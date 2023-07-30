@@ -1,0 +1,29 @@
+{% extends 'shared/base.html' %}
+
+{% block content %}
+    <h1>{{ chef.user.username }}</h1>
+    <p>Experience: {{ chef.experience }}</p>
+    <p>Bio: {{ chef.bio }}</p>
+
+    <h2>Featured Dishes</h2>
+    <ul>
+        {% for dish in featured_dishes %}
+            <li>{{ dish.name }}</li>
+        {% empty %}
+            <li>No featured dishes available.</li>
+        {% endfor %}
+    </ul>
+
+    <h2>All Dishes</h2>
+    <a href="{% url 'menus:chef_weekly_menu' chef.id %}">View {{ chef.user.username }}'s Menus</a>
+
+
+    <h2>Reviews</h2>
+    <ul>
+        {% for review in reviews %}
+            <li>{{ review }}</li>
+        {% empty %}
+            <li>No reviews available.</li>
+        {% endfor %}
+    </ul>
+{% endblock %}

@@ -1,0 +1,35 @@
+{% extends 'shared/base.html' %}
+
+{% block content %}
+  <h2><a href="{% url 'chefs:chef_detail' chef.id %}">Chef {{ chef.user.username }}</a> - Weekly Menu</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Dishes</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for menu in menus %}
+        <tr>
+          <td>{{ menu.date }}</td>
+          <td>
+            <ul>
+              {% for dish in menu.dishes.all %}
+                <li>{{ dish.name }}</li>
+              {% endfor %}
+            </ul>
+          </td>
+          <td>
+            <form method="post" action="{% url 'menus:add_to_cart' menu.id %}">
+              {% csrf_token %}
+              <button type="submit">Add to cart</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endblock %}

@@ -1,0 +1,24 @@
+{% extends 'shared/base.html' %}
+
+{% block content %}
+    <h1>Chef List</h1>
+
+    <form method="GET">
+        <div>
+            <label for="search">Search:</label>
+            <input type="text" id="search" name="search" value="{{ search }}">
+        </div>
+        <button type="submit">Filter</button>
+    </form>
+
+    <ul>
+        {% for chef in chefs %}
+            <li>
+                <a href="{% url 'chefs:chef_detail' chef.id %}">{{ chef.user.username }}</a>
+                - Rating: {{ chef.rating }}
+            </li>
+        {% empty %}
+            <li>No chefs found.</li>
+        {% endfor %}
+    </ul>
+{% endblock %}

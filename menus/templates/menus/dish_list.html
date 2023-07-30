@@ -1,0 +1,12 @@
+{% extends 'shared/base.html' %}
+
+{% block content %}
+{% for dish in dishes %}
+    <div>
+        <h3>Chef: <a href="{% url 'chefs:chef_detail' dish.chef.id %}">{{ dish.chef.user.username }}</a></h3>
+        <h2><a href="{% url 'menus:dish_detail' dish.id %}">{{ dish.name }}</a></h2>
+    </div>
+{% empty %}
+    <p>No dishes found.</p>
+{% endfor %}
+{% endblock %}

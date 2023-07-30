@@ -1,0 +1,13 @@
+{% extends 'shared/base.html' %}
+
+{% block content %}
+    <h1>Menus</h1>
+    {% for menu in menus %}
+        <div>
+            <h2><a href="{% url 'menus:menu_detail' menu.id %}">{{ menu.name }}</a></h2>  <!-- assuming 'menu_detail' is the name of the menu_detail view and 'name' is a field in the Menu model -->
+            <!-- Display other menu details here. -->
+        </div>
+    {% empty %}
+        <p>No menus available.</p>
+    {% endfor %}
+{% endblock %}

@@ -1,0 +1,14 @@
+{% autoescape off %}
+Hi {{ user.username }},
+
+Thank you for signing up for our website!
+
+Please click the link below to activate your account:
+
+http://{{ domain }}{% url 'custom_auth:activate' uidb64=uid token=token %}
+
+If you have any issues, please contact us at support@neighborhoodunited.com.
+
+Thanks,
+YourWebsite Team
+{% endautoescape %}

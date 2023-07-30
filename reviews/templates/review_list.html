@@ -1,0 +1,12 @@
+{% extends 'shared/base.html' %}
+
+{% block content %}
+  <h1>Reviews</h1>
+  <ul>
+    {% for review in reviews %}
+      <li>{{ review.title }} - {{ review.rating }}</li>
+    {% empty %}
+      <li>No reviews found.</li>
+    {% endfor %}
+  </ul>
+{% endblock %}

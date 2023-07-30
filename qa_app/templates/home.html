@@ -1,0 +1,107 @@
+{% extends 'shared/base.html' %}
+{% load static %}
+
+{% block content %}
+    <h1>Food Questions and Answers</h1>
+
+    <form method="POST" id="question-form">
+        {% csrf_token %}
+        <label for="question">Ask a question or make a search:</label>
+        <input type="text" name="question" id="question" required>
+        <div id="spinner" style="display: none;">
+            <!-- Here goes the spinner image or CSS-based spinner -->
+            <img src="{% static '/img/spinner.gif' %}" alt="Loading..." />
+        </div>        
+        <button type="submit">Submit</button>
+    </form>
+
+    <h2>Previously Asked Questions</h2>
+    <div id="questions-container"></div>
+    
+{% endblock %}
+
+{% block javascript %}
+    <script>
+        // Get the form and questions container elements
+        const form = document.getElementById('question-form');
+        const container = document.getElementById('questions-container');
+
+        // Add an event listener to the form submission event
+        form.addEventListener('submit', (event) => {
+            // Prevent the form from submitting normally
+            event.preventDefault();
+
+            // Get the form data
+            const formData = new FormData(form);
+
+            // Show the spinner
+            const spinner = document.getElementById('spinner');
+            spinner.style.display = 'block';
+
+            // Send an AJAX request to the server to submit the form data
+            fetch('', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-CSRFToken': form.elements.csrfmiddlewaretoken.value
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(response.statusText);
+                }
+                return response.json();
+            })
+            .then(response_data => {
+            // Hide the spinner
+            spinner.style.display = 'none';
+
+            // Clear the form input
+            form.elements.question.value = '';
+
+            // Create a new question and response element
+            const question = document.createElement('p');
+            question.textContent = 'Question: ' + response_data.question;
+            question.classList.add('question-text');
+
+            const response_data_content = response_data.response;
+
+            let response_text = '';
+            if (Array.isArray(response_data_content)) {
+                response_data_content.forEach(item => {
+                    if (item.name && item.experience && item.bio && item.featured_dishes) {
+                        // It's a chef object
+                        response_text += `Chef: ${item.name}, Experience: ${item.experience}, Bio: ${item.bio}, Featured dishes: ${item.featured_dishes.map(dish => dish.name).join(', ')}\n`;
+                    } else if (item.name && item.chefs && item.ingredients) {
+                        // It's a dish object
+                        response_text += `Dish: ${item.name}, Made by: ${item.chefs.join(', ')}, Ingredients: ${item.ingredients.join(', ')}\n`;
+                    }
+                });
+            } else {
+                // Just a simple response
+                response_text = response_data_content;
+            }
+
+            const response = document.createElement('p');
+            response.textContent = 'Response: ' + response_text;
+            response.classList.add('response-text');
+
+            const qaContainer = document.createElement('div');
+            qaContainer.classList.add('qa-container');
+            qaContainer.appendChild(question);
+            qaContainer.appendChild(response);
+
+            // Add the new question and response element to the questions container
+            container.appendChild(qaContainer);
+
+            // Add a horizontal rule after each question-response pair for better readability
+            const hr = document.createElement('hr');
+            container.appendChild(hr);
+        })
+        .catch(error => {
+            // Hide the spinner
+            spinner.style.display = 'none';
+        });
+        });
+    </script>
+{% endblock %}

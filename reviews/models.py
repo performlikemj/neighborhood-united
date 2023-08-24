@@ -1,7 +1,6 @@
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
-from django.contrib.auth import get_user_model
 from django.conf import settings
 
 class Review(models.Model):
@@ -13,7 +12,7 @@ class Review(models.Model):
         (5, '5 - Excellent'),
     ]
 
-    user = models.ForeignKey(get_user_model(), on_delete=models.CASCADE, related_name='reviews')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='reviews')
     content = models.TextField()
     rating = models.PositiveSmallIntegerField(choices=RATING_CHOICES)
     date_posted = models.DateTimeField(auto_now_add=True)

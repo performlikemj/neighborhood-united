@@ -1,17 +1,27 @@
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 from django.db import models
-from chefs.models import Chef
-from menus.models import Menu
-from events.models import Event
-from custom_auth.models import CustomUser
+from django.contrib.auth import get_user_model
+from django.conf import settings
 
 class Review(models.Model):
-    title = models.CharField(max_length=100)
-    text = models.TextField(blank=True)
-    chef = models.ForeignKey(Chef, on_delete=models.CASCADE, related_name='chef_reviews')
-    menu = models.ForeignKey(Menu, on_delete=models.CASCADE, related_name='reviews', null=True, blank=True)
-    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='reviews', null=True, blank=True) 
-    customer = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='reviews')
-    created_at = models.DateTimeField(auto_now_add=True)
+    RATING_CHOICES = [
+        (1, '1 - Poor'),
+        (2, '2 - Fair'),
+        (3, '3 - Good'),
+        (4, '4 - Very Good'),
+        (5, '5 - Excellent'),
+    ]
+
+    user = models.ForeignKey(get_user_model(), on_delete=models.CASCADE, related_name='reviews')
+    content = models.TextField()
+    rating = models.PositiveSmallIntegerField(choices=RATING_CHOICES)
+    date_posted = models.DateTimeField(auto_now_add=True)
+    
+    # Generic Foreign Key setup
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.PositiveIntegerField()
+    content_object = GenericForeignKey('content_type', 'object_id')
 
     def __str__(self):
-        return f'{self.title}'
+        return f'Review by {self.user} - {self.rating}/5'

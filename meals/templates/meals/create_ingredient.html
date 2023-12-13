@@ -1,0 +1,91 @@
+{% extends 'shared/base.html' %}
+
+{% block content %}
+  <h2>Create an ingredient</h2>
+  <p>1. Search for the ingredient</p>
+  <form method="post">
+    {% csrf_token %}
+    <label for="name">Search for ingredient:</label>
+    <input type="text" id="name" name="name">
+    <select id="id_spoonacular_id" name="spoonacular_id"></select>
+    <button type="submit">Create Ingredient</button>
+  </form>
+
+  <!-- Message will be inserted here -->
+  <div id="message"></div>
+
+  <!-- New ingredient will be appended here -->
+  <ul id="ingredients"></ul>
+
+  <!-- List of previously added ingredients -->
+<!-- List of previously added ingredients -->
+  <h2>Previously added ingredients:</h2>
+  <ul id="previous-ingredients">
+    {% for ingredient in ingredients %}
+      <li>{{ ingredient.name }}</li>
+    {% empty %}
+    <li id="no-ingredients-message">No ingredients have been added yet.</li>
+    {% endfor %}
+  </ul>
+{% endblock %}
+
+{% block javascript %}
+  <script>
+    $(document).ready(function() {
+      // Get CSRF token
+      var csrftoken = jQuery("[name=csrfmiddlewaretoken]").val();
+
+      // Set up AJAX to include CSRF token in the header
+      $.ajaxSetup({
+        beforeSend: function(xhr, settings) {
+          xhr.setRequestHeader("X-CSRFToken", csrftoken);
+        }
+      });
+
+      $('#name').on('input', function() {
+        var query = $(this).val();
+        if (query.length > 2) {
+          $.get('/meals/api/search_ingredients/', {query: query}, function(data) {
+            var select = $('#id_spoonacular_id');
+            select.empty();
+            $.each(data.results, function(key, value) {
+              select.append('<option value="' + value.id + '">' + value.name + '</option>');
+            });
+          });
+        }
+      });
+
+    // Handle form submit
+    $('form').on('submit', function(event) {
+        event.preventDefault();  // Prevent default form submit
+
+        // Collect form data 
+        var name = $("#id_spoonacular_id option:selected").text();
+        var spoonacular_id = $('#id_spoonacular_id').val();
+
+        // Make an AJAX POST request to the create_ingredient endpoint
+        $.ajax({
+          type: 'POST',
+          url: '/meals/api/create_ingredient/',
+          data: {name: name, spoonacular_id: spoonacular_id},
+          success: function(data) {
+            if (data.message === "Ingredient created successfully") {
+              // Show a success message
+              $('#message').html('<p>' + data.message + '</p>');
+              // Display the created ingredient
+              $('#ingredients').append('<li>' + name + '</li>');
+              // Add the ingredient to the previously added ingredients list
+              $('#previous-ingredients').append('<li>' + name + '</li>');
+              // Hide the "No ingredients have been added yet." message
+              $('#no-ingredients-message').hide();
+            } else {
+              // Show an error message
+              $('#message').html('<p>' + data.message + '</p>');
+            }
+          },
+        });
+    });
+
+    });
+  </script>
+{% endblock %}

@@ -11,19 +11,19 @@
 {% endfor %}
 </ul>
 
-<h2>My Menus</h2>
-{% for menu in menus %}
-    <h3>{{ menu.date }}</h3>
+<h2>My Meals</h2>
+{% for meal in meals %}
+    <h3>{{ meal.date }}</h3>
     <ul>
-    {% for dish in menu.dishes.all %}
+    {% for dish in meal.dishes.all %}
         <li>{{ dish.name }}</li>
     {% endfor %}
     </ul>
 {% empty %}
-    <p>You haven't created any menus yet.</p>
+    <p>You haven't created any meals yet.</p>
 {% endfor %}
 
-<h2>Create a new menu</h2>
+<h2>Create a new meal</h2>
 <form method="post">
     {% csrf_token %}
     {{ form.as_p }}
@@ -36,6 +36,6 @@
     <li>{{ ingredient.name }}</li>
 {% empty %}
     <li>You haven't added any ingredients yet.</li>
-    <a href="{% url 'menus:create_ingredient' %}">Add new ingredient</a>
+    <a href="{% url 'meals:create_ingredient' %}">Add new ingredient</a>
     {% endfor %}
 {% endblock %}

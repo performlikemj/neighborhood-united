@@ -8,8 +8,9 @@ from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from django.core.mail import EmailMessage
 from .tokens import account_activation_token
-from .models import CustomUser, Address 
-from .forms import RegistrationForm, UserProfileForm, EmailChangeForm, AddressForm
+from .models import CustomUser, Address, UserRole, ChefAddress
+from chefs.models import ChefRequest
+from .forms import RegistrationForm, UserProfileForm, EmailChangeForm, AddressForm, ChefAddressForm
 from django.urls import reverse
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.utils import timezone
@@ -52,60 +53,92 @@ def profile(request):
 
     address = Address.objects.get(user=request.user)  # Add this line
 
+    try:
+        user_role = UserRole.objects.get(user=request.user)
+    except UserRole.DoesNotExist:
+        user_role = None
+
     return render(request, 'custom_auth/profile.html', {
         'customuser': request.user,
         'breadcrumbs': breadcrumbs,
         'pending_email_change': pending_email_change,
         'address': address,  # Pass the variable to the template
+        'user_role': user_role,  # Pass UserRole to the template
     })
 
 
 @login_required
 @user_passes_test(lambda u: is_correct_user(u, u.username), login_url='chefs:chef_list', redirect_field_name=None)
 def update_profile(request):
-    if not is_customer(request.user):
-        messages.info(request, "Please confirm your email.")
-        return redirect('custom_auth:register')  
-    
+    # Fetch or create the user role
+    user_role, created = UserRole.objects.get_or_create(user=request.user, defaults={'current_role': 'customer'})
+    if created:
+        messages.info(request, "Your user role has been set to 'customer' by default.")
+
+    # Define forms
+    form = UserProfileForm(request.POST or None, instance=request.user, request=request)
+    address_form_instance = None  # Initialize as None
+
+    # Determine the correct address form based on the user's role
+    address_form_class = ChefAddressForm if user_role.current_role == 'chef' else AddressForm
     try:
-        address = Address.objects.get(user=request.user)
-    except Address.DoesNotExist:
-        address = None
+        address_instance = ChefAddress.objects.get(user=request.user) if user_role.current_role == 'chef' else Address.objects.get(user=request.user)
+        address_form_instance = address_form_class(request.POST or None, instance=address_instance)
+    except (ChefAddress.DoesNotExist, Address.DoesNotExist):
+        address_form_instance = address_form_class(request.POST or None)  # No instance if address doesn't exist
 
+    # Handle form submission
     if request.method == 'POST':
-        form = UserProfileForm(request.POST, instance=request.user, request=request)
-        address_form = AddressForm(request.POST, instance=address)
-        
-        if form.is_valid() and address_form.is_valid():
+        if form.is_valid():
             form.save()
-            address_form.save()
+            messages.success(request, 'Profile updated successfully.')
+            if address_form_instance and address_form_instance.is_valid():
+                address_form_instance.save()
+                messages.success(request, 'Address updated successfully.')
+            elif not address_instance:
+                messages.info(request, 'Please add an address to your profile.')
             return redirect('custom_auth:profile')
-    else:
-        form = UserProfileForm(instance=request.user)
-        address_form = AddressForm(instance=address)
 
+    # Prepare context
     breadcrumbs = [
         {'url': reverse('qa_app:home'), 'name': 'Home'},
         {'url': reverse('custom_auth:profile'), 'name': 'Profile'},
         {'url': reverse('custom_auth:update_profile'), 'name': 'Update Profile'},
     ]
+    context = {
+        'form': form,
+        'address_form': address_form_instance,
+        'breadcrumbs': breadcrumbs
+    }
 
-    return render(request, 'custom_auth/update_profile.html', {'form': form, 'address_form': address_form, 'breadcrumbs': breadcrumbs})
+    return render(request, 'custom_auth/update_profile.html', context)
 
 
 @login_required
 @user_passes_test(lambda u: is_correct_user(u, u.username), login_url='chefs:chef_list', redirect_field_name=None)
 def switch_roles(request):
+    # Get the user's role, or create a new one with 'customer' as the default
+    user_role, created = UserRole.objects.get_or_create(user=request.user, defaults={'current_role': 'customer'})
+
     if request.method == 'POST':  # Only switch roles for POST requests
-        if request.user.current_role == 'chef':
-            request.user.current_role = 'customer'
-        elif request.user.is_chef:  # Only allow the user to switch to chef role if they are an approved chef
-            request.user.current_role = 'chef'
+        if user_role.current_role == 'chef':
+            user_role.current_role = 'customer'
+            user_role.save()
+            messages.success(request, 'You have switched to the Customer role.')
+        elif user_role.current_role == 'customer':
+            # Check if there's a chef request and it is approved
+            chef_request = ChefRequest.objects.filter(user=request.user, is_approved=True).first()
+            if chef_request:
+                user_role.current_role = 'chef'
+                user_role.save()
+                messages.success(request, 'You have switched to the Chef role.')
+            else:
+                messages.error(request, 'You are not approved to become a chef.')
         else:
-            messages.error(request, 'You are not approved to become a chef.')
-            return redirect('custom_auth:profile')
-        request.user.save()
-    return redirect('custom_auth:profile')  # Always redirect to the profile page
+            messages.error(request, 'Invalid role.')
+
+    return redirect('custom_auth:profile')  # Always redirect to the profile page after the operation
+
 
 # register view
 def register_view(request):
@@ -273,3 +306,4 @@ class EmailChangeView(LoginRequiredMixin, View):
         else:
             messages.error(request, "Please correct the error below.")
         return render(request, 'custom_auth/change_email.html', {'form': form})
+

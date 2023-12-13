@@ -1,0 +1,10 @@
+{% extends 'shared/base.html' %}
+
+{% block content %}
+<h2>Approve Meal Plan</h2>
+<form method="post">
+    {% csrf_token %}
+    <!-- Display meal plan details here -->
+    <input type="submit" value="Approve">
+</form>
+{% endblock %}

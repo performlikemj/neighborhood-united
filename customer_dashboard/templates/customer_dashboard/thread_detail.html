@@ -1,0 +1,16 @@
+{% extends 'customer_dashboard/customer_base.html' %}
+
+{% block content %}
+    <div class="container mt-4">
+        <h2>Chat History</h2>
+        <div class="chat-history border p-3">
+            {% if chat_history %}
+                <div class="chat-messages">
+                    {{ chat_history|linebreaks }}
+                </div>
+            {% else %}
+                <p>No chat history available for this conversation.</p>
+            {% endif %}
+        </div>
+    </div>
+{% endblock %}

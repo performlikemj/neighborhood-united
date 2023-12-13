@@ -3,105 +3,289 @@
 
 {% block content %}
     <h1>Food Questions and Answers</h1>
-
-    <form method="POST" id="question-form">
-        {% csrf_token %}
-        <label for="question">Ask a question or make a search:</label>
-        <input type="text" name="question" id="question" required>
-        <div id="spinner" style="display: none;">
-            <!-- Here goes the spinner image or CSS-based spinner -->
-            <img src="{% static '/img/spinner.gif' %}" alt="Loading..." />
-        </div>        
-        <button type="submit">Submit</button>
-    </form>
-
-    <h2>Previously Asked Questions</h2>
-    <div id="questions-container"></div>
+    <div class="search-section">
+        <form method="POST" id="question-form">
+            {% csrf_token %}
+            <label for="question">Ask a question or make a search:</label>
+            <input type="text" name="question" id="question" required>
+            <div id="spinner" style="display: none;">
+                <img src="{% static '/img/spinner.gif' %}" alt="Loading..." />
+            </div>        
+            <button type="submit">Submit</button>
+        </form>
+    </div>
     
+    <div class="recommendations">
+            {% if latest_qa %}
+            <h2>Latest Search</h2>
+            <div id="latest-question">
+                <p><strong>Question:</strong> {{ latest_qa.question }}</p>
+                <!-- Dynamic Content Based on Search -->
+                <!-- Guest Dish Results Section -->
+                {% if response.guest_dish_result %}
+                    <div class="meal-gallery">
+                        <h2>Guest Dish Results</h2>
+                        <div class="row">
+                            {% for dish in response.guest_dish_result %}
+                                <div class="col-md-4">
+                                    <div class="card">
+                                        <!-- Assuming there's an image URL for the dish, add it here -->
+                                        <div class="card-body">
+                                            <h5 class="card-title">{{ dish.name }}</h5>
+                                            <p class="card-text">Start Date: {{ dish.start_date }}</p>
+                                            <p class="card-text">End Date: {{ dish.end_date }}</p>
+                                            <p class="card-text">Availability: {{ dish.is_available|yesno:"Yes,No" }}</p>
+                                            <h6>Chefs:</h6>
+                                            <ul class="list-group list-group-flush">
+                                                {% for chef in dish.chefs %}
+                                                    <li class="list-group-item">{{ chef.name }}</li>
+                                                {% endfor %}
+                                            </ul>
+                                            <h6>Dishes:</h6>
+                                            <ul class="list-group list-group-flush">
+                                                {% for dish_item in dish.dishes %}
+                                                    <li class="list-group-item">{{ dish_item.name }}</li>
+                                                {% endfor %}
+                                            </ul>
+                                            <!-- Additional details or actions -->
+                                        </div>
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                {% elif response.auth_dish_result or response.auth_meal_plan %}
+                    <div class="meal-gallery">
+                        <h2>Search Results</h2>
+                        <div class="row">
+                            {% for meal in response.auth_dish_result %}
+                            <div class="col-md-4">
+                                <div class="card">
+                                    <img src="{{ meal.image_url }}" class="card-img-top" alt="{{ meal.name }}">
+                                    <div class="card-body">
+                                        <h5 class="card-title">{{ meal.name }}</h5>
+                                        <p class="card-text">Start Date: {{ meal.start_date }}</p>
+                                        <p class="card-text">Availability: {{ meal.is_available|yesno:"Yes,No" }}</p>
+                                        <!-- Add more details here -->
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                            {% for plan in response.auth_meal_plan %}
+                                <div class="col-md-4">
+                                    <div class="card">
+                                        <!-- Add image if available -->
+                                        <div class="card-body">
+                                            <h5 class="card-title">{{ plan.name }}</h5>
+                                            <p class="card-text">Chef: {{ plan.chef }}</p>
+                                            <p class="card-text">Start Date: {{ plan.start_date }}</p>
+                                            <p class="card-text">End Date: {{ plan.end_date }}</p>
+                                            <ul class="list-group list-group-flush">
+                                                {% for dish in plan.dishes %}
+                                                    <li class="list-group-item">{{ dish }}</li>
+                                                {% endfor %}
+                                            </ul>
+                                            <!-- Add more details or actions here -->
+                                        </div>
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                <!-- Guest Chef Results Section -->
+                {% elif response.guest_chef_result %}
+                    <div class="chef-gallery">
+                        <h2>Guest Chef Results</h2>
+                        <div class="row">
+                            {% for chef in response.guest_chef_result %}
+                            <div class="col-md-4">
+                                <div class="card">
+                                    {% if chef.profile_pic %}
+                                        <img src="{{ chef.profile_pic }}" class="card-img-top" alt="Chef {{ chef.name }}">
+                                    {% endif %}
+                                    <div class="card-body">
+                                        <h5 class="card-title">{{ chef.name }}</h5>
+                                        <p class="card-text">Experience: {{ chef.experience }}</p>
+                                        <p class="card-text">{{ chef.bio }}</p>
+                                        <!-- Add more details or actions here -->
+                                        <a href="{% url 'chefs:chef_detail' chef.chef_id %}" class="btn btn-primary">View Profile</a>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                <!-- Authenticated Chef Results Section -->
+                {% elif response.auth_chef_result %}
+                    <div class="chef-gallery">
+                        <h2>Authenticated Chef Results</h2>
+                        <div class="row">
+                            {% for chef in response.auth_chef_result %}
+                                <div class="col-md-4">
+                                    <div class="card">
+                                        {% if chef.profile_pic %}
+                                            <img src="{{ chef.profile_pic }}" class="card-img-top" alt="Chef {{ chef.name }}">
+                                        {% endif %}
+                                        <div class="card-body">
+                                            <h5 class="card-title">{{ chef.name }}</h5>
+                                            <p class="card-text">Experience: {{ chef.experience }} years</p>
+                                            <p class="card-text">{{ chef.bio }}</p>
+                                            {% if chef.featured_dishes %}
+                                                <h6>Featured Dishes:</h6>
+                                                <ul class="list-group list-group-flush">
+                                                    {% for dish in chef.featured_dishes %}
+                                                        <li class="list-group-item">{{ dish.name }}</li>
+                                                    {% endfor %}
+                                                </ul>
+                                            {% endif %}
+                                            {% if chef.service_postal_codes %}
+                                                <p class="card-text mt-2">Service Areas: {{ chef.service_postal_codes|join:", " }}</p>
+                                            {% endif %}
+                                            <a href="{% url 'chefs:chef_detail' chef.chef_id %}" class="btn btn-primary">View Profile</a>
+                                            <!-- Add more details or actions here -->
+                                        </div>
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                {% elif response.guest_meal_plan %}
+                    <!--   I don't want anything to be shown -->
+                {% else %}
+                    <p>No results found for your query.</p>
+                {% endif %}
+            {% endif %}
+        </div>  
+
+    
+
+        <!-- Suggested Meal Plans Section for Authenticated Users -->
+        {% if response.suggested_meal_plan and response.suggested_meal_plan.auth_meal_plan %}
+            <div class="meal-gallery">
+                <h2>Authenticated Suggested Meal Plans</h2>
+                <div class="row">
+                    {% for plan in response.suggested_meal_plan.auth_meal_plan %}
+                    <div class="col-md-4">
+                        <div class="card">
+                            <!-- Add image if available -->
+                            <div class="card-body">
+                                <h5 class="card-title">{{ plan.name }}</h5>
+                                <p class="card-text">Chef: {{ plan.chef }}</p>
+                                <p class="card-text">Start Date: {{ plan.start_date }}</p>
+                                <p class="card-text">End Date: {{ plan.end_date }}</p>
+                                <p class="card-text">Availability: {{ plan.is_available|yesno:"Yes,No" }}</p>
+                                <ul class="list-group list-group-flush">
+                                    {% for dish in plan.dishes %}
+                                        <li class="list-group-item">{{ dish }}</li>
+                                    {% endfor %}
+                                </ul>
+                                <!-- Add more details or actions here -->
+                            </div>
+                        </div>
+                    </div>
+                {% empty %}
+                    <p class="text-center">No suggested meal plans available.</p>
+                    {% endfor %}
+                </div>
+            </div>
+        {% endif %}
+
+        <!-- Suggested Meal Plans Section for Guest Users -->
+        {% if response.suggested_meal_plan and response.suggested_meal_plan.guest_meal_plan %}
+            <div class="meal-gallery">
+                <h2>Guest Suggested Meal Plans</h2>
+                <div class="row">
+                    {% for plan in response.suggested_meal_plan.guest_meal_plan %}
+                    <div class="col-md-4">
+                        <div class="card">
+                            <!-- Add image if available -->
+                            <div class="card-body">
+                                <h5 class="card-title">{{ plan.name }}</h5>
+                                <p class="card-text">Chef: {{ plan.chef }}</p>
+                                <p class="card-text">Start Date: {{ plan.start_date }}</p>
+                                <p class="card-text">End Date: {{ plan.end_date }}</p>
+                                <p class="card-text">Availability: {{ plan.is_available|yesno:"Yes,No" }}</p>
+                                <ul class="list-group list-group-flush">
+                                    {% for dish in plan.dishes %}
+                                        <li class="list-group-item">{{ dish }}</li>
+                                    {% endfor %}
+                                </ul>
+                                <!-- Add more details or actions here -->
+                            </div>
+                        </div>
+                    </div>
+                {% empty %}
+                    <p class="text-center">No suggested meal plans available.</p>
+                    {% endfor %}
+                </div>
+            </div>
+        {% endif %}
+
+        <!-- Suggested Meal Plans Section for Standalone Guest Plans -->
+        {% if response.guest_meal_plan %}
+            <div class="meal-gallery">
+                <h2>Guest Meal Plans</h2>
+                <div class="row">
+                    {% for plan in response.guest_meal_plan %}
+                    <div class="col-md-4">
+                        <div class="card">
+                            <!-- Add image if available -->
+                            <div class="card-body">
+                                <h5 class="card-title">{{ plan.name }}</h5>
+                                <p class="card-text">Chef: {{ plan.chef }}</p>
+                                <p class="card-text">Start Date: {{ plan.start_date }}</p>
+                                <p class="card-text">End Date: {{ plan.end_date }}</p>
+                                <p class="card-text">Availability: {{ plan.is_available|yesno:"Yes,No" }}</p>
+                                <ul class="list-group list-group-flush">
+                                    {% for dish in plan.dishes %}
+                                        <li class="list-group-item">{{ dish }}</li>
+                                    {% endfor %}
+                                </ul>
+                                <!-- Add more details or actions here -->
+                            </div>
+                        </div>
+                    </div>
+                {% empty %}
+                    <p class="text-center">No suggested meal plans available.</p>
+                    {% endfor %}
+                </div>
+            </div>
+        {% endif %}
+
+
+        {% if not response.auth_dish_result and not response.guest_meal_plan and not response.guest_chef_result and not response.auth_meal_plan and not response.auth_chef_result and not response.guest_dish_result %}
+            <!-- Original Discover Meals Section with Random Meals -->
+            <div class="meal-gallery">
+                <h2>Discover Meals</h2>
+                <div class="row">
+                    {% for meal in random_meals %}
+                        <div class="col-md-4">
+                            <div class="card">
+                                <img src="{{ meal.image.url }}" class="card-img-top" alt="{{ meal.name }}">
+                                <div class="card-body">
+                                    <h5 class="card-title">{{ meal.name }}</h5>
+                                    <!-- Add more meal details here -->
+                                    <a href="{% url 'meals:meal_detail' meal.id %}" class="btn btn-primary">View Meal</a>
+                                </div>
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        {% endif %}
+    </div>  
 {% endblock %}
 
 {% block javascript %}
     <script>
-        // Get the form and questions container elements
-        const form = document.getElementById('question-form');
-        const container = document.getElementById('questions-container');
-
-        // Add an event listener to the form submission event
-        form.addEventListener('submit', (event) => {
-            // Prevent the form from submitting normally
-            event.preventDefault();
-
-            // Get the form data
-            const formData = new FormData(form);
-
-            // Show the spinner
-            const spinner = document.getElementById('spinner');
-            spinner.style.display = 'block';
-
-            // Send an AJAX request to the server to submit the form data
-            fetch('', {
-                method: 'POST',
-                body: formData,
-                headers: {
-                    'X-CSRFToken': form.elements.csrfmiddlewaretoken.value
-                }
-            })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error(response.statusText);
-                }
-                return response.json();
-            })
-            .then(response_data => {
-            // Hide the spinner
-            spinner.style.display = 'none';
-
-            // Clear the form input
-            form.elements.question.value = '';
-
-            // Create a new question and response element
-            const question = document.createElement('p');
-            question.textContent = 'Question: ' + response_data.question;
-            question.classList.add('question-text');
-
-            const response_data_content = response_data.response;
-
-            let response_text = '';
-            if (Array.isArray(response_data_content)) {
-                response_data_content.forEach(item => {
-                    if (item.name && item.experience && item.bio && item.featured_dishes) {
-                        // It's a chef object
-                        response_text += `Chef: ${item.name}, Experience: ${item.experience}, Bio: ${item.bio}, Featured dishes: ${item.featured_dishes.map(dish => dish.name).join(', ')}\n`;
-                    } else if (item.name && item.chefs && item.ingredients) {
-                        // It's a dish object
-                        response_text += `Dish: ${item.name}, Made by: ${item.chefs.join(', ')}, Ingredients: ${item.ingredients.join(', ')}\n`;
-                    }
-                });
-            } else {
-                // Just a simple response
-                response_text = response_data_content;
-            }
-
-            const response = document.createElement('p');
-            response.textContent = 'Response: ' + response_text;
-            response.classList.add('response-text');
-
-            const qaContainer = document.createElement('div');
-            qaContainer.classList.add('qa-container');
-            qaContainer.appendChild(question);
-            qaContainer.appendChild(response);
-
-            // Add the new question and response element to the questions container
-            container.appendChild(qaContainer);
-
-            // Add a horizontal rule after each question-response pair for better readability
-            const hr = document.createElement('hr');
-            container.appendChild(hr);
-        })
-        .catch(error => {
-            // Hide the spinner
-            spinner.style.display = 'none';
-        });
+        $(document).ready(function() {
+            // When the form is submitted, show the spinner
+            $('#question-form').submit(function() {
+                $('#spinner').show();
+            });
         });
     </script>
+    <script type="module" src="{% static 'js/customer_dashboard.js' %}"></script>
+
 {% endblock %}
+

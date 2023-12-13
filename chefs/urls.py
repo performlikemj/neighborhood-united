@@ -1,6 +1,7 @@
 from django.urls import path 
 from .views import chef_list, chef_detail, chef_request, chef_view
 
+
 app_name = 'chefs'
 
 urlpatterns = [

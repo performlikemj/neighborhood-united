@@ -1,0 +1,18 @@
+{% extends 'shared/base.html' %}
+
+{% block content %}
+  <div class="container">
+    <h1>Meals containing the dish</h1>
+    <ul>
+      {% for meal in meals %}
+        <li>
+          <h2><a href="{% url 'meals:meal_detail' meal.id %}">{{ meal.name }}</a></h2>
+          <p>Chef: {{ meal.chef.user.username }}</p>
+          <p>Start date: {{ meal.start_date }}</p>
+        </li>
+      {% empty %}
+        <li>No meals found containing this dish.</li>
+      {% endfor %}
+    </ul>
+  </div>
+{% endblock %}

@@ -1,223 +1,249 @@
 import openai
-from openai.error import OpenAIError
+from openai import OpenAIError
 import os
 import json
 from django.shortcuts import render, redirect
 from .models import FoodQA
-from menus.models import Dish, MealType, Menu
+from meals.models import Dish, MealType, Meal
 from django.conf import settings
 from django_ratelimit.decorators import ratelimit
 from django.utils.html import strip_tags
 from django.http import JsonResponse
 from django.core.paginator import Paginator
 from chefs.models import Chef
+from custom_auth.models import Address
 from datetime import date, timedelta
 from django.db.models import Q
-
-
-def get_meal_plan(query):
-    # Determine the current date and the end of the week
-    current_date = date.today()
-    end_of_week = current_date + timedelta(days=(6 - current_date.weekday()))  # Sunday is considered the end of the week
-
-    # Get all the meal types from the database
-    meal_types = MealType.objects.all()
-
-    # Determine if the query contains any meal type
-    meal_type_names = [meal_type for meal_type in meal_types if meal_type in query.lower()]
-
-    if meal_type_names:
-        # Get the meal type objects from the database
-        try:
-            meal_types = MealType.objects.filter(name__in=meal_type_names)
-        except MealType.DoesNotExist:
-            return json.dumps({"message": f"No meal types found with the names {meal_type_names}."})
-
-        # Get menus where the end_date is in the future and the start_date is within the current week
-        menus = Menu.objects.filter(end_date__gte=current_date, start_date__lte=end_of_week)
-
-        # Filter menus by query
-        menus = menus.filter(Q(chef__user__username__icontains=query) | Q(name__icontains=query))
-
-        result = []
-        for menu in menus:
-            # Get dishes from the menu that match any of the meal types
-            dishes = menu.dishes.filter(meal_types__in=meal_types)
-
-            # If there are any matching dishes
-            if dishes.exists():
-                menu_details = {
-                    "name": menu.name,
-                    "chef": menu.chef.user.username,
-                    "start_date": menu.start_date,
-                    "end_date": menu.end_date,
-                    "dishes": [dish.name for dish in dishes]
-                }
-                result.append(menu_details)
-    else:
-        # Get menus where the end_date is in the future and the start_date is within the current week
-        menus = Menu.objects.filter(end_date__gte=current_date, start_date__lte=end_of_week)
-
-        # Filter menus by query
-        menus = menus.filter(Q(chef__user__username__icontains=query) | Q(name__icontains=query))
-
-        result = []
-        for menu in menus:
-            menu_details = {
-                "name": menu.name,
-                "chef": menu.chef.user.username,
-                "start_date": menu.start_date,
-                "end_date": menu.end_date,
-                "dishes": [dish.name for dish in menu.dishes.all()]
-            }
-            result.append(menu_details)
-
-    if not result:
-        return json.dumps({"message": "No meal plans found matching your query."})
-
-    return json.dumps(result)
-
-
-def search_chefs(query):
-    # Normalize the query by removing common titles and trimming whitespace
-    normalized_query = query.lower().replace('chef', '').strip()
-
-    chefs = Chef.objects.filter(user__username__icontains=normalized_query)
-
-    result = []
-    for chef in chefs:
-        featured_dishes = [{"name": dish.name} for dish in chef.featured_dishes.all()]
-        chef_info = {
-            "name": chef.user.username,
-            "experience": chef.experience,
-            "bio": chef.bio,
-            "profile_pic": str(chef.profile_pic.url) if chef.profile_pic else None,
-            "featured_dishes": featured_dishes
-        }
-        result.append(chef_info)
-    if not result:
-        return json.dumps({"message": "No chefs found matching your query."})
-    return json.dumps(result)
-
-
-def search_dishes(query):
-    # Assume this function takes a query and returns a JSON with the requested information about chefs, dishes, and ingredients
-    dishes = Dish.objects.filter(name__icontains=query)  # Example of searching dishes by name
-    result = []
-    for dish in dishes:
-        chefs = [chef.user.username for chef in [dish.chef]]
-        result.append({"name": dish.name, "chefs": chefs, "ingredients": [ingredient.name for ingredient in dish.ingredients.all()]})
-    if not result:
-        return json.dumps({"message": "No dishes found matching your query."})
-    return json.dumps(result)
+from reviews.models import Review
+from django.contrib.contenttypes.models import ContentType
+from random import sample
+from collections import defaultdict
+from datetime import datetime
+from shared.utils import auth_get_meal_plan, auth_search_chefs, auth_search_dishes, guest_get_meal_plan, guest_search_chefs, guest_search_dishes, generate_review_summary, sanitize_query
+from openai import OpenAI
+from random import sample
+from meals.models import Meal
 
 @ratelimit(key='ip', rate='10/m')
 def home(request):
     if request.method == 'POST':
         question = strip_tags(request.POST.get('question', ''))
 
-        # Set up OpenAI
-        openai.api_key = settings.OPENAI_KEY
 
         # Define available functions for GPT to call
-        functions = [
-            {
-                "name": "search_dishes",
-                "description": "Search dishes in the database",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "The query to search for dishes",
+        if request.user.is_authenticated:
+            functions = [
+                {
+                    "name": "auth_search_dishes",
+                    "description": "Search dishes in the database",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "The query to search for dishes",
+                            },
                         },
+                        "required": ["query"],
                     },
-                    "required": ["query"],
                 },
-            },
-            {
-                "name": "search_chefs",
-                "description": "Search chefs in the database and get their info",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "The query to search for chefs"},
+                {
+                    "name": "auth_search_chefs",
+                    "description": "Search chefs in the database and get their info",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string", 
+                                "description": "The query to search for chefs"},
+                        },
+                        "required": ["query"],
                     },
-                    "required": ["query"],
                 },
-            }
-        ] 
+                {
+                    "name": "auth_get_meal_plan",
+                    "description": "Get a meal plan for the current week",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string", 
+                                "description": "The query to search for meal plans"},
+                        },
+                        "required": ["query"],
+                    },
+                },
+                # {
+                #     "name": "auth_search_ingredients",
+                #     "description": "Search ingredients used in dishes in the database and get their info.",
+                #     "parameters": {
+                #         "type": "object",
+                #         "properties": {
+                #             "query": {
+                #                 "type": "string", 
+                #                 "description": "The query to search for ingredients"},
+                #         },
+                #         "required": ["query"],
+                #     },
+                # },
+            ]
+        else:
+            functions = [
+                {
+                    "name": "guest_search_dishes",
+                    "description": "Search dishes in the database",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "The query to search for dishes",
+                            },
+                        },
+                        "required": ["query"],
+                    },
+                },
+                {
+                    "name": "guest_search_chefs",
+                    "description": "Search chefs in the database and get their info",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string", 
+                                "description": "The query to search for chefs"},
+                        },
+                        "required": ["query"],
+                    },
+                },
+                {
+                    "name": "guest_get_meal_plan",
+                    "description": "Get a meal plan for the current week",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string", 
+                                "description": "The query to search for meal plans"},
+                        },
+                        "required": ["query"],
+                    },
+                },
+                # {
+                #     "name": "guest_search_ingredients",
+                #     "description": "Search ingredients used in dishes in the database and get their info.",
+                #     "parameters": {
+                #         "type": "object",
+                #         "properties": {
+                #             "query": {
+                #                 "type": "string", 
+                #                 "description": "The query to search for ingredients"},
+                #         },
+                #         "required": ["query"],
+                #     },
+                # }
+            ] 
 
-
-        # Initialize function_response
-        function_response = None
 
         try:
-            # Initial call to the OpenAI API
-            initial_response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo-0613",
+            client = OpenAI(api_key=settings.OPENAI_KEY)
+
+            # Using JSON mode for structured outputs
+            initial_response = client.chat.completions.create(
+                model="gpt-3.5-turbo-1106",
+                response_format={"type": "json_object"},
                 messages=[
-                    {"role": "system", "content": settings.OPENAI_PROMPT},
+                    {"role": "system", "content": settings.OPENAI_PROMPT + " Please respond in JSON format."},
                     {"role": "user", "content": question}
                 ],
                 functions=functions,
                 function_call="auto",
             )
+            # Check if the response is valid and has choices
+            if initial_response and initial_response.choices:
+                choice = initial_response.choices[0]
 
-            response_message = initial_response['choices'][0]['message']
+                # Check if the finish_reason is 'function_call'
+                if choice.finish_reason == 'function_call' and choice.message.function_call:
+                    function_call = choice.message.function_call
+                    function_name = function_call.name
+                    function_args = json.loads(function_call.arguments)
 
-            # Check if GPT wanted to call a function
-            if response_message.get('function_call'):
-                # Get the name of the function to call and the arguments
-                function_name = response_message['function_call']['name']
-                function_args = json.loads(response_message['function_call']['arguments'])
+                    # Initialize function_response_json
+                    function_response_json = None            
+                    # Initialize function_response
+                    function_response = None
 
-                # Map of available functions
-                available_functions = {
-                    'search_dishes': search_dishes,
-                    'search_chefs': search_chefs,
-                    'get_meal_plan': get_meal_plan,
-                }
-
-                # Call the appropriate function
-                function_response = available_functions[function_name](**function_args)
-
-                # Handle the response
-                if 'message' in json.loads(function_response):
-                    # Save the message to the database instead of the usual function response
-                    FoodQA.objects.create(question=question, response=json.loads(function_response)['message'])
-                    print(f'If Function response: {json.loads(function_response)["message"]}')
-                else:
-                    FoodQA.objects.create(question=question, response=function_response)
-                    print(f'Else Function response: {function_response}')
+                    # Map of available functions
+                    if request.user.is_authenticated:
+                        available_functions = {
+                            'auth_search_dishes': auth_search_dishes,
+                            'auth_search_chefs': auth_search_chefs,
+                            'auth_get_meal_plan': auth_get_meal_plan,
+                            # 'auth_search_ingredients': auth_search_ingredients,
+                        }
+                    else:
+                        available_functions = {
+                            'guest_search_dishes': guest_search_dishes,
+                            'guest_search_chefs': guest_search_chefs,
+                            'guest_get_meal_plan': guest_get_meal_plan,
+                            # 'guest_search_ingredients': guest_search_ingredients,
+                        }
+                    # Call the appropriate function
+                    if request.user.is_authenticated:
+                        function_response = available_functions[function_name](request=request, **function_args)
+                    else:
+                        if function_name in ['auth_get_meal_plan', 'guest_get_meal_plan']:
+                            function_response = available_functions[function_name](query=function_args.get('query', ''), query_type=function_args.get('query_type', ''))
+                        else:
+                            function_response = available_functions[function_name](query=function_args.get('query', ''))
+                    # Try to load the function response as JSON                
+                    try:
+                        function_response_json = json.dumps(function_response)
+                    except json.decoder.JSONDecodeError:
+                        error_message = "function_response is not a valid JSON string."
+                        function_response_json = {
+                            "message": error_message
+                        }
+                        function_response = json.dumps({"message": error_message})                    
+                    # Handle the response
+                    if 'message' in function_response_json:
+                        FoodQA.objects.create(question=question, response=function_response.get('message', function_response))
+                        print(f'If Function response: {function_response.get("message", function_response)}')
+                    else:
+                        FoodQA.objects.create(question=question, response=function_response)
             else:
                 # If no function was called, save the initial response
-                FoodQA.objects.create(question=question, response=response_message['content'])
-                print(f'Outer Else response: {response_message["content"]}')
+                # When saving the question or setting it up for the context
+                safe_question = sanitize_query(question)
+                FoodQA.objects.create(question=safe_question, response=response_content)
 
-            if function_response:
-                # If a function was called, check if there's a 'message' key in the response
-                function_response_json = json.loads(function_response)
-                if 'message' in function_response_json:
-                    # If there's a 'message' key, use its value
-                    response_data = {
-                        "question": question,
-                        "response": function_response_json['message']
-                    }
-                else:
-                    # If there's no 'message' key, use the entire function response
-                    response_data = {
-                        "question": question,
-                        "response": function_response
-                    }
-            else:
-                # If no function was called, use the initial response from GPT
-                response_data = {
-                    "question": question,
-                    "response": response_message['content']
-                }
 
-            return JsonResponse(response_data)
+            # Prepare final response
+            # Prepare the data for the template
+            latest_qa = FoodQA.objects.last()
+            safe_question = sanitize_query(question)
+            # Fetch all meals with images from the database
+            meals_with_images = Meal.objects.filter(image__isnull=False)
+
+            # Determine the number of meals to display (up to 9)
+            num_meals_to_display = min(meals_with_images.count(), 9)
+
+            # Fetch a sample of random meals
+            random_meals = sample(list(meals_with_images), num_meals_to_display) if meals_with_images.exists() else []
+
+            context = {
+                'current_date': datetime.now().strftime('%Y-%m-%d'),
+                'question': safe_question,
+                'response': function_response.get('message', function_response) if function_response_json else response_message['content'],
+                'latest_qa': latest_qa,  # This is used to display the latest question and response in the template
+                'random_meals': random_meals,
+            }
+
+            print(f'Context: {context}')
+            # Render the template
+            return render(request, 'home.html', context)
+
         except OpenAIError as e:
             # handle the OpenAI error
             print(e)
@@ -229,5 +255,18 @@ def home(request):
 
     page_number = request.GET.get('page')
     qas = paginator.get_page(page_number)
+    # Fetch all meals with images from the database
+    meals_with_images = Meal.objects.filter(image__isnull=False)
 
-    return render(request, 'home.html', {'qas': qas})
+    # Determine the number of meals to display (up to 9)
+    num_meals_to_display = min(meals_with_images.count(), 9)
+
+    # Fetch a sample of random meals
+    random_meals = sample(list(meals_with_images), num_meals_to_display) if meals_with_images.exists() else []
+
+    context = {
+        'current_date': datetime.now().strftime('%Y-%m-%d'),
+        'qas': qas,
+        'random_meals': random_meals,
+    }
+    return render(request, 'home.html', context)

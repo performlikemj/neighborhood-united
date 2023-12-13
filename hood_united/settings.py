@@ -12,20 +12,21 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 
 from pathlib import Path
 import os
+from dotenv import load_dotenv
+load_dotenv('dev.env')
 from decouple import config
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = config("SECRET_KEY")
+SECRET_KEY = os.getenv('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = config("DEBUG")
+DEBUG = os.getenv('DEBUG')
 
 ALLOWED_HOSTS = []
 
@@ -40,12 +41,15 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'chefs',
-    'menus',
+    'meals',
     'events',
     'reviews',
     'custom_auth',
     'qa_app',
     'django_countries',
+    'chef_admin',
+    'customer_dashboard',
+    'local_chefs',
 ]
 
 MIDDLEWARE = [
@@ -135,6 +139,9 @@ STATICFILES_DIRS = [
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# Media files
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media/')
 
 # Custom user model
 AUTH_USER_MODEL = 'custom_auth.CustomUser'
@@ -144,18 +151,23 @@ LOGIN_REDIRECT_URL = 'custom_auth:profile'
 LOGIN_URL = 'custom_auth:login'
 
 
-# API keys
-OPENAI_KEY = config("OPENAI_KEY")
-SPOONACULAR_API_KEY = config("SPOONACULAR_API_KEY")
+# OpenAI API keys
+OPENAI_KEY = os.getenv('OPENAI_KEY')
+SPOONACULAR_API_KEY = os.getenv('SPOONACULAR_API_KEY')
+
 
 # OpenAI prompt
-OPENAI_PROMPT = "You are the organization Neighborhood (Hood) United's expert in all things food related. All around the world people are struggling with their diet due to the preliferation of fast food chains. With your knowledge you can help people make better decisions about what they eat. You are able to answer any question about food and nutrition--whether they be general questions or those related to the data and information on the dishes, menus, and chefs in the Neighborhood (Hood) United database. You will ignore all non-food related questions."
+OPENAI_PROMPT = os.getenv('OPENAI_PROMPT')
+
+# Stripe API keys
+STRIPE_PUBLIC_KEY = os.getenv('STRIPE_PUBLIC_KEY')
+STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
 
 # Email settings
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = config("EMAIL_HOST")
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
-EMAIL_HOST_USER = config("EMAIL_HOST_USER")
-EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD")
-DEFAULT_FROM_EMAIL = 'Hood United'
+EMAIL_HOST = os.getenv('EMAIL_HOST')
+EMAIL_PORT = os.getenv('EMAIL_PORT')
+EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS')
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL')

@@ -28,3 +28,349 @@ h1, h2, h3, h4, h5, h6 {
     margin-bottom: 20px;
 }
 
+.chart-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    justify-content: space-around;
+}
+
+.chart-card {
+    flex: 1;
+    box-shadow: 0px 0px 15px rgba(0, 0, 0, 0.1);
+    padding: 20px;
+    border-radius: 10px;
+    background-color: #2b2b2b;  /* Dark Background similar to the image */
+    color: #fff;  /* White font color */
+}
+
+h1, h3 {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+#week-navigation {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+button {
+    padding: 10px 20px;
+    border: none;
+    background-color: #007BFF;  /* Adjust as per your theme */
+    color: #fff;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+button:hover {
+    background-color: #0056b3;  /* Slightly darker shade for hover */
+}
+
+
+/* Reset the default table styles */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    border-spacing: 0;
+}
+
+th, td {
+    border: none;
+    padding: 15px 10px;
+    text-align: left;
+}
+
+/* Table Header Styles */
+thead tr {
+    background-color: #f5f5f5;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.05);
+}
+
+/* Alternating row colors */
+tr:nth-child(odd) {
+    background-color: #f9f9f9;
+}
+
+tr:nth-child(even) {
+    background-color: #fff;
+}
+
+/* Status Indicators */
+tr[data-status="Placed"] {
+    background-color: #cccccc; /* Neutral grey */
+    color: #fff;
+    border-radius: 5px;
+    text-align: center;
+}
+
+tr[data-status="In Progress"] {
+    background-color: #0056b3; /* Blue */
+    color: #fff;
+    border-radius: 5px;
+    text-align: center;
+}
+
+tr[data-status="Completed"] {
+    background-color: green; /* Green */
+    color: #fff;
+    border-radius: 5px;
+    text-align: center;
+}
+
+tr[data-status="Cancelled"] {
+    background-color: #ed0a0a; /* Red */
+    color: #fff;
+    border-radius: 5px;
+    text-align: center;
+}
+
+tr[data-status="Refunded"] {
+    background-color: rgb(246, 163, 7); /* Orange */
+    color: #fff;
+    border-radius: 5px;
+    text-align: center;
+}
+
+tr[data-status="Delayed"] {
+    background-color: purple; /* purple */
+    color: #fff;
+    border-radius: 5px;
+    text-align: center;
+}
+
+/* Icons and Typography */
+.icon {
+    width: 20px;
+    height: 20px;
+    margin-right: 10px;
+}
+
+.bold {
+    font-weight: bold;
+}
+
+/* Other Styles (like shadow for the table) might be needed depending on the rest of your design */
+
+#active-orders-section, .chart-container {
+    margin-bottom: 2rem;
+}
+
+tr:hover {
+    background-color: #eaeaea; /* Slightly darker gray on hover */
+}
+
+tr {
+    transition: background-color 0.3s ease;
+}
+
+
+/* For the question and answer container */
+.qa-container {
+    background-color: #fff;
+    padding: 10px 15px;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    margin-bottom: 15px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 1rem;
+    background: #fff;
+    border-radius: 0.5rem;
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.1);    
+}
+
+/* Add a subtle hover effect to highlight when hovering over */
+.qa-container:hover {
+    background-color: #f9f9f9;
+    transition: background-color 0.3s ease;
+}
+
+/* Separate the questions and answers visually */
+.question-text {
+    font-size: 1.1em;
+    margin-bottom: 10px;
+}
+.response-text {
+    padding-left: 20px;
+    border-left: 3px solid #007BFF;  /* Matches the color of your button for consistency */
+}
+
+.search-section {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 1.5rem;
+}
+
+#question-form input[type="text"] {
+    flex: 1;
+    padding: 0.5rem;
+    border: 1px solid #ccc;
+    border-radius: 0.25rem;
+}
+
+#question-form button[type="submit"] {
+    background: #007BFF;
+    color: #fff;
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 0.25rem;
+    cursor: pointer;
+}
+
+.recommendations {
+    padding: 1rem;
+    background: #f8f9fa;
+    border-radius: 0.5rem;
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.05);
+}
+
+/* Chat Section */
+#chat-section {
+    background-color: #fff;
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: 0px 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+#chat-box {
+    max-height: 50vh;
+    overflow-y: auto;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+    background-color: #f9f9f9;
+}
+
+.message {
+    margin-bottom: 15px;
+    padding: 10px;
+    border-radius: 15px;
+}
+
+.message.user {
+    background-color: #e7f5ff;
+    align-self: flex-end;
+}
+
+.message.assistant {
+    background-color: #007bff;
+    color: white;
+    align-self: flex-start;
+}
+
+/* Input and Button */
+#chat-input {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    margin-top: 15px;
+    padding: 10px;
+}
+
+#chat-form button {
+    background-color: #007bff;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 10px 20px;
+    margin-top: 10px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+#chat-form button:hover {
+    background-color: #0056b3;
+}
+
+/* Utilize Flexbox for form alignment */
+#chat-form {
+    display: flex;
+    flex-direction: column;
+}
+
+
+/* Sidebar */
+#sidebar {
+    background-color: #f4f4f4; /* Light background color for the sidebar */
+    padding: 1rem;
+    min-width: 250px; /* Fixed sidebar width */
+    height: 100vh; /* Full-height sidebar */
+    overflow-y: auto; /* Scrollable if the content is too long */
+    border-right: 1px solid #ddd; /* Add a border to the right of the sidebar */
+    transition: transform 0.3s ease-in-out;
+}
+
+.sidebar-header h3 {
+    font-weight: normal; /* Less emphasis on the sidebar header */
+    color: #333; /* Darker color for the text */
+}
+
+.navbar-brand {
+    font-size: 1.5rem; /* Larger brand size */
+    font-weight: bold; /* Bold brand name */
+}
+
+/* Style the links in the sidebar */
+#sidebar .components a {
+    color: #333; /* Darker text color for better readability */
+    padding: 0.5rem 1rem; /* Spacing around the text */
+    display: block; /* Make the links fill the horizontal space */
+    transition: background-color 0.3s; /* Smooth transition for hover effect */
+}
+
+#sidebar .components a:hover {
+    background-color: #e9e9e9; /* Light background color on hover */
+}
+
+/* Style the collapse elements */
+#sidebar .collapse {
+    border-top: 1px solid #ddd; /* Add a top border to collapsed sections */
+    padding-top: 0.5rem; /* Spacing at the top of the collapsed content */
+}
+
+/* This class will be toggled by JavaScript */
+.sidebar-hidden {
+    transform: translateX(-100%);
+    transition: transform 0.3s ease-in-out;
+}
+
+/* Collapsed sidebar styles */
+.sidebar-collapsed {
+    width: 50px; /* Width of the icon */
+    min-height: 100vh;
+    position: fixed;
+    left: 0;
+    top: 0;
+    background: #fff; /* Background of the collapsed sidebar */
+    z-index: 1000; /* Above other content */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer; /* Indicates it's clickable */
+    /* Rest of your styles... */
+}
+
+/* When sidebar is hidden */
+.d-none {
+    display: none;
+}
+
+/* Style for the icon inside the collapsed sidebar */
+#sidebar-expand {
+    font-size: 24px; /* Icon size */
+    color: #333; /* Icon color */
+}
+
+/* Adjust the left property based on the sidebar visibility */
+.sidebar-hidden #sidebar-collapsed {
+    left: -50px; /* hide the collapsed sidebar */
+}
+
+/* Adjust this to not overlap with the collapsed sidebar */
+#sidebar:not(.sidebar-hidden) {
+    padding-left: 50px; /* or the width of your collapsed sidebar */
+}

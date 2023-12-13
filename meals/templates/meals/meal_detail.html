@@ -1,0 +1,36 @@
+{% extends "shared/base.html" %}
+
+{% block content %}
+    <h2>Meal Details</h2>
+    <h3>{{ meal.name }}</h3>
+
+    <p><strong>Price: </strong>{{ meal.price }}</p>
+
+    <h4>Dishes</h4>
+    <ul>
+        {% for dish in meal.dishes.all %}
+            <li>
+                <h5>{{ dish.name }}</h5>
+                <p>{{ dish.description }}</p>
+                <h6>Ingredients</h6>
+                <ul>
+                    {% for ingredient in dish.ingredients.all %}
+                        <li>
+                            <p>{{ ingredient.name }}</p>
+                        </li>
+                    {% endfor %}
+                </ul>
+                <h2>Reviews</h2>
+                <ul>
+                    {% if summary %}
+                        <li>{{ summmary }}</li>
+                    {% else %}
+                        <li>No review available.</li>
+                    {% endif %}
+                </ul>
+            </li>
+        {% endfor %}
+    </ul>
+
+    <a href="{% url 'meals:meal_list' %}" class="btn btn-primary">Back to Meal List</a>
+{% endblock %}

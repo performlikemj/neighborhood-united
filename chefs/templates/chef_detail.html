@@ -2,6 +2,7 @@
 
 {% block content %}
     <h1>{{ chef.user.username }}</h1>
+    <img src="{{ chef.profile_pic.url }}">
     <p>Experience: {{ chef.experience }}</p>
     <p>Bio: {{ chef.bio }}</p>
 
@@ -15,15 +16,15 @@
     </ul>
 
     <h2>All Dishes</h2>
-    <a href="{% url 'menus:chef_weekly_menu' chef.id %}">View {{ chef.user.username }}'s Menus</a>
+    <a href="{% url 'meals:chef_weekly_meal' chef.id %}">View {{ chef.user.username }}'s meal</a>
 
 
     <h2>Reviews</h2>
     <ul>
-        {% for review in reviews %}
-            <li>{{ review }}</li>
-        {% empty %}
-            <li>No reviews available.</li>
-        {% endfor %}
+        {% if summary %}
+            <li>{{ summmary }}</li>
+        {% else %}
+            <li>No review available.</li>
+        {% endif %}
     </ul>
 {% endblock %}

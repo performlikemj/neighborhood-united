@@ -1,0 +1,13 @@
+{% extends 'shared/base.html' %}
+
+{% block content %}
+
+<h1>Thank you for your order!</h1>
+
+<h2>Order Details:</h2>
+<p>Order ID: {{ order.id }}</p>
+<p>Status: {{ order.status }}</p>
+<p>Delivery Method: {{ order.delivery_method }}</p>
+<!-- You can add more details based on what's in your Order model -->
+
+{% endblock %}

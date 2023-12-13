@@ -1,0 +1,36 @@
+{% extends 'shared/base.html' %}
+{% load meal_tags %}
+
+{% block content %}
+  <h1>Order Details</h1>
+  <p>Order ID: {{ order.id }}</p>
+  <p>Order Date: {{ order.order_date }}</p>
+  <p>Status: {{ order.get_status_display }}</p>
+  <p>Total Price: {{ order.total_price }}</p>
+
+  {% if order.meal_plan %}
+    <h2>Meal Plan from {{ order.meal_plan.week_start_date }} to {{ order.meal_plan.week_end_date }}</h2>
+    <ul>
+      {% for day in order.meal_plan.DAYS_OF_WEEK %}
+        <li><strong>{{ day.1 }}:</strong>
+          <ul>
+            {% for meal_plan_meal in order.meal_plan.mealplanmeal_set.all %}
+              {% if meal_plan_meal.day == day.0 %}
+                <li>{{ meal_plan_meal.meal.name }} - ${{ meal_plan_meal.meal.price }}</li>
+              {% endif %}
+            {% endfor %}
+          </ul>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <h2>Items in Your Order</h2>
+    <ul>
+      {% for order_meal in order.ordermeal_set.all %}
+        <li>{{ order_meal.quantity }}x {{ order_meal.meal.name }} - ${{ order_meal.meal.price }}</li>
+      {% empty %}
+        <li>No items found in this order.</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+{% endblock %}

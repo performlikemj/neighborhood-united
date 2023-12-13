@@ -1,0 +1,15 @@
+{% extends 'shared/base.html' %}
+
+{% block content %}
+  <h2>Payment Successful</h2>
+  <p>Your meal plan has been successfully paid for. Thank you for your purchase!</p>
+
+  <h3>Order Details</h3>
+  <p>Order ID: {{ order.id }}</p>
+  <p>Total Price: ${{ order.total_price }}</p>
+
+  <h3>Meal Plan Details</h3>
+  {% for meal in order.associated_meal_plan.meals.all %}
+    <p>Meal: {{ meal.name }}</p>
+  {% endfor %}
+{% endblock %}

@@ -1,0 +1,10 @@
+{% extends 'shared/base.html' %}
+
+{% block content %}
+<h2>Process Payment</h2>
+<form method="post">
+    {% csrf_token %}
+    <!-- Display payment form here -->
+    <input type="submit" value="Pay">
+</form>
+{% endblock %}

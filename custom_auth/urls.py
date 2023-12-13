@@ -14,5 +14,5 @@ urlpatterns = [
     path('activate/<uidb64>/<token>/', views.activate_view, name='activate'),
     path('verify-email/', views.verify_email_view, name='verify_email'),
     path('confirm-email/<str:uidb64>/<str:token>', views.confirm_email, name='confirm_email'),
-    path('user/re-request-email-change/', views.re_request_email_change, name='re_request_email_change'),   
+    path('user/re-request-email-change/', views.re_request_email_change, name='re_request_email_change'),  
 ]

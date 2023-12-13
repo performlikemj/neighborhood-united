@@ -12,7 +12,7 @@
 <h2>Profile</h2>
 <form method="post" action="{% url 'custom_auth:switch_roles' %}">
   {% csrf_token %}
-  {% if request.user.current_role == 'chef' %}
+  {% if user_role.current_role == 'chef' %}
       <button type="submit">Switch to Customer Role</button>
   {% else %}
       <button type="submit">Switch to Chef Role</button>
@@ -32,7 +32,6 @@
 <!-- Show Address Details -->
 <h3>Address</h3>
 {% for address in customuser.address_set.all %}
-    <p>Address Type: {{ address.address_type }}</p>
     <p>Street: {{ address.street }}</p>
     <p>City: {{ address.city }}</p>
     <p>State: {{ address.state }}</p>

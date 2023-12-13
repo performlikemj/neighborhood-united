@@ -24,6 +24,12 @@
     <script src="https://use.fontawesome.com/e11b11fbd7.js"></script>
     <!-- jQuery -->
     <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.0/jquery.min.js"></script>
+    <!-- Chart JS-->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Include Leaflet CSS and JS in your template -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
 </head>
 <body>
     <!-- Navbar -->
@@ -45,14 +51,18 @@
                             Food
                         </a>
                         <ul class="dropdown-menu" aria-labelledby="navbarDropdownMenu">
-                            <li><a class="dropdown-item" href="/menus/">Dish List</a></li> 
-                            {% if user.current_role == "chef" %}
-                            <li><a class="dropdown-item" href="{% url 'menus:create_menu' %}">Create Menu</a></li>
-                            <li><a class="dropdown-item" href="{% url 'menus:create_dish' %}">Create Dish</a></li>
-                            <li><a class="dropdown-item" href="{% url 'menus:create_ingredient' %}">Create Ingredient</a></li>
+                            <li><a class="dropdown-item" href="/meals/">Dish List</a></li>
+                            {% if current_role == "chef" %}
+                                <li><a class="dropdown-item" href="{% url 'chef_admin:order_dashboard' %}">Order Dashboard</a></li>
+                                <li><a class="dropdown-item" href="{% url 'chef_admin:chef_dashboard' %}">Chef Dashboard</a></li>
+                                <li><a class="dropdown-item" href="{% url 'meals:create_meals' %}">Create Meal</a></li>
+                                <li><a class="dropdown-item" href="{% url 'meals:create_dish' %}">Create Dish</a></li>
+                                <li><a class="dropdown-item" href="{% url 'meals:create_ingredient' %}">Create Ingredient</a></li>
+                            {% elif current_role == "customer" %}
+                                <li><a class="dropdown-item" href="{% url 'customer_dashboard:customer_dashboard' %}">Dashboard</a></li>
+                                <li><a class="dropdown-item" href="{% url 'meals:view_past_orders' %}">Past Orders</a></li>
                             {% endif %}
-                        </ul>
-                        
+                        </ul>                        
                     </li>
                     <li class="nav-item">
                         <a class="nav-link {% if request.path == '/chefs/' %}active{% endif %}" href="/chefs/">Chefs</a>
@@ -85,6 +95,68 @@
             </div>
         </div>
     </nav>
+    {% if request.user.is_authenticated and current_role == "customer" %}
+    <div class="d-flex">
+        <!-- Collapsed sidebar toggle button -->
+        <div id="sidebar-collapsed" class="sidebar-collapsed d-none">
+            <i id="sidebar-expand" class="fa fa-arrow-right" aria-hidden="true"></i>
+
+        </div>
+        <!-- Full sidebar -->
+        <div id="sidebar" class="bg-light border">
+            <!-- Toggle button within the sidebar -->
+            <button id="sidebarToggle" class="btn btn-secondary">Toggle Sidebar</button>
+            <!-- Sidebar Header -->
+            <div class="sidebar-header">
+                <h3>Customer Panel</h3>
+            </div>
+            <!-- Sidebar Links -->
+            <ul class="list-unstyled components">
+                <li><a href="{% url 'customer_dashboard:customer_dashboard' %}">Dashboard</a></li>
+            <!-- History Section -->
+            <li>
+                <a href="#historySubmenu" data-bs-toggle="collapse" aria-expanded="false" class="dropdown-toggle">History</a>
+                <ul class="collapse" id="historySubmenu">
+                    <!-- Static link to the page with full chat history -->
+                    <li><a href="{% url 'customer_dashboard:history_page' %}">Past Chats</a></li>
+
+                    <!-- This section will be dynamically populated by JavaScript -->
+                    <!-- No server-side rendering loop needed here -->
+                </ul>
+            </li> <!-- Close History Section Here -->
+
+                <!-- Food Preferences Form -->
+                <li>
+                    <a href="#preferencesSubmenu" data-bs-toggle="collapse" aria-expanded="false" class="dropdown-toggle">Food Preferences</a>
+                    <ul class="collapse" id="preferencesSubmenu">
+                        <li>
+                            <form id="food-preferences-form">
+                                {{ food_preferences_form.as_p }}
+                                <!-- Render the form fields here -->
+                                <!-- You can use AJAX to load these fields dynamically -->
+                            </form>
+                        </li>
+                    </ul>
+                </li>
+                <!-- Goals -->
+                <li>
+                    <a href="#goalsSubmenu" data-bs-toggle="collapse">Goals</a>
+                    <div class="collapse" id="goalsSubmenu">
+                        <form id="goals-form">
+                            <!-- Render goal form fields here -->
+                            {{ goal_form.as_p }}
+                            <button type="submit" class="btn btn-primary">Save</button>
+                        </form>
+                    </div>
+                </li>
+                <!-- Other Links -->
+                <li><a href="{% url 'qa_app:home' %}">Discover</a></li>
+                <li><a href="{% url 'custom_auth:profile' %}">Profile</a></li>
+            </ul>
+        </div>
+    </div>
+    {% endif %}
+    
     <nav aria-label="breadcrumb">
         <ol class="breadcrumb">
           {% for breadcrumb in breadcrumbs %}
@@ -112,8 +184,10 @@
     </div>
     <!-- Bootstrap JS and its dependencies -->
     <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.9.2/dist/umd/popper.min.js" integrity="sha384-IQsoLXl5PILFhosVNubq5LC7Qb9DXgDA9i+tQ8Zj3iwWAwPtgFTxbJ8NT4GN1R8p" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.min.js" integrity="sha384-cVKIPhGWiC2Al4u+LWgxfKTRIcfu0JTxR+EQDz/bgldoEyl4H0zUF0QKbrJ0EcQF" crossorigin="anonymous"></script>    <!-- Custom JS -->
-    <script src="{% static 'js/main.js' %}"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.min.js" integrity="sha384-cVKIPhGWiC2Al4u+LWgxfKTRIcfu0JTxR+EQDz/bgldoEyl4H0zUF0QKbrJ0EcQF" crossorigin="anonymous"></script>    
+    <!-- Custom JS -->
+    <script type="module" src="{% static 'js/main.js' %}"></script>
+
 
     <footer>
         <div class="container">

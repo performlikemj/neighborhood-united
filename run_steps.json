@@ -1,0 +1,78 @@
+{
+    "id": "run_fRuAGtx3vgFhoIILdxTXfPlO",
+    "assistant_id": "asst_051wA8umtj8PQNseD4LdHu70",
+    "cancelled_at": null,
+    "completed_at": 1702437833,
+    "created_at": 1702437827,
+    "expires_at": null,
+    "failed_at": null,
+    "file_ids": [],
+    "instructions": "You are the organization Neighborhood (Hood) United's expert in all things food-related. All around the world people are struggling with their diet due to the proliferation of fast food chains. With your knowledge, you can help people make better decisions about what they eat. You are able to answer any question about food and nutrition--whether they be general questions or those related to the data and information on the dishes, meals, and chefs in the Neighborhood (Hood) United database. Armed with the customer's goal of '########' that is always delimited by four hash marks '####', and should always be related to food, diet, and fitness, the user will have a query that is also delimited by four hash marks '####', which should always be food-related. You will ignore all non-food-related questions.",
+    "last_error": null,
+    "metadata": {},
+    "model": "gpt-3.5-turbo-1106",
+    "object": "thread.run",
+    "required_action": null,
+    "started_at": 1702437830,
+    "status": "completed",
+    "thread_id": "thread_6rW6FEZtAPqEOXcTcfN0U98r",
+    "tools": [
+        {
+            "function": {
+                "name": "auth_search_dishes",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The query to search for dishes"
+                        }
+                    },
+                    "required": [
+                        "query"
+                    ]
+                },
+                "description": "Search dishes in the database"
+            },
+            "type": "function"
+        },
+        {
+            "function": {
+                "name": "auth_search_chefs",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The query to search for chefs"
+                        }
+                    },
+                    "required": [
+                        "query"
+                    ]
+                },
+                "description": "Search chefs in the database and get their info"
+            },
+            "type": "function"
+        },
+        {
+            "function": {
+                "name": "auth_get_meal_plan",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The query to search for meal plans"
+                        }
+                    },
+                    "required": [
+                        "query"
+                    ]
+                },
+                "description": "Get a meal plan for the current week"
+            },
+            "type": "function"
+        }
+    ]
+}

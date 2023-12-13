@@ -1,0 +1,37 @@
+{% extends 'customer_dashboard/customer_base.html' %}
+
+{% load static %}
+
+{% block javascript %}
+    <script type="module" src="{% static 'js/customer_dashboard.js' %}"></script>
+{% endblock %}
+
+{% block content %}
+  <!-- Chat Section as Primary Content -->
+  <div data-approve-meal-plan-url="{% url 'meals:approve_meal_plan' %}" class="row">
+    <div class="col-md-8 offset-md-2">
+      <div id="chat-section">
+        <h2>Chat with Your Assistant</h2>
+        <form method="POST" id="chat-form">
+          {% csrf_token %}
+          <textarea id="chat-input"></textarea>
+          <input type="hidden" id="thread-id" value=""> 
+          <button type="submit">Send</button>
+        </form>
+        <div id="chat-box"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Structure -->
+  <div id="mealOptionsModal" class="modal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div id="modal-content">
+              <!-- Dynamic content will be added here -->
+            </div>
+        </div>
+        <!-- Add modal footer with buttons if necessary -->
+    </div>
+  </div>
+{% endblock %}

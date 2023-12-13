@@ -1,0 +1,15 @@
+{% extends 'shared/base.html' %}
+
+{% block content %}
+{% for order in past_orders %}
+    <div>
+        <h3>Order ID: {{ order.id }}</h3>
+        <p>Status: {{ order.status }}</p>
+        <p>Order Date: {{ order.order_date }}</p>
+        <p>Delivery Method: {{ order.delivery_method }}</p>
+        <!-- More fields -->
+        <p>Total Price: {{ order.total_price }}</p>
+    </div>
+{% endfor %}
+
+{% endblock %}

@@ -202,27 +202,7 @@ def auth_search_chefs(request, query):
             'service_postal_codes': list(postal_codes_served),
             'serves_user_area': serves_user_area,
         }
-        # Retrieve service areas for each chef
-        postal_codes_served = ChefPostalCode.objects.filter(chef=chef).values_list('postal_code__code', flat=True)
-
-        geojson_features = []
-        base_path = os.path.join(BASE_DIR, 'static/geojson/NY')  # Adjust the path as necessary
-        for code in postal_codes_served:
-            file_path = os.path.join(base_path, f"{code}.geojson")
-            try:
-                with open(file_path, 'r') as file:
-                    geojson = json.load(file)
-                    # Filter out only MultiPolygon features
-                    multipolygon_features = [feature for feature in geojson['features'] if feature['geometry']['type'] == 'MultiPolygon']
-                    geojson_features.extend(multipolygon_features)  # Append filtered features
-            except FileNotFoundError:
-                print(f"GeoJSON file for postal code {code} not found.")
-
-        # Add the service areas to the chef's information
-        chef_info['service_areas'] = {
-            "type": "FeatureCollection",
-            "features": geojson_features
-        }
+        chef_info['service_areas'] = list(ChefPostalCode.objects.filter(chef=chef).values_list('postal_code__code', flat=True))
 
 
         auth_chef_result.append(chef_info)

@@ -202,7 +202,6 @@ def auth_search_chefs(request, query):
             'service_postal_codes': list(postal_codes_served),
             'serves_user_area': serves_user_area,
         }
-        chef_info['service_areas'] = list(ChefPostalCode.objects.filter(chef=chef).values_list('postal_code__code', flat=True))
 
 
         auth_chef_result.append(chef_info)

@@ -16,6 +16,7 @@ from openai import NotFoundError, OpenAI, OpenAIError
 import pytz
 import json
 import os
+import re
 import time
 from django.conf import settings
 from shared.utils import auth_get_meal_plan, auth_search_chefs, auth_search_dishes, approve_meal_plan, guest_get_meal_plan, guest_search_chefs, guest_search_dishes, generate_review_summary, sanitize_query
@@ -486,9 +487,17 @@ def chat_with_gpt(request):
 
             if not question:
                 return JsonResponse({'error': 'No question provided'}, status=400)
+            
+            # Check if thread_id is safe
+            if thread_id and not re.match("^thread_[a-zA-Z0-9]*$", thread_id):
+                return JsonResponse({'error': 'Invalid thread_id'}, status=400)
 
             # Handle existing or new thread
             if thread_id:
+                # Check if thread_id exists in the database
+                if not ChatThread.objects.filter(openai_thread_id=thread_id).exists():
+                    return JsonResponse({'error': 'Thread_id does not exist'}, status=400)
+
                 ChatThread.objects.filter(user=request.user).update(is_active=False)
                 ChatThread.objects.filter(openai_thread_id=thread_id).update(is_active=True)
             else:

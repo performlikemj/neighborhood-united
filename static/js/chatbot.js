@@ -5,14 +5,14 @@
     const chatForm = document.getElementById('chat-form');
     const chatInput = document.getElementById('chat-input');
     const chatBox = document.getElementById('chat-box');
-    const threadId = document.getElementById('thread-id').value; // Get the current thread ID
+    let threadId = document.getElementById('thread-id').value; // Get the current thread ID
 
 
 
     chatForm.addEventListener('submit', function(event) {
         event.preventDefault();
         const question = chatInput.value;
-        const threadId = document.getElementById('thread-id').value; // Get the current thread ID
+        threadId = document.getElementById('thread-id').value; // Get the current thread ID
         displayUserQuestion(question); // Display user question immediately
         chatInput.value = ''; // Clear the input after sending
         sendQuestionToAssistant(question, threadId);
@@ -27,24 +27,31 @@
     }
 
 
-async function sendQuestionToAssistant(question, threadId) {
-    try {
-        const requestBody = threadId ? { question, thread_id: threadId } : { question };
-        const response = await fetch('/customer_dashboard/api/chat_with_gpt/', {
-            method: 'POST',
-            headers: {
-                'X-CSRFToken': getCookie('csrftoken'),
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(requestBody)
-        });
-        const data = await response.json();
-        displayAssistantResponse(data);
-    } catch (error) {
-        console.error('Error sending question to assistant:', error);
-        displayAssistantResponse({ messages: [] });
+
+    async function sendQuestionToAssistant(question) {
+        try {
+            const requestBody = threadId ? { question, thread_id: threadId } : { question };
+            const response = await fetch('/customer_dashboard/api/chat_with_gpt/', {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': getCookie('csrftoken'),
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(requestBody)
+            });
+            const data = await response.json();
+    
+            // Update the currentThreadId with the new_thread_id from the response
+            if (data.new_thread_id) {
+                document.getElementById('thread-id').value = data.new_thread_id; // Store the new thread ID
+            }
+    
+            displayAssistantResponse(data);
+        } catch (error) {
+            console.error('Error sending question to assistant:', error);
+            displayAssistantResponse({ messages: [] });
+        }
     }
-}
 
 
     function createDishesTable(dishes) {

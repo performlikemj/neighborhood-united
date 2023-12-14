@@ -85,6 +85,10 @@ def api_create_ingredient(request):
 
         ingredient = Ingredient.objects.create(name=name, spoonacular_id=spoonacular_id, chef_id=chef.id, calories=calories)
 
+        # Write to file
+        with open('ingredients.txt', 'a') as f:
+            f.write(f'{name}: {calories}\n')
+
         return JsonResponse({
             'name': ingredient.name,
             'spoonacular_id': ingredient.spoonacular_id,

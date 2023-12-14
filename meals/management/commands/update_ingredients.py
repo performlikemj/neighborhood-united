@@ -10,11 +10,12 @@ class Command(BaseCommand):
             # If spoonacular_id is not set, search for the ingredient by name
             if ingredient.spoonacular_id is None:
                 search_results = search_ingredients(ingredient.name)
-                if search_results['results']:
-                    # Set the spoonacular_id to the id of the first search result
-                    ingredient.spoonacular_id = search_results['results'][0]['id']
+                exact_match = next((result for result in search_results['results'] if result['name'].lower() == ingredient.name.lower()), None)
+                if exact_match:
+                    # Set the spoonacular_id to the id of the exact match
+                    ingredient.spoonacular_id = exact_match['id']
                 else:
-                    # If no search results, skip this ingredient
+                    # If no exact match, skip this ingredient
                     self.stdout.write(self.style.WARNING(f'Could not find spoonacular_id for ingredient "{ingredient.name}"'))
                     continue
 

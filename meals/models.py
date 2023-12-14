@@ -13,6 +13,7 @@ class Ingredient(models.Model):
     chef = models.ForeignKey(Chef, on_delete=models.CASCADE, related_name='ingredients')
     name = models.CharField(max_length=200)
     spoonacular_id = models.IntegerField(null=True) 
+    calories = models.FloatField(null=True)
 
     class Meta:
         unique_together = ('spoonacular_id', 'chef',)

@@ -58,6 +58,15 @@ def search_ingredients(query, number=20, apiKey=settings.SPOONACULAR_API_KEY):
     response.raise_for_status()  # Raises an HTTPError if the response status isn't 200
     return response.json()
 
+def get_ingredient_info(id, apiKey=settings.SPOONACULAR_API_KEY):
+    info_url = f"https://api.spoonacular.com/food/ingredients/{id}/information"
+    info_params = {
+        "amount": 1,
+        "apiKey": apiKey,
+    }
+    response = requests.get(info_url, params=info_params)
+    response.raise_for_status()  # Raises an HTTPError if the response status isn't 200
+    return response.json()
 
 @user_passes_test(is_chef, login_url='custom_auth:login')
 def api_create_ingredient(request):
@@ -70,11 +79,16 @@ def api_create_ingredient(request):
             # Ingredient already exists, no need to add it again
             return JsonResponse({"message": "Ingredient already added"}, status=400)
         
-        ingredient = Ingredient.objects.create(name=name, spoonacular_id=spoonacular_id, chef_id=chef.id)
+        # Get ingredient info from Spoonacular API
+        ingredient_info = get_ingredient_info(spoonacular_id)
+        calories = next((nutrient['amount'] for nutrient in ingredient_info['nutrition']['nutrients'] if nutrient['name'] == 'Calories'), None)
+
+        ingredient = Ingredient.objects.create(name=name, spoonacular_id=spoonacular_id, chef_id=chef.id, calories=calories)
 
         return JsonResponse({
             'name': ingredient.name,
             'spoonacular_id': ingredient.spoonacular_id,
+            'calories': ingredient.calories,
             'message': "Ingredient created successfully"
         })
 

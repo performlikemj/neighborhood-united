@@ -1,7 +1,7 @@
 # yourapp/management/commands/update_nutrition.py
 
 from django.core.management.base import BaseCommand
-from menus.models import Dish
+from meals.models import Dish
 
 class Command(BaseCommand):
     help = 'Updates the nutritional information for all dishes'

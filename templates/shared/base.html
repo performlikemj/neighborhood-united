@@ -55,7 +55,7 @@
                             {% if current_role == "chef" %}
                                 <li><a class="dropdown-item" href="{% url 'chef_admin:order_dashboard' %}">Order Dashboard</a></li>
                                 <li><a class="dropdown-item" href="{% url 'chef_admin:chef_dashboard' %}">Chef Dashboard</a></li>
-                                <li><a class="dropdown-item" href="{% url 'meals:create_meals' %}">Create Meal</a></li>
+                                <li><a class="dropdown-item" href="{% url 'meals:create_meal' %}">Create Meal</a></li>
                                 <li><a class="dropdown-item" href="{% url 'meals:create_dish' %}">Create Dish</a></li>
                                 <li><a class="dropdown-item" href="{% url 'meals:create_ingredient' %}">Create Ingredient</a></li>
                             {% elif current_role == "customer" %}

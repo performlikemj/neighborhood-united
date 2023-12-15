@@ -49,7 +49,6 @@ class Dish(models.Model):
         super().save(*args, **kwargs)
         # Update the nutritional information
 
-from django.db import models
 
 class PostalCodeManager(models.Manager):
     def for_user(self, user):

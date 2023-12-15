@@ -276,6 +276,7 @@ def auth_search_dishes(request, query):
     print(f"Postal query: {postal_query}")
     # Apply dietary preference filter
     base_meals = postal_query.filter(id__in=Meal.dietary_objects.for_user(request.user))
+    print(f"Base meals: {base_meals}")
     # Filter the meals based on the chef's serving postal codes and the meal's dietary preference
     # Filter the dishes based on the meals and the dish's name
     dishes = Dish.objects.filter(meal__in=base_meals, name__icontains=query).distinct()

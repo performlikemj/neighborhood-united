@@ -81,7 +81,9 @@ def create_openai_prompt(user_id):
         - auth_get_meal_plan\n
         - chef_service_areas\n
         - service_area_chefs\n
-        - approve_meal_plan\n"""
+        - approve_meal_plan\n
+        
+        When asked about a meal plan or a dish, the assistant will check the ingredients file for the caloric information and return the caloric information if it is available. If the caloric information is not available  the assistant will politely let the customer know that the information is not available. \n\n"""
     ).format(goal=user_goal)
 
     return OPENAI_PROMPT
@@ -355,20 +357,27 @@ def ai_call(tool_call, request):
 def chat_with_gpt(request):
     print("Chatting with GPT")
     assistant_id_file = "assistant_id.txt"
+    ingredients_id_file = "ingredients_current_file_id.txt"
     # Set up OpenAI
     client = OpenAI(api_key=settings.OPENAI_KEY)    
     # Check if the assistant ID is already stored in a file
     if os.path.exists(assistant_id_file):
         with open(assistant_id_file, 'r') as f:
             assistant_id = f.read().strip()
+
+    if os.path.exists(ingredients_id_file):
+        with open(ingredients_id_file, 'r') as f:
+            file_id = f.read().strip()
+            print(f"File ID: {file_id}")
     else:
         print("Creating a new assistant")
         # Create an Assistant
         assistant = client.beta.assistants.create (
             name="Food Expert",
             instructions=create_openai_prompt(request.user.id),
-            model="gpt-3.5-turbo-1106",
-            tools=[
+            model="gpt-4-1106-preview",
+            tools=[ 
+                {"type": "code_interpreter"},
                 {
                     "type": "function",
                     "function": {
@@ -467,7 +476,8 @@ def chat_with_gpt(request):
                         }
                     }
                 }, 
-                            ]
+            ],
+            file_ids=[file_id],
         )
         assistant_id = assistant.id
         # Store the assistant ID in a file
@@ -614,7 +624,7 @@ def chat_with_gpt(request):
 
 
             response_data = {
-                'last_assistant_message': [msg.content[0].text.value for msg in messages.data if msg.role == 'assistant'],
+                'last_assistant_message': next((msg.content[0].text.value for msg in (messages.data) if msg.role == 'assistant'), None),                
                 'run_status': run.status,
                 'formatted_outputs': formatted_outputs,
                 'new_thread_id': thread_id

@@ -20,6 +20,7 @@ import json
 from django.utils import timezone
 from django.contrib import messages
 import stripe
+from openai import OpenAI
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -71,23 +72,50 @@ def get_ingredient_info(id, apiKey=settings.SPOONACULAR_API_KEY):
 @user_passes_test(is_chef, login_url='custom_auth:login')
 def api_create_ingredient(request):
     if request.method == 'POST':
+        print(request.POST)
         chef = request.user.chef
+        print(chef)
         name = request.POST.get('name')
         spoonacular_id = request.POST.get('spoonacular_id')
-
+        print(f'Name: {name}')
+        print(f'Spoonacular ID: {spoonacular_id}')
         if chef.ingredients.filter(spoonacular_id=spoonacular_id).exists():
             # Ingredient already exists, no need to add it again
+            print(f'Ingredient already exists for chef {chef}')
             return JsonResponse({"message": "Ingredient already added"}, status=400)
         
         # Get ingredient info from Spoonacular API
         ingredient_info = get_ingredient_info(spoonacular_id)
+        print(f'Ingredient info: {ingredient_info}')
         calories = next((nutrient['amount'] for nutrient in ingredient_info['nutrition']['nutrients'] if nutrient['name'] == 'Calories'), None)
-
+        print(f'Calories: {calories}')
         ingredient = Ingredient.objects.create(name=name, spoonacular_id=spoonacular_id, chef_id=chef.id, calories=calories)
-
+        print(f'Ingredient: {ingredient}')
         # Write to file
         with open('ingredients.txt', 'a') as f:
             f.write(f'{name}: {calories}\n')
+
+        client = OpenAI(api_key=settings.OPENAI_KEY)
+        # Delete old file from OpenAI
+        try:
+            with open('ingredients_current_file_id.txt', 'r') as f:
+                old_file_id = f.read().strip()
+            client.beta.assistants.delete(old_file_id)
+            with open('ingredients_old_file_id.txt', 'a') as f:
+                f.write(f'{old_file_id}\n')
+        except FileNotFoundError:
+            pass  # If 'ingredients_current_file_id.txt' doesn't exist, there's no old file to delete
+
+        # Upload file to OpenAI
+        file = client.files.create(
+            file=open("ingredients.txt", "rb"),
+            purpose='assistants'
+        )
+        print(f'File: {file}')
+
+        # Write new file id to 'ingredients_current_file_id.txt'
+        with open('ingredients_current_file_id.txt', 'w') as f:
+            f.write(file.id)
 
         return JsonResponse({
             'name': ingredient.name,

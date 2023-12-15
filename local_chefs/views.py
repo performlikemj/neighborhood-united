@@ -10,24 +10,31 @@ def chef_service_areas(request, query):
     # Fetch all chefs whose username contains the normalized query
     chefs = Chef.objects.filter(user__username__icontains=normalized_query)
 
+    print(f'chefs: {chefs}')
     if not chefs.exists():
         return JsonResponse({'error': 'No chefs found based on the query provided'}, status=404)
 
-    chef_data = []
+    auth_chef_result = []
 
     for chef in chefs:
         # Fetch postal codes served by the chef
         postal_codes_served = ChefPostalCode.objects.filter(chef=chef).values_list('postal_code__code', flat=True)
 
+        print(f'chef: {chef.user.username} - postal_codes_served: {postal_codes_served}')
         # Add chef information and service areas
         chef_info = {
             "chef_id": chef.id,
             "name": chef.user.username,
-            "service_areas": list(postal_codes_served)
+            "experience": chef.experience,
+            "bio": chef.bio,
+            "profile_pic": str(chef.profile_pic.url) if chef.profile_pic else None,
+            'service_postal_codes': list(postal_codes_served),
         }
-        chef_data.append(chef_info)
-
-    return JsonResponse(chef_data, safe=False)  # safe=False is used as the top-level object is not a dict
+        auth_chef_result.append(chef_info)
+        print(f'auth_chef_result: {auth_chef_result}')
+    return {
+        "auth_chef_result": auth_chef_result
+    }
 
 def service_area_chefs(request, query):
     # Normalize the query to match the postal code format
@@ -55,7 +62,9 @@ def service_area_chefs(request, query):
             "chefs": chef_info,
         }
 
-        return JsonResponse(response_data)
+        return {
+            "response_data": response_data
+        }
 
     except PostalCode.DoesNotExist:
         return JsonResponse({'error': 'Postal code not found'}, status=404)

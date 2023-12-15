@@ -325,6 +325,7 @@ functions = {
     "auth_get_meal_plan": auth_get_meal_plan,
     "chef_service_areas": chef_service_areas,
     "service_area_chefs": service_area_chefs,
+    "approve_meal_plan": approve_meal_plan,
 }
 
 
@@ -336,11 +337,6 @@ def ai_call(tool_call, request):
 
     # Ensure that 'request' is included in the arguments if needed
     arguments['request'] = request
-
-
-    if name == 'approve_meal_plan':
-        # Directly use request.user to get the authenticated user's data
-        return approve_meal_plan(request)
     
     return_value = functions[name](**arguments)
 
@@ -361,21 +357,22 @@ def chat_with_gpt(request):
     # Set up OpenAI
     client = OpenAI(api_key=settings.OPENAI_KEY)    
     # Check if the assistant ID is already stored in a file
-    if os.path.exists(assistant_id_file):
-        with open(assistant_id_file, 'r') as f:
-            assistant_id = f.read().strip()
 
     if os.path.exists(ingredients_id_file):
         with open(ingredients_id_file, 'r') as f:
             file_id = f.read().strip()
             print(f"File ID: {file_id}")
+            
+    if os.path.exists(assistant_id_file):
+        with open(assistant_id_file, 'r') as f:
+            assistant_id = f.read().strip()
     else:
         print("Creating a new assistant")
         # Create an Assistant
-        assistant = client.beta.assistants.create (
+        assistant = client.beta.assistants.create(
             name="Food Expert",
             instructions=create_openai_prompt(request.user.id),
-            model="gpt-4-1106-preview",
+            model="gpt-3.5-1106",
             tools=[ 
                 {"type": "code_interpreter"},
                 {

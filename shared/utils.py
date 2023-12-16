@@ -25,103 +25,172 @@ from openai import OpenAIError
 from django.utils import timezone
 from meals.views import meal_plan_approval
 
-# def auth_search_ingredients(request, query):
-#     print("From auth_search_ingredients")
-    
-#     # Fetch the user's dietary preference
-#     try:
-#         dietary_preference = request.user.foodpreferences.dietary_preference
-#     except AttributeError:
-#         dietary_preference = None
-
-#     # Determine the current date and the end of the week
-#     current_date = date.today()
-#     end_of_week = current_date + timedelta(days=(6 - current_date.weekday()))  # Sunday is considered the end of the week
-    
-#     # Filter the mealsmeal based on the dietary preference, if available
-#     meal_filter_conditions = Q(start_date__gte=current_date) & Q(end_date__lte=end_of_week)
-#     if dietary_preference:
-#         meal_filter_conditions &= Q(dietary_preference=dietary_preference)
-
-#     # First, find the meals available for the current week
-#     available_meals = Meal.objects.filter(meal_filter_conditions)
-#     # Then, look for the dishes in those meals that contain the ingredient(s) in the query
-#     dishes_with_ingredient = Dish.objects.filter(
-#         ingredients__name__icontains=query,
-#         meal__in=available_meals
-#     ).distinct()
-    
-#     # Finally, list out those dishes along with their chefs
-#     result = []
-#     for dish in dishes_with_ingredient:
-#         meals_for_dish = Meal.objects.filter(dishes=dish)
-#         meal_names = [{"meal_id": meal.id, "name": meal.name} for meal in meals_for_dish]
-#         result.append({
-#             "dish_name": dish.name,
-#             "chef": dish.chef.user.username,
-#             "ingredients": [ingredient.name for ingredient in dish.ingredients.all()],
-#             "meals": meal_names,
-#         })
-
-#     # Fetch a suggested meal plan based on the query
-#     suggested_meal_plan = auth_get_meal_plan(result, query, 'ingredient')
-
-#     if not result:
-#         return {
-#             "message": "No dishes found containing the queried ingredient(s) in the available meals for this week.",
-#             "suggested_meal_plan": suggested_meal_plan
-#         }
-#     return {
-#         "result": result,
-#         "suggested_meal_plan": suggested_meal_plan
-#     }
-
-# def guest_search_ingredients(query, meal_ids=None):
-#     print("From guest_search_ingredients")
-#     # Determine the current date and the end of the week
-#     current_date = date.today()
-#     end_of_week = current_date + timedelta(days=(6 - current_date.weekday()))  # Sunday is considered the end of the week
-    
-#     # First, find the meals available for the current week
-#     available_meals = Meal.objects.filter(
-#         Q(start_date__gte=current_date) & 
-#         Q(end_date__lte=end_of_week)
-#     )
-#     if meal_ids:
-#         available_meals = available_meals.filter(id__in=meal_ids)
-#     # Then, look for the dishes in those meals that contain the ingredient(s) in the query
-#     dishes_with_ingredient = Dish.objects.filter(
-#         ingredients__name__icontains=query,
-#         meal__in=available_meals
-#     ).distinct()
-#     # Finally, list out those dishes along with their chefs
-#     result = []
-#     for dish in dishes_with_ingredient:
-#         meal_for_dish = Meal.objects.filter(dishes=dish)  # This should give you the meals where the dish appears
-#         meal_info = [{"id": meal.id, "name": meal.name} for meal in meals_for_dish]  # Convert it to a list of dictionaries with id and name
-#         result.append({
-#             "dish_id": dish.id,
-#             "dish_name": dish.name,
-#             "chef_id": dish.chef.id,
-#             "chef": dish.chef.user.username,
-#             "ingredients": [ingredient.name for ingredient in dish.ingredients.all()],
-#             "meals": meal_info,
-#         })
-    
-#     # Fetch a suggested meal plan based on the query
-#     suggested_meal_plan = guest_get_meal_plan(query, 'ingredient', meal_ids=meal_ids)
-
-#     if not result:
-#         return {
-#             "message": "No dishes found containing the queried ingredient(s) in the available meals for this week.",
-#             "suggested_meal_plan": suggested_meal_plan
-#         }
-#     return {
-#         "result": result,
-#         "suggested_meal_plan": suggested_meal_plan
-#     }
-
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def search_meal_ingredients(request, query):
+    print("From search_meal_ingredients")
+    # Filter meals by the query in their name
+    print(f"Query: {query}")
+    meals = Meal.objects.filter(name__icontains=query)
+
+    if not meals.exists():
+        return JsonResponse({"error": "No meals found matching the query."}, status=404)
+
+    result = []
+    print(f"Meals: {meals}")
+    for meal in meals:
+        meal_ingredients = {
+            "meal_name": meal.name,
+            "dishes": []
+        }
+        print(f"Meal: {meal}")
+        for dish in meal.dishes.all():
+            dish_detail = {
+                "dish_name": dish.name,
+                "ingredients": [ingredient.name for ingredient in dish.ingredients.all()]
+            }
+
+            meal_ingredients["dishes"].append(dish_detail)
+
+        result.append(meal_ingredients)
+
+    return {
+        "result": result
+    }
+
+def auth_search_meals_excluding_ingredient(request, query):
+    print("From auth_search_meals_excluding_ingredient")
+    
+    # Determine the current date
+    current_date = date(2023, 11, 27)
+
+    # Find dishes containing the excluded ingredient
+    dishes_with_excluded_ingredient = Dish.objects.filter(
+        ingredients__name__icontains=query
+    ).distinct()
+
+    # Filter meals available for the current week and for the user, excluding those with the unwanted ingredient
+    meal_filter_conditions = Q(start_date__gte=current_date)
+    available_meals = Meal.dietary_objects.for_user(request.user).filter(meal_filter_conditions)
+    available_meals = available_meals.exclude(dishes__in=dishes_with_excluded_ingredient)
+
+    # Compile meal details
+    meal_details = []
+    for meal in available_meals:
+        meal_detail = {
+            "meal_id": meal.id,
+            "name": meal.name,
+            "start_date": meal.start_date.strftime('%Y-%m-%d'),
+            "is_available": meal.is_available(),
+            "chefs": [{"id": chef.id, "name": chef.user.username} for chef in meal.chef.all()],
+            "dishes": [{"id": dish.id, "name": dish.name} for dish in meal.dishes.all()]
+        }
+        meal_details.append(meal_detail)
+
+    if not meal_details:
+        return {
+            "message": "No meals found without the specified ingredient for this week.",
+        }
+    return {
+        "result": meal_details,
+    }
+
+def auth_search_ingredients(request, query):
+    print("From auth_search_ingredients")
+    
+    # Determine the current date
+    current_date = date(2023, 11, 27)
+    
+    # Filter meals available for the current week and for the user
+    meal_filter_conditions = Q(start_date__gte=current_date)
+    available_meals = Meal.dietary_objects.for_user(request.user).filter(meal_filter_conditions)
+    
+    # Find dishes containing the queried ingredient
+    dishes_with_ingredient = Dish.objects.filter(
+        ingredients__name__icontains=query,
+    ).distinct()
+    
+    # Initialize data structure to store meal details
+    meal_details = defaultdict(lambda: {'name': '', 'chefs': [], 'dishes': []})
+
+    # Iterate over found dishes and compile meal details
+    for dish in dishes_with_ingredient:
+        # Fetch meals including the current dish and are available
+        meals_with_dish = available_meals.filter(dishes=dish)
+
+        for meal in meals_with_dish:
+            # Update meal details with chef and dish information
+            meal_detail = meal_details[meal.id]
+            meal_detail['name'] = meal.name
+            meal_detail['start_date'] = meal.start_date.strftime('%Y-%m-%d')
+            meal_detail['is_available'] = meal.is_available()
+
+            # Add chef details if not already present
+            chef_info = {"id": dish.chef.id, "name": dish.chef.user.username}
+            if chef_info not in meal_detail['chefs']:
+                meal_detail['chefs'].append(chef_info)
+
+            # Add dish details
+            dish_info = {
+                "id": dish.id,
+                "name": dish.name,
+                "ingredients": [{"id": ingredient.id, "name": ingredient.name} for ingredient in dish.ingredients.all()]
+            }
+            meal_detail['dishes'].append(dish_info)
+
+    # Convert the result to a list format
+    result = [{"meal_id": k, **v} for k, v in meal_details.items()]
+
+    if not result:
+        return {
+            "message": "No dishes found containing the queried ingredient(s) in the available meals for this week.",
+        }
+    return {
+        "result": result,
+    }
+
+def guest_search_ingredients(query, meal_ids=None):
+    print("From guest_search_ingredients")
+    # Determine the current date and the end of the week
+    current_date = date(2023, 11, 27)
+    
+    # First, find the meals available for the current week
+    available_meals = Meal.objects.filter(
+        Q(start_date__gte=current_date)
+    )
+    if meal_ids:
+        available_meals = available_meals.filter(id__in=meal_ids)
+    # Then, look for the dishes in those meals that contain the ingredient(s) in the query
+    dishes_with_ingredient = Dish.objects.filter(
+        ingredients__name__icontains=query,
+        meal__dishes__in=available_meals
+    ).distinct()
+    # Finally, list out those dishes along with their chefs
+    result = []
+    for dish in dishes_with_ingredient:
+        meal_for_dish = Meal.objects.filter(dishes=dish)  # This should give you the meals where the dish appears
+        meal_info = [{"id": meal.id, "name": meal.name} for meal in meals_for_dish]  # Convert it to a list of dictionaries with id and name
+        result.append({
+            "dish_id": dish.id,
+            "dish_name": dish.name,
+            "chef_id": dish.chef.id,
+            "chef": dish.chef.user.username,
+            "ingredients": [ingredient.name for ingredient in dish.ingredients.all()],
+            "meals": meal_info,
+        })
+    
+    # Fetch a suggested meal plan based on the query
+    suggested_meal_plan = guest_get_meal_plan(query, 'ingredient', meal_ids=meal_ids)
+
+    if not result:
+        return {
+            "message": "No dishes found containing the queried ingredient(s) in the available meals for this week.",
+        }
+    return {
+        "result": result,
+    }
+
 
 def auth_search_chefs(request, query):
     # Fetch user's dietary preference
@@ -130,10 +199,6 @@ def auth_search_chefs(request, query):
         dietary_preference = request.user.foodpreferences.dietary_preference
     except AttributeError:
         dietary_preference = None
-
-  
-    
-    
 
     # Normalize the query by removing common titles and trimming whitespace
     normalized_query = query.lower().replace('chef', '').strip()

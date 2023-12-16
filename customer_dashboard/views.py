@@ -19,7 +19,7 @@ import os
 import re
 import time
 from django.conf import settings
-from shared.utils import auth_get_meal_plan, auth_search_chefs, auth_search_dishes, approve_meal_plan, guest_get_meal_plan, guest_search_chefs, guest_search_dishes, generate_review_summary, sanitize_query
+from shared.utils import auth_get_meal_plan, auth_search_chefs, auth_search_dishes, approve_meal_plan, auth_search_ingredients, auth_search_meals_excluding_ingredient, search_meal_ingredients,guest_search_ingredients ,guest_get_meal_plan, guest_search_chefs, guest_search_dishes, generate_review_summary, sanitize_query
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
 
@@ -82,6 +82,9 @@ def create_openai_prompt(user_id):
         - chef_service_areas\n
         - service_area_chefs\n
         - approve_meal_plan\n
+        - auth_search_ingredients\n
+        - auth_search_meals_excluding_ingredient\n
+        - search_meal_ingredients\n
         
         When asked about a meal plan or a dish, the assistant will check the ingredients file for the caloric information and return the caloric information if it is available. If the caloric information is not available  the assistant will politely let the customer know that the information is not available. \n\n"""
     ).format(goal=user_goal)
@@ -326,6 +329,9 @@ functions = {
     "chef_service_areas": chef_service_areas,
     "service_area_chefs": service_area_chefs,
     "approve_meal_plan": approve_meal_plan,
+    "auth_search_ingredients": auth_search_ingredients,
+    "search_meal_ingredients": search_meal_ingredients,
+    'auth_search_meals_excluding_ingredient': auth_search_meals_excluding_ingredient,
 }
 
 
@@ -366,13 +372,14 @@ def chat_with_gpt(request):
     if os.path.exists(assistant_id_file):
         with open(assistant_id_file, 'r') as f:
             assistant_id = f.read().strip()
+
     else:
         print("Creating a new assistant")
         # Create an Assistant
         assistant = client.beta.assistants.create(
             name="Food Expert",
             instructions=create_openai_prompt(request.user.id),
-            model="gpt-3.5-1106",
+            model="gpt-3.5-turbo-1106",
             tools=[ 
                 {"type": "code_interpreter"},
                 {
@@ -472,7 +479,58 @@ def chat_with_gpt(request):
                             "required": []
                         }
                     }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "auth_search_ingredients",
+                        "description": "Search for ingredients in the database",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The query to search for ingredients",
+                                },
+                            },
+                            "required": ["query"],
+                        },
+                    }
                 }, 
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "auth_search_meals_excluding_ingredient",
+                        "description": "Search the database for meals that are excluding an ingredient",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The query to search for meals that exclude the ingredient",
+                                },
+                            },
+                            "required": ["query"],
+                        },
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search_meal_ingredients",
+                        "description": "Search the database for the ingredients of a meal",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The query to search for a meal's ingredients",
+                                },
+                            },
+                            "required": ["query"],
+                        },
+                    }
+                },
             ],
             file_ids=[file_id],
         )

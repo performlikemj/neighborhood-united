@@ -367,7 +367,9 @@ def create_meal(request):
 
 def chef_weekly_meal(request, chef_id):
     chef = get_object_or_404(Chef, id=chef_id)
-    today = date.today()
+    # Calculate the current week's date range
+    week_shift = max(int(request.user.week_shift), 0)
+    today = timezone.now().date() + timedelta(weeks=week_shift)
     meals = chef.meals.filter(start_date__gte=today).order_by('start_date')
 
     context = {
@@ -399,7 +401,7 @@ def get_meal_details(request):
         "name": meal.name,
         "chef": meal.chef.user.username,
         "start_date": meal.start_date.strftime('%Y-%m-%d'),
-        "is_available": meal.is_available(),
+        "is_available": meal.is_available(request.user.week_shift), 
         "dishes": [dish.name for dish in meal.dishes.all()]
     }
 
@@ -505,8 +507,7 @@ def get_alternative_meals(request):
     # Calculate the current week's date range
     week_shift = max(int(request.user.week_shift), 0)
     print(f'Week shift: {week_shift}')
-    # adjusted_today = timezone.now().date() + timedelta(weeks=week_shift)
-    adjusted_today = date(2023, 11, 27)
+    adjusted_today = timezone.now().date() + timedelta(weeks=week_shift)
     print(f'Adjusted today: {adjusted_today}')
     start_of_week = adjusted_today - timedelta(days=adjusted_today.weekday()) + timedelta(weeks=week_shift)
     print(f'Start of week: {start_of_week}')
@@ -605,7 +606,8 @@ def submit_meal_plan_updates(request):
 @login_required
 def meal_plan_approval(request):
     # Step 1: Retrieve the current MealPlan for the user
-    today = date(2023, 11, 27)
+    week_shift = max(int(request.user.week_shift), 0)
+    today = timezone.now().date() + timedelta(weeks=week_shift)
     meal_plan = get_object_or_404(MealPlan, user=request.user, week_start_date__lte=today, week_end_date__gte=today)
     
     # Check if the meal plan is already associated with an order

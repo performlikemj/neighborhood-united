@@ -19,7 +19,7 @@ import os
 import re
 import time
 from django.conf import settings
-from shared.utils import auth_get_meal_plan, auth_search_chefs, auth_search_dishes, approve_meal_plan, auth_search_ingredients, auth_search_meals_excluding_ingredient, search_meal_ingredients,guest_search_ingredients ,guest_get_meal_plan, guest_search_chefs, guest_search_dishes, generate_review_summary, sanitize_query
+from shared.utils import auth_get_meal_plan, auth_search_chefs, auth_search_dishes, approve_meal_plan, auth_search_ingredients, auth_search_meals_excluding_ingredient, search_meal_ingredients, suggest_alternative_meals,guest_search_ingredients ,guest_get_meal_plan, guest_search_chefs, guest_search_dishes, generate_review_summary, sanitize_query
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
 
@@ -86,7 +86,7 @@ def create_openai_prompt(user_id):
         - auth_search_meals_excluding_ingredient\n
         - search_meal_ingredients\n
         
-        When asked about a meal plan or a dish, the assistant will check the ingredients file for the caloric information and return the caloric information if it is available. If the caloric information is not available  the assistant will politely let the customer know that the information is not available. \n\n"""
+        When asked about a meal plan or a dish, the assistant will check the attached file for the caloric information--noting the key is the food name and the value is the calories--and return the caloric information if it is available. If the caloric information is not available  the assistant will politely let the customer know that the information is not available. \n\n"""
     ).format(goal=user_goal)
 
     return OPENAI_PROMPT
@@ -331,21 +331,24 @@ functions = {
     "approve_meal_plan": approve_meal_plan,
     "auth_search_ingredients": auth_search_ingredients,
     "search_meal_ingredients": search_meal_ingredients,
-    'auth_search_meals_excluding_ingredient': auth_search_meals_excluding_ingredient,
+    "auth_search_meals_excluding_ingredient": auth_search_meals_excluding_ingredient,
+    "suggest_alternative_meals": suggest_alternative_meals,
 }
 
 
 def ai_call(tool_call, request):
     print(f"Tool call: {tool_call}")
     function = tool_call.function
+    print(f"Function: {function}")
     name = function.name
+    print(f"Name: {name}")
     arguments = json.loads(function.arguments)
-
+    print(f"Arguments: {arguments}")
     # Ensure that 'request' is included in the arguments if needed
     arguments['request'] = request
-    
+    print(f"Arguments: {arguments}")
     return_value = functions[name](**arguments)
-
+    print(f"Return value: {return_value}")
     tool_outputs = {
         "tool_call_id": tool_call.id,
         "output": return_value,
@@ -364,6 +367,7 @@ def chat_with_gpt(request):
     client = OpenAI(api_key=settings.OPENAI_KEY)    
     # Check if the assistant ID is already stored in a file
 
+
     if os.path.exists(ingredients_id_file):
         with open(ingredients_id_file, 'r') as f:
             file_id = f.read().strip()
@@ -373,6 +377,196 @@ def chat_with_gpt(request):
         with open(assistant_id_file, 'r') as f:
             assistant_id = f.read().strip()
 
+        # assistant = client.beta.assistants.update(
+        #     name="Food Expert",
+        #     assistant_id=assistant_id,
+        #     instructions=create_openai_prompt(request.user.id),
+        #     model="gpt-3.5-turbo-1106",
+        #     tools=[ 
+        #         {"type": "code_interpreter",},
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "auth_search_dishes",
+        #                 "description": "Search dishes in the database",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {
+        #                         "query": {
+        #                             "type": "string",
+        #                             "description": "The query to search for dishes",
+        #                         },
+        #                     },
+        #                     "required": ["query"],
+        #                 },
+        #             }
+        #         },
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "auth_search_chefs",
+        #                 "description": "Search chefs in the database and get their info",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {
+        #                         "query": {
+        #                             "type": "string",
+        #                             "description": "The query to search for chefs",
+        #                         },
+        #                     },
+        #                     "required": ["query"],
+        #                 },
+        #             }
+        #         },
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "auth_get_meal_plan",
+        #                 "description": "Get a meal plan for the current week",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {
+        #                         "query": {
+        #                             "type": "string",
+        #                             "description": "The query to search for meal plans",
+        #                         },
+        #                     },
+        #                     "required": ["query"],
+        #                 },
+        #             }
+        #         },
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "chef_service_areas",
+        #                 "description": "Retrieve service areas for a specified chef based on their name or identifier.",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {
+        #                         "query": {
+        #                             "type": "string",
+        #                             "description": "The query to search for a chef's service areas, typically using the chef's name or identifier."
+        #                         }
+        #                     },
+        #                     "required": ["query"]
+        #                 }
+        #             }
+        #         },
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "service_area_chefs",
+        #                 "description": "Search for chefs serving a specific postal code area.",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {
+        #                         "query": {
+        #                             "type": "string",
+        #                             "description": "The query to find chefs serving a particular postal code."
+        #                         }
+        #                     },
+        #                     "required": ["query"]
+        #                 }
+        #             }
+        #         },  
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "approve_meal_plan",
+        #                 "description": "Approve the meal plan and proceed to payment",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {
+        #                     },
+        #                     "required": []
+        #                 }
+        #             }
+        #         },
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "auth_search_ingredients",
+        #                 "description": "Search for ingredients in the database",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {
+        #                         "query": {
+        #                             "type": "string",
+        #                             "description": "The query to search for ingredients",
+        #                         },
+        #                     },
+        #                     "required": ["query"],
+        #                 },
+        #             }
+        #         }, 
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "auth_search_meals_excluding_ingredient",
+        #                 "description": "Search the database for meals that are excluding an ingredient",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {
+        #                         "query": {
+        #                             "type": "string",
+        #                             "description": "The query to search for meals that exclude the ingredient",
+        #                         },
+        #                     },
+        #                     "required": ["query"],
+        #                 },
+        #             }
+        #         },
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "search_meal_ingredients",
+        #                 "description": "Search the database for the ingredients of a meal",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {
+        #                         "query": {
+        #                             "type": "string",
+        #                             "description": "The query to search for a meal's ingredients",
+        #                         },
+        #                     },
+        #                     "required": ["query"],
+        #                 },
+        #             }
+        #         },
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "suggest_alternative_meals",
+        #                 "description": "Suggest alternative meals based on a list of meal IDs and corresponding days of the week. Each meal ID will have a corresponding day to find alternatives.",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {
+        #                         "meal_ids": {
+        #                             "type": "array",
+        #                             "items": {
+        #                                 "type": "integer",
+        #                                 "description": "A unique identifier for a meal."
+        #                             },
+        #                             "description": "List of meal IDs to exclude from suggestions."
+        #                         },
+        #                         "days_of_week": {
+        #                             "type": "array",
+        #                             "items": {
+        #                                 "type": "string",
+        #                                 "description": "The day of the week for a meal, e.g., 'Monday', 'Tuesday', etc."
+        #                             },
+        #                             "description": "List of days of the week corresponding to each meal ID."
+        #                         }
+        #                     },
+        #                     "required": ["meal_ids", "days_of_week"]
+        #                 }
+        #             }
+        #         },
+        #     ],
+        # )
+      
+
+
     else:
         print("Creating a new assistant")
         # Create an Assistant
@@ -381,7 +575,7 @@ def chat_with_gpt(request):
             instructions=create_openai_prompt(request.user.id),
             model="gpt-3.5-turbo-1106",
             tools=[ 
-                {"type": "code_interpreter"},
+                {"type": "code_interpreter",},
                 {
                     "type": "function",
                     "function": {
@@ -420,16 +614,12 @@ def chat_with_gpt(request):
                     "type": "function",
                     "function": {
                         "name": "auth_get_meal_plan",
-                        "description": "Get a meal plan for the current week",
+                        "description": "Get or create a meal plan for the current week",
                         "parameters": {
                             "type": "object",
                             "properties": {
-                                "query": {
-                                    "type": "string",
-                                    "description": "The query to search for meal plans",
-                                },
                             },
-                            "required": ["query"],
+                            "required": []
                         },
                     }
                 },
@@ -529,6 +719,35 @@ def chat_with_gpt(request):
                             },
                             "required": ["query"],
                         },
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "suggest_alternative_meals",
+                        "description": "Suggest alternative meals based on a list of meal IDs and corresponding days of the week. Each meal ID will have a corresponding day to find alternatives.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "meal_ids": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "integer",
+                                        "description": "A unique identifier for a meal."
+                                    },
+                                    "description": "List of meal IDs to exclude from suggestions."
+                                },
+                                "days_of_week": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string",
+                                        "description": "The day of the week for a meal, e.g., 'Monday', 'Tuesday', etc."
+                                    },
+                                    "description": "List of days of the week corresponding to each meal ID."
+                                }
+                            },
+                            "required": ["meal_ids", "days_of_week"]
+                        }
                     }
                 },
             ],

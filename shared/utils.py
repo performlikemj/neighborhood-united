@@ -10,13 +10,12 @@ from django.http import JsonResponse
 from django.core.paginator import Paginator
 from chefs.models import Chef
 from custom_auth.models import Address
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from django.db.models import Q
 from reviews.models import Review
 from django.contrib.contenttypes.models import ContentType
 from random import sample
 from collections import defaultdict
-from datetime import datetime
 from local_chefs.views import chef_service_areas, service_area_chefs
 from customer_dashboard.models import FoodPreferences
 import os
@@ -27,6 +26,59 @@ from meals.views import meal_plan_approval
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+
+
+def suggest_alternative_meals(request, meal_ids, days_of_week):
+    """
+    Suggest alternative meals based on a list of meal IDs and corresponding days of the week.
+    """
+    print("From suggest_alternative_meals")
+    alternative_meals = []
+    week_shift = max(int(request.user.week_shift), 0)  # User's ability to plan for future weeks
+
+    today = timezone.now().date() + timedelta(weeks=week_shift)  # Adjust today's date based on week_shift
+    current_weekday = today.weekday()
+    print(f"Today: {today}")
+
+    # Map of day names to numbers
+    day_to_number = {
+        'Monday': 0, 'Tuesday': 1, 'Wednesday': 2, 'Thursday': 3,
+        'Friday': 4, 'Saturday': 5, 'Sunday': 6
+    }
+
+    for meal_id, day_of_week in zip(meal_ids, days_of_week):
+        print(f"Meal ID: {meal_id}")
+        print(f"Day of week: {day_of_week}")
+
+        # Get the day number from the map
+        day_of_week_number = day_to_number.get(day_of_week)
+        if day_of_week_number is None:
+            print(f"Invalid day of week: {day_of_week}")
+            continue
+
+        print(f"Day of week number: {day_of_week_number}")
+        days_until_target = (day_of_week_number - current_weekday + 7) % 7
+        print(f"Days until target: {days_until_target}")
+        target_date = today + timedelta(days=days_until_target)
+        print(f"Target date for {day_of_week}: {target_date}")
+
+        # Fetch alternative meals for the target date, excluding the current meal ID
+        available_meals = Meal.dietary_objects.for_user(request.user).filter(
+            start_date=target_date
+        ).exclude(id=meal_id)
+        print(f"Available meals for {day_of_week}: {available_meals}")
+        for meal in available_meals:
+            meal_details = {
+                "meal_id": meal.id,
+                "name": meal.name,
+                "start_date": meal.start_date.strftime('%Y-%m-%d'),
+                "is_available": meal.is_available(week_shift),
+                "chef": meal.chef.user.username,
+                # Add more details as needed
+            }
+            alternative_meals.append(meal_details)
+
+    return {"alternative_meals": alternative_meals}
 
 def search_meal_ingredients(request, query):
     print("From search_meal_ingredients")
@@ -63,7 +115,8 @@ def auth_search_meals_excluding_ingredient(request, query):
     print("From auth_search_meals_excluding_ingredient")
     
     # Determine the current date
-    current_date = date(2023, 11, 27)
+    week_shift = max(int(request.user.week_shift), 0)  # Ensure week_shift is not negative
+    current_date = timezone.now().date() + timedelta(weeks=week_shift)
 
     # Find dishes containing the excluded ingredient
     dishes_with_excluded_ingredient = Dish.objects.filter(
@@ -73,6 +126,7 @@ def auth_search_meals_excluding_ingredient(request, query):
     # Filter meals available for the current week and for the user, excluding those with the unwanted ingredient
     meal_filter_conditions = Q(start_date__gte=current_date)
     available_meals = Meal.dietary_objects.for_user(request.user).filter(meal_filter_conditions)
+    print(f"Available meals: {available_meals}")
     available_meals = available_meals.exclude(dishes__in=dishes_with_excluded_ingredient)
 
     # Compile meal details
@@ -82,7 +136,7 @@ def auth_search_meals_excluding_ingredient(request, query):
             "meal_id": meal.id,
             "name": meal.name,
             "start_date": meal.start_date.strftime('%Y-%m-%d'),
-            "is_available": meal.is_available(),
+            "is_available": meal.is_available(week_shift),
             "chefs": [{"id": chef.id, "name": chef.user.username} for chef in meal.chef.all()],
             "dishes": [{"id": dish.id, "name": dish.name} for dish in meal.dishes.all()]
         }
@@ -100,7 +154,8 @@ def auth_search_ingredients(request, query):
     print("From auth_search_ingredients")
     
     # Determine the current date
-    current_date = date(2023, 11, 27)
+    week_shift = max(int(request.user.week_shift), 0)
+    current_date = timezone.now().date() + timedelta(weeks=week_shift)
     
     # Filter meals available for the current week and for the user
     meal_filter_conditions = Q(start_date__gte=current_date)
@@ -124,7 +179,7 @@ def auth_search_ingredients(request, query):
             meal_detail = meal_details[meal.id]
             meal_detail['name'] = meal.name
             meal_detail['start_date'] = meal.start_date.strftime('%Y-%m-%d')
-            meal_detail['is_available'] = meal.is_available()
+            meal_detail['is_available'] = meal.is_available(week_shift)
 
             # Add chef details if not already present
             chef_info = {"id": dish.chef.id, "name": dish.chef.user.username}
@@ -153,7 +208,8 @@ def auth_search_ingredients(request, query):
 def guest_search_ingredients(query, meal_ids=None):
     print("From guest_search_ingredients")
     # Determine the current date and the end of the week
-    current_date = date(2023, 11, 27)
+    week_shift = max(int(request.user.week_shift), 0) # Ensure week_shift is not negative
+    current_date = timezone.now().date() + timedelta(weeks=week_shift)
     
     # First, find the meals available for the current week
     available_meals = Meal.objects.filter(
@@ -250,7 +306,7 @@ def auth_search_chefs(request, query):
                         "meal_id": meal.id,
                         "meal_name": meal.name,
                         "start_date": meal.start_date.strftime('%Y-%m-%d'),
-                        "is_available": meal.is_available()
+                        "is_available": meal.is_available(request.user.week_shift)
                     }
                     for meal in dish_meals
                 ]
@@ -337,7 +393,8 @@ def guest_search_chefs(query):
 def auth_search_dishes(request, query):
     print("From auth_search_dishes")
     # Query meals based on postal code
-    postal_query = Meal.postal_objects.for_user(user=request.user).filter(start_date__gte=date(2023, 11, 27))
+    week_shift = max(int(request.user.week_shift), 0)  # Ensure week_shift is not negative
+    postal_query = Meal.postal_objects.for_user(user=request.user).filter(start_date__gte=timezone.now().date() + timedelta(weeks=week_shift))
     print(f"Postal query: {postal_query}")
     # Apply dietary preference filter
     base_meals = postal_query.filter(id__in=Meal.dietary_objects.for_user(request.user))
@@ -358,7 +415,7 @@ def auth_search_dishes(request, query):
                 'meal_id': meal.id,
                 'name': meal.name,
                 'start_date': meal.start_date.strftime('%Y-%m-%d'),
-                'is_available': meal.is_available(),
+                'is_available': meal.is_available(week_shift),
                 'image_url': meal.image.url if meal.image else None,  # Add this line
                 'chefs': [{'id': dish.chef.id, 'name': dish.chef.user.username}],
                 'dishes': [{'id': dish.id, 'name': dish.name}],
@@ -412,12 +469,11 @@ def guest_search_dishes(query):
 
 
 
-def auth_get_meal_plan(request, query, query_type=None):
+def auth_get_meal_plan(request):
     print("From auth_get_meal_plan")
     # Calculate the current week's date range
     week_shift = max(int(request.user.week_shift), 0)  # Ensure week_shift is not negative
-    # adjusted_today = timezone.now().date() + timedelta(weeks=week_shift)
-    adjusted_today = date(2023, 11, 27)
+    adjusted_today = timezone.now().date() + timedelta(weeks=week_shift)
     start_of_week = adjusted_today - timedelta(days=adjusted_today.weekday()) + timedelta(weeks=week_shift)
     end_of_week = start_of_week + timedelta(days=6)
 
@@ -480,7 +536,7 @@ def auth_get_meal_plan(request, query, query_type=None):
             "name": meal.name,
             "chef": meal.chef.user.username,
             "start_date": meal.start_date.strftime('%Y-%m-%d'),
-            "is_available": meal.is_available(),
+            "is_available": meal.is_available(week_shift),
             "dishes": [dish.name for dish in meal.dishes.all()],
             "day": meal_plan_meal.day,
             "meal_plan_id": meal_plan.id,

@@ -3,7 +3,7 @@ from chefs.models import Chef
 import requests
 import json
 from django.conf import settings
-from datetime import date
+from datetime import date, timedelta
 from django.utils import timezone
 from custom_auth.models import CustomUser, Address
 from django.contrib.contenttypes.fields import GenericRelation
@@ -123,9 +123,10 @@ class Meal(models.Model):
         return f'{self.chef.user.username} - {self.start_date}'
     
 
-    def is_available(self):
-        current_date = date.today()
-        return self.start_date <= current_date 
+    def is_available(self, week_shift=0):
+        week_shift = max(int(week_shift), 0)  # User's ability to plan for future weeks
+        current_date = timezone.now().date() + timedelta(weeks=week_shift) 
+        return self.start_date <= current_date  
 
     def save(self, *args, **kwargs):
         if not self.created_date:

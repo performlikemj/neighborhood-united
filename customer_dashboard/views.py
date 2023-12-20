@@ -23,6 +23,7 @@ from shared.utils import auth_get_meal_plan, auth_search_chefs, auth_search_dish
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
 
+
 def is_customer(user):
     if user.is_authenticated:
         try:
@@ -422,16 +423,12 @@ def chat_with_gpt(request):
         #             "type": "function",
         #             "function": {
         #                 "name": "auth_get_meal_plan",
-        #                 "description": "Get a meal plan for the current week",
+        #                 "description": "Get or create a meal plan for the current week",
         #                 "parameters": {
         #                     "type": "object",
         #                     "properties": {
-        #                         "query": {
-        #                             "type": "string",
-        #                             "description": "The query to search for meal plans",
-        #                         },
         #                     },
-        #                     "required": ["query"],
+        #                     "required": []
         #                 },
         #             }
         #         },
@@ -563,8 +560,7 @@ def chat_with_gpt(request):
         #             }
         #         },
         #     ],
-        # )
-      
+        # )   
 
 
     else:
@@ -750,8 +746,32 @@ def chat_with_gpt(request):
                         }
                     }
                 },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "add_meal_to_plan",
+                        "description": "Add a meal to a specified day in the meal plan",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "meal_plan_id": {
+                                    "type": "integer",
+                                    "description": "The unique identifier of the meal plan"
+                                },
+                                "meal_id": {
+                                    "type": "integer",
+                                    "description": "The unique identifier of the meal to add"
+                                },
+                                "day": {
+                                    "type": "string",
+                                    "description": "The day to add the meal to"
+                                }
+                            },
+                            "required": ["meal_plan_id", "meal_id", "day"]
+                        }
+                    }
+                },
             ],
-            file_ids=[file_id],
         )
         assistant_id = assistant.id
         # Store the assistant ID in a file

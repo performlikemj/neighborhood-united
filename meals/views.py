@@ -21,6 +21,7 @@ from django.utils import timezone
 from django.contrib import messages
 import stripe
 from openai import OpenAI
+from django.views.decorators.http import require_http_methods
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -459,8 +460,6 @@ def create_meal_plan(request):
 
     # return HttpResponseBadRequest('Invalid Method')
 
-from django.http import JsonResponse
-from django.views.decorators.http import require_http_methods
 
 @login_required
 @require_http_methods(["GET", "POST"])  # Restrict to GET and POST methods

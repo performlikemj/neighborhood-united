@@ -160,10 +160,12 @@
         const chatBox = document.getElementById('chat-box');
     
         // Display the assistant's text response
-        const responseElement = document.createElement('div');
+        const responseElement = document.createElement('pre');
         responseElement.classList.add('message', 'assistant');
         if (data.last_assistant_message) {
-            responseElement.textContent = `Assistant: ${data.last_assistant_message}`;
+            // Replace **text** with <strong>text</strong>
+            const formattedMessage = data.last_assistant_message.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            responseElement.textContent = `Assistant: ${formattedMessage}`;
             chatBox.appendChild(responseElement);
         } else {
             responseElement.textContent = "Assistant: No response received.";

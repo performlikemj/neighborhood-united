@@ -467,6 +467,19 @@ def guest_search_dishes(query):
         "suggested_meal_plan": suggested_meal_plan
     }
 
+def add_meal_to_plan(request, meal_plan_id, meal_id, day):
+    print("From add_meal_to_plan")
+    try:
+        meal_plan = MealPlan.objects.get(id=meal_plan_id, user=request.user)
+        print(f"Meal plan: {meal_plan}")
+    except MealPlan.DoesNotExist:
+        return JsonResponse({'status': 'error', 'message': 'Meal plan not found.'}, status=404)
+    
+    meal = Meal.objects.get(id=meal_id)
+    print(f"Meal: {meal}")
+    MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day)
+    print(f"MealPlanMeal: {MealPlanMeal.objects.get(meal_plan=meal_plan, meal=meal, day=day)}")
+    return JsonResponse({'status': 'success', 'action': 'added', 'new_meal': meal.name})
 
 
 def auth_get_meal_plan(request):

@@ -19,7 +19,7 @@ import os
 import re
 import time
 from django.conf import settings
-from shared.utils import auth_get_meal_plan, auth_search_chefs, auth_search_dishes, approve_meal_plan, auth_search_ingredients, auth_search_meals_excluding_ingredient, search_meal_ingredients, suggest_alternative_meals,guest_search_ingredients ,guest_get_meal_plan, guest_search_chefs, guest_search_dishes, generate_review_summary, sanitize_query
+from shared.utils import replace_meal_in_plan, remove_meal_from_plan, list_upcoming_meals, get_date, create_meal_plan, add_meal_to_plan, auth_get_meal_plan, auth_search_chefs, auth_search_dishes, approve_meal_plan, auth_search_ingredients, auth_search_meals_excluding_ingredient, search_meal_ingredients, suggest_alternative_meals,guest_search_ingredients ,guest_get_meal_plan, guest_search_chefs, guest_search_dishes, generate_review_summary, sanitize_query
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
 
@@ -86,6 +86,13 @@ def create_openai_prompt(user_id):
         - auth_search_ingredients\n
         - auth_search_meals_excluding_ingredient\n
         - search_meal_ingredients\n
+        - suggest_alternative_meals\n
+        - add_meal_to_plan\n
+        - create_meal_plan\n
+        - get_date\n
+        - list_upcoming_meals\n
+        - remove_meal_from_plan\n
+        - replace_meal_in_plan\n
         
         When asked about a meal plan or a dish, the assistant will check the attached file for the caloric information--noting the key is the food name and the value is the calories--and return the caloric information if it is available. If the caloric information is not available  the assistant will politely let the customer know that the information is not available. \n\n"""
     ).format(goal=user_goal)
@@ -334,6 +341,13 @@ functions = {
     "search_meal_ingredients": search_meal_ingredients,
     "auth_search_meals_excluding_ingredient": auth_search_meals_excluding_ingredient,
     "suggest_alternative_meals": suggest_alternative_meals,
+    "add_meal_to_plan": add_meal_to_plan,
+    "create_meal_plan": create_meal_plan,
+    "get_date": get_date,
+    "list_upcoming_meals": list_upcoming_meals,
+    "remove_meal_from_plan": remove_meal_from_plan,
+    "replace_meal_in_plan": replace_meal_in_plan,
+
 }
 
 
@@ -382,7 +396,8 @@ def chat_with_gpt(request):
         #     name="Food Expert",
         #     assistant_id=assistant_id,
         #     instructions=create_openai_prompt(request.user.id),
-        #     model="gpt-3.5-turbo-1106",
+        #     # model="gpt-3.5-turbo-1106",
+        #     model="gpt-4-1106-preview",
         #     tools=[ 
         #         {"type": "code_interpreter",},
         #         {
@@ -423,13 +438,24 @@ def chat_with_gpt(request):
         #             "type": "function",
         #             "function": {
         #                 "name": "auth_get_meal_plan",
-        #                 "description": "Get or create a meal plan for the current week",
+        #                 "description": "Get a meal plan for the current week or a future week based on the user's week_shift. This function depends on the request object to access the authenticated user and their week_shift attribute.",
         #                 "parameters": {
         #                     "type": "object",
-        #                     "properties": {
-        #                     },
+        #                     "properties": {},
         #                     "required": []
-        #                 },
+        #                 }
+        #             }
+        #         },
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "create_meal_plan",
+        #                 "description": "Create a new meal plan for the user.",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {},
+        #                     "required": []
+        #                 }
         #             }
         #         },
         #         {
@@ -474,8 +500,12 @@ def chat_with_gpt(request):
         #                 "parameters": {
         #                     "type": "object",
         #                     "properties": {
+        #                         "meal_plan_id": {
+        #                             "type": "integer",
+        #                             "description": "The ID of the meal plan to approve"
+        #                         }
         #                     },
-        #                     "required": []
+        #                     "required": ["meal_plan_id"]
         #                 }
         #             }
         #         },
@@ -559,9 +589,112 @@ def chat_with_gpt(request):
         #                 }
         #             }
         #         },
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "add_meal_to_plan",
+        #                 "description": "Add a meal to a specified day in the meal plan",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {
+        #                         "meal_plan_id": {
+        #                             "type": "integer",
+        #                             "description": "The unique identifier of the meal plan"
+        #                         },
+        #                         "meal_id": {
+        #                             "type": "integer",
+        #                             "description": "The unique identifier of the meal to add"
+        #                         },
+        #                         "day": {
+        #                             "type": "string",
+        #                             "description": "The day to add the meal to"
+        #                         }
+        #                     },
+        #                     "required": ["meal_plan_id", "meal_id", "day"]
+        #                 }
+        #             }
+        #         },
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "get_date",
+        #                 "description": "Get the current date and time. This function returns the current date and time in a user-friendly format, taking into account the server's time zone.",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {},
+        #                     "required": []
+        #                 }
+        #             }
+        #         },
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "list_upcoming_meals",
+        #                 "description": "Lists upcoming meals for the current week, filtered by user's dietary preference and postal code. The meals are adjusted based on the user's week_shift to plan for future meals.",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {},
+        #                     "required": []
+        #                 }
+        #             }
+        #         },
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "remove_meal_from_plan",
+        #                 "description": "Remove a meal from a specified day in the meal plan",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {
+        #                         "meal_plan_id": {
+        #                             "type": "integer",
+        #                             "description": "The unique identifier of the meal plan"
+        #                         },
+        #                         "meal_id": {
+        #                             "type": "integer",
+        #                             "description": "The unique identifier of the meal to remove"
+        #                         },
+        #                         "day": {
+        #                             "type": "string",
+        #                             "description": "The day to remove the meal from"
+        #                         }
+        #                     },
+        #                     "required": ["meal_plan_id", "meal_id", "day"]
+        #                 }
+        #             }
+        #         },
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "replace_meal_in_plan",
+        #                 "description": "Replace a meal with another meal on a specified day in the meal plan",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {
+        #                         "meal_plan_id": {
+        #                             "type": "integer",
+        #                             "description": "The unique identifier of the meal plan"
+        #                         },
+        #                         "old_meal_id": {
+        #                             "type": "integer",
+        #                             "description": "The unique identifier of the meal to be replaced"
+        #                         },
+        #                         "new_meal_id": {
+        #                             "type": "integer",
+        #                             "description": "The unique identifier of the new meal"
+        #                         },
+        #                         "day": {
+        #                             "type": "string",
+        #                             "description": "The day to replace the meal on"
+        #                         }
+        #                     },
+        #                     "required": ["meal_plan_id", "old_meal_id", "new_meal_id", "day"]
+        #                 }
+        #             }
+        #         },
         #     ],
-        # )   
-
+        # )
+        
 
     else:
         print("Creating a new assistant")
@@ -569,7 +702,8 @@ def chat_with_gpt(request):
         assistant = client.beta.assistants.create(
             name="Food Expert",
             instructions=create_openai_prompt(request.user.id),
-            model="gpt-3.5-turbo-1106",
+            # model="gpt-3.5-turbo-1106",
+            model="gpt-4-1106-preview",
             tools=[ 
                 {"type": "code_interpreter",},
                 {
@@ -610,13 +744,24 @@ def chat_with_gpt(request):
                     "type": "function",
                     "function": {
                         "name": "auth_get_meal_plan",
-                        "description": "Get or create a meal plan for the current week",
+                        "description": "Get a meal plan for the current week or a future week based on the user's week_shift. This function depends on the request object to access the authenticated user and their week_shift attribute.",
                         "parameters": {
                             "type": "object",
-                            "properties": {
-                            },
+                            "properties": {},
                             "required": []
-                        },
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "create_meal_plan",
+                        "description": "Create a new meal plan for the user.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
+                        }
                     }
                 },
                 {
@@ -661,8 +806,12 @@ def chat_with_gpt(request):
                         "parameters": {
                             "type": "object",
                             "properties": {
+                                "meal_plan_id": {
+                                    "type": "integer",
+                                    "description": "The ID of the meal plan to approve"
+                                }
                             },
-                            "required": []
+                            "required": ["meal_plan_id"]
                         }
                     }
                 },
@@ -768,6 +917,84 @@ def chat_with_gpt(request):
                                 }
                             },
                             "required": ["meal_plan_id", "meal_id", "day"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_date",
+                        "description": "Get the current date and time. This function returns the current date and time in a user-friendly format, taking into account the server's time zone.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "list_upcoming_meals",
+                        "description": "Lists upcoming meals for the current week, filtered by user's dietary preference and postal code. The meals are adjusted based on the user's week_shift to plan for future meals.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "remove_meal_from_plan",
+                        "description": "Remove a meal from a specified day in the meal plan",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "meal_plan_id": {
+                                    "type": "integer",
+                                    "description": "The unique identifier of the meal plan"
+                                },
+                                "meal_id": {
+                                    "type": "integer",
+                                    "description": "The unique identifier of the meal to remove"
+                                },
+                                "day": {
+                                    "type": "string",
+                                    "description": "The day to remove the meal from"
+                                }
+                            },
+                            "required": ["meal_plan_id", "meal_id", "day"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "replace_meal_in_plan",
+                        "description": "Replace a meal with another meal on a specified day in the meal plan",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "meal_plan_id": {
+                                    "type": "integer",
+                                    "description": "The unique identifier of the meal plan"
+                                },
+                                "old_meal_id": {
+                                    "type": "integer",
+                                    "description": "The unique identifier of the meal to be replaced"
+                                },
+                                "new_meal_id": {
+                                    "type": "integer",
+                                    "description": "The unique identifier of the new meal"
+                                },
+                                "day": {
+                                    "type": "string",
+                                    "description": "The day to replace the meal on"
+                                }
+                            },
+                            "required": ["meal_plan_id", "old_meal_id", "new_meal_id", "day"]
                         }
                     }
                 },

@@ -1,7 +1,7 @@
 import json
 from django.shortcuts import render, redirect
 from qa_app.models import FoodQA
-from meals.models import Dish, MealType, Meal, MealPlan, MealPlanMeal
+from meals.models import Dish, MealType, Meal, MealPlan, MealPlanMeal, Order, OrderMeal
 from local_chefs.models import ChefPostalCode, PostalCode
 from django.conf import settings
 from django_ratelimit.decorators import ratelimit
@@ -22,9 +22,187 @@ import os
 import openai
 from openai import OpenAIError
 from django.utils import timezone
+from django.utils.formats import date_format
 from meals.views import meal_plan_approval
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# TODO: Reminder: When implementing the functionality for users to edit future meal plans, ensure that all days in the week are included when a user shifts the week using their week_shift attribute. This means that even if the current day of the week is Wednesday, for example, and the user shifts to the next week, the meal plan for that week should include all days from Monday to Sunday.
+
+def list_upcoming_meals(request):
+    # Calculate the current week's start and end dates based on week_shift
+    week_shift = max(int(request.user.week_shift), 0)
+    current_date = timezone.now().date() + timedelta(weeks=week_shift)
+    start_of_week = current_date - timedelta(days=current_date.weekday())
+    end_of_week = start_of_week + timedelta(days=6)
+
+    # Filter meals by dietary preferences, postal code, and current week
+    dietary_filtered_meals = Meal.dietary_objects.for_user(request.user).filter(start_date__range=[start_of_week, end_of_week])
+    postal_filtered_meals = Meal.postal_objects.for_user(user=request.user).filter(start_date__range=[start_of_week, end_of_week])
+
+    # Combine both filters
+    filtered_meals = dietary_filtered_meals & postal_filtered_meals
+
+    # Compile meal details
+    meal_details = [
+        {
+            "meal_id": meal.id,
+            "name": meal.name,
+            "start_date": meal.start_date.strftime('%Y-%m-%d'),
+            "is_available": meal.is_available(week_shift),
+            "chef": meal.chef.user.username,
+            # Add more details as needed
+        } for meal in filtered_meals
+    ]
+
+    # Return a dictionary instead of JsonResponse
+    return {
+        "upcoming_meals": meal_details,
+        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
+    }
+
+
+def create_meal_plan(request):
+    print("From create_meal_plan")
+
+    # Calculate the week's date range which also works if user shifts week
+    week_shift = max(int(request.user.week_shift), 0)  # Ensure week_shift is not negative
+    adjusted_today = timezone.now().date() + timedelta(weeks=week_shift)
+    start_of_week = adjusted_today - timedelta(days=adjusted_today.weekday()) + timedelta(weeks=week_shift)
+    end_of_week = start_of_week + timedelta(days=6)
+
+    print(f"Start of week: {start_of_week}")
+    print(f"End of week: {end_of_week}")
+
+    # Check if a MealPlan already exists for the specified week
+    if not MealPlan.objects.filter(user=request.user, week_start_date=start_of_week, week_end_date=end_of_week).exists():
+        # Create a new MealPlan for the remaining days in the week
+        meal_plan = MealPlan.objects.create(
+            user=request.user,
+            week_start_date=start_of_week,
+            week_end_date=end_of_week,
+            created_date=timezone.now()
+        )
+        print(f"Created new meal plan: {meal_plan}")
+        return {'status': 'success', 'message': 'Created new meal plan.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+    return {'status': 'error', 'message': 'A meal plan already exists for this week.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day):
+    print("From replace_meal_in_plan")
+
+    # Validate meal plan
+    try:
+        meal_plan = MealPlan.objects.get(id=meal_plan_id, user=request.user)
+    except MealPlan.DoesNotExist:
+        return {'status': 'error', 'message': 'Meal plan not found.'}
+
+    # Validate old meal
+    try:
+        old_meal = Meal.objects.get(id=old_meal_id)
+    except Meal.DoesNotExist:
+        return {'status': 'error', 'message': 'Old meal not found.'}
+
+    # Validate new meal
+    try:
+        new_meal = Meal.objects.get(id=new_meal_id)
+    except Meal.DoesNotExist:
+        return {'status': 'error', 'message': 'New meal not found.'}
+
+    # Validate day
+    if day not in dict(MealPlanMeal.DAYS_OF_WEEK):
+        return {'status': 'error', 'message': f'Invalid day: {day}'}
+
+    # Check if old meal is scheduled for the specified day
+    meal_plan_meal = MealPlanMeal.objects.filter(meal_plan=meal_plan, meal=old_meal, day=day).first()
+    if not meal_plan_meal:
+        return {'status': 'error', 'message': 'Old meal not scheduled on the specified day.'}
+
+    # Replace old meal with new meal
+    meal_plan_meal.meal = new_meal
+    meal_plan_meal.save()
+
+    return {
+        'status': 'success',
+        'message': 'Meal replaced successfully.',
+        'replaced_meal': {
+            'old_meal': old_meal.name,
+            'new_meal': new_meal.name,
+            'day': day
+        },
+        'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+
+
+def remove_meal_from_plan(request, meal_plan_id, meal_id, day):
+    print("From remove_meal_from_plan")
+
+    # Retrieve the specified MealPlan
+    try:
+        meal_plan = MealPlan.objects.get(id=meal_plan_id, user=request.user)
+    except MealPlan.DoesNotExist:
+        return {'status': 'error', 'message': 'Meal plan not found.'}
+
+    # Retrieve the specified Meal
+    try:
+        meal = Meal.objects.get(id=meal_id)
+    except Meal.DoesNotExist:
+        return {'status': 'error', 'message': 'Meal not found.'}
+
+    # Validate the day
+    if day not in dict(MealPlanMeal.DAYS_OF_WEEK):
+        return {'status': 'error', 'message': f'Invalid day: {day}'}
+
+    # Check if the meal is scheduled for the specified day in the meal plan
+    meal_plan_meal = MealPlanMeal.objects.filter(meal_plan=meal_plan, meal=meal, day=day).first()
+    if not meal_plan_meal:
+        return {'status': 'error', 'message': 'Meal not scheduled on the specified day.'}
+
+    # Remove the meal from the meal plan
+    meal_plan_meal.delete()
+    return {'status': 'success', 'message': 'Meal removed from the plan.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+
+def add_meal_to_plan(request, meal_plan_id, meal_id, day):
+    print("From add_meal_to_plan")
+    try:
+        meal_plan = MealPlan.objects.get(id=meal_plan_id, user=request.user)
+        print(f"Meal plan: {meal_plan}")
+    except MealPlan.DoesNotExist:
+        return {'status': 'error', 'message': 'Meal plan not found.'}
+
+    try:
+        meal = Meal.objects.get(id=meal_id)
+        print(f"Meal: {meal}")
+    except Meal.DoesNotExist:
+        return {'status': 'error', 'message': 'Meal not found.'}
+
+    # Check if the meal's start date falls within the meal plan's week
+    if meal.start_date < meal_plan.week_start_date or meal.start_date > meal_plan.week_end_date:
+        return {'status': 'error', 'message': 'Meal not available in the selected week.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+    # Check if the day is within the meal plan's week
+    day_of_week_number = datetime.strptime(day, '%A').weekday()
+    target_date = meal_plan.week_start_date + timedelta(days=day_of_week_number)
+    if target_date < meal_plan.week_start_date or target_date > meal_plan.week_end_date:
+        return {'status': 'error', 'message': 'Invalid day for the meal plan.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+    # Check if there's already a meal scheduled for that day
+    existing_meal = MealPlanMeal.objects.filter(meal_plan=meal_plan, day=day).first()
+    if existing_meal:
+        return {
+            'status': 'prompt',
+            'message': 'This day already has a meal scheduled. Would you like to replace it?',
+            'existing_meal': {
+                'meal_id': existing_meal.meal.id,
+                'name': existing_meal.meal.name,
+                'chef': existing_meal.meal.chef.user.username
+            }
+        }
+
+    # Create the MealPlanMeal
+    MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day)
+    return {'status': 'success', 'action': 'added', 'new_meal': meal.name, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 
 
@@ -87,7 +265,7 @@ def search_meal_ingredients(request, query):
     meals = Meal.objects.filter(name__icontains=query)
 
     if not meals.exists():
-        return JsonResponse({"error": "No meals found matching the query."}, status=404)
+        return {"error": "No meals found matching the query.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
     result = []
     print(f"Meals: {meals}")
@@ -145,9 +323,11 @@ def auth_search_meals_excluding_ingredient(request, query):
     if not meal_details:
         return {
             "message": "No meals found without the specified ingredient for this week.",
+            "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
         }
     return {
         "result": meal_details,
+        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
 
 def auth_search_ingredients(request, query):
@@ -200,16 +380,17 @@ def auth_search_ingredients(request, query):
     if not result:
         return {
             "message": "No dishes found containing the queried ingredient(s) in the available meals for this week.",
+            "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
         }
     return {
         "result": result,
+        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
 
 def guest_search_ingredients(query, meal_ids=None):
     print("From guest_search_ingredients")
     # Determine the current date and the end of the week
-    week_shift = max(int(request.user.week_shift), 0) # Ensure week_shift is not negative
-    current_date = timezone.now().date() + timedelta(weeks=week_shift)
+    current_date = timezone.now().date()
     
     # First, find the meals available for the current week
     available_meals = Meal.objects.filter(
@@ -226,7 +407,7 @@ def guest_search_ingredients(query, meal_ids=None):
     result = []
     for dish in dishes_with_ingredient:
         meal_for_dish = Meal.objects.filter(dishes=dish)  # This should give you the meals where the dish appears
-        meal_info = [{"id": meal.id, "name": meal.name} for meal in meals_for_dish]  # Convert it to a list of dictionaries with id and name
+        meal_info = [{"id": meal.id, "name": meal.name} for meal in meal_for_dish]  # Convert it to a list of dictionaries with id and name
         result.append({
             "dish_id": dish.id,
             "dish_name": dish.name,
@@ -242,9 +423,11 @@ def guest_search_ingredients(query, meal_ids=None):
     if not result:
         return {
             "message": "No dishes found containing the queried ingredient(s) in the available meals for this week.",
+            "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
         }
     return {
         "result": result,
+        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
 
 
@@ -333,10 +516,12 @@ def auth_search_chefs(request, query):
     if not auth_chef_result:
         return {
             "message": "No chefs found that match your search.",
+            "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
             # "suggested_meal_plan": suggested_meal_plan
         }
     return {
         "auth_chef_result": auth_chef_result,
+        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
         # "suggested_meal_plan": suggested_meal_plan
     }
 
@@ -385,7 +570,7 @@ def guest_search_chefs(query):
 
     return {
         "guest_chef_result": guest_chef_result,
-        "suggested_meal_plan": suggested_meal_plan
+        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
 
 
@@ -427,9 +612,11 @@ def auth_search_dishes(request, query):
     if not auth_dish_result:
         return {
             "message": "No dishes found that match your search.",
+            "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
         }
     return {
         "auth_dish_result": auth_dish_result,
+        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
 
 def guest_search_dishes(query):
@@ -460,106 +647,58 @@ def guest_search_dishes(query):
     if not guest_dish_result:
         return {
             "message": "No dishes found that match your search.",
-            "suggested_meal_plan": suggested_meal_plan
+            "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
         }
     return {
         "guest_dish_result": guest_dish_result,
-        "suggested_meal_plan": suggested_meal_plan
+        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
 
-def add_meal_to_plan(request, meal_plan_id, meal_id, day):
-    print("From add_meal_to_plan")
-    try:
-        meal_plan = MealPlan.objects.get(id=meal_plan_id, user=request.user)
-        print(f"Meal plan: {meal_plan}")
-    except MealPlan.DoesNotExist:
-        return JsonResponse({'status': 'error', 'message': 'Meal plan not found.'}, status=404)
-    
-    meal = Meal.objects.get(id=meal_id)
-    print(f"Meal: {meal}")
-    MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day)
-    print(f"MealPlanMeal: {MealPlanMeal.objects.get(meal_plan=meal_plan, meal=meal, day=day)}")
-    return JsonResponse({'status': 'success', 'action': 'added', 'new_meal': meal.name})
-
-
-def auth_get_meal_plan(request):
-    print("From auth_get_meal_plan")
-    # Calculate the current week's date range
-    week_shift = max(int(request.user.week_shift), 0)  # Ensure week_shift is not negative
-    adjusted_today = timezone.now().date() + timedelta(weeks=week_shift)
-    start_of_week = adjusted_today - timedelta(days=adjusted_today.weekday()) + timedelta(weeks=week_shift)
-    end_of_week = start_of_week + timedelta(days=6)
-
-    print(f"Start of week: {start_of_week}")
-    print(f"End of week: {end_of_week}")
-    # Convert DAYS_OF_WEEK to a list of day names
-    days_of_week_list = [day[0] for day in MealPlanMeal.DAYS_OF_WEEK]
-    
-    # Calculate the index of the current day
-    current_day_index = days_of_week_list.index(adjusted_today.strftime('%A'))
-
-    # Fetch or create a MealPlan for the specified week
+def get_or_create_meal_plan(user, start_of_week, end_of_week):
     meal_plan, created = MealPlan.objects.get_or_create(
-        user=request.user,
+        user=user,
         week_start_date=start_of_week,
         week_end_date=end_of_week,
         defaults={'created_date': timezone.now()}
     )
-    
+    return meal_plan
 
-    # Query meals based on postal code
-    postal_query = Meal.postal_objects.for_user(user=request.user).filter(start_date__lte=end_of_week, start_date__gte=adjusted_today)
-    print(f"Postal query: {postal_query}")
-    # Apply dietary preference filter
-    base_meals = postal_query.filter(id__in=Meal.dietary_objects.for_user(request.user))
-    print(f"Base meals: {base_meals}")
-    # Remove past MealPlanMeal entries for this week
-    if not created:
-        MealPlanMeal.objects.filter(meal_plan=meal_plan, day__lte=adjusted_today).delete()
+def cleanup_past_meals(meal_plan, current_date):
+    if meal_plan.week_start_date <= current_date <= meal_plan.week_end_date:
+        MealPlanMeal.objects.filter(meal_plan=meal_plan, day__lt=current_date).delete()
 
-    # Iterate over the remaining days of the week
-    for i in range(current_day_index, len(days_of_week_list)):
-        day_name = days_of_week_list[i]
-        current_day = start_of_week + timedelta(days=i)
 
-        # Check if a meal is already planned for this day
-        if not MealPlanMeal.objects.filter(meal_plan=meal_plan, day=day_name).exists():
-            # Find a meal whose start date matches the current day
-            chosen_meal = base_meals.filter(start_date=current_day).first()
+def auth_get_meal_plan(request):
+    print("From auth_get_meal_plan")
 
-            # Print out the IDs of all meals in the meal plan and the chosen meal
-            print("IDs of all meals in the meal plan:", MealPlanMeal.objects.filter(meal_plan=meal_plan).values_list('meal_id', flat=True))
-            print("Chosen meal:", chosen_meal)
+    today = timezone.now().date()
+    week_shift = max(int(request.user.week_shift), 0)
+    adjusted_today = today + timedelta(weeks=week_shift)
+    start_of_week = adjusted_today - timedelta(days=adjusted_today.weekday())
+    end_of_week = start_of_week + timedelta(days=6)
 
-            # Create a MealPlanMeal entry if a suitable meal is found
-            if chosen_meal:
-                MealPlanMeal.objects.create(
-                    meal_plan=meal_plan,
-                    meal=chosen_meal,
-                    day=day_name
-                )
+    meal_plan = get_or_create_meal_plan(request.user, start_of_week, end_of_week)
 
-    # Prepare response data
-    auth_meal_plan = []
+    if week_shift == 0:
+        cleanup_past_meals(meal_plan, today)
+
+    meal_plan_details = [{'meal_plan_id': meal_plan.id, 'week_start_date': meal_plan.week_start_date.strftime('%Y-%m-%d'), 'week_end_date': meal_plan.week_end_date.strftime('%Y-%m-%d')}]
+
     for meal_plan_meal in MealPlanMeal.objects.filter(meal_plan=meal_plan):
-        print(f"MealPlanMeal: {meal_plan_meal}")
         meal = meal_plan_meal.meal
         meal_details = {
             "meal_id": meal.id,
             "name": meal.name,
             "chef": meal.chef.user.username,
             "start_date": meal.start_date.strftime('%Y-%m-%d'),
-            "is_available": meal.is_available(week_shift),
+            "is_available": meal.is_available(),
             "dishes": [dish.name for dish in meal.dishes.all()],
             "day": meal_plan_meal.day,
             "meal_plan_id": meal_plan.id,
         }
-        auth_meal_plan.append(meal_details)
+        meal_plan_details.append(meal_details)
 
-    print(f"Auth meal plan: {auth_meal_plan}")
-    return {
-        "auth_meal_plan": auth_meal_plan if auth_meal_plan else [{"message": "No meals available this week."}]
-    }
+    return {"auth_meal_plan": meal_plan_details, "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 def guest_get_meal_plan(query, query_type=None, include_dish_id=False):
     print("From guest_get_meal_plan")
@@ -618,16 +757,63 @@ def guest_get_meal_plan(query, query_type=None, include_dish_id=False):
     if not guest_meal_plan:
         return {
             "message": "No meals available this week.",
+            "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
             "guest_meal_plan": []  # Empty list to indicate no meal plans
         }
     return {
-        "guest_meal_plan": guest_meal_plan  # List of meal plans
+        "guest_meal_plan": guest_meal_plan,  # List of meal plans
+        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
 
-def approve_meal_plan(request):
+def approve_meal_plan(request, meal_plan_id):
     print("From approve_meal_plan")
-    # You can add any additional logic here
-    return meal_plan_approval(request)
+    
+    # Step 1: Retrieve the MealPlan using the provided ID
+    meal_plan = MealPlan.objects.get(id=meal_plan_id, user=request.user)
+    
+    # Check if the meal plan is already associated with an order
+    if meal_plan.order:
+        if meal_plan.order.is_paid:
+            # If the order is paid, return a message
+            return {'status': 'info', 'message': 'This meal plan has already been paid for.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+        else:
+            # If the order is not paid, return a message
+            return {'status': 'info', 'message': 'This meal plan has an unpaid order. Please complete the payment.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+    # Step 2: Handle meal plan approval
+    # Create an Order object
+    order = Order(customer=request.user)
+    order.save()  # Save the order to generate an ID
+    
+    # Step 3: Create OrderMeal objects for each meal in the meal plan
+    for meal in meal_plan.meal.all():
+        OrderMeal.objects.create(order=order, meal=meal, quantity=1)
+
+    # Step 4: Link the Order to the MealPlan
+    meal_plan.order = order
+    meal_plan.save()
+
+    # Step 5: Return a success message
+    return {'status': 'success', 'message': 'Meal plan approved. Proceed to payment.', 'order_id': order.id, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+def get_date(request):
+    current_time = timezone.now()
+    
+    # User-friendly formatting
+    friendly_date_time = date_format(current_time, "DATETIME_FORMAT")
+    day_of_week = date_format(current_time, "l")  # Day name
+    
+    # Additional date information (optional)
+    start_of_week = current_time - timezone.timedelta(days=current_time.weekday())
+    end_of_week = start_of_week + timezone.timedelta(days=6)
+
+    return {
+        'current_time': friendly_date_time,
+        'day_of_week': day_of_week,
+        'week_start': start_of_week.strftime('%Y-%m-%d'),
+        'week_end': end_of_week.strftime('%Y-%m-%d'),
+    }
+
 
 def generate_review_summary(object_id, category):
     # Step 1: Fetch all the review summaries for a specific chef or meal
@@ -636,7 +822,7 @@ def generate_review_summary(object_id, category):
     reviews = Review.objects.filter(content_type=content_type, object_id=object_id)
 
     if not reviews.exists():
-        return JsonResponse({"message": "No reviews found for the specified category and object ID."})
+        return {"message": "No reviews found for the specified category and object ID.", "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
     # Step 2: Format the summaries naturally
     formatted_summaries = "Review summaries:\n"
@@ -651,7 +837,7 @@ def generate_review_summary(object_id, category):
         )
         overall_summary = response['choices'][0]['message']['content']
     except OpenAIError as e:
-        return JsonResponse({"message": f"An error occurred: {str(e)}"})
+        return {"message": f"An error occurred: {str(e)}", "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
     # Step 4: Store the overall summary in the database
     obj = model_class.objects.get(id=object_id)
@@ -660,7 +846,7 @@ def generate_review_summary(object_id, category):
 
     
     # Step 5: Return the overall summary
-    return JsonResponse({"overall_summary": overall_summary})
+    return {"overall_summary": overall_summary, "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 
 def sanitize_query(query):

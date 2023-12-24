@@ -1,4 +1,5 @@
 from django.db import models
+from pydantic import ValidationError
 from chefs.models import Chef
 import requests
 import json
@@ -147,6 +148,15 @@ class MealPlan(models.Model):
         on_delete=models.SET_NULL,
         related_name='associated_meal_plan'
     )
+
+    def clean(self):
+        # Custom validation to ensure start_date is before end_date
+        if self.week_start_date and self.week_end_date:
+            if self.week_start_date >= self.week_end_date:
+                raise ValidationError(_('The start date must be before the end date.'))
+
+        # Call the parent class's clean method
+        super().clean()
 
     class Meta:
         unique_together = ('user', 'week_start_date', 'week_end_date')

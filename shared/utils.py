@@ -30,6 +30,91 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # TODO: Reminder: When implementing the functionality for users to edit future meal plans, ensure that all days in the week are included when a user shifts the week using their week_shift attribute. This means that even if the current day of the week is Wednesday, for example, and the user shifts to the next week, the meal plan for that week should include all days from Monday to Sunday.
 
+
+def post_review(request, user_id, content, rating, item_id, item_type):
+    if user_id != request.user.id:
+        return {'status': 'error', 'message': 'You are not authorized to post this review.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+    
+    # Find the content type based on item_type
+    if item_type == 'chef':
+        content_type = ContentType.objects.get_for_model(Chef)
+        # Check if the user has purchased a meal from the chef
+        if not Meal.objects.filter(chef__id=item_id, ordermeal__order__customer_id=user_id).exists():
+            return {'status': 'error', 'message': 'You have not purchased a meal from this chef.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+    elif item_type == 'meal':
+        content_type = ContentType.objects.get_for_model(Meal)
+        # Check if the order status for the reviewed item is either 'Completed', 'Cancelled', or 'Refunded'
+        if not OrderMeal.objects.filter(meal_id=item_id, order__customer_id=user_id, order__status__in=['Completed', 'Cancelled', 'Refunded']).exists():
+            return {'status': 'error', 'message': 'You have not completed an order for this meal.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+    else:
+        return {'status': 'error', 'message': 'Only meals and chefs can be reviewed.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+    # Create and save the review
+    review = Review(
+        user_id=user_id, 
+        content=content, 
+        rating=rating, 
+        content_type=content_type, 
+        object_id=item_id
+    )
+    review.save()
+
+    return {'status': 'success', 'message': 'Review posted successfully', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+def update_review(request, review_id, updated_content, updated_rating):
+    if request.user.id != Review.objects.get(id=review_id).user.id:
+        return {'status': 'error', 'message': 'You are not authorized to update this review.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+    review = Review.objects.get(id=review_id)
+    review.content = updated_content
+    review.rating = updated_rating
+    review.save()
+
+    return {'status': 'success', 'message': 'Review updated successfully', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+def delete_review(request, review_id):
+    if request.user.id != Review.objects.get(id=review_id).user.id:
+        return {'status': 'error', 'message': 'You are not authorized to delete this review.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+    review_id = request.POST.get('review_id')
+
+    review = Review.objects.get(id=review_id)
+    review.delete()
+
+    return {'status': 'success', 'message': 'Review deleted successfully', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+def generate_review_summary(object_id, category):
+    # Step 1: Fetch all the review summaries for a specific chef or meal
+    content_type = ContentType.objects.get(model=category)
+    model_class = content_type.model_class()
+    reviews = Review.objects.filter(content_type=content_type, object_id=object_id)
+
+    if not reviews.exists():
+        return {"message": "No reviews found.", "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+    # Step 2: Format the summaries naturally
+    formatted_summaries = "Review summaries:\n"
+    for review in reviews:
+        formatted_summaries += f" - {review.content}\n"
+
+    # Step 3: Feed the formatted string into GPT-3.5-turbo-1106 to generate the overall summary
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo-1106",
+            messages=[{"role": "user", "content": formatted_summaries}],
+        )
+        overall_summary = response['choices'][0]['message']['content']
+    except OpenAIError as e:
+        return {"message": f"An error occurred: {str(e)}", "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+    # Step 4: Store the overall summary in the database
+    obj = model_class.objects.get(id=object_id)
+    obj.review_summary = overall_summary
+    obj.save()
+
+    
+    # Step 5: Return the overall summary
+    return {"overall_summary": overall_summary, "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+
 def list_upcoming_meals(request):
     # Calculate the current week's start and end dates based on week_shift
     week_shift = max(int(request.user.week_shift), 0)
@@ -61,7 +146,6 @@ def list_upcoming_meals(request):
         "upcoming_meals": meal_details,
         "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
-
 
 def create_meal_plan(request):
     print("From create_meal_plan")
@@ -184,6 +268,13 @@ def add_meal_to_plan(request, meal_plan_id, meal_id, day):
     except Meal.DoesNotExist:
         return {'status': 'error', 'message': 'Meal not found.'}
 
+    # Check if the meal can be ordered
+    if not meal.can_be_ordered():
+        return {
+            'status': 'error',
+            'message': f'Meal "{meal.name}" cannot be ordered as it starts tomorrow or earlier. To avoid food waste, chefs need at least 24 hours to plan and prepare the meals.'
+        }
+
     # Check if the meal's start date falls within the meal plan's week
     if meal.start_date < meal_plan.week_start_date or meal.start_date > meal_plan.week_end_date:
         return {'status': 'error', 'message': 'Meal not available in the selected week.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -210,7 +301,6 @@ def add_meal_to_plan(request, meal_plan_id, meal_id, day):
     # Create the MealPlanMeal
     MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day)
     return {'status': 'success', 'action': 'added', 'new_meal': meal.name, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
-
 
 
 def suggest_alternative_meals(request, meal_ids, days_of_week):
@@ -857,40 +947,6 @@ def get_date(request):
         'week_start': start_of_week.strftime('%Y-%m-%d'),
         'week_end': end_of_week.strftime('%Y-%m-%d'),
     }
-
-
-def generate_review_summary(object_id, category):
-    # Step 1: Fetch all the review summaries for a specific chef or meal
-    content_type = ContentType.objects.get(model=category)
-    model_class = content_type.model_class()
-    reviews = Review.objects.filter(content_type=content_type, object_id=object_id)
-
-    if not reviews.exists():
-        return {"message": "No reviews found for the specified category and object ID.", "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-    # Step 2: Format the summaries naturally
-    formatted_summaries = "Review summaries:\n"
-    for review in reviews:
-        formatted_summaries += f" - {review.content}\n"
-
-    # Step 3: Feed the formatted string into GPT-3.5-turbo-1106 to generate the overall summary
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo-1106",
-            messages=[{"role": "user", "content": formatted_summaries}],
-        )
-        overall_summary = response['choices'][0]['message']['content']
-    except OpenAIError as e:
-        return {"message": f"An error occurred: {str(e)}", "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-    # Step 4: Store the overall summary in the database
-    obj = model_class.objects.get(id=object_id)
-    obj.summary = overall_summary
-    obj.save()
-
-    
-    # Step 5: Return the overall summary
-    return {"overall_summary": overall_summary, "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 
 def sanitize_query(query):

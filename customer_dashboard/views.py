@@ -19,7 +19,7 @@ import os
 import re
 import time
 from django.conf import settings
-from shared.utils import replace_meal_in_plan, remove_meal_from_plan, list_upcoming_meals, get_date, create_meal_plan, add_meal_to_plan, auth_get_meal_plan, auth_search_chefs, auth_search_dishes, approve_meal_plan, auth_search_ingredients, auth_search_meals_excluding_ingredient, search_meal_ingredients, suggest_alternative_meals,guest_search_ingredients ,guest_get_meal_plan, guest_search_chefs, guest_search_dishes, generate_review_summary, sanitize_query
+from shared.utils import post_review, update_review, delete_review, replace_meal_in_plan, remove_meal_from_plan, list_upcoming_meals, get_date, create_meal_plan, add_meal_to_plan, auth_get_meal_plan, auth_search_chefs, auth_search_dishes, approve_meal_plan, auth_search_ingredients, auth_search_meals_excluding_ingredient, search_meal_ingredients, suggest_alternative_meals,guest_search_ingredients ,guest_get_meal_plan, guest_search_chefs, guest_search_dishes, generate_review_summary, sanitize_query
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
 
@@ -93,6 +93,10 @@ def create_openai_prompt(user_id):
         - list_upcoming_meals\n
         - remove_meal_from_plan\n
         - replace_meal_in_plan\n
+        - post_review\n
+        - update_review\n
+        - delete_review\n
+        - generate_review_summary\n
         
         When asked about a meal plan or a dish, the assistant will check the attached file for the caloric information--noting the key is the food name and the value is the calories--and return the caloric information if it is available. If the caloric information is not available  the assistant will politely let the customer know that the information is not available. \n\n"""
     ).format(goal=user_goal)
@@ -347,6 +351,10 @@ functions = {
     "list_upcoming_meals": list_upcoming_meals,
     "remove_meal_from_plan": remove_meal_from_plan,
     "replace_meal_in_plan": replace_meal_in_plan,
+    "post_review": post_review,
+    "update_review": update_review,
+    "delete_review": delete_review,
+    "generate_review_summary": generate_review_summary,
 
 }
 
@@ -692,9 +700,107 @@ def chat_with_gpt(request):
         #                 }
         #             }
         #         },
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "post_review",
+        #                 "description": "Post a review for a meal or a chef.",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {
+        #                         "user_id": {
+        #                             "type": "integer",
+        #                             "description": "The ID of the user posting the review."
+        #                         },
+        #                         "content": {
+        #                             "type": "string",
+        #                             "description": "The content of the review. Must be between 10 and 1000 characters."
+        #                         },
+        #                         "rating": {
+        #                             "type": "integer",
+        #                             "description": "The rating given in the review, from 1 (Poor) to 5 (Excellent)."
+        #                         },
+        #                         "item_id": {
+        #                             "type": "integer",
+        #                             "description": "The ID of the item (meal or chef) being reviewed."
+        #                         },
+        #                         "item_type": {
+        #                             "type": "string",
+        #                             "enum": ["meal", "chef"],
+        #                             "description": "The type of item being reviewed."
+        #                         }
+        #                     },
+        #                     "required": ["user_id", "content", "rating", "item_id", "item_type"]
+        #                 }
+        #             }
+        #         },
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "update_review",
+        #                 "description": "Update an existing review.",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {
+        #                         "review_id": {
+        #                             "type": "integer",
+        #                             "description": "The ID of the review to be updated."
+        #                         },
+        #                         "updated_content": {
+        #                             "type": "string",
+        #                             "description": "The updated content of the review. Must be between 10 and 1000 characters."
+        #                         },
+        #                         "updated_rating": {
+        #                             "type": "integer",
+        #                             "description": "The updated rating, from 1 (Poor) to 5 (Excellent)."
+        #                         }
+        #                     },
+        #                     "required": ["review_id", "updated_content", "updated_rating"]
+        #                 }
+        #             }
+        #         },
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "delete_review",
+        #                 "description": "Delete a review.",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {
+        #                         "review_id": {
+        #                             "type": "integer",
+        #                             "description": "The ID of the review to be deleted."
+        #                         }
+        #                     },
+        #                     "required": ["review_id"]
+        #                 }
+        #             }
+        #         },
+        #         {
+        #             "type": "function",
+        #             "function": {
+        #                 "name": "generate_review_summary",
+        #                 "description": "Generate a summary of all reviews for a specific object (meal or chef) using AI model.",
+        #                 "parameters": {
+        #                     "type": "object",
+        #                     "properties": {
+        #                         "object_id": {
+        #                             "type": "integer",
+        #                             "description": "The unique identifier of the object (meal or chef) to summarize reviews for."
+        #                         },
+        #                         "category": {
+        #                             "type": "string",
+        #                             "enum": ["meal", "chef"],
+        #                             "description": "The category of the object being reviewed."
+        #                         }
+        #                     },
+        #                     "required": ["object_id", "category"]
+        #                 }
+        #             }
+        #         },
         #     ],
         # )
-        
+           
 
     else:
         print("Creating a new assistant")
@@ -995,6 +1101,104 @@ def chat_with_gpt(request):
                                 }
                             },
                             "required": ["meal_plan_id", "old_meal_id", "new_meal_id", "day"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "post_review",
+                        "description": "Post a review for a meal or a chef.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "user_id": {
+                                    "type": "integer",
+                                    "description": "The ID of the user posting the review."
+                                },
+                                "content": {
+                                    "type": "string",
+                                    "description": "The content of the review. Must be between 10 and 1000 characters."
+                                },
+                                "rating": {
+                                    "type": "integer",
+                                    "description": "The rating given in the review, from 1 (Poor) to 5 (Excellent)."
+                                },
+                                "item_id": {
+                                    "type": "integer",
+                                    "description": "The ID of the item (meal or chef) being reviewed."
+                                },
+                                "item_type": {
+                                    "type": "string",
+                                    "enum": ["meal", "chef"],
+                                    "description": "The type of item being reviewed."
+                                }
+                            },
+                            "required": ["user_id", "content", "rating", "item_id", "item_type"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "update_review",
+                        "description": "Update an existing review.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "review_id": {
+                                    "type": "integer",
+                                    "description": "The ID of the review to be updated."
+                                },
+                                "updated_content": {
+                                    "type": "string",
+                                    "description": "The updated content of the review. Must be between 10 and 1000 characters."
+                                },
+                                "updated_rating": {
+                                    "type": "integer",
+                                    "description": "The updated rating, from 1 (Poor) to 5 (Excellent)."
+                                }
+                            },
+                            "required": ["review_id", "updated_content", "updated_rating"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "delete_review",
+                        "description": "Delete a review.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "review_id": {
+                                    "type": "integer",
+                                    "description": "The ID of the review to be deleted."
+                                }
+                            },
+                            "required": ["review_id"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "generate_review_summary",
+                        "description": "Generate a summary of all reviews for a specific object (meal or chef) using AI model.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "object_id": {
+                                    "type": "integer",
+                                    "description": "The unique identifier of the object (meal or chef) to summarize reviews for."
+                                },
+                                "category": {
+                                    "type": "string",
+                                    "enum": ["meal", "chef"],
+                                    "description": "The category of the object being reviewed."
+                                }
+                            },
+                            "required": ["object_id", "category"]
                         }
                     }
                 },

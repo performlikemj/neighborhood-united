@@ -1,5 +1,6 @@
 import json
 from django.shortcuts import render, redirect
+from django.urls import reverse
 from qa_app.models import FoodQA
 from meals.models import Dish, MealType, Meal, MealPlan, MealPlanMeal, Order, OrderMeal
 from local_chefs.models import ChefPostalCode, PostalCode
@@ -97,6 +98,13 @@ def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day):
     except MealPlan.DoesNotExist:
         return {'status': 'error', 'message': 'Meal plan not found.'}
 
+    # Check if the meal plan is linked to a placed order and if the order is paid
+    if meal_plan.order:
+        if meal_plan.order.is_paid:
+            return {'status': 'error', 'message': 'Cannot modify a paid meal plan.'}
+        else:
+            return {'status': 'error', 'message': 'Cannot modify a meal plan with an unpaid order.'}
+
     # Validate old meal
     try:
         old_meal = Meal.objects.get(id=old_meal_id)
@@ -132,7 +140,6 @@ def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day):
         },
         'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
     }
-
 
 def remove_meal_from_plan(request, meal_plan_id, meal_id, day):
     print("From remove_meal_from_plan")
@@ -240,10 +247,14 @@ def suggest_alternative_meals(request, meal_ids, days_of_week):
         target_date = today + timedelta(days=days_until_target)
         print(f"Target date for {day_of_week}: {target_date}")
 
-        # Fetch alternative meals for the target date, excluding the current meal ID
-        available_meals = Meal.dietary_objects.for_user(request.user).filter(
-            start_date=target_date
-        ).exclude(id=meal_id)
+        # Filter meals by dietary preferences, postal code, and current week
+        dietary_filtered_meals = Meal.dietary_objects.for_user(request.user).filter(start_date=target_date).exclude(id=meal_id)
+        postal_filtered_meals = Meal.postal_objects.for_user(user=request.user).filter(start_date=target_date).exclude(id=meal_id)
+
+        # Combine both filters
+        available_meals = dietary_filtered_meals & postal_filtered_meals
+
+        # Compile meal details
         print(f"Available meals for {day_of_week}: {available_meals}")
         for meal in available_meals:
             meal_details = {
@@ -303,7 +314,13 @@ def auth_search_meals_excluding_ingredient(request, query):
 
     # Filter meals available for the current week and for the user, excluding those with the unwanted ingredient
     meal_filter_conditions = Q(start_date__gte=current_date)
-    available_meals = Meal.dietary_objects.for_user(request.user).filter(meal_filter_conditions)
+
+    # Filter meals by dietary preferences, postal code, and current week
+    dietary_filtered_meals = Meal.dietary_objects.for_user(request.user).filter(meal_filter_conditions)
+    postal_filtered_meals = Meal.postal_objects.for_user(user=request.user).filter(meal_filter_conditions)
+
+    # Combine both filters
+    available_meals = dietary_filtered_meals & postal_filtered_meals
     print(f"Available meals: {available_meals}")
     available_meals = available_meals.exclude(dishes__in=dishes_with_excluded_ingredient)
 
@@ -339,7 +356,13 @@ def auth_search_ingredients(request, query):
     
     # Filter meals available for the current week and for the user
     meal_filter_conditions = Q(start_date__gte=current_date)
-    available_meals = Meal.dietary_objects.for_user(request.user).filter(meal_filter_conditions)
+
+    # Filter meals by dietary preferences, postal code, and current week
+    dietary_filtered_meals = Meal.dietary_objects.for_user(request.user).filter(meal_filter_conditions)
+    postal_filtered_meals = Meal.postal_objects.for_user(user=request.user).filter(meal_filter_conditions)
+
+    # Combine both filters
+    available_meals = dietary_filtered_meals & postal_filtered_meals
     
     # Find dishes containing the queried ingredient
     dishes_with_ingredient = Dish.objects.filter(
@@ -578,11 +601,15 @@ def guest_search_chefs(query):
 def auth_search_dishes(request, query):
     print("From auth_search_dishes")
     # Query meals based on postal code
-    week_shift = max(int(request.user.week_shift), 0)  # Ensure week_shift is not negative
-    postal_query = Meal.postal_objects.for_user(user=request.user).filter(start_date__gte=timezone.now().date() + timedelta(weeks=week_shift))
-    print(f"Postal query: {postal_query}")
+    week_shift = max(int(request.user.week_shift), 0)
+    current_date = timezone.now().date() + timedelta(weeks=week_shift)
+
+    # Filter meals by dietary preferences, postal code, and current week
+    dietary_filtered_meals = Meal.dietary_objects.for_user(request.user).filter(start_date__gte=current_date)
+    postal_filtered_meals = Meal.postal_objects.for_user(user=request.user).filter(start_date__gte=current_date)
+
     # Apply dietary preference filter
-    base_meals = postal_query.filter(id__in=Meal.dietary_objects.for_user(request.user))
+    base_meals = dietary_filtered_meals & postal_filtered_meals
     print(f"Base meals: {base_meals}")
     # Filter the meals based on the chef's serving postal codes and the meal's dietary preference
     # Filter the dishes based on the meals and the dish's name
@@ -787,14 +814,28 @@ def approve_meal_plan(request, meal_plan_id):
     
     # Step 3: Create OrderMeal objects for each meal in the meal plan
     for meal in meal_plan.meal.all():
+        if not meal.can_be_ordered():
+            return {
+                'status': 'error',
+                'message': f'Meal "{meal.name}" cannot be ordered as it starts tomorrow or earlier. To avoid food waste, chefs need at least 24 hours to plan and prepare the meals.'
+            }
         OrderMeal.objects.create(order=order, meal=meal, quantity=1)
 
     # Step 4: Link the Order to the MealPlan
     meal_plan.order = order
     meal_plan.save()
 
-    # Step 5: Return a success message
-    return {'status': 'success', 'message': 'Meal plan approved. Proceed to payment.', 'order_id': order.id, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+    # Generate the URL for the order
+    order_url = request.build_absolute_uri(reverse('approve_meal_plan')) + f"?order_id={order.id}"
+
+    # Return a success message with the URL
+    return {
+        'status': 'success', 
+        'message': 'Meal plan approved. Proceed to payment.',
+        'order_id': order.id, 
+        'order_url': order_url,
+        'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
 
 def get_date(request):
     current_time = timezone.now()

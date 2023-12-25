@@ -129,6 +129,14 @@ class Meal(models.Model):
         current_date = timezone.now().date() + timedelta(weeks=week_shift) 
         return self.start_date <= current_date  
 
+    def can_be_ordered(self):
+        """
+        Check if the meal can be ordered (at least a day in advance).
+        """
+        current_date = timezone.now().date()
+        return self.start_date > current_date
+
+
     def save(self, *args, **kwargs):
         if not self.created_date:
             self.created_date = timezone.now()

@@ -692,8 +692,11 @@ def get_or_create_meal_plan(user, start_of_week, end_of_week):
 
 def cleanup_past_meals(meal_plan, current_date):
     if meal_plan.week_start_date <= current_date <= meal_plan.week_end_date:
-        MealPlanMeal.objects.filter(meal_plan=meal_plan, day__lt=current_date).delete()
-
+        MealPlanMeal.objects.filter(
+            meal_plan=meal_plan, 
+            day__lt=current_date,
+            meal__start_date__lte=current_date  # Only include meals that cannot be ordered
+        ).delete()
 
 def auth_get_meal_plan(request):
     print("From auth_get_meal_plan")
@@ -737,7 +740,7 @@ def guest_get_meal_plan(query, query_type=None, include_dish_id=False):
     days_of_week_list = [day[0] for day in MealPlanMeal.DAYS_OF_WEEK]
 
     # Base query for meals available in the current week
-    base_meals = Meal.objects.filter(start_date__lte=end_of_week)
+    base_meals = Meal.objects.filter(start_date__gt=today, start_date__lte=end_of_week)  # Only include meals that can be ordered
 
     # Additional filter based on query type
     query_filter = Q()

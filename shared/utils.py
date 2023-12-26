@@ -14,6 +14,7 @@ from custom_auth.models import Address
 from datetime import date, timedelta, datetime
 from django.db.models import Q
 from reviews.models import Review
+from custom_auth.models import CustomUser, UserRole
 from django.contrib.contenttypes.models import ContentType
 from random import sample
 from collections import defaultdict
@@ -30,6 +31,75 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # TODO: Reminder: When implementing the functionality for users to edit future meal plans, ensure that all days in the week are included when a user shifts the week using their week_shift attribute. This means that even if the current day of the week is Wednesday, for example, and the user shifts to the next week, the meal plan for that week should include all days from Monday to Sunday.
 
+
+
+def get_user_info(request):
+    # Ensure the requesting user is trying to access their own information
+
+    try:
+        user = CustomUser.objects.get(id=request.user.id)
+        user_role = UserRole.objects.get(user=user)
+        
+        # Ensure the user is not in the chef role
+        if user_role.current_role == 'chef':
+            return {'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+        
+        address = Address.objects.get(user=user)
+        user_info = {
+            'user_id': user.id,
+            'dietary_preference': user.dietary_preference,
+            'week_shift': user.week_shift,
+            'postal_code': address.postalcode.code if address.postalcode else 'Not provided'
+        }
+        return {'status': 'success', 'user_info': user_info, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+    except CustomUser.DoesNotExist:
+        return {'status': 'error', 'message': 'User not found.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+    except Address.DoesNotExist:
+        return {'status': 'error', 'message': 'Address not found for user.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+
+def access_past_orders(request, user_id):
+    # Check user authorization
+
+    if user_id != request.user.id:
+        return {'status': 'error', 'message': "Unauthorized access.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+    # Find meal plans within the week range with specific order statuses
+    meal_plans = MealPlan.objects.filter(
+        user_id=user_id,
+        order__status__in=['Completed', 'Cancelled', 'Refunded']
+    )
+
+    # If no meal plans are found, return a message
+    if not meal_plans.exists():
+        return {'status': 'info', 'message': "No meal plans found for the current week.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+    # Retrieve orders associated with the meal plans
+    orders = Order.objects.filter(meal_plan__in=meal_plans)
+
+    print(f"Meal plans: {meal_plans}")
+    print(f"Orders: {orders}")
+    # If no orders are found, return a message indicating this
+    if not orders.exists():
+        return {'status': 'info', 'message': "No past orders found.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+    # Prepare order data
+    orders_data = []
+    for order in orders:
+        order_meals = order.ordermeal_set.all()
+        if not order_meals:
+            continue
+        meals_data = [{'meal_id': om.meal.id, 'quantity': om.quantity} for om in order_meals]
+        order_data = {
+            'order_id': order.id,
+            'order_date': order.order_date.strftime('%Y-%m-%d'),
+            'status': order.status,
+            'total_price': order.total_price() if order.total_price() is not None else 0,
+            'meals': meals_data
+        }
+        orders_data.append(order_data)
+    print(f"Orders data: {orders_data}")
+    return {'orders': orders_data, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 def post_review(request, user_id, content, rating, item_id, item_type):
     if user_id != request.user.id:
@@ -906,13 +976,14 @@ def approve_meal_plan(request, meal_plan_id):
     order.save()  # Save the order to generate an ID
     
     # Step 3: Create OrderMeal objects for each meal in the meal plan
-    for meal in meal_plan.meal.all():
+    for meal_plan_meal in meal_plan.mealplanmeal_set.all():
+        meal = meal_plan_meal.meal
         if not meal.can_be_ordered():
             return {
                 'status': 'error',
                 'message': f'Meal "{meal.name}" cannot be ordered as it starts tomorrow or earlier. To avoid food waste, chefs need at least 24 hours to plan and prepare the meals.'
             }
-        OrderMeal.objects.create(order=order, meal=meal, quantity=1)
+        OrderMeal.objects.create(order=order, meal=meal, meal_plan_meal=meal_plan_meal, quantity=1)  # Include the MealPlanMeal
 
     # Step 4: Link the Order to the MealPlan
     meal_plan.order = order

@@ -247,17 +247,14 @@ class Order(models.Model):
         total = 0
         for order_meal in self.ordermeal_set.all():
             total += order_meal.meal.price * order_meal.quantity
-        if self.meal_plan:
-            for meal in self.meal_plan.meal.all():
-                total += meal.price
         return total
 
     
 class OrderMeal(models.Model):
     meal = models.ForeignKey(Meal, on_delete=models.CASCADE)
     order = models.ForeignKey(Order, on_delete=models.CASCADE)
+    meal_plan_meal = models.ForeignKey(MealPlanMeal, on_delete=models.CASCADE)  # New field
     quantity = models.IntegerField()
 
     def __str__(self):
-        return f'{self.meal} - {self.order}'
-    
+        return f'{self.meal} - {self.order} on {self.meal_plan_meal.day}'

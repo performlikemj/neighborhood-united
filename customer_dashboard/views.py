@@ -19,7 +19,7 @@ import os
 import re
 import time
 from django.conf import settings
-from shared.utils import post_review, update_review, delete_review, replace_meal_in_plan, remove_meal_from_plan, list_upcoming_meals, get_date, create_meal_plan, add_meal_to_plan, auth_get_meal_plan, auth_search_chefs, auth_search_dishes, approve_meal_plan, auth_search_ingredients, auth_search_meals_excluding_ingredient, search_meal_ingredients, suggest_alternative_meals,guest_search_ingredients ,guest_get_meal_plan, guest_search_chefs, guest_search_dishes, generate_review_summary, sanitize_query
+from shared.utils import get_user_info, post_review, update_review, delete_review, replace_meal_in_plan, remove_meal_from_plan, list_upcoming_meals, get_date, create_meal_plan, add_meal_to_plan, auth_get_meal_plan, auth_search_chefs, auth_search_dishes, approve_meal_plan, auth_search_ingredients, auth_search_meals_excluding_ingredient, search_meal_ingredients, suggest_alternative_meals,guest_search_ingredients ,guest_get_meal_plan, guest_search_chefs, guest_search_dishes, generate_review_summary, sanitize_query, access_past_orders
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
 
@@ -97,6 +97,8 @@ def create_openai_prompt(user_id):
         - update_review\n
         - delete_review\n
         - generate_review_summary\n
+        - access_past_orders\n
+        - get_user_info\n
         
         When asked about a meal plan or a dish, the assistant will check the attached file for the caloric information--noting the key is the food name and the value is the calories--and return the caloric information if it is available. If the caloric information is not available  the assistant will politely let the customer know that the information is not available. \n\n"""
     ).format(goal=user_goal)
@@ -355,6 +357,8 @@ functions = {
     "update_review": update_review,
     "delete_review": delete_review,
     "generate_review_summary": generate_review_summary,
+    "access_past_orders": access_past_orders,
+    "get_user_info": get_user_info,
 
 }
 
@@ -400,407 +404,458 @@ def chat_with_gpt(request):
         with open(assistant_id_file, 'r') as f:
             assistant_id = f.read().strip()
 
-        # assistant = client.beta.assistants.update(
-        #     name="Food Expert",
-        #     assistant_id=assistant_id,
-        #     instructions=create_openai_prompt(request.user.id),
-        #     # model="gpt-3.5-turbo-1106",
-        #     model="gpt-4-1106-preview",
-        #     tools=[ 
-        #         {"type": "code_interpreter",},
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "auth_search_dishes",
-        #                 "description": "Search dishes in the database",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {
-        #                         "query": {
-        #                             "type": "string",
-        #                             "description": "The query to search for dishes",
-        #                         },
-        #                     },
-        #                     "required": ["query"],
-        #                 },
-        #             }
-        #         },
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "auth_search_chefs",
-        #                 "description": "Search chefs in the database and get their info",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {
-        #                         "query": {
-        #                             "type": "string",
-        #                             "description": "The query to search for chefs",
-        #                         },
-        #                     },
-        #                     "required": ["query"],
-        #                 },
-        #             }
-        #         },
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "auth_get_meal_plan",
-        #                 "description": "Get a meal plan for the current week or a future week based on the user's week_shift. This function depends on the request object to access the authenticated user and their week_shift attribute.",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {},
-        #                     "required": []
-        #                 }
-        #             }
-        #         },
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "create_meal_plan",
-        #                 "description": "Create a new meal plan for the user.",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {},
-        #                     "required": []
-        #                 }
-        #             }
-        #         },
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "chef_service_areas",
-        #                 "description": "Retrieve service areas for a specified chef based on their name or identifier.",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {
-        #                         "query": {
-        #                             "type": "string",
-        #                             "description": "The query to search for a chef's service areas, typically using the chef's name or identifier."
-        #                         }
-        #                     },
-        #                     "required": ["query"]
-        #                 }
-        #             }
-        #         },
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "service_area_chefs",
-        #                 "description": "Search for chefs serving a specific postal code area.",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {
-        #                         "query": {
-        #                             "type": "string",
-        #                             "description": "The query to find chefs serving a particular postal code."
-        #                         }
-        #                     },
-        #                     "required": ["query"]
-        #                 }
-        #             }
-        #         },  
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "approve_meal_plan",
-        #                 "description": "Approve the meal plan and proceed to payment",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {
-        #                         "meal_plan_id": {
-        #                             "type": "integer",
-        #                             "description": "The ID of the meal plan to approve"
-        #                         }
-        #                     },
-        #                     "required": ["meal_plan_id"]
-        #                 }
-        #             }
-        #         },
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "auth_search_ingredients",
-        #                 "description": "Search for ingredients in the database",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {
-        #                         "query": {
-        #                             "type": "string",
-        #                             "description": "The query to search for ingredients",
-        #                         },
-        #                     },
-        #                     "required": ["query"],
-        #                 },
-        #             }
-        #         }, 
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "auth_search_meals_excluding_ingredient",
-        #                 "description": "Search the database for meals that are excluding an ingredient",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {
-        #                         "query": {
-        #                             "type": "string",
-        #                             "description": "The query to search for meals that exclude the ingredient",
-        #                         },
-        #                     },
-        #                     "required": ["query"],
-        #                 },
-        #             }
-        #         },
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "search_meal_ingredients",
-        #                 "description": "Search the database for the ingredients of a meal",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {
-        #                         "query": {
-        #                             "type": "string",
-        #                             "description": "The query to search for a meal's ingredients",
-        #                         },
-        #                     },
-        #                     "required": ["query"],
-        #                 },
-        #             }
-        #         },
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "suggest_alternative_meals",
-        #                 "description": "Suggest alternative meals based on a list of meal IDs and corresponding days of the week. Each meal ID will have a corresponding day to find alternatives.",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {
-        #                         "meal_ids": {
-        #                             "type": "array",
-        #                             "items": {
-        #                                 "type": "integer",
-        #                                 "description": "A unique identifier for a meal."
-        #                             },
-        #                             "description": "List of meal IDs to exclude from suggestions."
-        #                         },
-        #                         "days_of_week": {
-        #                             "type": "array",
-        #                             "items": {
-        #                                 "type": "string",
-        #                                 "description": "The day of the week for a meal, e.g., 'Monday', 'Tuesday', etc."
-        #                             },
-        #                             "description": "List of days of the week corresponding to each meal ID."
-        #                         }
-        #                     },
-        #                     "required": ["meal_ids", "days_of_week"]
-        #                 }
-        #             }
-        #         },
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "add_meal_to_plan",
-        #                 "description": "Add a meal to a specified day in the meal plan",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {
-        #                         "meal_plan_id": {
-        #                             "type": "integer",
-        #                             "description": "The unique identifier of the meal plan"
-        #                         },
-        #                         "meal_id": {
-        #                             "type": "integer",
-        #                             "description": "The unique identifier of the meal to add"
-        #                         },
-        #                         "day": {
-        #                             "type": "string",
-        #                             "description": "The day to add the meal to"
-        #                         }
-        #                     },
-        #                     "required": ["meal_plan_id", "meal_id", "day"]
-        #                 }
-        #             }
-        #         },
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "get_date",
-        #                 "description": "Get the current date and time. This function returns the current date and time in a user-friendly format, taking into account the server's time zone.",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {},
-        #                     "required": []
-        #                 }
-        #             }
-        #         },
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "list_upcoming_meals",
-        #                 "description": "Lists upcoming meals for the current week, filtered by user's dietary preference and postal code. The meals are adjusted based on the user's week_shift to plan for future meals.",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {},
-        #                     "required": []
-        #                 }
-        #             }
-        #         },
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "remove_meal_from_plan",
-        #                 "description": "Remove a meal from a specified day in the meal plan",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {
-        #                         "meal_plan_id": {
-        #                             "type": "integer",
-        #                             "description": "The unique identifier of the meal plan"
-        #                         },
-        #                         "meal_id": {
-        #                             "type": "integer",
-        #                             "description": "The unique identifier of the meal to remove"
-        #                         },
-        #                         "day": {
-        #                             "type": "string",
-        #                             "description": "The day to remove the meal from"
-        #                         }
-        #                     },
-        #                     "required": ["meal_plan_id", "meal_id", "day"]
-        #                 }
-        #             }
-        #         },
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "replace_meal_in_plan",
-        #                 "description": "Replace a meal with another meal on a specified day in the meal plan",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {
-        #                         "meal_plan_id": {
-        #                             "type": "integer",
-        #                             "description": "The unique identifier of the meal plan"
-        #                         },
-        #                         "old_meal_id": {
-        #                             "type": "integer",
-        #                             "description": "The unique identifier of the meal to be replaced"
-        #                         },
-        #                         "new_meal_id": {
-        #                             "type": "integer",
-        #                             "description": "The unique identifier of the new meal"
-        #                         },
-        #                         "day": {
-        #                             "type": "string",
-        #                             "description": "The day to replace the meal on"
-        #                         }
-        #                     },
-        #                     "required": ["meal_plan_id", "old_meal_id", "new_meal_id", "day"]
-        #                 }
-        #             }
-        #         },
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "post_review",
-        #                 "description": "Post a review for a meal or a chef.",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {
-        #                         "user_id": {
-        #                             "type": "integer",
-        #                             "description": "The ID of the user posting the review."
-        #                         },
-        #                         "content": {
-        #                             "type": "string",
-        #                             "description": "The content of the review. Must be between 10 and 1000 characters."
-        #                         },
-        #                         "rating": {
-        #                             "type": "integer",
-        #                             "description": "The rating given in the review, from 1 (Poor) to 5 (Excellent)."
-        #                         },
-        #                         "item_id": {
-        #                             "type": "integer",
-        #                             "description": "The ID of the item (meal or chef) being reviewed."
-        #                         },
-        #                         "item_type": {
-        #                             "type": "string",
-        #                             "enum": ["meal", "chef"],
-        #                             "description": "The type of item being reviewed."
-        #                         }
-        #                     },
-        #                     "required": ["user_id", "content", "rating", "item_id", "item_type"]
-        #                 }
-        #             }
-        #         },
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "update_review",
-        #                 "description": "Update an existing review.",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {
-        #                         "review_id": {
-        #                             "type": "integer",
-        #                             "description": "The ID of the review to be updated."
-        #                         },
-        #                         "updated_content": {
-        #                             "type": "string",
-        #                             "description": "The updated content of the review. Must be between 10 and 1000 characters."
-        #                         },
-        #                         "updated_rating": {
-        #                             "type": "integer",
-        #                             "description": "The updated rating, from 1 (Poor) to 5 (Excellent)."
-        #                         }
-        #                     },
-        #                     "required": ["review_id", "updated_content", "updated_rating"]
-        #                 }
-        #             }
-        #         },
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "delete_review",
-        #                 "description": "Delete a review.",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {
-        #                         "review_id": {
-        #                             "type": "integer",
-        #                             "description": "The ID of the review to be deleted."
-        #                         }
-        #                     },
-        #                     "required": ["review_id"]
-        #                 }
-        #             }
-        #         },
-        #         {
-        #             "type": "function",
-        #             "function": {
-        #                 "name": "generate_review_summary",
-        #                 "description": "Generate a summary of all reviews for a specific object (meal or chef) using AI model.",
-        #                 "parameters": {
-        #                     "type": "object",
-        #                     "properties": {
-        #                         "object_id": {
-        #                             "type": "integer",
-        #                             "description": "The unique identifier of the object (meal or chef) to summarize reviews for."
-        #                         },
-        #                         "category": {
-        #                             "type": "string",
-        #                             "enum": ["meal", "chef"],
-        #                             "description": "The category of the object being reviewed."
-        #                         }
-        #                     },
-        #                     "required": ["object_id", "category"]
-        #                 }
-        #             }
-        #         },
-        #     ],
-        # )
-           
+        assistant = client.beta.assistants.update(
+            name="Food Expert",
+            assistant_id=assistant_id,
+            instructions=create_openai_prompt(request.user.id),
+            # model="gpt-3.5-turbo-1106",
+            model="gpt-4-1106-preview",
+            tools=[ 
+                {"type": "code_interpreter",},
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "auth_search_dishes",
+                        "description": "Search dishes in the database",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The query to search for dishes",
+                                },
+                            },
+                            "required": ["query"],
+                        },
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "auth_search_chefs",
+                        "description": "Search chefs in the database and get their info",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The query to search for chefs",
+                                },
+                            },
+                            "required": ["query"],
+                        },
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "auth_get_meal_plan",
+                        "description": "Get a meal plan for the current week or a future week based on the user's week_shift. This function depends on the request object to access the authenticated user and their week_shift attribute.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "create_meal_plan",
+                        "description": "Create a new meal plan for the user.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "chef_service_areas",
+                        "description": "Retrieve service areas for a specified chef based on their name or identifier.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The query to search for a chef's service areas, typically using the chef's name or identifier."
+                                }
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "service_area_chefs",
+                        "description": "Search for chefs serving a specific postal code area.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The query to find chefs serving a particular postal code."
+                                }
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                },  
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "approve_meal_plan",
+                        "description": "Approve the meal plan and proceed to payment",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "meal_plan_id": {
+                                    "type": "integer",
+                                    "description": "The ID of the meal plan to approve"
+                                }
+                            },
+                            "required": ["meal_plan_id"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "auth_search_ingredients",
+                        "description": "Search for ingredients in the database",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The query to search for ingredients",
+                                },
+                            },
+                            "required": ["query"],
+                        },
+                    }
+                }, 
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "auth_search_meals_excluding_ingredient",
+                        "description": "Search the database for meals that are excluding an ingredient",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The query to search for meals that exclude the ingredient",
+                                },
+                            },
+                            "required": ["query"],
+                        },
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "search_meal_ingredients",
+                        "description": "Search the database for the ingredients of a meal",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The query to search for a meal's ingredients",
+                                },
+                            },
+                            "required": ["query"],
+                        },
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "suggest_alternative_meals",
+                        "description": "Suggest alternative meals based on a list of meal IDs and corresponding days of the week. Each meal ID will have a corresponding day to find alternatives.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "meal_ids": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "integer",
+                                        "description": "A unique identifier for a meal."
+                                    },
+                                    "description": "List of meal IDs to exclude from suggestions."
+                                },
+                                "days_of_week": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string",
+                                        "description": "The day of the week for a meal, e.g., 'Monday', 'Tuesday', etc."
+                                    },
+                                    "description": "List of days of the week corresponding to each meal ID."
+                                }
+                            },
+                            "required": ["meal_ids", "days_of_week"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "add_meal_to_plan",
+                        "description": "Add a meal to a specified day in the meal plan",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "meal_plan_id": {
+                                    "type": "integer",
+                                    "description": "The unique identifier of the meal plan"
+                                },
+                                "meal_id": {
+                                    "type": "integer",
+                                    "description": "The unique identifier of the meal to add"
+                                },
+                                "day": {
+                                    "type": "string",
+                                    "description": "The day to add the meal to"
+                                }
+                            },
+                            "required": ["meal_plan_id", "meal_id", "day"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_date",
+                        "description": "Get the current date and time. This function returns the current date and time in a user-friendly format, taking into account the server's time zone.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "list_upcoming_meals",
+                        "description": "Lists upcoming meals for the current week, filtered by user's dietary preference and postal code. The meals are adjusted based on the user's week_shift to plan for future meals.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "remove_meal_from_plan",
+                        "description": "Remove a meal from a specified day in the meal plan",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "meal_plan_id": {
+                                    "type": "integer",
+                                    "description": "The unique identifier of the meal plan"
+                                },
+                                "meal_id": {
+                                    "type": "integer",
+                                    "description": "The unique identifier of the meal to remove"
+                                },
+                                "day": {
+                                    "type": "string",
+                                    "description": "The day to remove the meal from"
+                                }
+                            },
+                            "required": ["meal_plan_id", "meal_id", "day"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "replace_meal_in_plan",
+                        "description": "Replace a meal with another meal on a specified day in the meal plan",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "meal_plan_id": {
+                                    "type": "integer",
+                                    "description": "The unique identifier of the meal plan"
+                                },
+                                "old_meal_id": {
+                                    "type": "integer",
+                                    "description": "The unique identifier of the meal to be replaced"
+                                },
+                                "new_meal_id": {
+                                    "type": "integer",
+                                    "description": "The unique identifier of the new meal"
+                                },
+                                "day": {
+                                    "type": "string",
+                                    "description": "The day to replace the meal on"
+                                }
+                            },
+                            "required": ["meal_plan_id", "old_meal_id", "new_meal_id", "day"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "post_review",
+                        "description": "Post a review for a meal or a chef.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "user_id": {
+                                    "type": "integer",
+                                    "description": "The ID of the user posting the review."
+                                },
+                                "content": {
+                                    "type": "string",
+                                    "description": "The content of the review. Must be between 10 and 1000 characters."
+                                },
+                                "rating": {
+                                    "type": "integer",
+                                    "description": "The rating given in the review, from 1 (Poor) to 5 (Excellent)."
+                                },
+                                "item_id": {
+                                    "type": "integer",
+                                    "description": "The ID of the item (meal or chef) being reviewed."
+                                },
+                                "item_type": {
+                                    "type": "string",
+                                    "enum": ["meal", "chef"],
+                                    "description": "The type of item being reviewed."
+                                }
+                            },
+                            "required": ["user_id", "content", "rating", "item_id", "item_type"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "update_review",
+                        "description": "Update an existing review.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "review_id": {
+                                    "type": "integer",
+                                    "description": "The ID of the review to be updated."
+                                },
+                                "updated_content": {
+                                    "type": "string",
+                                    "description": "The updated content of the review. Must be between 10 and 1000 characters."
+                                },
+                                "updated_rating": {
+                                    "type": "integer",
+                                    "description": "The updated rating, from 1 (Poor) to 5 (Excellent)."
+                                }
+                            },
+                            "required": ["review_id", "updated_content", "updated_rating"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "delete_review",
+                        "description": "Delete a review.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "review_id": {
+                                    "type": "integer",
+                                    "description": "The ID of the review to be deleted."
+                                }
+                            },
+                            "required": ["review_id"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "generate_review_summary",
+                        "description": "Generate a summary of all reviews for a specific object (meal or chef) using AI model.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "object_id": {
+                                    "type": "integer",
+                                    "description": "The unique identifier of the object (meal or chef) to summarize reviews for."
+                                },
+                                "category": {
+                                    "type": "string",
+                                    "enum": ["meal", "chef"],
+                                    "description": "The category of the object being reviewed."
+                                }
+                            },
+                            "required": ["object_id", "category"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "access_past_orders",
+                        "description": "Retrieve past orders for a user, optionally filtered by specific criteria.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "user_id": {
+                                    "type": "integer",
+                                    "description": "The ID of the user whose past orders are being accessed."
+                                },
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["Placed", "In Progress", "Completed", "Cancelled", "Refunded", "Delayed"],
+                                    "description": "The status of the orders to retrieve."
+                                },
+                                "delivery_method": {
+                                    "type": "string",
+                                    "enum": ["Pickup", "Delivery"],
+                                    "description": "The delivery method of the orders to retrieve."
+                                }
+                            },
+                            "required": ["user_id"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_user_info",
+                        "description": "Retrieve essential information about the user such as user ID, dietary preference, week shift, and postal code.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_goal",
+                        "description": "Retrieve the user's goal to aide in making smart dietary decisions and offering advise.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
+                        }
+                    }    
+                },
+            ],
+        )
+        
 
     else:
         print("Creating a new assistant")
@@ -1199,6 +1254,45 @@ def chat_with_gpt(request):
                                 }
                             },
                             "required": ["object_id", "category"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "access_past_orders",
+                        "description": "Retrieve past orders for a user, optionally filtered by specific criteria.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "user_id": {
+                                    "type": "integer",
+                                    "description": "The ID of the user whose past orders are being accessed."
+                                },
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["Placed", "In Progress", "Completed", "Cancelled", "Refunded", "Delayed"],
+                                    "description": "The status of the orders to retrieve."
+                                },
+                                "delivery_method": {
+                                    "type": "string",
+                                    "enum": ["Pickup", "Delivery"],
+                                    "description": "The delivery method of the orders to retrieve."
+                                }
+                            },
+                            "required": ["user_id"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_user_info",
+                        "description": "Retrieve essential information about the user such as user ID, dietary preference, week shift, and postal code.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
                         }
                     }
                 },

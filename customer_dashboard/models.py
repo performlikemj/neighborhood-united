@@ -6,7 +6,7 @@ from django.utils import timezone
 class GoalTracking(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='goal')  # One-to-One
     goal_name = models.CharField(max_length=255)
-    goal_description = models.TextField(max_length=500)  # New field
+    goal_description = models.TextField(max_length=1000)  # New field
 
     def __str__(self):
         return f"{self.goal_name} - {self.user}"

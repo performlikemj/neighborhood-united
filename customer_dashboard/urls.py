@@ -14,7 +14,7 @@ urlpatterns = [
     path('api/meal_plans/', views.meal_plans, name='api_meal_plans'),
     path('api/chat_logs/', views.chat_with_gpt, name='api_chat_logs'),
     path('api/update_week_shift/', views.update_week_shift, name='api_update_week_shift'),
-    path('api/update_goal/', views.update_goal, name='api_update_goal'),
+    path('api/update_goal/', views.update_goal_api, name='api_update_goal'),
     path('api/food_preferences/', views.food_preferences, name='food_preferences'),
     path('api/update_food_preferences/', views.update_food_preferences, name='update_food_preferences'),
 ]

@@ -25,13 +25,88 @@ import openai
 from openai import OpenAIError
 from django.utils import timezone
 from django.utils.formats import date_format
-from meals.views import meal_plan_approval
+from django.forms.models import model_to_dict
+from customer_dashboard.models import GoalTracking
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # TODO: Reminder: When implementing the functionality for users to edit future meal plans, ensure that all days in the week are included when a user shifts the week using their week_shift attribute. This means that even if the current day of the week is Wednesday, for example, and the user shifts to the next week, the meal plan for that week should include all days from Monday to Sunday.
 
 
+def adjust_week_shift(request, week_shift_increment):
+    # Validate that the increment is positive
+    if week_shift_increment < 1:
+        return {'status': 'error', 'message': 'Week shift increment must be positive.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+    user = request.user
+
+    # Update the user's week shift, ensuring it doesn't go below 0
+    new_week_shift = max(user.week_shift + week_shift_increment, 0)
+    user.week_shift = new_week_shift
+    user.save()
+
+    return {
+        'status': 'success',
+        'message': f'Week shift adjusted to {new_week_shift} weeks.',
+        'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+
+
+def update_goal(request, goal_name, goal_description):
+    try:
+        print(f'From update_goal: {goal_name}, {goal_description}')
+        # Ensure goal_name and goal_description are not empty
+        if not goal_name or not goal_description:
+            return {
+                'status': 'error', 
+                'message': 'Both goal name and description are required.',
+                'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+
+        # Get the current user's GoalTracking object or create a new one if it doesn't exist
+        goal, created = GoalTracking.objects.get_or_create(user=request.user)
+
+        # Update goal details
+        goal.goal_name = goal_name
+        goal.goal_description = goal_description
+        goal.save()
+
+        return {
+            'status': 'success', 
+            'message': 'Goal updated successfully.',
+            'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+
+    except CustomUser.DoesNotExist:
+        return {
+            'status': 'error', 
+            'message': 'User not found.', 
+            'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+    except Exception as e:
+        return {
+            'status': 'error', 
+            'message': f'An unexpected error occurred: {e}',
+            'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+
+
+def get_goal(request):
+    # Retrieve the user's goal
+    try:
+        user = CustomUser.objects.get(id=request.user.id)
+        goal = user.goal
+        return {
+            'status': 'success', 
+            'goal': model_to_dict(goal),  # Convert the goal object to a dictionary
+            'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+    except CustomUser.DoesNotExist:
+        return {
+            'status': 'error', 
+            'message': 'User not found.', 
+            'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
 
 def get_user_info(request):
     # Ensure the requesting user is trying to access their own information
@@ -56,7 +131,6 @@ def get_user_info(request):
         return {'status': 'error', 'message': 'User not found.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     except Address.DoesNotExist:
         return {'status': 'error', 'message': 'Address not found for user.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
-
 
 def access_past_orders(request, user_id):
     # Check user authorization

@@ -69,15 +69,4 @@ class UserRole(models.Model):
         return f'{self.user.username} - {self.current_role}'
     
 
-class ChefAddress(models.Model):
-    user = models.OneToOneField(get_user_model(), on_delete=models.CASCADE, related_name='chef_address')
-    street = models.CharField(max_length=255)
-    city = models.CharField(max_length=255)
-    state = models.CharField(max_length=255)
-    postalcode = models.ForeignKey('local_chefs.PostalCode', on_delete=models.SET_NULL, null=True, blank=True)
-    country = CountryField()
-
-    def __str__(self):
-        return f'{self.business_name}, {self.street}, {self.city}, {self.state} {self.postalcode}, {self.country}'
-
 

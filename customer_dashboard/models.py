@@ -12,35 +12,6 @@ class GoalTracking(models.Model):
         return f"{self.goal_name} - {self.user}"
 
 
-class FoodPreferences(models.Model):
-    DIETARY_CHOICES = [
-    ('Vegan', 'Vegan'),
-    ('Vegetarian', 'Vegetarian'),
-    ('Pescatarian', 'Pescatarian'),
-    ('Gluten-Free', 'Gluten-Free'),
-    ('Keto', 'Keto'),
-    ('Paleo', 'Paleo'),
-    ('Halal', 'Halal'),
-    ('Kosher', 'Kosher'),
-    ('Low-Calorie', 'Low-Calorie'),
-    ('Low-Sodium', 'Low-Sodium'),
-    ('High-Protein', 'High-Protein'),
-    ('Dairy-Free', 'Dairy-Free'),
-    ('Nut-Free', 'Nut-Free'),
-    ('Raw Food', 'Raw Food'),
-    ('Whole 30', 'Whole 30'),
-    ('Low-FODMAP', 'Low-FODMAP'),
-    ('Diabetic-Friendly', 'Diabetic-Friendly'),
-    # ... add more as needed
-    ]
-    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
-    dietary_preference = models.CharField(max_length=20, choices=DIETARY_CHOICES, default='None', null=True, blank=True)
-    allergies = models.TextField(blank=True)
-
-    def __str__(self):
-        return f'Food Preferences for {self.user.username}'
-
-
 class ChatThread(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='chat_threads')
     title = models.CharField(max_length=255, default="Chat with Assistant")
@@ -50,3 +21,15 @@ class ChatThread(models.Model):
 
     def __str__(self):
         return f"Chat Thread for {self.user.username} - ID: {self.openai_thread_id}"
+
+
+class UserHealthMetrics(models.Model):
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='health_metrics')
+    date_recorded = models.DateField(default=timezone.now)
+    weight = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)  # in kilograms
+    bmi = models.DecimalField(max_digits=4, decimal_places=2, null=True, blank=True)  # Body Mass Index
+    mood = models.CharField(max_length=50, null=True, blank=True)  # Mood description
+    energy_level = models.IntegerField(null=True, blank=True)  # Scale (e.g., 1-10)
+
+    def __str__(self):
+        return f"Health Metrics for {self.user.username} - Date: {self.date_recorded}"

@@ -1,5 +1,5 @@
 from django import forms
-from .models import CustomUser, Address, ChefAddress
+from .models import CustomUser, Address
 from django.contrib.auth.forms import UserCreationForm
 from local_chefs.models import PostalCode  # Import the PostalCode model
 from .utils import send_email_change_confirmation
@@ -69,12 +69,6 @@ class AddressForm(forms.ModelForm):
 
     class Meta:
         model = Address
-        fields = ['street', 'city', 'state', 'postalcode', 'country']
-
-
-class ChefAddressForm(forms.ModelForm):
-    class Meta:
-        model = ChefAddress
         fields = ['street', 'city', 'state', 'postalcode', 'country']
 
 

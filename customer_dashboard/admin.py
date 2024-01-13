@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import GoalTracking, ChatThread, FoodPreferences
+from .models import GoalTracking, ChatThread
 
 # Admin class for GoalTracking
 class GoalTrackingAdmin(admin.ModelAdmin):
@@ -22,11 +22,3 @@ class ChatThreadAdmin(admin.ModelAdmin):
 admin.site.register(ChatThread, ChatThreadAdmin)
 
 
-class FoodPreferencesAdmin(admin.ModelAdmin):
-    list_display = ('user', 'dietary_preference', 'allergies')
-    search_fields = ('user__username',)
-    list_filter = ('dietary_preference',)
-    readonly_fields = ('user',)
-
-# Register FoodPreferences model
-admin.site.register(FoodPreferences, FoodPreferencesAdmin)

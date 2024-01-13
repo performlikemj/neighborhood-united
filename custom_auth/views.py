@@ -8,9 +8,9 @@ from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from django.core.mail import EmailMessage
 from .tokens import account_activation_token
-from .models import CustomUser, Address, UserRole, ChefAddress
+from .models import CustomUser, Address, UserRole
 from chefs.models import ChefRequest
-from .forms import RegistrationForm, UserProfileForm, EmailChangeForm, AddressForm, ChefAddressForm
+from .forms import RegistrationForm, UserProfileForm, EmailChangeForm, AddressForm
 from django.urls import reverse
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.utils import timezone
@@ -18,13 +18,183 @@ from datetime import timedelta
 from .utils import send_email_change_confirmation
 from django.views import View
 from django.contrib.auth.mixins import LoginRequiredMixin
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.response import Response
+from django.contrib.sites.shortcuts import get_current_site
+from django.template.loader import render_to_string
+from django.core.mail import EmailMessage
+from .serializers import CustomUserSerializer, AddressSerializer, PostalCodeSerializer
 
-def is_customer(user):
-    return user.initial_email_confirmed
+from local_chefs.models import PostalCode
+import os
+from django.db import transaction
+from django.core.exceptions import ValidationError
+from django.contrib.auth import get_user_model
 
-def is_correct_user(user, customuser_username):
-    return user.username == customuser_username
 
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+import json
+from rest_framework_simplejwt.tokens import RefreshToken
+
+from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
+
+from rest_framework.permissions import IsAuthenticated
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def user_details_view(request):
+    # Serialize the request user's data
+    serializer = CustomUserSerializer(request.user)
+    return Response(serializer.data)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def update_profile_api(request):
+    user = request.user
+
+    # Deserialize and update user data
+    user_serializer = CustomUserSerializer(user, data=request.data, partial=True)
+    if user_serializer.is_valid():
+        # Check if email is updated
+        if 'email' in user_serializer.validated_data:
+            user.email_confirmed = False
+            user.new_email = user_serializer.validated_data['email']
+            user.save()
+
+            # Send activation email
+            mail_subject = 'Verify your email to resume access.'
+            uid = urlsafe_base64_encode(force_bytes(user.pk))
+            token = account_activation_token.make_token(user)
+            activation_link = f"{os.getenv('STREAMLIT_URL')}/activate?uid={uid}&token={token}"
+            message = f"Hi {user.username},\n\nYou've recently updated your email!\n\n" \
+                    f"Please click the link below to verify the change:\n\n{activation_link}\n\n" \
+                    "If you have any issues, please contact us at support@sautAI.com.\n\n" \
+                    "Thanks,\nYour SautAI Support Team"
+
+            to_email = user_serializer.validated_data.get('email')
+            email = EmailMessage(mail_subject, message, from_email='mj@igobymj.com', to=[to_email])
+            email.send()
+        user_serializer.save()
+
+        # Handle address update
+        address_data = request.data.get('address')
+        if address_data:
+            address_serializer = AddressSerializer(data=address_data)
+            if address_serializer.is_valid():
+                # Update or create the address
+                Address.objects.update_or_create(user=user, defaults=address_serializer.validated_data)
+            else:
+                return Response({'status': 'failure', 'message': address_serializer.errors}, status=400)
+
+        return Response({'status': 'success', 'message': 'Profile updated successfully'})
+    else:
+        return Response({'status': 'failure', 'message': user_serializer.errors}, status=400)
+
+
+@csrf_exempt
+def login_api_view(request):
+    if request.method == 'POST':
+        data = json.loads(request.body)
+        username = data['username']
+        password = data['password']
+        user = authenticate(username=username, password=password)
+        if user is not None:
+            # Create the token for the user
+            refresh = RefreshToken.for_user(user)
+            print(f'User {user.username} logged in successfully')
+            print(f'Access token: {refresh.access_token}')
+            return JsonResponse({
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+                'user_id': user.id,  # Include the user_id in the response
+                'status': 'success',
+                'message': 'Logged in successfully'
+            }, status=200)
+        else:
+            return JsonResponse({'status': 'error', 'message': 'Invalid username or password'}, status=400)
+    return JsonResponse({'status': 'error', 'message': 'Only POST method allowed'}, status=405)
+
+
+@api_view(['POST'])
+@login_required
+def logout_api_view(request):
+    try:
+        refresh_token = request.data.get('refresh')
+        token = RefreshToken(refresh_token)
+        token.blacklist()
+        logout(request)
+        return JsonResponse({'status': 'success', 'message': 'Logged out successfully'}, status=200)
+    except (TokenError, InvalidToken):
+        return JsonResponse({'status': 'error', 'message': 'Invalid token'}, status=400)
+
+@api_view(['POST'])
+def register_api_view(request):
+    user_serializer = CustomUserSerializer(data=request.data.get('user'))
+
+    if not user_serializer.is_valid():
+        return Response({'errors': user_serializer.errors})
+
+    with transaction.atomic():
+        user = user_serializer.save()
+        UserRole.objects.create(user=user, current_role='customer')
+        address_data = request.data.get('address')
+        address_data['user'] = user.id
+
+        postal_code_str = address_data.pop('postalcode', None)
+        if postal_code_str:
+            try:
+                postal_code_obj = PostalCode.objects.get(code=postal_code_str)
+                address_data['postalcode'] = postal_code_obj.pk
+            except PostalCode.DoesNotExist:
+                return Response({'errors': {'postalcode': 'Invalid postal code'}})
+
+        address_serializer = AddressSerializer(data=address_data)
+        if not address_serializer.is_valid():
+            return Response({'errors': address_serializer.errors})
+
+        address_serializer.save()
+
+        # Send activation email (adjust the logic as needed)
+        mail_subject = 'Activate your account.'
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = account_activation_token.make_token(user)
+        activation_link = f"{os.getenv('STREAMLIT_URL')}/activate?uid={uid}&token={token}"
+        message = f"Hi {user.username},\n\nThank you for signing up for our website!\n\n" \
+                  f"Please click the link below to activate your account:\n\n{activation_link}\n\n" \
+                  "If you have any issues, please contact us at support@sautAI.com.\n\n" \
+                  "Thanks,\nYour SautAI Support Team"
+
+        to_email = user_serializer.validated_data.get('email')
+        email = EmailMessage(mail_subject, message, from_email='mj@igobymj.com', to=[to_email])
+        email.send()
+    # After successful registration
+    refresh = RefreshToken.for_user(user)
+    return Response({
+        'refresh': str(refresh),
+        'access': str(refresh.access_token),
+        'status': 'User registered',
+        'navigate_to': 'Assistant'
+    })
+
+
+
+@api_view(['POST'])
+def activate_account_api_view(request):
+    uidb64 = request.data.get('uid')
+    token = request.data.get('token')
+    try:
+        uid = force_str(urlsafe_base64_decode(uidb64))
+        user = get_user_model().objects.get(pk=uid)
+        if user and account_activation_token.check_token(user, token):
+            user.email_confirmed = True
+            user.initial_email_confirmed = True
+            user.save()
+            return Response({'status': 'success', 'message': 'Account activated successfully.'})
+        else:
+            return Response({'status': 'failure', 'message': 'Activation link is invalid.'})
+    except Exception as e:
+        return Response({'status': 'error', 'message': str(e)})
 
 def email_confirmed_required(function):
     def wrap(request, *args, **kwargs):
@@ -36,6 +206,13 @@ def email_confirmed_required(function):
     wrap.__doc__ = function.__doc__
     wrap.__name__ = function.__name__
     return wrap
+
+
+def is_customer(user):
+    return user.initial_email_confirmed
+
+def is_correct_user(user, customuser_username):
+    return user.username == customuser_username
 
 
 @login_required
@@ -80,11 +257,11 @@ def update_profile(request):
     address_form_instance = None  # Initialize as None
 
     # Determine the correct address form based on the user's role
-    address_form_class = ChefAddressForm if user_role.current_role == 'chef' else AddressForm
+    address_form_class = AddressForm
     try:
-        address_instance = ChefAddress.objects.get(user=request.user) if user_role.current_role == 'chef' else Address.objects.get(user=request.user)
+        address_instance = Address.objects.get(user=request.user)
         address_form_instance = address_form_class(request.POST or None, instance=address_instance)
-    except (ChefAddress.DoesNotExist, Address.DoesNotExist):
+    except (Address.DoesNotExist):
         address_form_instance = address_form_class(request.POST or None)  # No instance if address doesn't exist
 
     # Handle form submission

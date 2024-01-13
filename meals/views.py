@@ -11,7 +11,6 @@ from django.http import JsonResponse
 from django.urls import reverse
 from django.http import HttpResponseBadRequest
 from custom_auth.models import Address
-from customer_dashboard.models import FoodPreferences
 from django.core.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404, render
 from django.http import HttpResponseForbidden

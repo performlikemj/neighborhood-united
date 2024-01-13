@@ -19,7 +19,6 @@ from django.contrib.contenttypes.models import ContentType
 from random import sample
 from collections import defaultdict
 from local_chefs.views import chef_service_areas, service_area_chefs
-from customer_dashboard.models import FoodPreferences
 import os
 import openai
 from openai import OpenAIError
@@ -38,7 +37,7 @@ def adjust_week_shift(request, week_shift_increment):
     if week_shift_increment < 1:
         return {'status': 'error', 'message': 'Week shift increment must be positive.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-    user = request.user
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
 
     # Update the user's week shift, ensuring it doesn't go below 0
     new_week_shift = max(user.week_shift + week_shift_increment, 0)
@@ -54,6 +53,7 @@ def adjust_week_shift(request, week_shift_increment):
 
 def update_goal(request, goal_name, goal_description):
     try:
+        user = CustomUser.objects.get(id=request.data.get('user_id'))
         print(f'From update_goal: {goal_name}, {goal_description}')
         # Ensure goal_name and goal_description are not empty
         if not goal_name or not goal_description:
@@ -64,7 +64,7 @@ def update_goal(request, goal_name, goal_description):
             }
 
         # Get the current user's GoalTracking object or create a new one if it doesn't exist
-        goal, created = GoalTracking.objects.get_or_create(user=request.user)
+        goal, created = GoalTracking.objects.get_or_create(user=user)
 
         # Update goal details
         goal.goal_name = goal_name
@@ -92,27 +92,27 @@ def update_goal(request, goal_name, goal_description):
 
 
 def get_goal(request):
-    # Retrieve the user's goal
     try:
-        user = CustomUser.objects.get(id=request.user.id)
+        user = CustomUser.objects.get(id=request.data.get('user_id'))
         goal = user.goal
         return {
-            'status': 'success', 
-            'goal': model_to_dict(goal),  # Convert the goal object to a dictionary
+            'status': 'success',
+            'goal': model_to_dict(goal),
             'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
         }
     except CustomUser.DoesNotExist:
         return {
-            'status': 'error', 
-            'message': 'User not found.', 
+            'status': 'error',
+            'message': 'User not found.',
             'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
         }
+
 
 def get_user_info(request):
     # Ensure the requesting user is trying to access their own information
 
     try:
-        user = CustomUser.objects.get(id=request.user.id)
+        user = CustomUser.objects.get(id=request.data.get('user_id'))
         user_role = UserRole.objects.get(user=user)
         
         # Ensure the user is not in the chef role
@@ -134,8 +134,9 @@ def get_user_info(request):
 
 def access_past_orders(request, user_id):
     # Check user authorization
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
 
-    if user_id != request.user.id:
+    if user_id != user.id:
         return {'status': 'error', 'message': "Unauthorized access.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
     # Find meal plans within the week range with specific order statuses
@@ -176,7 +177,9 @@ def access_past_orders(request, user_id):
     return {'orders': orders_data, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 def post_review(request, user_id, content, rating, item_id, item_type):
-    if user_id != request.user.id:
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
+
+    if user_id != user.id:
         return {'status': 'error', 'message': 'You are not authorized to post this review.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     
     # Find the content type based on item_type
@@ -206,7 +209,9 @@ def post_review(request, user_id, content, rating, item_id, item_type):
     return {'status': 'success', 'message': 'Review posted successfully', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 def update_review(request, review_id, updated_content, updated_rating):
-    if request.user.id != Review.objects.get(id=review_id).user.id:
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
+
+    if user.id != Review.objects.get(id=review_id).user.id:
         return {'status': 'error', 'message': 'You are not authorized to update this review.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     review = Review.objects.get(id=review_id)
     review.content = updated_content
@@ -216,7 +221,8 @@ def update_review(request, review_id, updated_content, updated_rating):
     return {'status': 'success', 'message': 'Review updated successfully', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 def delete_review(request, review_id):
-    if request.user.id != Review.objects.get(id=review_id).user.id:
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
+    if user.id != Review.objects.get(id=review_id).user.id:
         return {'status': 'error', 'message': 'You are not authorized to delete this review.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     review_id = request.POST.get('review_id')
 
@@ -260,15 +266,17 @@ def generate_review_summary(object_id, category):
 
 
 def list_upcoming_meals(request):
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
+
     # Calculate the current week's start and end dates based on week_shift
-    week_shift = max(int(request.user.week_shift), 0)
+    week_shift = max(int(user.week_shift), 0)
     current_date = timezone.now().date() + timedelta(weeks=week_shift)
     start_of_week = current_date - timedelta(days=current_date.weekday())
     end_of_week = start_of_week + timedelta(days=6)
 
     # Filter meals by dietary preferences, postal code, and current week
-    dietary_filtered_meals = Meal.dietary_objects.for_user(request.user).filter(start_date__range=[start_of_week, end_of_week])
-    postal_filtered_meals = Meal.postal_objects.for_user(user=request.user).filter(start_date__range=[start_of_week, end_of_week])
+    dietary_filtered_meals = Meal.dietary_objects.for_user(user).filter(start_date__range=[start_of_week, end_of_week])
+    postal_filtered_meals = Meal.postal_objects.for_user(user=user).filter(start_date__range=[start_of_week, end_of_week])
 
     # Combine both filters
     filtered_meals = dietary_filtered_meals & postal_filtered_meals
@@ -293,9 +301,9 @@ def list_upcoming_meals(request):
 
 def create_meal_plan(request):
     print("From create_meal_plan")
-
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
     # Calculate the week's date range which also works if user shifts week
-    week_shift = max(int(request.user.week_shift), 0)  # Ensure week_shift is not negative
+    week_shift = max(int(user.week_shift), 0)  # Ensure week_shift is not negative
     adjusted_today = timezone.now().date() + timedelta(weeks=week_shift)
     start_of_week = adjusted_today - timedelta(days=adjusted_today.weekday()) + timedelta(weeks=week_shift)
     end_of_week = start_of_week + timedelta(days=6)
@@ -304,10 +312,10 @@ def create_meal_plan(request):
     print(f"End of week: {end_of_week}")
 
     # Check if a MealPlan already exists for the specified week
-    if not MealPlan.objects.filter(user=request.user, week_start_date=start_of_week, week_end_date=end_of_week).exists():
+    if not MealPlan.objects.filter(user=user, week_start_date=start_of_week, week_end_date=end_of_week).exists():
         # Create a new MealPlan for the remaining days in the week
         meal_plan = MealPlan.objects.create(
-            user=request.user,
+            user=user,
             week_start_date=start_of_week,
             week_end_date=end_of_week,
             created_date=timezone.now()
@@ -319,10 +327,11 @@ def create_meal_plan(request):
 
 def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day):
     print("From replace_meal_in_plan")
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
 
     # Validate meal plan
     try:
-        meal_plan = MealPlan.objects.get(id=meal_plan_id, user=request.user)
+        meal_plan = MealPlan.objects.get(id=meal_plan_id, user=user)
     except MealPlan.DoesNotExist:
         return {'status': 'error', 'message': 'Meal plan not found.'}
 
@@ -371,10 +380,11 @@ def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day):
 
 def remove_meal_from_plan(request, meal_plan_id, meal_id, day):
     print("From remove_meal_from_plan")
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
 
     # Retrieve the specified MealPlan
     try:
-        meal_plan = MealPlan.objects.get(id=meal_plan_id, user=request.user)
+        meal_plan = MealPlan.objects.get(id=meal_plan_id, user=user)
     except MealPlan.DoesNotExist:
         return {'status': 'error', 'message': 'Meal plan not found.'}
 
@@ -401,7 +411,8 @@ def remove_meal_from_plan(request, meal_plan_id, meal_id, day):
 def add_meal_to_plan(request, meal_plan_id, meal_id, day):
     print("From add_meal_to_plan")
     try:
-        meal_plan = MealPlan.objects.get(id=meal_plan_id, user=request.user)
+        user = CustomUser.objects.get(id=request.data.get('user_id'))
+        meal_plan = MealPlan.objects.get(id=meal_plan_id, user=user)
         print(f"Meal plan: {meal_plan}")
     except MealPlan.DoesNotExist:
         return {'status': 'error', 'message': 'Meal plan not found.'}
@@ -452,8 +463,9 @@ def suggest_alternative_meals(request, meal_ids, days_of_week):
     Suggest alternative meals based on a list of meal IDs and corresponding days of the week.
     """
     print("From suggest_alternative_meals")
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
     alternative_meals = []
-    week_shift = max(int(request.user.week_shift), 0)  # User's ability to plan for future weeks
+    week_shift = max(int(user.week_shift), 0)  # User's ability to plan for future weeks
 
     today = timezone.now().date() + timedelta(weeks=week_shift)  # Adjust today's date based on week_shift
     current_weekday = today.weekday()
@@ -482,8 +494,8 @@ def suggest_alternative_meals(request, meal_ids, days_of_week):
         print(f"Target date for {day_of_week}: {target_date}")
 
         # Filter meals by dietary preferences, postal code, and current week
-        dietary_filtered_meals = Meal.dietary_objects.for_user(request.user).filter(start_date=target_date).exclude(id=meal_id)
-        postal_filtered_meals = Meal.postal_objects.for_user(user=request.user).filter(start_date=target_date).exclude(id=meal_id)
+        dietary_filtered_meals = Meal.dietary_objects.for_user(user).filter(start_date=target_date).exclude(id=meal_id)
+        postal_filtered_meals = Meal.postal_objects.for_user(user=user).filter(start_date=target_date).exclude(id=meal_id)
 
         # Combine both filters
         available_meals = dietary_filtered_meals & postal_filtered_meals
@@ -536,9 +548,9 @@ def search_meal_ingredients(request, query):
 
 def auth_search_meals_excluding_ingredient(request, query):
     print("From auth_search_meals_excluding_ingredient")
-    
+    user = CustomUser.objects.get(id=request.data.get('user_id'))    
     # Determine the current date
-    week_shift = max(int(request.user.week_shift), 0)  # Ensure week_shift is not negative
+    week_shift = max(int(user.week_shift), 0)  # Ensure week_shift is not negative
     current_date = timezone.now().date() + timedelta(weeks=week_shift)
 
     # Find dishes containing the excluded ingredient
@@ -550,8 +562,8 @@ def auth_search_meals_excluding_ingredient(request, query):
     meal_filter_conditions = Q(start_date__gte=current_date)
 
     # Filter meals by dietary preferences, postal code, and current week
-    dietary_filtered_meals = Meal.dietary_objects.for_user(request.user).filter(meal_filter_conditions)
-    postal_filtered_meals = Meal.postal_objects.for_user(user=request.user).filter(meal_filter_conditions)
+    dietary_filtered_meals = Meal.dietary_objects.for_user(user).filter(meal_filter_conditions)
+    postal_filtered_meals = Meal.postal_objects.for_user(user=user).filter(meal_filter_conditions)
 
     # Combine both filters
     available_meals = dietary_filtered_meals & postal_filtered_meals
@@ -583,17 +595,17 @@ def auth_search_meals_excluding_ingredient(request, query):
 
 def auth_search_ingredients(request, query):
     print("From auth_search_ingredients")
-    
+    user = CustomUser.objects.get(id=request.data.get('user_id'))   
     # Determine the current date
-    week_shift = max(int(request.user.week_shift), 0)
+    week_shift = max(int(user.week_shift), 0)
     current_date = timezone.now().date() + timedelta(weeks=week_shift)
     
     # Filter meals available for the current week and for the user
     meal_filter_conditions = Q(start_date__gte=current_date)
 
     # Filter meals by dietary preferences, postal code, and current week
-    dietary_filtered_meals = Meal.dietary_objects.for_user(request.user).filter(meal_filter_conditions)
-    postal_filtered_meals = Meal.postal_objects.for_user(user=request.user).filter(meal_filter_conditions)
+    dietary_filtered_meals = Meal.dietary_objects.for_user(user).filter(meal_filter_conditions)
+    postal_filtered_meals = Meal.postal_objects.for_user(user=user).filter(meal_filter_conditions)
 
     # Combine both filters
     available_meals = dietary_filtered_meals & postal_filtered_meals
@@ -691,8 +703,9 @@ def guest_search_ingredients(query, meal_ids=None):
 def auth_search_chefs(request, query):
     # Fetch user's dietary preference
     print("From auth_search_chefs")
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
     try:
-        dietary_preference = request.user.foodpreferences.dietary_preference
+        dietary_preference = user.foodpreferences.dietary_preference
     except AttributeError:
         dietary_preference = None
 
@@ -701,7 +714,7 @@ def auth_search_chefs(request, query):
     print("Normalized Query:", normalized_query)
 
     # Retrieve user's primary postal code from Address model
-    user_addresses = Address.objects.filter(user=request.user)
+    user_addresses = Address.objects.filter(user=user)
     user_postal_code = user_addresses.first().postalcode.code if user_addresses.exists() else None
 
     # Query for chefs whose names contain the normalized query
@@ -746,7 +759,7 @@ def auth_search_chefs(request, query):
                         "meal_id": meal.id,
                         "meal_name": meal.name,
                         "start_date": meal.start_date.strftime('%Y-%m-%d'),
-                        "is_available": meal.is_available(request.user.week_shift)
+                        "is_available": meal.is_available(user.week_shift)
                     }
                     for meal in dish_meals
                 ]
@@ -834,13 +847,14 @@ def guest_search_chefs(query):
 
 def auth_search_dishes(request, query):
     print("From auth_search_dishes")
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
     # Query meals based on postal code
-    week_shift = max(int(request.user.week_shift), 0)
+    week_shift = max(int(user.week_shift), 0)
     current_date = timezone.now().date() + timedelta(weeks=week_shift)
 
     # Filter meals by dietary preferences, postal code, and current week
-    dietary_filtered_meals = Meal.dietary_objects.for_user(request.user).filter(start_date__gte=current_date)
-    postal_filtered_meals = Meal.postal_objects.for_user(user=request.user).filter(start_date__gte=current_date)
+    dietary_filtered_meals = Meal.dietary_objects.for_user(user).filter(start_date__gte=current_date)
+    postal_filtered_meals = Meal.postal_objects.for_user(user=user).filter(start_date__gte=current_date)
 
     # Apply dietary preference filter
     base_meals = dietary_filtered_meals & postal_filtered_meals
@@ -934,14 +948,15 @@ def cleanup_past_meals(meal_plan, current_date):
 
 def auth_get_meal_plan(request):
     print("From auth_get_meal_plan")
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
 
     today = timezone.now().date()
-    week_shift = max(int(request.user.week_shift), 0)
+    week_shift = max(int(user.week_shift), 0)
     adjusted_today = today + timedelta(weeks=week_shift)
     start_of_week = adjusted_today - timedelta(days=adjusted_today.weekday())
     end_of_week = start_of_week + timedelta(days=6)
 
-    meal_plan = get_or_create_meal_plan(request.user, start_of_week, end_of_week)
+    meal_plan = get_or_create_meal_plan(user, start_of_week, end_of_week)
 
     if week_shift == 0:
         cleanup_past_meals(meal_plan, today)
@@ -1031,9 +1046,9 @@ def guest_get_meal_plan(query, query_type=None, include_dish_id=False):
 
 def approve_meal_plan(request, meal_plan_id):
     print("From approve_meal_plan")
-    
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
     # Step 1: Retrieve the MealPlan using the provided ID
-    meal_plan = MealPlan.objects.get(id=meal_plan_id, user=request.user)
+    meal_plan = MealPlan.objects.get(id=meal_plan_id, user=user)
     
     # Check if the meal plan is already associated with an order
     if meal_plan.order:
@@ -1046,7 +1061,7 @@ def approve_meal_plan(request, meal_plan_id):
 
     # Step 2: Handle meal plan approval
     # Create an Order object
-    order = Order(customer=request.user)
+    order = Order(customer=user)
     order.save()  # Save the order to generate an ID
     
     # Step 3: Create OrderMeal objects for each meal in the meal plan
@@ -1063,15 +1078,12 @@ def approve_meal_plan(request, meal_plan_id):
     meal_plan.order = order
     meal_plan.save()
 
-    # Generate the URL for the order
-    order_url = request.build_absolute_uri(reverse('approve_meal_plan')) + f"?order_id={order.id}"
 
     # Return a success message with the URL
     return {
         'status': 'success', 
         'message': 'Meal plan approved. Proceed to payment.',
         'order_id': order.id, 
-        'order_url': order_url,
         'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
     }
 

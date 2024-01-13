@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views
+from . import utils
 
 app_name = 'customer_dashboard'
 
@@ -17,4 +18,19 @@ urlpatterns = [
     path('api/update_goal/', views.update_goal_api, name='api_update_goal'),
     path('api/food_preferences/', views.food_preferences, name='food_preferences'),
     path('api/update_food_preferences/', views.update_food_preferences, name='update_food_preferences'),
+    # streamlit
+    path('api/history_page/', views.api_history_page, name='api_history_page'),
+    path('api/thread_history/', views.api_thread_history, name='api_thread_history'),
+    path('api/thread_detail/<str:openai_thread_id>/', views.api_thread_detail_view, name='api_thread_detail'),
+    path('api/goal_management/', views.api_goal_management, name='api_goal_management'),
+    path('api/user_goal/', views.api_user_goal_view, name='api_user_goal_view'),
+    path('api/adjust_week_shift/', utils.api_adjust_week_shift, name='api_adjust_week_shift'),
+    path('api/adjust_current_week/', utils.api_adjust_current_week, name='api_adjust_current_week'),
+    path('api/update_goal/', utils.api_update_goal, name='api_update_goal'),
+    path('api/get_goal/', utils.api_get_goal, name='api_get_goal'),
+    path('api/get_user_info/', utils.api_get_user_info, name='api_get_user_info'),
+    path('api/access_past_orders/', utils.api_access_past_orders, name='api_access_past_orders'),
+    path('api/api_ai_call/', views.api_ai_call, name='api_ai_call'),
+
+
 ]

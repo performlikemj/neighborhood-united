@@ -9,7 +9,7 @@ from datetime import timedelta
 from django.template.loader import render_to_string
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_http_methods
-from .models import GoalTracking, ChatThread
+from .models import GoalTracking, ChatThread, UserHealthMetrics
 from .forms import GoalForm
 import openai
 from openai import NotFoundError, OpenAI, OpenAIError
@@ -31,12 +31,49 @@ from customer_dashboard.utils import (api_get_user_info, api_access_past_orders,
                           api_adjust_week_shift)
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
-from .serializers import ChatThreadSerializer, GoalTrackingSerializer
+from .serializers import ChatThreadSerializer, GoalTrackingSerializer, UserHealthMetricsSerializer
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from .permissions import IsCustomer
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
+import datetime
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated, IsCustomer])
+def api_user_metrics(request):
+    user = request.user
+
+    if request.method == 'GET':
+        user_metrics = UserHealthMetrics.objects.filter(user=user).order_by('-date_recorded')[:5]
+        serializer = UserHealthMetricsSerializer(user_metrics, many=True)
+        
+        current_week_metrics = any(metric.is_current_week() for metric in user_metrics)
+        print(f'Current week metrics: {current_week_metrics}')
+        if not current_week_metrics:
+            return Response({"message": "Please update your health metrics for the current week."})
+        print(f'Serializer data: {serializer.data}')
+        return Response(serializer.data)
+
+    elif request.method == 'POST':
+        date_recorded = request.data.get('date_recorded')
+        date_recorded = datetime.datetime.strptime(date_recorded, '%Y-%m-%d').date()  # convert string to date
+
+        # Try to get the existing metric for the specified date
+        metric = UserHealthMetrics.objects.filter(user=user, date_recorded=date_recorded).first()
+
+        if metric:
+            # Update existing metric
+            for key, value in request.data.items():
+                setattr(metric, key, value)
+            metric.save()
+        else:
+            # Create a new metric
+            metric = UserHealthMetrics.objects.create(user=user, date_recorded=date_recorded, **request.data)
+
+        return Response({"message": "Health metric updated."})
+
+
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])

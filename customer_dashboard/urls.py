@@ -31,6 +31,7 @@ urlpatterns = [
     path('api/get_user_info/', utils.api_get_user_info, name='api_get_user_info'),
     path('api/access_past_orders/', utils.api_access_past_orders, name='api_access_past_orders'),
     path('api/api_ai_call/', views.api_ai_call, name='api_ai_call'),
+    path('api/health_metrics/', views.api_user_metrics, name='api_get_health_metrics'),
 
 
 ]

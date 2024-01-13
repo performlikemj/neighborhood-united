@@ -2,6 +2,7 @@ from django.db import models
 from custom_auth.models import CustomUser
 from meals.models import Dish
 from django.utils import timezone
+from .helper_functions import get_current_week
 
 class GoalTracking(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='goal')  # One-to-One
@@ -30,6 +31,10 @@ class UserHealthMetrics(models.Model):
     bmi = models.DecimalField(max_digits=4, decimal_places=2, null=True, blank=True)  # Body Mass Index
     mood = models.CharField(max_length=50, null=True, blank=True)  # Mood description
     energy_level = models.IntegerField(null=True, blank=True)  # Scale (e.g., 1-10)
+
+    def is_current_week(self):
+        start_week, end_week = get_current_week()
+        return start_week <= self.date_recorded <= end_week
 
     def __str__(self):
         return f"Health Metrics for {self.user.username} - Date: {self.date_recorded}"

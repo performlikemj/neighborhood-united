@@ -22,3 +22,4 @@ class ChatThreadAdmin(admin.ModelAdmin):
 admin.site.register(ChatThread, ChatThreadAdmin)
 
 
+

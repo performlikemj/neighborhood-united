@@ -6,7 +6,7 @@ from local_chefs.models import PostalCode, ChefPostalCode
 class CustomUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = get_user_model()
-        fields = ['id', 'username', 'email', 'password', 'phone_number', 'dietary_preference', 'week_shift']
+        fields = ['id', 'username', 'email', 'password', 'phone_number', 'dietary_preference', 'allergies', 'week_shift', 'email_confirmed']
         extra_kwargs = {'password': {'write_only': True}}
 
     def create(self, validated_data):

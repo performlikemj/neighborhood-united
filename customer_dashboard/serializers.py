@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import GoalTracking, ChatThread, UserHealthMetrics
+from .models import GoalTracking, ChatThread, UserHealthMetrics, CalorieIntake
 
 class GoalTrackingSerializer(serializers.ModelSerializer):
     class Meta:
@@ -13,6 +13,17 @@ class ChatThreadSerializer(serializers.ModelSerializer):
 
 
 class UserHealthMetricsSerializer(serializers.ModelSerializer):
+    date_recorded = serializers.DateField(format='%Y-%m-%d')  # Ensure date-only format
+
     class Meta:
         model = UserHealthMetrics
         fields = ['id', 'user', 'date_recorded', 'weight', 'bmi', 'mood', 'energy_level']
+
+
+class CalorieIntakeSerializer(serializers.ModelSerializer):
+    date_recorded = serializers.DateField(format='%Y-%m-%d')  # Ensure date-only format
+    meal = serializers.PrimaryKeyRelatedField(read_only=True)
+
+    class Meta:
+        model = CalorieIntake
+        fields = ['id', 'user', 'meal', 'portion_size', 'date_recorded']

@@ -16,8 +16,6 @@ urlpatterns = [
     path('api/chat_logs/', views.chat_with_gpt, name='api_chat_logs'),
     path('api/update_week_shift/', views.update_week_shift, name='api_update_week_shift'),
     path('api/update_goal/', views.update_goal_api, name='api_update_goal'),
-    path('api/food_preferences/', views.food_preferences, name='food_preferences'),
-    path('api/update_food_preferences/', views.update_food_preferences, name='update_food_preferences'),
     # streamlit
     path('api/history_page/', views.api_history_page, name='api_history_page'),
     path('api/thread_history/', views.api_thread_history, name='api_thread_history'),

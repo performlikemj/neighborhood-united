@@ -161,7 +161,7 @@ class MealPlan(models.Model):
         # Custom validation to ensure start_date is before end_date
         if self.week_start_date and self.week_end_date:
             if self.week_start_date >= self.week_end_date:
-                raise ValidationError(_('The start date must be before the end date.'))
+                raise ValidationError(('The start date must be before the end date.'))
 
         # Call the parent class's clean method
         super().clean()

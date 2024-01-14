@@ -108,6 +108,7 @@ def login_api_view(request):
                 'refresh': str(refresh),
                 'access': str(refresh.access_token),
                 'user_id': user.id,  # Include the user_id in the response
+                'email_confirmed': user.email_confirmed,
                 'status': 'success',
                 'message': 'Logged in successfully'
             }, status=200)

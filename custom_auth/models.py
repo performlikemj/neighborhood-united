@@ -28,6 +28,42 @@ class CustomUser(AbstractUser):
     # ... add more as needed
     ]
 
+    ALLERGY_CHOICES = [
+        ('Peanuts', 'Peanuts'),
+        ('Tree nuts', 'Tree nuts'),  # Includes almonds, cashews, walnuts, etc.
+        ('Milk', 'Milk'),  # Refers to dairy allergy
+        ('Egg', 'Egg'),
+        ('Wheat', 'Wheat'),  # Common in gluten intolerance
+        ('Soy', 'Soy'),
+        ('Fish', 'Fish'),  # Includes allergies to specific types of fish
+        ('Shellfish', 'Shellfish'),  # Includes shrimp, crab, lobster, etc.
+        ('Sesame', 'Sesame'),
+        ('Mustard', 'Mustard'),
+        ('Celery', 'Celery'),
+        ('Lupin', 'Lupin'),  # Common in Europe, refers to Lupin beans and seeds
+        ('Sulfites', 'Sulfites'),  # Often found in dried fruits and wine
+        ('Molluscs', 'Molluscs'),  # Includes snails, slugs, mussels, oysters, etc.
+        ('Corn', 'Corn'),
+        ('Gluten', 'Gluten'),  # For broader gluten-related allergies beyond wheat
+        ('Kiwi', 'Kiwi'),
+        ('Latex', 'Latex'),  # Latex-fruit syndrome related allergies
+        ('Pine Nuts', 'Pine Nuts'),
+        ('Sunflower Seeds', 'Sunflower Seeds'),
+        ('Poppy Seeds', 'Poppy Seeds'),
+        ('Fennel', 'Fennel'),
+        ('Peach', 'Peach'),
+        ('Banana', 'Banana'),
+        ('Avocado', 'Avocado'),
+        ('Chocolate', 'Chocolate'),
+        ('Coffee', 'Coffee'),
+        ('Cinnamon', 'Cinnamon'),
+        ('Garlic', 'Garlic'),
+        ('Chickpeas', 'Chickpeas'),
+        ('Lentils', 'Lentils'),
+        ('None', 'None')
+        # ... add more as needed
+    ]
+    
     email_confirmed = models.BooleanField(default=False)
     phone_number = models.CharField(max_length=20)
     new_email = models.EmailField(blank=True, null=True)
@@ -36,6 +72,7 @@ class CustomUser(AbstractUser):
     # Field to store week_shift for context when chatting with assistant
     week_shift = models.IntegerField(default=0)
     dietary_preference = models.CharField(max_length=20, choices=DIETARY_CHOICES, default='Everything')
+    allergies = models.CharField(max_length=70, choices=DIETARY_CHOICES, default='None')
 
 class Address(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)

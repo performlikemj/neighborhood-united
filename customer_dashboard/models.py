@@ -3,6 +3,8 @@ from custom_auth.models import CustomUser
 from meals.models import Dish
 from django.utils import timezone
 from .helper_functions import get_current_week
+from meals.models import Meal  # Import the Meal model
+
 
 class GoalTracking(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='goal')  # One-to-One
@@ -38,3 +40,14 @@ class UserHealthMetrics(models.Model):
 
     def __str__(self):
         return f"Health Metrics for {self.user.username} - Date: {self.date_recorded}"
+
+
+
+class CalorieIntake(models.Model):
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='calorie_intake')
+    meal = models.ForeignKey(Meal, on_delete=models.CASCADE, related_name='calorie_intake')  # Use a ForeignKey to the Meal model
+    portion_size = models.CharField(max_length=100)  # Define max_length based on your expected input size
+    date_recorded = models.DateField(default=timezone.now)
+
+    def __str__(self):
+        return f"Calorie Intake for {self.user.username} - Meal ID: {self.meal.id}, Date: {self.date_recorded}"

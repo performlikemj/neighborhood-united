@@ -25,11 +25,70 @@ from openai import OpenAIError
 from django.utils import timezone
 from django.utils.formats import date_format
 from django.forms.models import model_to_dict
-from customer_dashboard.models import GoalTracking
+from customer_dashboard.models import GoalTracking, UserHealthMetrics, CalorieIntake
+from django.core.exceptions import ObjectDoesNotExist
+
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# TODO: Reminder: When implementing the functionality for users to edit future meal plans, ensure that all days in the week are included when a user shifts the week using their week_shift attribute. This means that even if the current day of the week is Wednesday, for example, and the user shifts to the next week, the meal plan for that week should include all days from Monday to Sunday.
+
+def check_allergy_alert(request, user_id):
+    print("From check_allergy_alert")
+    user = CustomUser.objects.get(id=user_id)
+    if user.allergies.exists():
+        allergies = user.allergies.all()
+        return {'Allergens': [allergy.name for allergy in allergies]}
+    else:
+        return {'Allergens': []}
+
+
+def update_health_metrics(request, user_id, weight=None, bmi=None, mood=None, energy_level=None):
+    try:
+        # Get the latest health metrics for the user
+        latest_metrics = UserHealthMetrics.objects.filter(user_id=user_id).latest('date_recorded')
+
+        # Update the fields with the new metrics
+        if weight is not None:
+            latest_metrics.weight = weight
+        if bmi is not None:
+            latest_metrics.bmi = bmi
+        if mood is not None:
+            latest_metrics.mood = mood
+        if energy_level is not None:
+            latest_metrics.energy_level = energy_level
+
+        # Save the updated health metrics
+        latest_metrics.save()
+
+        return "Health metrics updated successfully."
+    except ObjectDoesNotExist:
+        return "No health metrics found for this user."
+
+def get_unupdated_health_metrics(request, user_id):
+    one_week_ago = timezone.now().date() - timedelta(days=7)
+    try:
+        latest_metrics = UserHealthMetrics.objects.filter(
+            user_id=user_id,
+            date_recorded__gte=one_week_ago
+        ).latest('date_recorded')
+
+        # Check which fields are not updated
+        fields_to_update = []
+        if latest_metrics.weight is None:
+            fields_to_update.append('weight')
+        if latest_metrics.bmi is None:
+            fields_to_update.append('bmi')
+        if latest_metrics.mood is None:
+            fields_to_update.append('mood')
+        if latest_metrics.energy_level is None:
+            fields_to_update.append('energy level')
+
+        if fields_to_update:
+            return f"Please update the following health metrics: {', '.join(fields_to_update)}."
+        else:
+            return "All health metrics are up to date for this week."
+    except UserHealthMetrics.DoesNotExist:
+        return "No health metrics recorded. Please update your health metrics."
 
 
 def adjust_week_shift(request, week_shift_increment):
@@ -528,6 +587,7 @@ def search_meal_ingredients(request, query):
     print(f"Meals: {meals}")
     for meal in meals:
         meal_ingredients = {
+            "meal_id": meal.id,
             "meal_name": meal.name,
             "dishes": []
         }
@@ -626,6 +686,7 @@ def auth_search_ingredients(request, query):
         for meal in meals_with_dish:
             # Update meal details with chef and dish information
             meal_detail = meal_details[meal.id]
+            meal_detail['meal_id'] = meal.id
             meal_detail['name'] = meal.name
             meal_detail['start_date'] = meal.start_date.strftime('%Y-%m-%d')
             meal_detail['is_available'] = meal.is_available(week_shift)
@@ -700,36 +761,38 @@ def guest_search_ingredients(query, meal_ids=None):
     }
 
 
-def auth_search_chefs(request, query):
+def auth_search_chefs(request):
     # Fetch user's dietary preference
-    print("From auth_search_chefs")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     try:
         dietary_preference = user.foodpreferences.dietary_preference
     except AttributeError:
         dietary_preference = None
 
-    # Normalize the query by removing common titles and trimming whitespace
-    normalized_query = query.lower().replace('chef', '').strip()
-    print("Normalized Query:", normalized_query)
-
     # Retrieve user's primary postal code from Address model
     user_addresses = Address.objects.filter(user=user)
     user_postal_code = user_addresses.first().postalcode.code if user_addresses.exists() else None
 
-    # Query for chefs whose names contain the normalized query
-    chefs = Chef.objects.filter(user__username__icontains=normalized_query).distinct()
+    # Base query
+    base_query = Q()
 
+    # Add dietary preference filtering if available
+    if dietary_preference:
+        base_query &= Q(meals__dietary_preference=dietary_preference)
 
+    # Add postal code filtering if available
+    if user_postal_code:
+        base_query &= Q(serving_postalcodes__code=user_postal_code)
+
+    # Final query
+    chefs = Chef.objects.filter(base_query).distinct()
 
     if dietary_preference:
         meals = Meal.objects.filter(dietary_preference=dietary_preference)
         if meals.exists():
-            base_query = Q(user__username__icontains=normalized_query, meals__in=meals)
-        else:
-            base_query = Q(user__username__icontains=normalized_query)
-    else:
-        base_query = Q(user__username__icontains=normalized_query)
+            base_query = Q(meals__in=meals)
+        if user_postal_code:
+            base_query &= Q(serving_postalcodes__code=user_postal_code)
 
 
     # Add postal code filtering if available
@@ -845,7 +908,7 @@ def guest_search_chefs(query):
 
 
 
-def auth_search_dishes(request, query):
+def auth_search_dishes(request):
     print("From auth_search_dishes")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     # Query meals based on postal code
@@ -861,7 +924,7 @@ def auth_search_dishes(request, query):
     print(f"Base meals: {base_meals}")
     # Filter the meals based on the chef's serving postal codes and the meal's dietary preference
     # Filter the dishes based on the meals and the dish's name
-    dishes = Dish.objects.filter(meal__in=base_meals, name__icontains=query).distinct()
+    dishes = Dish.objects.filter(meal__in=base_meals).distinct()
 
     print(f'Dishes: {dishes}')
 

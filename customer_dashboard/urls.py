@@ -30,6 +30,7 @@ urlpatterns = [
     path('api/access_past_orders/', utils.api_access_past_orders, name='api_access_past_orders'),
     path('api/api_ai_call/', views.api_ai_call, name='api_ai_call'),
     path('api/health_metrics/', views.api_user_metrics, name='api_get_health_metrics'),
-
+    path('api/get_calories/', views.api_get_calories, name='api_get_calories'),
+    path('api/add_calories/', views.api_add_calorie_intake, name='api_add_calories'),
 
 ]

@@ -40,18 +40,19 @@ import datetime
 
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated, IsCustomer])
-def get_calorie_intake(request, user_id):
+def api_get_calories(request):
     try:
-        calorie_records = CalorieIntake.objects.filter(user_id=user_id)
+        # Using request.user.id to get the authenticated user's ID
+        calorie_records = CalorieIntake.objects.filter(user=request.user.id)
         serializer = CalorieIntakeSerializer(calorie_records, many=True)
-        return serializer.data
+        return Response(serializer.data)
     except Exception as e:
-        return str(e)
+        return Response({"error": str(e)}, status=400)
     
-    
+
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated, IsCustomer])
-def add_calorie_intake(request, user_id, meal_id, portion_size):
+def api_add_calorie_intake(request, user_id, meal_id, portion_size):
     try:
         # Fetch the Meal instance
         meal_instance = Meal.objects.get(id=meal_id)

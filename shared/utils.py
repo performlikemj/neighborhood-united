@@ -32,9 +32,58 @@ from django.core.exceptions import ObjectDoesNotExist
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def provide_nutrition_advice(request, user_id):
+    try:
+        print("Fetching user...")
+        user = CustomUser.objects.get(id=user_id)
+        print("Fetching user role...")
+        user_role = UserRole.objects.get(user=user)
+
+        if user_role.current_role == 'chef':
+            return {'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'}
+
+        # Fetch the user's goal
+        try:
+            print("Fetching goal tracking...")
+            goal_tracking = GoalTracking.objects.get(user=user)
+            goal_info = {
+                'goal_name': goal_tracking.goal_name,
+                'goal_description': goal_tracking.goal_description
+            }
+        except GoalTracking.DoesNotExist:
+            goal_info = {'goal_name': 'None', 'goal_description': 'No goal set'}
+
+        # Fetch the user's latest health metrics
+        try:
+            print("Fetching latest metrics...")
+            latest_metrics = UserHealthMetrics.objects.filter(user=user).latest('date_recorded')
+            health_metrics = {
+                'weight': float(latest_metrics.weight) if latest_metrics.weight else None,  # Convert Decimal to str
+                'bmi': latest_metrics.bmi,
+                'mood': latest_metrics.mood,
+                'energy_level': latest_metrics.energy_level
+            }
+        except UserHealthMetrics.DoesNotExist:
+            health_metrics = {'weight': 'None', 'bmi': 'None', 'mood': 'None', 'energy_level': 'None'}
+
+        
+        return {
+            'status': 'success',
+            'goal_info': goal_info,
+            'health_metrics': health_metrics,
+            'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+
+    except CustomUser.DoesNotExist:
+        print("User does not exist.")
+        return {'status': 'error', 'message': 'User not found.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        return {'status': 'error', 'message': f'An unexpected error occurred: {e}', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
 def check_allergy_alert(request, user_id):
     print("From check_allergy_alert")
-    user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user = CustomUser.objects.get(id=user_id)
     user_role = UserRole.objects.get(user=user)
     
     if user_role.current_role == 'chef':
@@ -140,8 +189,7 @@ def update_goal(request, goal_name, goal_description):
         if user_role.current_role == 'chef':
             return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
 
-        if request.data.get('user_id') != user.id:
-            return {'status': 'error', 'message': "Unauthorized access.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
         print(f'From update_goal: {goal_name}, {goal_description}')
         # Ensure goal_name and goal_description are not empty
         if not goal_name or not goal_description:
@@ -187,8 +235,7 @@ def get_goal(request):
         if user_role.current_role == 'chef':
             return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
 
-        if request.data.get('user_id') != user.id:
-            return {'status': 'error', 'message': "Unauthorized access.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
         goal = user.goal
         return {
             'status': 'success',
@@ -213,8 +260,7 @@ def get_user_info(request):
         if user_role.current_role == 'chef':
             return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
 
-        if request.data.get('user_id') != user.id:
-            return {'status': 'error', 'message': "Unauthorized access.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
         
         address = Address.objects.get(user=user)
         user_info = {
@@ -236,9 +282,6 @@ def access_past_orders(request, user_id):
     
     if user_role.current_role == 'chef':
         return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
-
-    if user_id != user.id:
-        return {'status': 'error', 'message': "Unauthorized access.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
     # Find meal plans within the week range with specific order statuses
     meal_plans = MealPlan.objects.filter(
@@ -283,11 +326,6 @@ def post_review(request, user_id, content, rating, item_id, item_type):
     
     if user_role.current_role == 'chef':
         return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
-
-    if user_id != user.id:
-        return {'status': 'error', 'message': "Unauthorized access.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
-    if user_id != user.id:
-        return {'status': 'error', 'message': 'You are not authorized to post this review.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     
     # Find the content type based on item_type
     if item_type == 'chef':

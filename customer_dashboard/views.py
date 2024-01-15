@@ -27,7 +27,7 @@ from shared.utils import (get_user_info, post_review, update_review, delete_revi
                           guest_get_meal_plan, guest_search_chefs, guest_search_dishes, 
                           generate_review_summary, sanitize_query, access_past_orders, get_goal, 
                           update_goal, adjust_week_shift, get_unupdated_health_metrics, 
-                          update_health_metrics, check_allergy_alert)
+                          update_health_metrics, check_allergy_alert, provide_nutrition_advice)
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
 from .serializers import ChatThreadSerializer, GoalTrackingSerializer, UserHealthMetricsSerializer, CalorieIntakeSerializer
@@ -297,6 +297,7 @@ def create_openai_prompt(user_id):
         - get_unupdated_health_metrics\n
         - update_health_metrics\n
         - check_allergy_alert\n
+        - provide_nutrition_advice\n
 
        \n\n"""
     ).format(goal=user_goal)
@@ -538,6 +539,7 @@ functions = {
     "get_unupdated_health_metrics": get_unupdated_health_metrics,
     "update_health_metrics": update_health_metrics,
     "check_allergy_alert": check_allergy_alert,
+    "provide_nutrition_advice": provide_nutrition_advice,
 }
 
 
@@ -1841,25 +1843,26 @@ def chat_with_gpt(request):
                 for tool_call in run.required_action.submit_tool_outputs.tool_calls:
                     # Execute the function call and get the result
                     tool_call_result = ai_call(tool_call, request)
-                    
+                    print(f"Tool call result: {tool_call_result}")
                     # Extracting the tool_call_id and the output
                     tool_call_id = tool_call_result['tool_call_id']
+                    print(f"Tool call ID: {tool_call_id}")
                     output = tool_call_result['output']
-                    
+                    print(f"Output: {output}")
                     # Assuming 'output' needs to be serialized as a JSON string
                     # If it's already a string or another format is required, adjust this line accordingly
                     output_json = json.dumps(output)
-
+                    print(f"Output JSON: {output_json}")
                     # Prepare the output in the required format
                     formatted_output = {
                         "tool_call_id": tool_call_id,
                         "output": output_json
                     }
-                    # print(f"Formatted tool output: {formatted_output}")
+                    print(f"Formatted tool output: {formatted_output}")
                     tool_outputs.append(formatted_output)
 
                     formatted_outputs.append(formatted_output)
-                    
+                print(f"Ready to submit tool outputs: {tool_outputs}")
                 # Submitting the formatted outputs
                 client.beta.threads.runs.submit_tool_outputs(
                     thread_id=thread_id,
@@ -1871,6 +1874,7 @@ def chat_with_gpt(request):
 
         try:
             # Retrieve messages and log them
+            print("Retrieving messages")
             messages = client.beta.threads.messages.list(thread_id)
         except Exception as e:
             return Response({'error': f'Failed to list messages: {str(e)}'}, status=500)
@@ -1883,6 +1887,7 @@ def chat_with_gpt(request):
 
         try:
             # Retrieve the run steps
+            print("Retrieving run steps")
             run_steps = client.beta.threads.runs.steps.list(thread_id=thread_id, run_id=run.id)
         except Exception as e:
             return Response({'error': f'Failed to list run steps: {str(e)}'}, status=500)

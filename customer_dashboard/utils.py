@@ -126,8 +126,7 @@ def api_get_user_info(request):
         if user_role.current_role == 'chef':
             return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
 
-        if request.data.get('user_id') != user.id:
-            return {'status': 'error', 'message': "Unauthorized access.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
         
         address = Address.objects.get(user=user)
         user_serializer = CustomUserSerializer(user)

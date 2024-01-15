@@ -21,6 +21,7 @@ from django.contrib import messages
 import stripe
 from openai import OpenAI
 from django.views.decorators.http import require_http_methods
+from customer_dashboard.models import GoalTracking, ChatThread, UserHealthMetrics, CalorieIntake
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -658,6 +659,18 @@ def process_payment(request, order_id):
                 order.is_paid = True
                 order.status = 'Completed'
                 order.save()
+
+            # After the order is marked as completed, process each meal in the order
+            for order_meal in order.ordermeal_set.all():
+                meal = order_meal.meal
+                # Assuming meal_name, meal_description, and portion_size are attributes of Meal
+                CalorieIntake.objects.create(
+                    user=request.user,
+                    meal_name=meal.name,  # Replace with actual attribute names
+                    meal_description=meal.description,
+                    portion_size="1",  # Ensure this info is available
+                    date_recorded=timezone.now()
+                )
                 messages.success(request, 'Your payment was successful.')
                 return redirect('meals:meal_plan_confirmed')
             else:

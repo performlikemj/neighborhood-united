@@ -1137,6 +1137,23 @@ def chat_with_gpt(request):
                         }
                     }
                 },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "provide_nutrition_advice",
+                        "description": "Offer personalized nutrition advice based on user's dietary preferences and health goals.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "user_id": {
+                                    "type": "integer",
+                                    "description": "The ID of the user seeking advice."
+                                }
+                            },
+                            "required": ["user_id"]
+                        }
+                    }
+                },
             ],
         )        
 
@@ -1699,6 +1716,23 @@ def chat_with_gpt(request):
                                 "user_id": {
                                     "type": "integer",
                                     "description": "The unique identifier of the user."
+                                }
+                            },
+                            "required": ["user_id"]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "provide_nutrition_advice",
+                        "description": "Offer personalized nutrition advice based on user's dietary preferences and health goals.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "user_id": {
+                                    "type": "integer",
+                                    "description": "The ID of the user seeking advice."
                                 }
                             },
                             "required": ["user_id"]

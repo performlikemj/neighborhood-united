@@ -51,3 +51,5 @@ class CalorieIntake(models.Model):
 
     def __str__(self):
         return f"Calorie Intake for {self.user.username} on {self.date_recorded}"
+
+

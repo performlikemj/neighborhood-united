@@ -34,15 +34,26 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def check_allergy_alert(request, user_id):
     print("From check_allergy_alert")
-    user = CustomUser.objects.get(id=user_id)
-    if user.allergies.exists():
-        allergies = user.allergies.all()
-        return {'Allergens': [allergy.name for allergy in allergies]}
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+
+    if user.allergies:
+        return {'Allergens': [user.allergies]}
     else:
         return {'Allergens': []}
 
-
 def update_health_metrics(request, user_id, weight=None, bmi=None, mood=None, energy_level=None):
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+
     try:
         # Get the latest health metrics for the user
         latest_metrics = UserHealthMetrics.objects.filter(user_id=user_id).latest('date_recorded')
@@ -65,6 +76,13 @@ def update_health_metrics(request, user_id, weight=None, bmi=None, mood=None, en
         return "No health metrics found for this user."
 
 def get_unupdated_health_metrics(request, user_id):
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+
     one_week_ago = timezone.now().date() - timedelta(days=7)
     try:
         latest_metrics = UserHealthMetrics.objects.filter(
@@ -92,16 +110,20 @@ def get_unupdated_health_metrics(request, user_id):
 
 
 def adjust_week_shift(request, week_shift_increment):
-    # Validate that the increment is positive
-    if week_shift_increment < 1:
-        return {'status': 'error', 'message': 'Week shift increment must be positive.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
-
     user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
 
     # Update the user's week shift, ensuring it doesn't go below 0
-    new_week_shift = max(user.week_shift + week_shift_increment, 0)
-    user.week_shift = new_week_shift
-    user.save()
+    new_week_shift = user.week_shift + week_shift_increment
+    if new_week_shift < 0:
+        return {'status': 'error', 'message': 'Week shift cannot be negative.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+    else:
+        user.week_shift = new_week_shift
+        user.save()
 
     return {
         'status': 'success',
@@ -113,6 +135,13 @@ def adjust_week_shift(request, week_shift_increment):
 def update_goal(request, goal_name, goal_description):
     try:
         user = CustomUser.objects.get(id=request.data.get('user_id'))
+        user_role = UserRole.objects.get(user=user)
+        
+        if user_role.current_role == 'chef':
+            return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+        if request.data.get('user_id') != user.id:
+            return {'status': 'error', 'message': "Unauthorized access.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
         print(f'From update_goal: {goal_name}, {goal_description}')
         # Ensure goal_name and goal_description are not empty
         if not goal_name or not goal_description:
@@ -153,6 +182,13 @@ def update_goal(request, goal_name, goal_description):
 def get_goal(request):
     try:
         user = CustomUser.objects.get(id=request.data.get('user_id'))
+        user_role = UserRole.objects.get(user=user)
+        
+        if user_role.current_role == 'chef':
+            return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+        if request.data.get('user_id') != user.id:
+            return {'status': 'error', 'message': "Unauthorized access.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
         goal = user.goal
         return {
             'status': 'success',
@@ -174,9 +210,11 @@ def get_user_info(request):
         user = CustomUser.objects.get(id=request.data.get('user_id'))
         user_role = UserRole.objects.get(user=user)
         
-        # Ensure the user is not in the chef role
         if user_role.current_role == 'chef':
-            return {'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+            return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+        if request.data.get('user_id') != user.id:
+            return {'status': 'error', 'message': "Unauthorized access.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
         
         address = Address.objects.get(user=user)
         user_info = {
@@ -194,6 +232,10 @@ def get_user_info(request):
 def access_past_orders(request, user_id):
     # Check user authorization
     user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
 
     if user_id != user.id:
         return {'status': 'error', 'message': "Unauthorized access.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -237,7 +279,13 @@ def access_past_orders(request, user_id):
 
 def post_review(request, user_id, content, rating, item_id, item_type):
     user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
 
+    if user_id != user.id:
+        return {'status': 'error', 'message': "Unauthorized access.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     if user_id != user.id:
         return {'status': 'error', 'message': 'You are not authorized to post this review.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     
@@ -269,6 +317,11 @@ def post_review(request, user_id, content, rating, item_id, item_type):
 
 def update_review(request, review_id, updated_content, updated_rating):
     user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
 
     if user.id != Review.objects.get(id=review_id).user.id:
         return {'status': 'error', 'message': 'You are not authorized to update this review.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -281,6 +334,11 @@ def update_review(request, review_id, updated_content, updated_rating):
 
 def delete_review(request, review_id):
     user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
     if user.id != Review.objects.get(id=review_id).user.id:
         return {'status': 'error', 'message': 'You are not authorized to delete this review.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     review_id = request.POST.get('review_id')
@@ -326,6 +384,10 @@ def generate_review_summary(object_id, category):
 
 def list_upcoming_meals(request):
     user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
 
     # Calculate the current week's start and end dates based on week_shift
     week_shift = max(int(user.week_shift), 0)
@@ -361,6 +423,12 @@ def list_upcoming_meals(request):
 def create_meal_plan(request):
     print("From create_meal_plan")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+
     # Calculate the week's date range which also works if user shifts week
     week_shift = max(int(user.week_shift), 0)  # Ensure week_shift is not negative
     adjusted_today = timezone.now().date() + timedelta(weeks=week_shift)
@@ -387,6 +455,12 @@ def create_meal_plan(request):
 def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day):
     print("From replace_meal_in_plan")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+
 
     # Validate meal plan
     try:
@@ -440,6 +514,12 @@ def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day):
 def remove_meal_from_plan(request, meal_plan_id, meal_id, day):
     print("From remove_meal_from_plan")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+
 
     # Retrieve the specified MealPlan
     try:
@@ -469,8 +549,14 @@ def remove_meal_from_plan(request, meal_plan_id, meal_id, day):
 
 def add_meal_to_plan(request, meal_plan_id, meal_id, day):
     print("From add_meal_to_plan")
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+
     try:
-        user = CustomUser.objects.get(id=request.data.get('user_id'))
         meal_plan = MealPlan.objects.get(id=meal_plan_id, user=user)
         print(f"Meal plan: {meal_plan}")
     except MealPlan.DoesNotExist:
@@ -523,6 +609,12 @@ def suggest_alternative_meals(request, meal_ids, days_of_week):
     """
     print("From suggest_alternative_meals")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+
     alternative_meals = []
     week_shift = max(int(user.week_shift), 0)  # User's ability to plan for future weeks
 
@@ -608,7 +700,13 @@ def search_meal_ingredients(request, query):
 
 def auth_search_meals_excluding_ingredient(request, query):
     print("From auth_search_meals_excluding_ingredient")
-    user = CustomUser.objects.get(id=request.data.get('user_id'))    
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+   
     # Determine the current date
     week_shift = max(int(user.week_shift), 0)  # Ensure week_shift is not negative
     current_date = timezone.now().date() + timedelta(weeks=week_shift)
@@ -655,7 +753,13 @@ def auth_search_meals_excluding_ingredient(request, query):
 
 def auth_search_ingredients(request, query):
     print("From auth_search_ingredients")
-    user = CustomUser.objects.get(id=request.data.get('user_id'))   
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+
     # Determine the current date
     week_shift = max(int(user.week_shift), 0)
     current_date = timezone.now().date() + timedelta(weeks=week_shift)
@@ -764,6 +868,12 @@ def guest_search_ingredients(query, meal_ids=None):
 def auth_search_chefs(request):
     # Fetch user's dietary preference
     user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+
     try:
         dietary_preference = user.foodpreferences.dietary_preference
     except AttributeError:
@@ -911,6 +1021,12 @@ def guest_search_chefs(query):
 def auth_search_dishes(request):
     print("From auth_search_dishes")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+
     # Query meals based on postal code
     week_shift = max(int(user.week_shift), 0)
     current_date = timezone.now().date() + timedelta(weeks=week_shift)
@@ -1012,6 +1128,12 @@ def cleanup_past_meals(meal_plan, current_date):
 def auth_get_meal_plan(request):
     print("From auth_get_meal_plan")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+
 
     today = timezone.now().date()
     week_shift = max(int(user.week_shift), 0)
@@ -1110,6 +1232,12 @@ def guest_get_meal_plan(query, query_type=None, include_dish_id=False):
 def approve_meal_plan(request, meal_plan_id):
     print("From approve_meal_plan")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+
     # Step 1: Retrieve the MealPlan using the provided ID
     meal_plan = MealPlan.objects.get(id=meal_plan_id, user=user)
     

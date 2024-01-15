@@ -21,9 +21,7 @@ class UserHealthMetricsSerializer(serializers.ModelSerializer):
 
 
 class CalorieIntakeSerializer(serializers.ModelSerializer):
-    date_recorded = serializers.DateField(format='%Y-%m-%d')  # Ensure date-only format
-    meal = serializers.PrimaryKeyRelatedField(read_only=True)
-
     class Meta:
         model = CalorieIntake
-        fields = ['id', 'user', 'meal', 'portion_size', 'date_recorded']
+        fields = ['id', 'user', 'meal_name', 'meal_description', 'portion_size', 'date_recorded']
+

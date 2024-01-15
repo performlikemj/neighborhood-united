@@ -32,5 +32,7 @@ urlpatterns = [
     path('api/health_metrics/', views.api_user_metrics, name='api_get_health_metrics'),
     path('api/get_calories/', views.api_get_calories, name='api_get_calories'),
     path('api/add_calories/', views.api_add_calorie_intake, name='api_add_calories'),
+    path('api/delete_calorie_intake/<int:record_id>/', views.api_delete_calorie_intake, name='api_delete_calorie_intake'),
+    path('api/calorie_intake/<int:record_id>/', views.api_update_calorie_intake, name='api_update_calorie_intake'),
 
 ]

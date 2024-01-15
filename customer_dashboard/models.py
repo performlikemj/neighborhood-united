@@ -42,12 +42,12 @@ class UserHealthMetrics(models.Model):
         return f"Health Metrics for {self.user.username} - Date: {self.date_recorded}"
 
 
-
 class CalorieIntake(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='calorie_intake')
-    meal = models.ForeignKey(Meal, on_delete=models.CASCADE, related_name='calorie_intake')  # Use a ForeignKey to the Meal model
-    portion_size = models.CharField(max_length=100)  # Define max_length based on your expected input size
+    meal_name = models.TextField(null=True, blank=True)  # Store the name of the meal
+    meal_description = models.TextField(null=True, blank=True)  # Store a description of the meal
+    portion_size = models.CharField(max_length=100)
     date_recorded = models.DateField(default=timezone.now)
 
     def __str__(self):
-        return f"Calorie Intake for {self.user.username} - Meal ID: {self.meal.id}, Date: {self.date_recorded}"
+        return f"Calorie Intake for {self.user.username} on {self.date_recorded}"

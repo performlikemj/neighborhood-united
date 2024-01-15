@@ -38,38 +38,71 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 import datetime
 
-@api_view(['GET', 'POST'])
+@api_view(['PUT'])
+@permission_classes([IsAuthenticated, IsCustomer])
+def api_update_calorie_intake(request):
+    try:
+        record_id = request.data.record_id
+        calorie_record = CalorieIntake.objects.get(id=record_id, user=request.user)
+        serializer = CalorieIntakeSerializer(calorie_record, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=200)
+        return Response(serializer.errors, status=400)
+    except CalorieIntake.DoesNotExist:
+        return Response({"error": "Record not found."}, status=404)
+    except Exception as e:
+        return Response({"error": str(e)}, status=400)
+
+@api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_get_calories(request):
     try:
+        print(f'Request: {request.data}')
+        print("Getting calories")
+        user = CustomUser.objects.get(id=request.data.get('user_id'))
+        print(f'User: {user}')
+        date_recorded = request.data.get('date')
+        print(f'Date recorded: {date_recorded}')
         # Using request.user.id to get the authenticated user's ID
-        calorie_records = CalorieIntake.objects.filter(user=request.user.id)
+        calorie_records = CalorieIntake.objects.filter(user=user)
+        print(f'Calorie records: {calorie_records}')
+        if date_recorded:
+            print("date was recorded")
+            calorie_records = calorie_records.filter(date_recorded=date_recorded)
+            print(f'Calorie records: {calorie_records}')
         serializer = CalorieIntakeSerializer(calorie_records, many=True)
         return Response(serializer.data)
     except Exception as e:
         return Response({"error": str(e)}, status=400)
     
 
-@api_view(['GET', 'POST'])
+@api_view(['POST'])  # This should only be a POST request
 @permission_classes([IsAuthenticated, IsCustomer])
-def api_add_calorie_intake(request, user_id, meal_id, portion_size):
+def api_add_calorie_intake(request):
+    # TODO: Have a function that uses the AI model to calculate the calories and save it to a model
     try:
-        # Fetch the Meal instance
-        meal_instance = Meal.objects.get(id=meal_id)
-
-        # Create a new Calorie Intake record
-        calorie_record = CalorieIntake(
-            user_id=user_id, 
-            meal=meal_instance, 
-            portion_size=portion_size
-        )
-        calorie_record.save()
-        return "Calorie intake record added successfully."
-    except Meal.DoesNotExist:
-        return "Meal with the given ID does not exist."
+        data = request.data.copy()  # Make a mutable copy of the data
+        data['user'] = request.user.id  # Add the user ID to the data
+        serializer = CalorieIntakeSerializer(data=data)  # Pass the data to the serializer
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=201)
+        return Response(serializer.errors, status=400)
     except Exception as e:
-        return str(e)
+        return Response({"error": str(e)}, status=400)
 
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def api_delete_calorie_intake(request, record_id):
+    try:
+        calorie_record = CalorieIntake.objects.get(id=record_id, user=request.user)
+        calorie_record.delete()
+        return Response({"message": "Calorie intake record deleted successfully."}, status=200)
+    except CalorieIntake.DoesNotExist:
+        return Response({"error": "Record not found."}, status=404)
+    except Exception as e:
+        return Response({"error": str(e)}, status=400)
 
 
 @api_view(['GET', 'POST'])
@@ -1720,7 +1753,7 @@ def chat_with_gpt(request):
                 is_active=True
             )
 
-        
+            user.week_shift = 0
         try:
             print("Creating a message")
             # Add a Message to a Thread

@@ -10,26 +10,35 @@ from meals.models import MealPlan, Order
 from .permissions import IsCustomer
 from django.utils import timezone
 from django.contrib.auth import get_user_model
+from custom_auth.models import CustomUser
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_adjust_week_shift(request):
     # Deserialize the request data
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+
     serializer = CustomUserSerializer(data=request.data)
     if not serializer.is_valid():
         return Response(serializer.errors, status=400)
 
     week_shift_increment = serializer.validated_data.get('week_shift_increment')
 
-    # Validate that the increment is positive
-    if week_shift_increment < 1:
-        return Response({'status': 'error', 'message': 'Week shift increment must be positive.'}, status=400)
-
-    user = request.user
+    user = CustomUser.objects.get(id=request.user.id)
+    user = user
     # Update the user's week shift, ensuring it doesn't go below 0
-    new_week_shift = max(user.week_shift + week_shift_increment, 0)
-    user.week_shift = new_week_shift
-    user.save()
+    new_week_shift = user.week_shift + week_shift_increment
+    if new_week_shift < 0:
+        return Response({'status': 'error', 'message': 'Week shift cannot be negative.'}, status=400)
+    else:
+        user.week_shift = new_week_shift
+        user.save()
+
 
     return Response({
         'status': 'success',
@@ -40,7 +49,13 @@ def api_adjust_week_shift(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_adjust_current_week(request):
-    user = request.user
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+
     # Reset the user's week shift to 0
     user.week_shift = 0
     user.save()
@@ -55,7 +70,13 @@ def api_adjust_current_week(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_update_goal(request):
-    user = request.user
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+
     serializer = GoalTrackingSerializer(data=request.data)
     if serializer.is_valid():
         goal, created = GoalTracking.objects.get_or_create(user=user)
@@ -72,7 +93,13 @@ def api_update_goal(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_get_goal(request):
-    user = request.user
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+
     try:
         goal = user.goal
         serializer = GoalTrackingSerializer(goal)
@@ -93,11 +120,14 @@ def api_get_goal(request):
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_get_user_info(request):
     try:
-        user = get_user_model().objects.get(id=request.user.id)
+        user = CustomUser.objects.get(id=request.data.get('user_id'))
         user_role = UserRole.objects.get(user=user)
         
         if user_role.current_role == 'chef':
-            return Response({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'}, status=403)
+            return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
+        if request.data.get('user_id') != user.id:
+            return {'status': 'error', 'message': "Unauthorized access.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
         
         address = Address.objects.get(user=user)
         user_serializer = CustomUserSerializer(user)
@@ -116,7 +146,13 @@ def api_get_user_info(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def api_access_past_orders(request):
-    user_id = request.user.id
+    user_id = request.data.get('user_id')
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user_role = UserRole.objects.get(user=user)
+    
+    if user_role.current_role == 'chef':
+        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+
 
     # Find meal plans within the week range with specific order statuses
     meal_plans = MealPlan.objects.filter(

@@ -52,6 +52,13 @@ def user_details_view(request):
 @permission_classes([IsAuthenticated])
 def update_profile_api(request):
     user = request.user
+    print(f'request.data: {request.data}')
+    if 'dietary_preference' in request.data:
+        user.dietary_preference = request.data['dietary_preference']
+    if 'allergies' in request.data:
+        user.allergies = request.data['allergies']
+
+    user.save()
 
     # Deserialize and update user data
     user_serializer = CustomUserSerializer(user, data=request.data, partial=True)

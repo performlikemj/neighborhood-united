@@ -106,10 +106,11 @@ def login_api_view(request):
         username = data['username']
         password = data['password']
         user = authenticate(username=username, password=password)
-        if user is not None:
+        if user:
             # Create the token for the user
             refresh = RefreshToken.for_user(user)
             print(f'User {user.username} logged in successfully')
+            print(f'Refresh token: {refresh}')
             print(f'Access token: {refresh.access_token}')
             return JsonResponse({
                 'refresh': str(refresh),

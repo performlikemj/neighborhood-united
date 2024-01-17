@@ -37,6 +37,8 @@ from .permissions import IsCustomer
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 import datetime
+from asgiref.sync import async_to_sync
+from hood_united.consumers import ToolCallConsumer
 
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated, IsCustomer])

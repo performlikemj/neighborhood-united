@@ -35,6 +35,7 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
+    'channels',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -54,6 +55,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
+    'stripe',
 ]
 
 MIDDLEWARE = [
@@ -91,7 +93,9 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = 'hood_united.wsgi.application'
+# WSGI_APPLICATION = 'hood_united.wsgi.application'
+# Change from WSGI to ASGI
+ASGI_APPLICATION = 'hood_united.asgi.application'
 
 
 # Database

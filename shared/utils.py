@@ -21,6 +21,7 @@ from collections import defaultdict
 from local_chefs.views import chef_service_areas, service_area_chefs
 import os
 import openai
+from openai import OpenAI
 from openai import OpenAIError
 from django.utils import timezone
 from django.utils.formats import date_format
@@ -30,6 +31,71 @@ from django.core.exceptions import ObjectDoesNotExist
 
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def recommend_follow_up(request, context):
+    """
+    Recommend follow-up prompts based on the user's interaction context.
+
+    :param context: A string representing the user's last few interactions or context.
+    :return: A list of recommended follow-up prompts or actions.
+    """
+    client = OpenAI(api_key=settings.OPENAI_KEY) # Initialize OpenAI client
+    if request.user.is_authenticated:
+        functions = """
+            "auth_search_dishes: Search dishes in the database",
+            "auth_search_chefs: Search chefs in the database and get their info",
+            "auth_get_meal_plan: Get a meal plan for the current week or a future week",
+            "create_meal_plan: Create a new meal plan for the user",
+            "chef_service_areas: Retrieve service areas for a specified chef",
+            "service_area_chefs: Search for chefs serving a specific postal code area",
+            "approve_meal_plan: Approve the meal plan and proceed to payment",
+            "auth_search_ingredients: Search for ingredients in the database",
+            "auth_search_meals_excluding_ingredient: Search for meals excluding an ingredient",
+            "search_meal_ingredients: Search the database for a meal's ingredients",
+            "suggest_alternative_meals: Suggest alternative meals based on meal IDs and days of the week",
+            "add_meal_to_plan: Add a meal to a specified day in the meal plan",
+            "get_date: Get the current date and time",
+            "list_upcoming_meals: List upcoming meals for the current week",
+            "remove_meal_from_plan: Remove a meal from a specified day in the meal plan",
+            "replace_meal_in_plan: Replace a meal with another on a specified day in the meal plan",
+            "post_review: Post a review for a meal or a chef",
+            "update_review: Update an existing review",
+            "delete_review: Delete a review",
+            "generate_review_summary: Generate a summary of all reviews for a meal or chef",
+            "access_past_orders: Retrieve past orders for a user",
+            "get_user_info: Retrieve essential information about the user",
+            "get_goal: Retrieve the user's goal",
+            "update_goal: Update the user's goal",
+            "adjust_week_shift: Adjust the week shift forward for meal planning",
+            "get_unupdated_health_metrics: Get unupdated health metrics for a user",
+            "check_allergy_alert: Check for potential allergens in a meal",
+            "track_calorie_intake: Track and log the user's daily calorie intake",
+            "provide_nutrition_advice: Offer personalized nutrition advice"
+    """
+    else:
+        print("Chatting with Guest GPT")
+        functions = """
+            "guest_search_dishes: Search dishes in the database",
+            "guest_search_chefs: Search chefs in the database and get their info",
+            "guest_get_meal_plan: Get a meal plan for the current week",
+            "guest_search_ingredients: Search ingredients used in dishes and get their info"
+        """
+
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo-1106",
+        messages=[
+            {
+                "role": "user", 
+                "content": f"Given the following context: {context} and functions: {functions}, what prompt should a user write next? Ouput only the recommended prompt in a natural sentence without using the function name."
+            }
+        ],
+    )
+    # Correct way to access the response content
+    response_content = response.choices[0].message.content
+    print(f'Follow-Up Response: {response_content}')
+    return response_content.strip().split('\n')
+
 
 
 def provide_nutrition_advice(request, user_id):

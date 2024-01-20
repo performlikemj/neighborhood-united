@@ -27,7 +27,7 @@ from shared.utils import (get_user_info, post_review, update_review, delete_revi
                           guest_get_meal_plan, guest_search_chefs, guest_search_dishes, 
                           generate_review_summary, access_past_orders, get_goal, 
                           update_goal, adjust_week_shift, get_unupdated_health_metrics, 
-                          update_health_metrics, check_allergy_alert, provide_nutrition_advice)
+                          update_health_metrics, check_allergy_alert, provide_nutrition_advice, recommend_follow_up)
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
 from .serializers import ChatThreadSerializer, GoalTrackingSerializer, UserHealthMetricsSerializer, CalorieIntakeSerializer
@@ -308,7 +308,6 @@ def create_openai_prompt(user_id):
         - update_health_metrics\n
         - check_allergy_alert\n
         - provide_nutrition_advice\n
-
        \n\n"""
     ).format(goal=user_goal)
 
@@ -631,7 +630,7 @@ def guest_chat_with_gpt(request):
                             "required": []
                         }
                     }
-                }
+                },
             ]
         )      
         guest_assistant_id = assistant.id
@@ -648,7 +647,6 @@ def guest_chat_with_gpt(request):
             print(f"Data: {data}")
         except json.JSONDecodeError:
             return Response({'error': 'Failed to parse JSON'}, status=400)
-
         question = data.get('question')
         print(f"Question: {question}")
         thread_id = data.get('thread_id')
@@ -724,11 +722,6 @@ def guest_chat_with_gpt(request):
                         print(f"New Tool call: {tool_call}")
                         tool_call_result = guest_ai_call(tool_call, request)
                         print(f"Tool call result: {tool_call_result}")
-                        # Prepare the update data
-                        update_data = {
-                            'function_name': tool_call_result['function'],  # Example, adjust based on your data structure
-                            'result': tool_call_result
-                        }
                         # Extracting the tool_call_id and the output
                         tool_call_id = tool_call_result['tool_call_id']
                         print(f"Tool call ID: {tool_call_id}")
@@ -762,6 +755,13 @@ def guest_chat_with_gpt(request):
             # Retrieve messages and log them
             print("Retrieving messages")
             messages = client.beta.threads.messages.list(thread_id)
+            context = []
+            for message in reversed(messages.data):
+                role = message.role.capitalize()
+                text = message.content[0].text.value
+                context.append(f"{role}: {text}")            
+
+            formatted_context = "\n".join(context)
         except Exception as e:
             logger.error(f'Failed to list messages: {str(e)}')
             return Response({'error': f'Failed to list messages: {str(e)}'}, status=500)
@@ -785,11 +785,11 @@ def guest_chat_with_gpt(request):
             json.dump(run.model_dump(), f, indent=4)
         
 
-
         response_data = {
             'last_assistant_message': next((msg.content[0].text.value for msg in (messages.data) if msg.role == 'assistant'), None),                
             'run_status': run.status,
-            'new_thread_id': thread_id
+            'new_thread_id': thread_id,
+            'recommend_follow_up': recommend_follow_up(request, formatted_context),
         }
 
         print(thread_id)
@@ -2105,6 +2105,13 @@ def chat_with_gpt(request):
             # Retrieve messages and log them
             print("Retrieving messages")
             messages = client.beta.threads.messages.list(thread_id)
+            context = []
+            for message in reversed(messages.data):
+                role = message.role.capitalize()
+                text = message.content[0].text.value
+                context.append(f"{role}: {text}")            
+
+            formatted_context = "\n".join(context)
         except Exception as e:
             logger.error(f'Failed to list messages: {str(e)}')
             return Response({'error': f'Failed to list messages: {str(e)}'}, status=500)
@@ -2132,7 +2139,8 @@ def chat_with_gpt(request):
         response_data = {
             'last_assistant_message': next((msg.content[0].text.value for msg in (messages.data) if msg.role == 'assistant'), None),                
             'run_status': run.status,
-            'new_thread_id': thread_id
+            'new_thread_id': thread_id,
+            'recommend_follow_up': recommend_follow_up(request, formatted_context),
         }
 
         print(thread_id)

@@ -30,7 +30,6 @@ urlpatterns = [
     path('reviews/', include('reviews.urls')),
     path('events/', include('events.urls')),
     path('local_chefs/', include('local_chefs.urls')),
-    path('', include('qa_app.urls')),
 ]
 
 if settings.DEBUG:

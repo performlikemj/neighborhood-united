@@ -125,7 +125,7 @@ class Meal(models.Model):
     
 
     def is_available(self, week_shift=0):
-        week_shift = max(int(week_shift), 0)  # User's ability to plan for future weeks
+        week_shift = int(week_shift)  # User's ability to plan for future weeks
         current_date = timezone.now().date() + timedelta(weeks=week_shift) 
         return self.start_date <= current_date  
 

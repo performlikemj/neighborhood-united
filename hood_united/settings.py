@@ -201,3 +201,40 @@ EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS')
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL')
+
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'level': 'WARNING',  # Adjusted level
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+        'file': {
+            'level': 'WARNING',  # Adjusted level
+            'class': 'logging.FileHandler',
+            'filename': os.path.join(BASE_DIR, 'django_warnings.log'),  # Updated filename
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console', 'file'],
+            'level': 'WARNING',  # Adjusted level
+            'propagate': True,
+        },
+        'customer_dashboard': {  
+            'handlers': ['console', 'file'],
+            'level': 'WARNING',  # Adjusted level
+            'propagate': True,
+        },
+    },
+}

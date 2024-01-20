@@ -25,7 +25,7 @@ from shared.utils import (get_user_info, post_review, update_review, delete_revi
                           approve_meal_plan, auth_search_ingredients, auth_search_meals_excluding_ingredient, 
                           search_meal_ingredients, suggest_alternative_meals,guest_search_ingredients ,
                           guest_get_meal_plan, guest_search_chefs, guest_search_dishes, 
-                          generate_review_summary, sanitize_query, access_past_orders, get_goal, 
+                          generate_review_summary, access_past_orders, get_goal, 
                           update_goal, adjust_week_shift, get_unupdated_health_metrics, 
                           update_health_metrics, check_allergy_alert, provide_nutrition_advice)
 from local_chefs.views import chef_service_areas, service_area_chefs
@@ -39,6 +39,14 @@ from rest_framework.pagination import PageNumberPagination
 import datetime
 from asgiref.sync import async_to_sync
 from hood_united.consumers import ToolCallConsumer
+import asyncio
+import logging
+import threading
+
+logger = logging.getLogger(__name__)
+
+# Use logger as needed
+logger.warning("This is a warning message")
 
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated, IsCustomer])
@@ -359,46 +367,6 @@ def update_week_shift(request):
             return JsonResponse({'error': str(e)}, status=500)
     return JsonResponse({'error': 'Invalid request'}, status=400)
 
-# @login_required
-# @user_passes_test(is_customer)
-# @require_http_methods(["GET", "POST"])  # Only allow GET and POST requests.
-# def api_meal_plan_details(request):
-#     # Handle fetching meal plan details
-#     if request.method == 'GET':
-#         meal_plan_id = request.GET.get('meal_plan_id')
-#         meal_plan = get_object_or_404(MealPlan, id=meal_plan_id, user=request.user)
-        
-#         # Render the meal plan details using a template
-#         meal_plan_html = render_to_string('customer_dashboard/includes/meal_plan_details.html', {'meal_plan': meal_plan})
-        
-#         return JsonResponse({
-#             'meal_plan_html': meal_plan_html,
-#         })
-
-#     # Handle updating meal plan details
-#     elif request.method == 'POST':
-#         meal_plan_id = request.POST.get('meal_plan_id')
-#         day = request.POST.get('day')
-#         new_meal_id = request.POST.get('meal_id')
-
-#         meal_plan = get_object_or_404(MealPlan, id=meal_plan_id, user=request.user)
-#         new_meal = get_object_or_404(Meal, id=new_meal_id)
-        
-#         # TODO: Check if the new meal is available and perform the update 
-
-#         # Perform the update
-#         meal_plan_meal = MealPlanMeal.objects.get(id=request.POST.get('meal_plan_meal_id'))
-#         meal_plan_meal.meal = new_meal  # Assuming you have already checked the new meal's availability
-#         meal_plan_meal.save()
-
-#         # After updating, render the updated meal plan details
-#         updated_meal_plan_html = render_to_string('customer_dashboard/includes/meal_plan_details.html', {'meal_plan': meal_plan})
-        
-#         return JsonResponse({
-#             'updated_meal_plan_html': updated_meal_plan_html,
-#         })
-
-
     
 @login_required
 @user_passes_test(is_customer)
@@ -511,6 +479,14 @@ def update_goal_api(request):
             return JsonResponse({'success': False, 'errors': form.errors}, status=400)
     return JsonResponse({'error': 'Invalid request'}, status=400)
 
+guest_functions = {
+    "guest_search_dishes": guest_search_dishes,
+    "guest_search_chefs": guest_search_chefs,
+    "guest_get_meal_plan": guest_get_meal_plan,
+    "guest_search_ingredients": guest_search_ingredients,
+    "chef_service_areas": chef_service_areas,
+    "service_area_chefs": service_area_chefs,
+}
 
 functions = {
     "auth_search_dishes": auth_search_dishes,
@@ -544,57 +520,294 @@ functions = {
     "provide_nutrition_advice": provide_nutrition_advice,
 }
 
+def run_async_in_thread(func, *args):
+    """
+    Utility function to run an asynchronous function in a background thread.
+    """
+    loop = asyncio.new_event_loop()
+    
+    def run():
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(func(*args))
+        loop.close()
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    return thread
+
 
 def ai_call(tool_call, request):
-    print(f"Tool call: {tool_call}")
     function = tool_call.function
-    print(f"Function: {function}")
     name = function.name
-    print(f"Name: {name}")
     arguments = json.loads(function.arguments)
-    print(f"Arguments: {arguments}")
     # Ensure that 'request' is included in the arguments if needed
     arguments['request'] = request
-    print(f"Arguments: {arguments}")
     return_value = functions[name](**arguments)
-    print(f"Return value: {return_value}")
     tool_outputs = {
         "tool_call_id": tool_call.id,
         "output": return_value,
+        "function": name,
     }
     return tool_outputs
 
-@api_view(['POST'])
-def api_ai_call(request):
-    print(f'From api_ai_call: {request.data}')
-    tool_call = request.data.get('tool_call')
-    print(f'Tool call: {tool_call}')
-    user_info = request.data.get('user_info')
-    # Add more parameters as needed
-
-    function_name = tool_call.get('function_name')
-    print(f"Function: {function_name}")
-    arguments = tool_call.get('arguments', {})
-    print(f"Arguments: {arguments}")
+def guest_ai_call(tool_call, request):
+    function = tool_call.function
+    name = function.name
+    arguments = json.loads(function.arguments)
     # Ensure that 'request' is included in the arguments if needed
     arguments['request'] = request
-    arguments['user_info'] = user_info
-    print(f"Arguments: {arguments}")
-    return_value = functions[function_name](**arguments)
-    print(f"Return value: {return_value}")
+    return_value = guest_functions[name](**arguments)
     tool_outputs = {
-        "tool_call_id": tool_call.get('id'),
+        "tool_call_id": tool_call.id,
         "output": return_value,
+        "function": name,
     }
-    # Example response
-    return Response({
-        "status": "success",
-        "data": tool_outputs,
-    })
+    return tool_outputs
+@api_view(['POST'])
+def guest_chat_with_gpt(request):
+    print("Chatting with Guest GPT")
+    guest_assistant_id_file = "guest_assistant_id.txt"
+    # Set up OpenAI
+    client = OpenAI(api_key=settings.OPENAI_KEY)    
+    # Check if the assistant ID is already stored in a file
+  
+    if os.path.exists(guest_assistant_id_file):
+        with open(guest_assistant_id_file, 'r') as f:
+            guest_assistant_id = f.read().strip()
+
+    else:
+        print("Creating a new assistant")
+        # Create an Assistant
+        assistant = client.beta.assistants.create(
+            name="Guest Food Expert",
+            instructions='You help guests understand the functionality of the app and help them find good food, chefs, and ingredients.',
+            model="gpt-4-1106-preview",
+            tools=[ 
+                {"type": "code_interpreter"},
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "guest_search_dishes",
+                        "description": "Search dishes in the database",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "guest_search_chefs",
+                        "description": "Search chefs in the database and get their info",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "guest_get_meal_plan",
+                        "description": "Get a meal plan for the current week",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "guest_search_ingredients",
+                        "description": "Search ingredients used in dishes in the database and get their info.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
+                        }
+                    }
+                }
+            ]
+        )      
+        guest_assistant_id = assistant.id
+        # Store the assistant ID in a file
+        with open(guest_assistant_id_file, 'w') as f:
+            f.write(guest_assistant_id)
+
+    # Processing the POST request
+    try:
+        print("Processing POST request")
+        try:
+            print(f"Request data: {request.data}")
+            data = request.data
+            print(f"Data: {data}")
+        except json.JSONDecodeError:
+            return Response({'error': 'Failed to parse JSON'}, status=400)
+
+        question = data.get('question')
+        print(f"Question: {question}")
+        thread_id = data.get('thread_id')
+        print(f"Thread ID: {thread_id}")
+
+        if not question:
+            return Response({'error': 'No question provided'}, status=400)
+        
+        # Check if thread_id is safe
+        if thread_id and not re.match("^thread_[a-zA-Z0-9]*$", thread_id):
+            return Response({'error': 'Invalid thread_id'}, status=400)
+
+        # Handle existing or new thread
+        if not thread_id:
+            openai_thread = client.beta.threads.create()
+            thread_id = openai_thread.id
+            print(f"New thread ID: {thread_id}")
+    
+        try:
+            print("Creating a message")
+            # Add a Message to a Thread
+            client.beta.threads.messages.create(
+                thread_id=thread_id,
+                role="user",
+                content=question
+            )
+            print("Message created")
+        except Exception as e:
+            logger.error(f'Failed to create message: {str(e)}')
+            return Response({'error': f'Failed to create message: {str(e)}'}, status=500)    
+                
+
+    
+        # Variable to store tool call results
+        formatted_outputs = []
+            
+        try:
+            # Run the Assistant
+            print('Running the assistant')
+            print(f"Guest assistant ID: {guest_assistant_id}")
+            run = client.beta.threads.runs.create(
+                thread_id=thread_id,
+                assistant_id=guest_assistant_id,
+                # Optionally, you can add specific instructions here
+            )
+        except Exception as e:
+            logger.error(f'Failed to create run: {str(e)}')
+            return Response({'error': f'Failed to create run: {str(e)}'}, status=500)
+        while True:
+            try:
+                run = client.beta.threads.runs.retrieve(
+                    thread_id=thread_id,
+                    run_id=run.id
+                )
+
+                if run.status == 'completed':
+                    logger.info('Run completed')
+                    break
+                elif run.status == 'failed':
+                    logger.error('Run failed')
+                    break
+                elif run.status in ['expired', 'cancelled']:
+                    logger.warning(f'Run {run.status}')
+                    break
+                elif run.status in ['queued', 'in_progress']:
+                    time.sleep(0.5)
+                    continue
+                elif run.status == "requires_action":
+                    tool_outputs = []
+                    print("Run requires action")
+                    for tool_call in run.required_action.submit_tool_outputs.tool_calls:
+                        # Execute the function call and get the result
+                        print(f"New Tool call: {tool_call}")
+                        tool_call_result = guest_ai_call(tool_call, request)
+                        print(f"Tool call result: {tool_call_result}")
+                        # Prepare the update data
+                        update_data = {
+                            'function_name': tool_call_result['function'],  # Example, adjust based on your data structure
+                            'result': tool_call_result
+                        }
+                        # Extracting the tool_call_id and the output
+                        tool_call_id = tool_call_result['tool_call_id']
+                        print(f"Tool call ID: {tool_call_id}")
+                        output = tool_call_result['output']
+                        print(f"Output: {output}")
+                        # Assuming 'output' needs to be serialized as a JSON string
+                        # If it's already a string or another format is required, adjust this line accordingly
+                        output_json = json.dumps(output)
+                        print(f"Output JSON: {output_json}")
+                        # Prepare the output in the required format
+                        formatted_output = {
+                            "tool_call_id": tool_call_id,
+                            "output": output_json
+                        }
+                        print(f"Formatted tool output: {formatted_output}")
+                        tool_outputs.append(formatted_output)
+
+                        formatted_outputs.append(formatted_output)
+                    print(f"Ready to submit tool outputs: {tool_outputs}")
+                    # Submitting the formatted outputs
+                    client.beta.threads.runs.submit_tool_outputs(
+                        thread_id=thread_id,
+                        run_id=run.id,
+                        tool_outputs=tool_outputs,
+                    )
+                    continue
+            except Exception as e:
+                logger.critical(f'Critical error occurred: {e}', exc_info=True)
+        # Check the status of the Run and retrieve responses
+        try:
+            # Retrieve messages and log them
+            print("Retrieving messages")
+            messages = client.beta.threads.messages.list(thread_id)
+        except Exception as e:
+            logger.error(f'Failed to list messages: {str(e)}')
+            return Response({'error': f'Failed to list messages: {str(e)}'}, status=500)
+
+
+        with open("messages.json", "w") as f:
+            messages_json = messages.model_dump()
+            json.dump(messages_json, f, indent=4)
+            
+
+        try:
+            # Retrieve the run steps
+            print("Retrieving run steps")
+            run_steps = client.beta.threads.runs.steps.list(thread_id=thread_id, run_id=run.id)
+        except Exception as e:
+            return Response({'error': f'Failed to list run steps: {str(e)}'}, status=500)
+
+        # Save the run steps to a file
+        with open("run_steps.json", "w") as f:
+            run_steps_json = run_steps.model_dump()
+            json.dump(run.model_dump(), f, indent=4)
+        
+
+
+        response_data = {
+            'last_assistant_message': next((msg.content[0].text.value for msg in (messages.data) if msg.role == 'assistant'), None),                
+            'run_status': run.status,
+            'new_thread_id': thread_id
+        }
+
+        print(thread_id)
+        print(f'New thread ID: {thread_id}')
+
+        print(f'message: {response_data["last_assistant_message"]}')
+        
+        # Wrap response_data in a Response object
+        return Response(response_data)
+
+    except Exception as e:
+        # Return error message wrapped in Response
+        logger.error(f'Error: {str(e)}')
+        return Response({'error': str(e)}, status=500)
+
 
 # @login_required
 # @user_passes_test(is_customer)
-
 @api_view(['POST'])
 def chat_with_gpt(request):
     print("Chatting with GPT")
@@ -1804,6 +2017,7 @@ def chat_with_gpt(request):
             )
             print("Message created")
         except Exception as e:
+            logger.error(f'Failed to create message: {str(e)}')
             return Response({'error': f'Failed to create message: {str(e)}'}, status=500)    
                 
 
@@ -1819,66 +2033,80 @@ def chat_with_gpt(request):
                 # Optionally, you can add specific instructions here
             )
         except Exception as e:
+            logger.error(f'Failed to create run: {str(e)}')
             return Response({'error': f'Failed to create run: {str(e)}'}, status=500)
-
-        # Check the status of the Run and retrieve responses
         while True:
-            run = client.beta.threads.runs.retrieve(
-                thread_id=thread_id,
-                run_id=run.id
-            )
-            if run.status == 'completed':
-                print('Run completed')
-                break
-            elif run.status == 'failed':
-                print('Run failed')
-                break
-            elif run.status in ['expired', 'cancelled']:
-                print(f'Run {run.status}')
-                break
-            elif run.status in ['failed', 'queued', 'in_progress']:
-                time.sleep(0.5)
-                continue
-            elif run.status == "requires_action":
-                tool_outputs = []
-                print("Run requires action")
-                for tool_call in run.required_action.submit_tool_outputs.tool_calls:
-                    # Execute the function call and get the result
-                    tool_call_result = ai_call(tool_call, request)
-                    print(f"Tool call result: {tool_call_result}")
-                    # Extracting the tool_call_id and the output
-                    tool_call_id = tool_call_result['tool_call_id']
-                    print(f"Tool call ID: {tool_call_id}")
-                    output = tool_call_result['output']
-                    print(f"Output: {output}")
-                    # Assuming 'output' needs to be serialized as a JSON string
-                    # If it's already a string or another format is required, adjust this line accordingly
-                    output_json = json.dumps(output)
-                    print(f"Output JSON: {output_json}")
-                    # Prepare the output in the required format
-                    formatted_output = {
-                        "tool_call_id": tool_call_id,
-                        "output": output_json
-                    }
-                    print(f"Formatted tool output: {formatted_output}")
-                    tool_outputs.append(formatted_output)
-
-                    formatted_outputs.append(formatted_output)
-                print(f"Ready to submit tool outputs: {tool_outputs}")
-                # Submitting the formatted outputs
-                client.beta.threads.runs.submit_tool_outputs(
+            try:
+                run = client.beta.threads.runs.retrieve(
                     thread_id=thread_id,
-                    run_id=run.id,
-                    tool_outputs=tool_outputs,
+                    run_id=run.id
                 )
-                continue
 
+                if run.status == 'completed':
+                    logger.info('Run completed')
+                    break
+                elif run.status == 'failed':
+                    logger.error('Run failed')
+                    break
+                elif run.status in ['expired', 'cancelled']:
+                    logger.warning(f'Run {run.status}')
+                    break
+                elif run.status in ['queued', 'in_progress']:
+                    time.sleep(0.5)
+                    continue
+                elif run.status == "requires_action":
+                    tool_outputs = []
+                    print("Run requires action")
+                    for tool_call in run.required_action.submit_tool_outputs.tool_calls:
+                        # Execute the function call and get the result
+                        print(f"New Tool call: {tool_call}")
+                        tool_call_result = ai_call(tool_call, request)
+                        print(f"Tool call result: {tool_call_result}")
+                        # Prepare the update data
+                        update_data = {
+                            'function_name': tool_call_result['function'],  # Example, adjust based on your data structure
+                            'result': tool_call_result
+                        }
+                        # Identify the user to whom you want to send the update
+                        user_id = user.id
+                        # Use the utility function to run the async function in a background thread
+                        run_async_in_thread(ToolCallConsumer.send_update, user_id, update_data)
+                        print("Tool call result sent to user")
+                        # Extracting the tool_call_id and the output
+                        tool_call_id = tool_call_result['tool_call_id']
+                        print(f"Tool call ID: {tool_call_id}")
+                        output = tool_call_result['output']
+                        print(f"Output: {output}")
+                        # Assuming 'output' needs to be serialized as a JSON string
+                        # If it's already a string or another format is required, adjust this line accordingly
+                        output_json = json.dumps(output)
+                        print(f"Output JSON: {output_json}")
+                        # Prepare the output in the required format
+                        formatted_output = {
+                            "tool_call_id": tool_call_id,
+                            "output": output_json
+                        }
+                        print(f"Formatted tool output: {formatted_output}")
+                        tool_outputs.append(formatted_output)
 
+                        formatted_outputs.append(formatted_output)
+                    print(f"Ready to submit tool outputs: {tool_outputs}")
+                    # Submitting the formatted outputs
+                    client.beta.threads.runs.submit_tool_outputs(
+                        thread_id=thread_id,
+                        run_id=run.id,
+                        tool_outputs=tool_outputs,
+                    )
+                    continue
+            except Exception as e:
+                logger.critical(f'Critical error occurred: {e}', exc_info=True)
+        # Check the status of the Run and retrieve responses
         try:
             # Retrieve messages and log them
             print("Retrieving messages")
             messages = client.beta.threads.messages.list(thread_id)
         except Exception as e:
+            logger.error(f'Failed to list messages: {str(e)}')
             return Response({'error': f'Failed to list messages: {str(e)}'}, status=500)
 
 
@@ -1917,4 +2145,5 @@ def chat_with_gpt(request):
 
     except Exception as e:
         # Return error message wrapped in Response
+        logger.error(f'Error: {str(e)}')
         return Response({'error': str(e)}, status=500)

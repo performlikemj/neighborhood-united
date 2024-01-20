@@ -859,7 +859,7 @@ def auth_search_ingredients(request, query):
         "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
 
-def guest_search_ingredients(query, meal_ids=None):
+def guest_search_ingredients(meal_ids=None):
     print("From guest_search_ingredients")
     # Determine the current date and the end of the week
     current_date = timezone.now().date()
@@ -870,9 +870,10 @@ def guest_search_ingredients(query, meal_ids=None):
     )
     if meal_ids:
         available_meals = available_meals.filter(id__in=meal_ids)
+    else:
+        return {"error": "No meals with those ingredients found."}
     # Then, look for the dishes in those meals that contain the ingredient(s) in the query
     dishes_with_ingredient = Dish.objects.filter(
-        ingredients__name__icontains=query,
         meal__dishes__in=available_meals
     ).distinct()
     # Finally, list out those dishes along with their chefs
@@ -888,9 +889,6 @@ def guest_search_ingredients(query, meal_ids=None):
             "ingredients": [ingredient.name for ingredient in dish.ingredients.all()],
             "meals": meal_info,
         })
-    
-    # Fetch a suggested meal plan based on the query
-    suggested_meal_plan = guest_get_meal_plan(query, 'ingredient', meal_ids=meal_ids)
 
     if not result:
         return {
@@ -1007,11 +1005,10 @@ def auth_search_chefs(request):
     }
 
 
-def guest_search_chefs(query):
+def guest_search_chefs(request):
     print("From guest_search_chefs")
-    normalized_query = query.lower().replace('chef', '').strip()
 
-    chefs = Chef.objects.filter(user__username__icontains=normalized_query)
+    chefs = Chef.objects.all()
 
     guest_chef_result = []
     for chef in chefs:
@@ -1046,8 +1043,6 @@ def guest_search_chefs(query):
         chef_info['service_postal_codes'] = list(postal_codes_served)
 
         guest_chef_result.append(chef_info)
-
-    suggested_meal_plan = guest_get_meal_plan(query, 'chef')
 
     return {
         "guest_chef_result": guest_chef_result,
@@ -1111,11 +1106,10 @@ def auth_search_dishes(request):
         "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
 
-def guest_search_dishes(query):
+def guest_search_dishes(request):
     print("From guest_search_dishes")
 
-    dishes = Dish.objects.filter(name__icontains=query)
-    print(f'Query: {query}')
+    dishes = Dish.objects.all()
 
     meal_ids = set() 
     meal_details = defaultdict(lambda: {'name': '', 'chefs': [], 'dishes': []})
@@ -1133,8 +1127,6 @@ def guest_search_dishes(query):
             }
 
     guest_dish_result = [{"meal_id": k, **v} for k, v in meal_details.items()]
-
-    suggested_meal_plan = guest_get_meal_plan(query, 'dish')
 
     if not guest_dish_result:
         return {
@@ -1202,7 +1194,7 @@ def auth_get_meal_plan(request):
 
     return {"auth_meal_plan": meal_plan_details, "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-def guest_get_meal_plan(query, query_type=None, include_dish_id=False):
+def guest_get_meal_plan(request):
     print("From guest_get_meal_plan")
     today = timezone.now().date()
     start_of_week = today - timedelta(days=today.weekday())
@@ -1213,16 +1205,6 @@ def guest_get_meal_plan(query, query_type=None, include_dish_id=False):
 
     # Base query for meals available in the current week
     base_meals = Meal.objects.filter(start_date__gt=today, start_date__lte=end_of_week)  # Only include meals that can be ordered
-
-    # Additional filter based on query type
-    query_filter = Q()
-    if query_type == 'chef':
-        query_filter |= Q(chef__user__username__icontains=query)
-    elif query_type == 'dish':
-        query_filter |= Q(dishes__name__icontains=query)
-
-    if query_type:
-        base_meals = base_meals.filter(query_filter)
 
     # Build the meal plan for each day of the week
     guest_meal_plan = []
@@ -1250,7 +1232,7 @@ def guest_get_meal_plan(query, query_type=None, include_dish_id=False):
                 "chef": chosen_meal.chef.user.username,
                 "start_date": chosen_meal.start_date.strftime('%Y-%m-%d'),
                 "is_available": chosen_meal.is_available(),
-                "dishes": [{"id": dish.id, "name": dish.name} for dish in chosen_meal.dishes.all()] if include_dish_id else [dish.name for dish in chosen_meal.dishes.all()],
+                "dishes": [{"id": dish.id, "name": dish.name} for dish in chosen_meal.dishes.all()],
                 "day": day_name
             }
             guest_meal_plan.append(meal_details)

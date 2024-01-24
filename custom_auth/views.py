@@ -157,13 +157,6 @@ def register_api_view(request):
         address_data = request.data.get('address')
         address_data['user'] = user.id
 
-        postal_code_str = address_data.pop('postalcode', None)
-        if postal_code_str:
-            try:
-                postal_code_obj = PostalCode.objects.get(code=postal_code_str)
-                address_data['postalcode'] = postal_code_obj.pk
-            except PostalCode.DoesNotExist:
-                return Response({'errors': {'postalcode': 'Invalid postal code'}})
 
         address_serializer = AddressSerializer(data=address_data)
         if not address_serializer.is_valid():

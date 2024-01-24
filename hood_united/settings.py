@@ -256,28 +256,28 @@ LOGGING = {
         },
     },
 }
-
+if not DEBUG:
 # Cookie settings
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SECURE = True
-CSRF_TRUSTED_ORIGINS = [
-    'https://sautai.azurewebsites.net',
-    'https://www.sautai.com',
-    'https://sautai.com',
-    'https://*.127.0.0.1'
-]
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    CSRF_TRUSTED_ORIGINS = [
+        'https://sautai.azurewebsites.net',
+        'https://www.sautai.com',
+        'https://sautai.com',
+        'https://*.127.0.0.1'
+    ]
 
-# HSTS
-SECURE_HSTS_SECONDS = 31536000
-SECURE_HSTS_PRELOAD = True
-SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    # HSTS
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_PRELOAD = True
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 
-# SSL
-SECURE_SSL_REDIRECT = True
+    # SSL
+    SECURE_SSL_REDIRECT = True
 
-# Clickjacking Protection
-X_FRAME_OPTIONS = 'DENY'
+    # Clickjacking Protection
+    X_FRAME_OPTIONS = 'DENY'
 
-# Other security settings
-SECURE_BROWSER_XSS_FILTER = True
-SECURE_CONTENT_TYPE_NOSNIFF = True
+    # Other security settings
+    SECURE_BROWSER_XSS_FILTER = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True

@@ -176,6 +176,11 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media/')
 # Custom user model
 AUTH_USER_MODEL = 'custom_auth.CustomUser'
 
+AUTHENTICATION_BACKENDS = [
+    'custom_auth.backends.CaseInsensitiveAuthBackend',  # Replace with the actual path
+]
+
+
 # Login redirects
 LOGIN_REDIRECT_URL = 'custom_auth:profile'
 LOGIN_URL = 'custom_auth:login'

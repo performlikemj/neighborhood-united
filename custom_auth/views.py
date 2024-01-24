@@ -91,10 +91,15 @@ def update_profile_api(request):
         user_serializer.save()
 
     # Update or create address data
-    address_data = {key: value for key, value in request.data.items() if key in Address._meta.get_fields()}
-    
+    address_fields = [field.name for field in Address._meta.get_fields()]
+    address_data = {key: value for key, value in request.data.items() if key in address_fields}
     if address_data:
-        address_serializer = AddressSerializer(data=address_data, partial=True)
+        try:
+            address = Address.objects.get(user=user)
+        except Address.DoesNotExist:
+            address = None
+
+        address_serializer = AddressSerializer(instance=address, data=address_data, partial=True)
         if address_serializer.is_valid():
             address = address_serializer.save(user=user)
             is_served = address.is_postalcode_served()

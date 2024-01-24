@@ -1,6 +1,8 @@
 from django.http import JsonResponse
 from .models import ChefPostalCode, PostalCode
 from chefs.models import Chef
+from rest_framework.response import Response
+from custom_auth.models import Address, CustomUser
 
 def chef_service_areas(request, query):
     # Normalize the query to match chef's name or identifier
@@ -12,7 +14,7 @@ def chef_service_areas(request, query):
 
     print(f'chefs: {chefs}')
     if not chefs.exists():
-        return JsonResponse({'error': 'No chefs found based on the query provided'}, status=404)
+        return JsonResponse({'error': 'No chefs found based on the query provided'})
 
     auth_chef_result = []
 
@@ -36,35 +38,21 @@ def chef_service_areas(request, query):
         "auth_chef_result": auth_chef_result
     }
 
-def service_area_chefs(request, query):
-    # Normalize the query to match the postal code format
-    print(f'using service_area_chefs with query: {query}')
-    normalized_query = query.strip()
+def service_area_chefs(request):
+    user_id = request.data.get('user_id')
+    print(f'Using service_area_chefs with user_id: {user_id}')
+    user = CustomUser.objects.get(id=user_id)
+    address = Address.objects.get(user=user)
+    # Get the user's input postal code
+    user_input_postalcode = address.input_postalcode
 
     try:
-        # Find the postal code based on the query
-        postal_code = PostalCode.objects.get(code=normalized_query)
+        # Get the PostalCode instance for the user's input postal code
+        user_postalcode = PostalCode.objects.get(code=user_input_postalcode)
 
-        # Find chefs serving the queried postal code
-        chefs_serving = ChefPostalCode.objects.filter(postal_code=postal_code).select_related('chef')
+        # Filter chefs whose serving_postalcodes include the user's input postal code
+        chefs = Chef.objects.filter(serving_postalcodes=user_postalcode)
 
-        if not chefs_serving:
-            return JsonResponse({'message': 'No chefs are currently serving this area.'}, status=200)
-
-        chef_info = [{
-            'chef_id': chef_serve.chef.id,
-            'chef_name': chef_serve.chef.user.username,  # Adjust based on your user model relation
-            # Add more chef details as needed
-        } for chef_serve in chefs_serving]
-
-        response_data = {
-            "postal_code": postal_code.code,
-            "chefs": chef_info,
-        }
-
-        return {
-            "response_data": response_data
-        }
-
+        return {'chefs': chefs}
     except PostalCode.DoesNotExist:
-        return JsonResponse({'error': 'Postal code not found'}, status=404)
+        return {'message': 'We do not serve your area yet. Please check back later.'}

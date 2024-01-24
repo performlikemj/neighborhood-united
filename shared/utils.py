@@ -28,9 +28,91 @@ from django.utils.formats import date_format
 from django.forms.models import model_to_dict
 from customer_dashboard.models import GoalTracking, UserHealthMetrics, CalorieIntake
 from django.core.exceptions import ObjectDoesNotExist
+import base64
+import os
+import requests
 
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Kroger API
+def get_base64_encoded_credentials(client_id, client_secret):
+    credentials = f"{client_id}:{client_secret}"
+    return base64.b64encode(credentials.encode()).decode()
+
+def get_access_token(client_id, client_secret):
+    url = "https://api-ce.kroger.com/v1/connect/oauth2/token"
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": f"Basic {get_base64_encoded_credentials(client_id, client_secret)}"
+    }
+    data = {
+        "grant_type": "client_credentials",
+        "scope": "product.compact"  # Adjust the scope as needed
+    }
+    response = requests.post(url, headers=headers, data=data)
+    if response.status_code == 200:
+        return response.json()["access_token"]
+    else:
+        # Handle error
+        return None
+
+def find_nearby_supermarkets(request, postal_code):
+    url = "https://api-ce.kroger.com/v1/locations"
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {get_access_token(client_id=os.getenv('KROGER_CLIENT_ID'), client_secret=os.getenv('KROGER_CLIENT_SECRET'))}"
+    }
+    params = {
+        "filter.zipCode.near": postal_code,
+        # You can adjust the radius and limit as needed
+        "filter.radiusInMiles": 10,
+        "filter.limit": 10
+    }
+    response = requests.get(url, headers=headers, params=params)
+
+    if response.status_code == 200:
+        return response.json()
+    else:
+        # Handle errors
+        return None
+
+
+# sautAI functions
+def understand_dietary_choices(request):
+    dietary_choices = Meal.DIETARY_CHOICES   
+    return dietary_choices
+
+def provide_healthy_meal_suggestions(request, user_id):
+    user = CustomUser.objects.get(id=user_id)
+
+    user_info = {
+        'goal_name': user.goal.goal_name,
+        'goal_description': user.goal.goal_description,
+        'dietary_preference': user.dietary_preference
+    }
+
+    return user_info
+
+def search_healthy_meal_options(request, search_term, location_id, limit=10, start=0):
+    url = "https://api-ce.kroger.com/v1/products"
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {get_access_token(client_id=os.getenv('KROGER_CLIENT_ID'), client_secret=os.getenv('KROGER_CLIENT_SECRET'))}"
+    }
+    params = {
+        "filter.term": search_term,
+        "filter.locationId": location_id,
+        "filter.limit": limit,
+        "filter.start": start
+    }
+    response = requests.get(url, headers=headers, params=params)
+
+    if response.status_code == 200:
+        return response.json()
+    else:
+        # Handle errors
+        return None
 
 
 def recommend_follow_up(request, context):
@@ -48,7 +130,7 @@ def recommend_follow_up(request, context):
             "auth_get_meal_plan: Get a meal plan for the current week or a future week",
             "create_meal_plan: Create a new meal plan for the user",
             "chef_service_areas: Retrieve service areas for a specified chef",
-            "service_area_chefs: Search for chefs serving a specific postal code area",
+            "service_area_chefs: Search for chefs serving a user's postal code area",
             "approve_meal_plan: Approve the meal plan and proceed to payment",
             "auth_search_ingredients: Search for ingredients in the database",
             "auth_search_meals_excluding_ingredient: Search for meals excluding an ingredient",
@@ -68,10 +150,12 @@ def recommend_follow_up(request, context):
             "get_goal: Retrieve the user's goal",
             "update_goal: Update the user's goal",
             "adjust_week_shift: Adjust the week shift forward for meal planning",
-            "get_unupdated_health_metrics: Get unupdated health metrics for a user",
             "check_allergy_alert: Check for potential allergens in a meal",
             "track_calorie_intake: Track and log the user's daily calorie intake",
-            "provide_nutrition_advice: Offer personalized nutrition advice"
+            "provide_nutrition_advice: Offer personalized nutrition advice",
+            "find_nearby_supermarkets: Find nearby supermarkets based on the user's postal code",
+            "search_healthy_meal_options: Search for healthy meal options at a specified supermarket location",
+            "provide_healthy_meal_suggestions: Provide healthy meal suggestions based on the user's dietary preferences and health goals"
     """
     else:
         print("Chatting with Guest GPT")
@@ -124,8 +208,8 @@ def provide_nutrition_advice(request, user_id):
             print("Fetching latest metrics...")
             latest_metrics = UserHealthMetrics.objects.filter(user=user).latest('date_recorded')
             health_metrics = {
-                'weight': float(latest_metrics.weight) if latest_metrics.weight else None,  # Convert Decimal to str
-                'bmi': latest_metrics.bmi,
+                'weight': float(latest_metrics.weight) if latest_metrics.weight else None,
+                'bmi': float(latest_metrics.bmi) if latest_metrics.bmi else None,
                 'mood': latest_metrics.mood,
                 'energy_level': latest_metrics.energy_level
             }
@@ -144,7 +228,6 @@ def provide_nutrition_advice(request, user_id):
         print("User does not exist.")
         return {'status': 'error', 'message': 'User not found.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
         return {'status': 'error', 'message': f'An unexpected error occurred: {e}', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 def check_allergy_alert(request, user_id):
@@ -333,7 +416,8 @@ def get_user_info(request):
             'user_id': user.id,
             'dietary_preference': user.dietary_preference,
             'week_shift': user.week_shift,
-            'postal_code': address.postalcode.code if address.postalcode else 'Not provided'
+            'user_goal': user.goal.goal_description if user.goal else 'None',
+            'postal_code': address.input_postalcode if address.input_postalcode else 'Not provided'
         }
         return {'status': 'success', 'user_info': user_info, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     except CustomUser.DoesNotExist:
@@ -362,8 +446,6 @@ def access_past_orders(request, user_id):
     # Retrieve orders associated with the meal plans
     orders = Order.objects.filter(meal_plan__in=meal_plans)
 
-    print(f"Meal plans: {meal_plans}")
-    print(f"Orders: {orders}")
     # If no orders are found, return a message indicating this
     if not orders.exists():
         return {'status': 'info', 'message': "No past orders found.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -383,7 +465,6 @@ def access_past_orders(request, user_id):
             'meals': meals_data
         }
         orders_data.append(order_data)
-    print(f"Orders data: {orders_data}")
     return {'orders': orders_data, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 def post_review(request, user_id, content, rating, item_id, item_type):
@@ -512,7 +593,7 @@ def list_upcoming_meals(request):
             "meal_id": meal.id,
             "name": meal.name,
             "start_date": meal.start_date.strftime('%Y-%m-%d'),
-            "is_available": meal.is_available(week_shift),
+            "is_available": meal.can_be_ordered(),
             "chef": meal.chef.user.username,
             # Add more details as needed
         } for meal in filtered_meals
@@ -539,8 +620,6 @@ def create_meal_plan(request):
     start_of_week = adjusted_today - timedelta(days=adjusted_today.weekday()) + timedelta(weeks=week_shift)
     end_of_week = start_of_week + timedelta(days=6)
 
-    print(f"Start of week: {start_of_week}")
-    print(f"End of week: {end_of_week}")
 
     # Check if a MealPlan already exists for the specified week
     if not MealPlan.objects.filter(user=user, week_start_date=start_of_week, week_end_date=end_of_week).exists():
@@ -551,7 +630,6 @@ def create_meal_plan(request):
             week_end_date=end_of_week,
             created_date=timezone.now()
         )
-        print(f"Created new meal plan: {meal_plan}")
         return {'status': 'success', 'message': 'Created new meal plan.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
     return {'status': 'error', 'message': 'A meal plan already exists for this week.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -662,13 +740,11 @@ def add_meal_to_plan(request, meal_plan_id, meal_id, day):
 
     try:
         meal_plan = MealPlan.objects.get(id=meal_plan_id, user=user)
-        print(f"Meal plan: {meal_plan}")
     except MealPlan.DoesNotExist:
         return {'status': 'error', 'message': 'Meal plan not found.'}
 
     try:
         meal = Meal.objects.get(id=meal_id)
-        print(f"Meal: {meal}")
     except Meal.DoesNotExist:
         return {'status': 'error', 'message': 'Meal not found.'}
 
@@ -711,7 +787,6 @@ def suggest_alternative_meals(request, meal_ids, days_of_week):
     """
     Suggest alternative meals based on a list of meal IDs and corresponding days of the week.
     """
-    print("From suggest_alternative_meals")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
     
@@ -724,7 +799,6 @@ def suggest_alternative_meals(request, meal_ids, days_of_week):
 
     today = timezone.now().date() + timedelta(weeks=week_shift)  # Adjust today's date based on week_shift
     current_weekday = today.weekday()
-    print(f"Today: {today}")
 
     # Map of day names to numbers
     day_to_number = {
@@ -733,20 +807,14 @@ def suggest_alternative_meals(request, meal_ids, days_of_week):
     }
 
     for meal_id, day_of_week in zip(meal_ids, days_of_week):
-        print(f"Meal ID: {meal_id}")
-        print(f"Day of week: {day_of_week}")
 
         # Get the day number from the map
         day_of_week_number = day_to_number.get(day_of_week)
         if day_of_week_number is None:
-            print(f"Invalid day of week: {day_of_week}")
             continue
 
-        print(f"Day of week number: {day_of_week_number}")
         days_until_target = (day_of_week_number - current_weekday + 7) % 7
-        print(f"Days until target: {days_until_target}")
         target_date = today + timedelta(days=days_until_target)
-        print(f"Target date for {day_of_week}: {target_date}")
 
         # Filter meals by dietary preferences, postal code, and current week
         dietary_filtered_meals = Meal.dietary_objects.for_user(user).filter(start_date=target_date).exclude(id=meal_id)
@@ -756,13 +824,12 @@ def suggest_alternative_meals(request, meal_ids, days_of_week):
         available_meals = dietary_filtered_meals & postal_filtered_meals
 
         # Compile meal details
-        print(f"Available meals for {day_of_week}: {available_meals}")
         for meal in available_meals:
             meal_details = {
                 "meal_id": meal.id,
                 "name": meal.name,
                 "start_date": meal.start_date.strftime('%Y-%m-%d'),
-                "is_available": meal.is_available(week_shift),
+                "is_available": meal.can_be_ordered(),
                 "chef": meal.chef.user.username,
                 # Add more details as needed
             }
@@ -780,7 +847,6 @@ def search_meal_ingredients(request, query):
         return {"error": "No meals found matching the query.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
     result = []
-    print(f"Meals: {meals}")
     for meal in meals:
         meal_ingredients = {
             "meal_id": meal.id,
@@ -829,7 +895,6 @@ def auth_search_meals_excluding_ingredient(request, query):
 
     # Combine both filters
     available_meals = dietary_filtered_meals & postal_filtered_meals
-    print(f"Available meals: {available_meals}")
     available_meals = available_meals.exclude(dishes__in=dishes_with_excluded_ingredient)
 
     # Compile meal details
@@ -839,8 +904,11 @@ def auth_search_meals_excluding_ingredient(request, query):
             "meal_id": meal.id,
             "name": meal.name,
             "start_date": meal.start_date.strftime('%Y-%m-%d'),
-            "is_available": meal.is_available(week_shift),
-            "chefs": [{"id": chef.id, "name": chef.user.username} for chef in meal.chef.all()],
+            "is_available": meal.can_be_ordered(),
+            "chef": {
+                "id": meal.chef.id,
+                "name": meal.chef.user.username
+            },
             "dishes": [{"id": dish.id, "name": dish.name} for dish in meal.dishes.all()]
         }
         meal_details.append(meal_detail)
@@ -897,7 +965,7 @@ def auth_search_ingredients(request, query):
             meal_detail['meal_id'] = meal.id
             meal_detail['name'] = meal.name
             meal_detail['start_date'] = meal.start_date.strftime('%Y-%m-%d')
-            meal_detail['is_available'] = meal.is_available(week_shift)
+            meal_detail['is_available'] = meal.can_be_ordered()
 
             # Add chef details if not already present
             chef_info = {"id": dish.chef.id, "name": dish.chef.user.username}
@@ -982,8 +1050,8 @@ def auth_search_chefs(request):
         dietary_preference = None
 
     # Retrieve user's primary postal code from Address model
-    user_addresses = Address.objects.filter(user=user)
-    user_postal_code = user_addresses.first().postalcode.code if user_addresses.exists() else None
+    user_addresses = Address.objects.filter(user=user.id)
+    user_postal_code = user_addresses.input_postalcode if user_addresses.exists() else None
 
     # Base query
     base_query = Q()
@@ -1034,7 +1102,7 @@ def auth_search_chefs(request):
                         "meal_id": meal.id,
                         "meal_name": meal.name,
                         "start_date": meal.start_date.strftime('%Y-%m-%d'),
-                        "is_available": meal.is_available(user.week_shift)
+                        "is_available": meal.can_be_ordered()
                     }
                     for meal in dish_meals
                 ]
@@ -1089,7 +1157,7 @@ def guest_search_chefs(request):
                         "meal_id": meal.id,
                         "meal_name": meal.name,
                         "start_date": meal.start_date.strftime('%Y-%m-%d'),
-                        "is_available": meal.is_available()
+                        "is_available": meal.can_be_ordered()
                     } for meal in dish_meals
                 ]
             }
@@ -1136,30 +1204,25 @@ def auth_search_dishes(request):
 
     # Apply dietary preference filter
     base_meals = dietary_filtered_meals & postal_filtered_meals
-    print(f"Base meals: {base_meals}")
     # Filter the meals based on the chef's serving postal codes and the meal's dietary preference
     # Filter the dishes based on the meals and the dish's name
     dishes = Dish.objects.filter(meal__in=base_meals).distinct()
 
-    print(f'Dishes: {dishes}')
 
     auth_dish_result = []
     for dish in dishes:
-        print(f"Processing dish: {dish}")
         meals_with_dish = set(Meal.objects.filter(dishes=dish))
-        print(f"meals_with_dish: {meals_with_dish}")
         for meal in meals_with_dish:
             meal_detail = {
                 'meal_id': meal.id,
                 'name': meal.name,
                 'start_date': meal.start_date.strftime('%Y-%m-%d'),
-                'is_available': meal.is_available(week_shift),
+                'is_available': meal.can_be_ordered(),
                 'image_url': meal.image.url if meal.image else None,  # Add this line
                 'chefs': [{'id': dish.chef.id, 'name': dish.chef.user.username}],
                 'dishes': [{'id': dish.id, 'name': dish.name}],
             }
             auth_dish_result.append(meal_detail)
-    print(f"auth_dish_result: {auth_dish_result}")
 
     # Prepare the response
     if not auth_dish_result:
@@ -1187,7 +1250,7 @@ def guest_search_dishes(request):
             meal_details[meal.id] = {
                 "name": meal.name,
                 "start_date": meal.start_date.strftime('%Y-%m-%d'),
-                "is_available": meal.is_available(),
+                "is_available": meal.can_be_ordered(),
                 "chefs": [{"id": dish.chef.id, "name": dish.chef.user.username}],
                 "dishes": [{"id": dish.id, "name": dish.name}]
             }
@@ -1251,7 +1314,7 @@ def auth_get_meal_plan(request):
             "name": meal.name,
             "chef": meal.chef.user.username,
             "start_date": meal.start_date.strftime('%Y-%m-%d'),
-            "is_available": meal.is_available(),
+            "is_available": meal.can_be_ordered(),
             "dishes": [dish.name for dish in meal.dishes.all()],
             "day": meal_plan_meal.day,
             "meal_plan_id": meal_plan.id,
@@ -1297,7 +1360,7 @@ def guest_get_meal_plan(request):
                 "name": chosen_meal.name,
                 "chef": chosen_meal.chef.user.username,
                 "start_date": chosen_meal.start_date.strftime('%Y-%m-%d'),
-                "is_available": chosen_meal.is_available(),
+                "is_available": chosen_meal.can_be_ordered(),
                 "dishes": [{"id": dish.id, "name": dish.name} for dish in chosen_meal.dishes.all()],
                 "day": day_name
             }

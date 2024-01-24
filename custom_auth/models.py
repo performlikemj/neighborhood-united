@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth.models import AbstractUser
 from django.contrib.auth import get_user_model
 from django_countries.fields import CountryField
+from local_chefs.models import PostalCode
 
 
 # Create your models here.
@@ -75,16 +76,22 @@ class CustomUser(AbstractUser):
     allergies = models.CharField(max_length=70, choices=DIETARY_CHOICES, default='None')
 
 class Address(models.Model):
-    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='address')
     street = models.CharField(max_length=255)
     city = models.CharField(max_length=255)
     state = models.CharField(max_length=255)
-    postalcode = models.ForeignKey('local_chefs.PostalCode', on_delete=models.SET_NULL, null=True, blank=True)
+    input_postalcode = models.CharField(max_length=10, blank=True, null=True)  # User input postal code
     country = CountryField()
 
     def __str__(self):
-        return f'{self.user} - {self.postalcode}, {self.country}'
+        return f'{self.user} - {self.input_postalcode}, {self.country}'
 
+    def is_postalcode_served(self):
+        """
+        Checks if the input postal code is in the list of served postal codes.
+        Returns True if served, False otherwise.
+        """
+        return PostalCode.objects.filter(code=self.input_postalcode).exists()
 
 class UserRole(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)

@@ -27,7 +27,9 @@ from shared.utils import (get_user_info, post_review, update_review, delete_revi
                           guest_get_meal_plan, guest_search_chefs, guest_search_dishes, 
                           generate_review_summary, access_past_orders, get_goal, 
                           update_goal, adjust_week_shift, get_unupdated_health_metrics, 
-                          update_health_metrics, check_allergy_alert, provide_nutrition_advice, recommend_follow_up)
+                          update_health_metrics, check_allergy_alert, provide_nutrition_advice, 
+                          recommend_follow_up, find_nearby_supermarkets,
+                          search_healthy_meal_options, provide_healthy_meal_suggestions, understand_dietary_choices)
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
 from .serializers import ChatThreadSerializer, GoalTrackingSerializer, UserHealthMetricsSerializer, CalorieIntakeSerializer
@@ -68,19 +70,14 @@ def api_update_calorie_intake(request):
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_get_calories(request):
     try:
-        print(f'Request: {request.data}')
         print("Getting calories")
         user = CustomUser.objects.get(id=request.data.get('user_id'))
-        print(f'User: {user}')
         date_recorded = request.data.get('date')
-        print(f'Date recorded: {date_recorded}')
         # Using request.user.id to get the authenticated user's ID
         calorie_records = CalorieIntake.objects.filter(user=user)
-        print(f'Calorie records: {calorie_records}')
         if date_recorded:
             print("date was recorded")
             calorie_records = calorie_records.filter(date_recorded=date_recorded)
-            print(f'Calorie records: {calorie_records}')
         serializer = CalorieIntakeSerializer(calorie_records, many=True)
         return Response(serializer.data)
     except Exception as e:
@@ -123,10 +120,9 @@ def api_user_metrics(request):
     if request.method == 'GET':
         user_metrics = UserHealthMetrics.objects.filter(user=user).order_by('-date_recorded')[:5]
         serializer = UserHealthMetricsSerializer(user_metrics, many=True)
-        
         current_week_metrics = any(metric.is_current_week() for metric in user_metrics)
         if not current_week_metrics:
-            return Response({"message": "Please update your health metrics for the current week."})
+            return Response({"message": "Please update your health metrics for the current week."}, status=200)
         return Response(serializer.data)
 
     elif request.method == 'POST':
@@ -204,7 +200,6 @@ def api_thread_detail_view(request, openai_thread_id):
     try:
         messages = client.beta.threads.messages.list(openai_thread_id)
         # Format and return the messages as per your requirement
-        print(f'Messages: {messages}')
         chat_history = api_format_chat_history(messages)
         return Response({'chat_history': chat_history})
     except Exception as e:
@@ -308,6 +303,9 @@ def create_openai_prompt(user_id):
         - update_health_metrics\n
         - check_allergy_alert\n
         - provide_nutrition_advice\n
+        - find_nearby_supermarkets\n
+        - search_healthy_meal_options\n
+        - provide_healthy_meal_suggestions\n
        \n\n"""
     ).format(goal=user_goal)
 
@@ -484,7 +482,6 @@ guest_functions = {
     "guest_get_meal_plan": guest_get_meal_plan,
     "guest_search_ingredients": guest_search_ingredients,
     "chef_service_areas": chef_service_areas,
-    "service_area_chefs": service_area_chefs,
 }
 
 functions = {
@@ -517,22 +514,11 @@ functions = {
     "update_health_metrics": update_health_metrics,
     "check_allergy_alert": check_allergy_alert,
     "provide_nutrition_advice": provide_nutrition_advice,
+    "find_nearby_supermarkets": find_nearby_supermarkets,
+    "search_healthy_meal_options": search_healthy_meal_options,
+    "provide_healthy_meal_suggestions": provide_healthy_meal_suggestions,
+    "understand_dietary_choices": understand_dietary_choices,
 }
-
-def run_async_in_thread(func, *args):
-    """
-    Utility function to run an asynchronous function in a background thread.
-    """
-    loop = asyncio.new_event_loop()
-    
-    def run():
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(func(*args))
-        loop.close()
-
-    thread = threading.Thread(target=run)
-    thread.start()
-    return thread
 
 
 def ai_call(tool_call, request):
@@ -562,6 +548,7 @@ def guest_ai_call(tool_call, request):
         "function": name,
     }
     return tool_outputs
+
 @api_view(['POST'])
 def guest_chat_with_gpt(request):
     print("Chatting with Guest GPT")
@@ -648,9 +635,7 @@ def guest_chat_with_gpt(request):
         except json.JSONDecodeError:
             return Response({'error': 'Failed to parse JSON'}, status=400)
         question = data.get('question')
-        print(f"Question: {question}")
         thread_id = data.get('thread_id')
-        print(f"Thread ID: {thread_id}")
 
         if not question:
             return Response({'error': 'No question provided'}, status=400)
@@ -663,7 +648,6 @@ def guest_chat_with_gpt(request):
         if not thread_id:
             openai_thread = client.beta.threads.create()
             thread_id = openai_thread.id
-            print(f"New thread ID: {thread_id}")
     
         try:
             print("Creating a message")
@@ -685,8 +669,6 @@ def guest_chat_with_gpt(request):
             
         try:
             # Run the Assistant
-            print('Running the assistant')
-            print(f"Guest assistant ID: {guest_assistant_id}")
             run = client.beta.threads.runs.create(
                 thread_id=thread_id,
                 assistant_id=guest_assistant_id,
@@ -719,28 +701,21 @@ def guest_chat_with_gpt(request):
                     print("Run requires action")
                     for tool_call in run.required_action.submit_tool_outputs.tool_calls:
                         # Execute the function call and get the result
-                        print(f"New Tool call: {tool_call}")
                         tool_call_result = guest_ai_call(tool_call, request)
-                        print(f"Tool call result: {tool_call_result}")
                         # Extracting the tool_call_id and the output
                         tool_call_id = tool_call_result['tool_call_id']
-                        print(f"Tool call ID: {tool_call_id}")
                         output = tool_call_result['output']
-                        print(f"Output: {output}")
                         # Assuming 'output' needs to be serialized as a JSON string
                         # If it's already a string or another format is required, adjust this line accordingly
                         output_json = json.dumps(output)
-                        print(f"Output JSON: {output_json}")
                         # Prepare the output in the required format
                         formatted_output = {
                             "tool_call_id": tool_call_id,
                             "output": output_json
                         }
-                        print(f"Formatted tool output: {formatted_output}")
                         tool_outputs.append(formatted_output)
 
                         formatted_outputs.append(formatted_output)
-                    print(f"Ready to submit tool outputs: {tool_outputs}")
                     # Submitting the formatted outputs
                     client.beta.threads.runs.submit_tool_outputs(
                         thread_id=thread_id,
@@ -908,13 +883,8 @@ def chat_with_gpt(request):
                         "description": "Search for chefs serving a specific postal code area.",
                         "parameters": {
                             "type": "object",
-                            "properties": {
-                                "query": {
-                                    "type": "string",
-                                    "description": "The query to find chefs serving a particular postal code."
-                                }
-                            },
-                            "required": ["query"]
+                            "properties": {},
+                            "required": []
                         }
                     }
                 },  
@@ -1371,7 +1341,78 @@ def chat_with_gpt(request):
                         }
                     }
                 },
-            ],
+                {
+                "type": "function",
+                "function": {
+                    "name": "find_nearby_supermarkets",
+                    "description": "Find nearby supermarkets based on the user's postal code.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "postal_code": {
+                                "type": "string",
+                                "description": "The postal code to find nearby supermarkets."
+                            }
+                        },
+                        "required": ["postal_code"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_healthy_meal_options",
+                    "description": "Search for healthy meal options at a specified supermarket location.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location_id": {
+                                "type": "string",
+                                "description": "The unique identifier of the supermarket location."
+                            },
+                            "search_term": {
+                                "type": "string",
+                                "description": "The search term to find healthy meal options (e.g., 'gluten-free', 'organic vegetables')."
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "The number of products to retrieve in the search."
+                            }
+                        },
+                        "required": ["search_term", "location_id"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "provide_healthy_meal_suggestions",
+                    "description": "If requested or no meals are available, provide healthy meal suggestions based on the user's dietary preferences and health goals filtered by days of the week. If the user is in a location where a supermarket is available, provide healthy meal suggestions based on what is available at the supermarket.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "user_id": {
+                                "type": "integer",
+                                "description": "The ID of the user seeking meal suggestions."
+                            }
+                        },
+                        "required": ["user_id"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "understand_dietary_choices",
+                    "description": "Understand the available dietary choices that all users have access to. Use this to create more precise queries.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                }
+            },
+        ],
         )        
 
 
@@ -1467,13 +1508,8 @@ def chat_with_gpt(request):
                         "description": "Search for chefs serving a specific postal code area.",
                         "parameters": {
                             "type": "object",
-                            "properties": {
-                                "query": {
-                                    "type": "string",
-                                    "description": "The query to find chefs serving a particular postal code."
-                                }
-                            },
-                            "required": ["query"]
+                            "properties": {},
+                            "required": []
                         }
                     }
                 },  
@@ -2051,7 +2087,7 @@ def chat_with_gpt(request):
                 elif run.status in ['expired', 'cancelled']:
                     logger.warning(f'Run {run.status}')
                     break
-                elif run.status in ['queued', 'in_progress']:
+                elif run.status in ['queued', 'in_progress', 'running']:
                     time.sleep(0.5)
                     continue
                 elif run.status == "requires_action":
@@ -2067,11 +2103,6 @@ def chat_with_gpt(request):
                             'function_name': tool_call_result['function'],  # Example, adjust based on your data structure
                             'result': tool_call_result
                         }
-                        # Identify the user to whom you want to send the update
-                        user_id = user.id
-                        # Use the utility function to run the async function in a background thread
-                        run_async_in_thread(ToolCallConsumer.send_update, user_id, update_data)
-                        print("Tool call result sent to user")
                         # Extracting the tool_call_id and the output
                         tool_call_id = tool_call_result['tool_call_id']
                         print(f"Tool call ID: {tool_call_id}")
@@ -2138,7 +2169,7 @@ def chat_with_gpt(request):
 
         response_data = {
             'last_assistant_message': next((msg.content[0].text.value for msg in (messages.data) if msg.role == 'assistant'), None),                
-            'run_status': run.status,
+            'run_id': run.id,
             'new_thread_id': thread_id,
             'recommend_follow_up': recommend_follow_up(request, formatted_context),
         }

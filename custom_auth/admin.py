@@ -10,7 +10,7 @@ class CustomUserAdmin(admin.ModelAdmin):
 
 
 class AddressAdmin(admin.ModelAdmin):
-    list_display = ('user', 'street', 'city', 'state', 'postalcode', 'country')
+    list_display = ('user', 'street', 'city', 'state', 'input_postalcode', 'country')
 
 class UserRoleAdmin(admin.ModelAdmin):
     list_display = ('user', 'is_chef', 'current_role')

@@ -48,11 +48,17 @@ def user_details_view(request):
     serializer = CustomUserSerializer(request.user)
     return Response(serializer.data)
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def address_details_view(request):
+    serializer = AddressSerializer(request.user.address)
+    return Response(serializer.data)
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def update_profile_api(request):
     user = request.user
-    print(f'request.data: {request.data}')
+    # Directly check for address-related keys
     if 'dietary_preference' in request.data:
         user.dietary_preference = request.data['dietary_preference']
     if 'allergies' in request.data:
@@ -84,19 +90,20 @@ def update_profile_api(request):
             email.send()
         user_serializer.save()
 
-        # Handle address update
-        address_data = request.data.get('address')
-        if address_data:
-            address_serializer = AddressSerializer(data=address_data)
-            if address_serializer.is_valid():
-                # Update or create the address
-                Address.objects.update_or_create(user=user, defaults=address_serializer.validated_data)
-            else:
-                return Response({'status': 'failure', 'message': address_serializer.errors}, status=400)
+    # Update or create address data
+    address_data = {key: value for key, value in request.data.items() if key in Address._meta.get_fields()}
+    
+    if address_data:
+        address_serializer = AddressSerializer(data=address_data, partial=True)
+        if address_serializer.is_valid():
+            address = address_serializer.save(user=user)
+            is_served = address.is_postalcode_served()
 
-        return Response({'status': 'success', 'message': 'Profile updated successfully'})
+            return Response({'status': 'success', 'message': 'Profile updated successfully', 'is_served': is_served})
+        else:
+            return Response({'status': 'failure', 'message': address_serializer.errors}, status=400)
     else:
-        return Response({'status': 'failure', 'message': user_serializer.errors}, status=400)
+        return Response({'status': 'failure', 'message': 'Address data not provided'}, status=400)
 
 
 @csrf_exempt
@@ -185,7 +192,6 @@ def register_api_view(request):
         'status': 'User registered',
         'navigate_to': 'Assistant'
     })
-
 
 
 @api_view(['POST'])

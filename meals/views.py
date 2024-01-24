@@ -23,6 +23,7 @@ from openai import OpenAI
 from django.views.decorators.http import require_http_methods
 from customer_dashboard.models import GoalTracking, ChatThread, UserHealthMetrics, CalorieIntake
 
+
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 def is_chef(user):
@@ -78,20 +79,14 @@ def api_create_ingredient(request):
         print(chef)
         name = request.POST.get('name')
         spoonacular_id = request.POST.get('spoonacular_id')
-        print(f'Name: {name}')
-        print(f'Spoonacular ID: {spoonacular_id}')
         if chef.ingredients.filter(spoonacular_id=spoonacular_id).exists():
             # Ingredient already exists, no need to add it again
-            print(f'Ingredient already exists for chef {chef}')
             return JsonResponse({"message": "Ingredient already added"}, status=400)
         
         # Get ingredient info from Spoonacular API
         ingredient_info = get_ingredient_info(spoonacular_id)
-        print(f'Ingredient info: {ingredient_info}')
         calories = next((nutrient['amount'] for nutrient in ingredient_info['nutrition']['nutrients'] if nutrient['name'] == 'Calories'), None)
-        print(f'Calories: {calories}')
         ingredient = Ingredient.objects.create(name=name, spoonacular_id=spoonacular_id, chef_id=chef.id, calories=calories)
-        print(f'Ingredient: {ingredient}')
         # Write to file
         with open('ingredients.txt', 'a') as f:
             f.write(f'{name}: {calories}\n')
@@ -112,7 +107,6 @@ def api_create_ingredient(request):
             file=open("ingredients.txt", "rb"),
             purpose='assistants'
         )
-        print(f'File: {file}')
 
         # Write new file id to 'ingredients_current_file_id.txt'
         with open('ingredients_current_file_id.txt', 'w') as f:
@@ -505,13 +499,9 @@ def get_alternative_meals(request):
 
     # Calculate the current week's date range
     week_shift = max(int(request.user.week_shift), 0)
-    print(f'Week shift: {week_shift}')
     adjusted_today = timezone.now().date() + timedelta(weeks=week_shift)
-    print(f'Adjusted today: {adjusted_today}')
     start_of_week = adjusted_today - timedelta(days=adjusted_today.weekday()) + timedelta(weeks=week_shift)
-    print(f'Start of week: {start_of_week}')
     end_of_week = start_of_week + timedelta(days=6)
-    print(f'End of week: {end_of_week}')
 
     # Get current day from the request
     current_day = request.GET.get('day', adjusted_today.strftime('%A'))
@@ -520,31 +510,24 @@ def get_alternative_meals(request):
 
     # Convert the day name to a date object
     current_day_date = start_of_week + timedelta(days=days_of_week_list.index(current_day))
-    print(f'Current day date: {current_day_date}')
-    print(f'Current day: {current_day}')
     # Retrieve the meal plan for the specified week
     meal_plan = MealPlan.objects.filter(
         user=request.user,
         week_start_date=start_of_week,
         week_end_date=end_of_week
     ).first()
-    print(f'Meal plan: {meal_plan}')
 
     if not meal_plan:
         return JsonResponse({"message": "No meal plan found for the specified week."})
 
     # Query MealPlanMeal for the specific day within the meal plan
     meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan, day=current_day)
-    print(f'Meal plan meals: {meal_plan_meals}')
 
-    print(f'Found {meal_plan_meals.count()} meals for {current_day}')
     # Query meals based on postal code, and availability for the specific day
     postal_query = Meal.postal_objects.for_user(user=request.user).filter(start_date=current_day_date)
-    print(f'Postal query: {postal_query}')
     # Apply dietary preference filter only if it's not None
     meals = postal_query.filter(id__in=Meal.dietary_objects.for_user(request.user))
 
-    print(f'Found {meals.count()} meals matching the criteria')
     print(meals)
 
     # Return the meals as JSON
@@ -571,7 +554,6 @@ def submit_meal_plan_updates(request):
         updated_meals = data.get('mealPlan')
         print(updated_meals)
         print(type(updated_meals))
-        print(f'data: {data}')
 
         # Assuming each meal in updated_meals includes a 'meal_plan_id'
         if not updated_meals:
@@ -579,10 +561,7 @@ def submit_meal_plan_updates(request):
 
         # Example: getting the meal_plan_id from the first meal
         meal_plan_id = updated_meals[0].get('meal_plan_id')
-        print(f'meal_plan_id: {meal_plan_id}')
         meal_plan = MealPlan.objects.get(id=meal_plan_id, user=request.user)
-        print(f'meal_plan: {meal_plan}')
-        print(f'meal_plan_meals: {meal_plan.mealplanmeal_set.all()}')
 
         # Clear existing MealPlanMeal entries
         MealPlanMeal.objects.filter(meal_plan=meal_plan).delete()
@@ -594,8 +573,6 @@ def submit_meal_plan_updates(request):
                 meal_id=meal['meal_id'],
                 day=meal['day']
             )
-        print(f'meal_plan: {meal_plan}')    
-        print(f'meal_plan_meals: {meal_plan.mealplanmeal_set.all()}')
 
         return JsonResponse({'status': 'success', 'message': 'Meal plan updated successfully.'})
     except Exception as e:

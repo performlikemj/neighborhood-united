@@ -30,7 +30,7 @@ class AddressSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Address
-        fields = ['user', 'street', 'city', 'state', 'postalcode', 'country']
+        fields = ['user', 'street', 'city', 'state', 'input_postalcode', 'country']
 
 
 class PostalCodeSerializer(serializers.ModelSerializer):

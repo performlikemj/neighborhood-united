@@ -33,7 +33,6 @@ from django.contrib.auth import get_user_model
 
 
 from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
 import json
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -111,7 +110,7 @@ def update_profile_api(request):
         return Response({'status': 'failure', 'message': 'Address data not provided'}, status=400)
 
 
-@csrf_exempt
+@api_view(['POST'])
 def login_api_view(request):
     if request.method == 'POST':
         data = json.loads(request.body)

@@ -44,6 +44,8 @@ from hood_united.consumers import ToolCallConsumer
 import asyncio
 import logging
 import threading
+from django_ratelimit.decorators import ratelimit
+
 
 logger = logging.getLogger(__name__)
 
@@ -549,7 +551,9 @@ def guest_ai_call(tool_call, request):
     }
     return tool_outputs
 
+
 @api_view(['POST'])
+@ratelimit(key='ip', rate='5/m', block=True)
 def guest_chat_with_gpt(request):
     print("Chatting with Guest GPT")
     guest_assistant_id_file = "guest_assistant_id.txt"

@@ -29,7 +29,7 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG')
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['127.0.0.1', 'localhost', 'sautai.azurewebsites.net', 'www.sautai.com']
 
 
 # Application definition
@@ -243,3 +243,21 @@ LOGGING = {
         },
     },
 }
+
+# Cookie settings
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+CSRF_TRUSTED_ORIGINS = [
+    'https://sautai.azurewebsites.net',
+    'https://www.sautai.com',
+    'https://sautai.com',
+    'https://*.127.0.0.1'
+]
+
+# HSTS
+SECURE_HSTS_SECONDS = 31536000
+SECURE_HSTS_PRELOAD = True
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+
+# SSL
+SECURE_SSL_REDIRECT = True

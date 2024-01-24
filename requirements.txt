@@ -34,6 +34,7 @@ msgpack==1.0.7
 multidict==6.0.4
 openai==1.2.2
 Pillow==9.5.0
+psycopg2-binary==2.9.9
 pyasn1==0.5.1
 pyasn1-modules==0.3.0
 pycparser==2.21

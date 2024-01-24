@@ -29,7 +29,7 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = ['127.0.0.1', 'localhost', 'nbhd.azurewebsites.net', 'www.nbhdunited.com', 'nbhdunited.com']
+ALLOWED_HOSTS = ['127.0.0.1', 'localhost', 'nbhd.azurewebsites.net', 'www.nbhdunited.com', 'nbhdunited.com', 'www.sautai.com', 'sautai.com', '169.254.130.5:8000']
 
 
 # Application definition

@@ -29,7 +29,7 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = ['127.0.0.1', 'localhost', 'nbhdunited.azurewebsites.net', 'www.nbhdunited.com', 'nbhdunited.com', 'www.sautai.com', 'sautai.com', '169.254.131.6:8000', '169.254.131.3:8000']
+ALLOWED_HOSTS = ['127.0.0.1', 'localhost', 'nbhdunited.azurewebsites.net', 'www.nbhdunited.com', 'nbhdunited.com', 'www.sautai.com', 'sautai.com', '169.254.131.6:8000', '169.254.131.3:8000', 'hoodunited.org']
 
 
 # Application definition
@@ -182,6 +182,14 @@ STATICFILES_DIRS = [
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+
+# Static files (CSS, JavaScript, Images)
+# https://docs.djangoproject.com/en/4.1/howto/static-files/
+
+STATIC_URL = '/static/'
+STATICFILES_DIRS = [os.path.join(BASE_DIR, 'static/')]
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
 # Media files
 if DEBUG:
     MEDIA_URL = '/media/'
@@ -266,7 +274,7 @@ LOGGING = {
         },
     },
 }
-if not DEBUG:
+if DEBUG == False:
 # Cookie settings
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True

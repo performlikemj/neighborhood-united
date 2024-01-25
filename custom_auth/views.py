@@ -85,7 +85,7 @@ def update_profile_api(request):
                     "Thanks,\nYour SautAI Support Team"
 
             to_email = user_serializer.validated_data.get('email')
-            email = EmailMessage(mail_subject, message, from_email='mj@igobymj.com', to=[to_email])
+            email = EmailMessage(mail_subject, message, from_email='mj@sautai.com', to=[to_email])
             email.send()
         user_serializer.save()
 
@@ -179,7 +179,7 @@ def register_api_view(request):
                   "Thanks,\nYour SautAI Support Team"
 
         to_email = user_serializer.validated_data.get('email')
-        email = EmailMessage(mail_subject, message, from_email='mj@igobymj.com', to=[to_email])
+        email = EmailMessage(mail_subject, message, from_email='mj@sautai.com', to=[to_email])
         email.send()
     # After successful registration
     refresh = RefreshToken.for_user(user)
@@ -359,7 +359,7 @@ def register_view(request):
             email = EmailMessage(
                 mail_subject, 
                 message, 
-                from_email='mj@igobymj.com',  # Use a different From address
+                from_email='mj@sautai.com',  # Use a different From address
                 to=[to_email]
             )
             email.send()

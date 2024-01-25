@@ -28,7 +28,7 @@ def send_email_change_confirmation(request, user, new_email):
     email = EmailMessage(
         mail_subject, 
         message, 
-        from_email='mj@igobymj.com',
+        from_email='mj@sautai.com',
         to=[new_email]
     )
     email.send()

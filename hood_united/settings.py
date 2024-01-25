@@ -29,7 +29,7 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = ['127.0.0.1', 'localhost', 'nbhdunited.azurewebsites.net', 'www.nbhdunited.com', 'nbhdunited.com', 'www.sautai.com', 'sautai.com', '169.254.131.6:8000']
+ALLOWED_HOSTS = ['127.0.0.1', 'localhost', 'nbhdunited.azurewebsites.net', 'www.nbhdunited.com', 'nbhdunited.com', 'www.sautai.com', 'sautai.com', '169.254.131.6:8000', '169.254.131.3:8000']
 
 
 # Application definition
@@ -56,7 +56,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'stripe',
-    'sslserver',
+    'storages',
 ]
 
 MIDDLEWARE = [
@@ -183,8 +183,18 @@ STATICFILES_DIRS = [
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Media files
-MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media/')
+if DEBUG:
+    MEDIA_URL = '/media/'
+    MEDIA_ROOT = os.path.join(BASE_DIR, 'media/')
+else:
+    # Blob Storage
+    DEFAULT_FILE_STORAGE = 'storages.backends.azure_storage.AzureStorage'
+
+    AZURE_ACCOUNT_NAME = config('AZURE_ACCOUNT_NAME')  # your azure account name
+    AZURE_ACCOUNT_KEY = config('AZURE_ACCOUNT_KEY')  # your azure account key
+    AZURE_CONTAINER = config('AZURE_CONTAINER', 'media')  # the default container
+    AZURE_CUSTOM_DOMAIN = f'{AZURE_ACCOUNT_NAME}.blob.core.windows.net'
+    MEDIA_URL = f'https://{AZURE_CUSTOM_DOMAIN}/{AZURE_CONTAINER}/'
 
 # Custom user model
 AUTH_USER_MODEL = 'custom_auth.CustomUser'

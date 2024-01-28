@@ -85,7 +85,7 @@ def update_profile_api(request):
                     "Thanks,\nYour SautAI Support Team"
 
             to_email = user_serializer.validated_data.get('email')
-            email = EmailMessage(mail_subject, message, from_email='mj@sautai.com', to=[to_email])
+            email = EmailMessage(mail_subject, message, from_email='support@sautai.com', to=[to_email])
             email.send()
         user_serializer.save()
 
@@ -172,14 +172,14 @@ def register_api_view(request):
         mail_subject = 'Activate your account.'
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         token = account_activation_token.make_token(user)
-        activation_link = f"{os.getenv('STREAMLIT_URL')}/activate?uid={uid}&token={token}"
+        activation_link = f"https://sautai.com/activate?uid={uid}&token={token}"
         message = f"Hi {user.username},\n\nThank you for signing up for our website!\n\n" \
                   f"Please click the link below to activate your account:\n\n{activation_link}\n\n" \
                   "If you have any issues, please contact us at support@sautAI.com.\n\n" \
                   "Thanks,\nYour SautAI Support Team"
 
         to_email = user_serializer.validated_data.get('email')
-        email = EmailMessage(mail_subject, message, from_email='mj@sautai.com', to=[to_email])
+        email = EmailMessage(mail_subject, message, from_email='support@sautai.com', to=[to_email])
         email.send()
     # After successful registration
     refresh = RefreshToken.for_user(user)
@@ -351,7 +351,7 @@ def register_view(request):
             mail_subject = 'Activate your account.'
             message = render_to_string('custom_auth/acc_active_email.html', {
                 'user': user,
-                'domain': current_site.domain,
+                'domain': 'https://www.sautai.com',
                 'uid': urlsafe_base64_encode(force_bytes(user.pk)),
                 'token': account_activation_token.make_token(user),
             })
@@ -359,9 +359,18 @@ def register_view(request):
             email = EmailMessage(
                 mail_subject, 
                 message, 
-                from_email='mj@sautai.com',  # Use a different From address
+                from_email='support@sautai.com',  # Use a different From address
                 to=[to_email]
             )
+          # Prepare data for Zapier
+            #zapier_data = {
+            #    'email': to_email,
+            #    'username': user.username,
+            #    'domain': current_site.domain,
+            #    'uid': urlsafe_base64_encode(force_bytes(user.pk)),
+            #    'token': account_activation_token.make_token(user),
+            #}
+            #requests.post('https://hooks.zapier.com/hooks/catch/17732876/3qbqiob/', json=zapier_data)
             email.send()
             return redirect('custom_auth:verify_email')
     else:

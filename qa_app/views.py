@@ -6,7 +6,6 @@ from django.shortcuts import render, redirect
 from .models import FoodQA
 from meals.models import Dish, MealType, Meal
 from django.conf import settings
-from django_ratelimit.decorators import ratelimit
 from django.utils.html import strip_tags
 from django.http import JsonResponse
 from django.core.paginator import Paginator

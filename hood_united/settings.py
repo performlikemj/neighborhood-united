@@ -12,10 +12,13 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 
 from pathlib import Path
 import os
-from dotenv import load_dotenv
-load_dotenv('dev.env')
-from decouple import config
 from datetime import timedelta
+
+import json
+
+# Load configuration from config.json
+with open('/etc/config.json') as config_file:
+    config = json.load(config_file)
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -24,12 +27,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv('SECRET_KEY')
+SECRET_KEY = config['SECRET_KEY']
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
+DEBUG = False
 
-ALLOWED_HOSTS = ['127.0.0.1', 'localhost', 'nbhdunited.azurewebsites.net', 'www.nbhdunited.com', 'nbhdunited.com', 'www.sautai.com', 'sautai.com', '169.254.131.6:8000', '169.254.131.3:8000', 'hoodunited.org']
+ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '4.242.33.69', 'www.nbhdunited.com', 'nbhdunited.com', 'www.sautai.com', 'sautai.com', 'neighborhoodunited.org', 'hoodunited.org']
 
 
 # Application definition
@@ -71,7 +74,7 @@ MIDDLEWARE = [
 ]
 
 CORS_ALLOWED_ORIGINS = [
-    os.getenv('STREAMLIT_URL'),  # Add your Streamlit app's origin here
+    config['STREAMLIT_URL'],  # Add your Streamlit app's origin here
     # "https://example.com",  # Add other origins as needed
 ]
 
@@ -102,7 +105,7 @@ ASGI_APPLICATION = 'hood_united.asgi.application'
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
-if DEBUG:
+if DEBUG == 'True':
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.sqlite3',
@@ -113,14 +116,13 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.getenv('DB_NAME'),
-            'USER': os.getenv('DB_USER'),
-            'PASSWORD': os.getenv('DB_PASSWORD'),
-            'HOST': os.getenv('DB_HOST', 'localhost'),
-            'PORT': os.getenv('DB_PORT', '5432'),
+            'NAME': config['DB_NAME'],
+            'USER': config['DB_USER'],
+            'PASSWORD': config['DB_PASSWORD'],
+            'HOST': config['DB_HOST'],
+            'PORT': config['DB_PORT'],
         }
     }
-
 
 # Password validation
 # https://docs.djangoproject.com/en/4.2/ref/settings/#auth-password-validators
@@ -198,9 +200,9 @@ else:
     # Blob Storage
     DEFAULT_FILE_STORAGE = 'storages.backends.azure_storage.AzureStorage'
 
-    AZURE_ACCOUNT_NAME = config('AZURE_ACCOUNT_NAME')  # your azure account name
-    AZURE_ACCOUNT_KEY = config('AZURE_ACCOUNT_KEY')  # your azure account key
-    AZURE_CONTAINER = config('AZURE_CONTAINER', 'media')  # the default container
+    AZURE_ACCOUNT_NAME = config['AZURE_ACCOUNT_NAME']  # your azure account name
+    AZURE_ACCOUNT_KEY = config['AZURE_ACCOUNT_KEY']  # your azure account key
+    AZURE_CONTAINER = config['AZURE_CONTAINER']  # the default container
     AZURE_CUSTOM_DOMAIN = f'{AZURE_ACCOUNT_NAME}.blob.core.windows.net'
     MEDIA_URL = f'https://{AZURE_CUSTOM_DOMAIN}/{AZURE_CONTAINER}/'
 
@@ -218,26 +220,25 @@ LOGIN_URL = 'custom_auth:login'
 
 
 # OpenAI API keys
-OPENAI_KEY = os.getenv('OPENAI_KEY')
-SPOONACULAR_API_KEY = os.getenv('SPOONACULAR_API_KEY')
-
+# OpenAI API keys
+OPENAI_KEY = config['OPENAI_KEY']
+SPOONACULAR_API_KEY = config['SPOONACULAR_API_KEY']
 
 # OpenAI prompt
-OPENAI_PROMPT = os.getenv('OPENAI_PROMPT')
+OPENAI_PROMPT = config['OPENAI_PROMPT']
 
 # Stripe API keys
-STRIPE_PUBLIC_KEY = os.getenv('STRIPE_PUBLIC_KEY')
-STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
+STRIPE_PUBLIC_KEY = config['STRIPE_PUBLIC_KEY']
+STRIPE_SECRET_KEY = config['STRIPE_SECRET_KEY']
+
 
 # Email settings
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = os.getenv('EMAIL_HOST')
-EMAIL_PORT = os.getenv('EMAIL_PORT')
-EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS')
-EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
-EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL')
-
+EMAIL_HOST = config['EMAIL_HOST']
+EMAIL_PORT = config['EMAIL_PORT']
+EMAIL_USE_TLS = config['EMAIL_USE_TLS']
+EMAIL_HOST_USER = config['EMAIL_HOST_USER']
+EMAIL_HOST_PASSWORD = config['EMAIL_HOST_PASSWORD']
+DEFAULT_FROM_EMAIL = config['DEFAULT_FROM_EMAIL']
 
 LOGGING = {
     'version': 1,
@@ -292,6 +293,7 @@ if DEBUG == False:
 
     # SSL
     SECURE_SSL_REDIRECT = True
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
     # Clickjacking Protection
     X_FRAME_OPTIONS = 'DENY'

@@ -57,17 +57,11 @@ def address_details_view(request):
 @permission_classes([IsAuthenticated])
 def update_profile_api(request):
     user = request.user
-    # Directly check for address-related keys
-    if 'dietary_preference' in request.data:
-        user.dietary_preference = request.data['dietary_preference']
-    if 'allergies' in request.data:
-        user.allergies = request.data['allergies']
-
-    user.save()
-
     # Deserialize and update user data
     user_serializer = CustomUserSerializer(user, data=request.data, partial=True)
     if user_serializer.is_valid():
+        print(f"Validated data: {user_serializer.validated_data}")  # Debug print
+
         # Check if email is updated
         if 'email' in user_serializer.validated_data:
             user.email_confirmed = False
@@ -87,7 +81,16 @@ def update_profile_api(request):
             to_email = user_serializer.validated_data.get('email')
             email = EmailMessage(mail_subject, message, from_email='mj@sautai.com', to=[to_email])
             email.send()
+        if 'dietary_preference' in user_serializer.validated_data:
+            user.dietary_preference = user_serializer.validated_data['dietary_preference']
+
+        if 'allergies' in user_serializer.validated_data:
+            user.allergies = user_serializer.validated_data['allergies']
         user_serializer.save()
+
+    else:
+        print(f"Serializer errors: {user_serializer.errors}")  # Debug print
+        return Response({'status': 'failure', 'message': user_serializer.errors}, status=400)
 
     # Update or create address data
     address_fields = [field.name for field in Address._meta.get_fields()]

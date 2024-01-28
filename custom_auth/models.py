@@ -73,7 +73,7 @@ class CustomUser(AbstractUser):
     # Field to store week_shift for context when chatting with assistant
     week_shift = models.IntegerField(default=0)
     dietary_preference = models.CharField(max_length=20, choices=DIETARY_CHOICES, default='Everything')
-    allergies = models.CharField(max_length=70, choices=DIETARY_CHOICES, default='None')
+    allergies = models.CharField(max_length=70, choices=ALLERGY_CHOICES, default='None')
 
 class Address(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='address')

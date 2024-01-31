@@ -63,7 +63,7 @@ class CustomUser(AbstractUser):
         ('Lentils', 'Lentils'),
         ('None', 'None'),
     ]
-    
+    email = models.EmailField(unique=True, blank=False, null=False)
     email_confirmed = models.BooleanField(default=False)
     phone_number = models.CharField(max_length=20)
     new_email = models.EmailField(blank=True, null=True)
@@ -73,6 +73,10 @@ class CustomUser(AbstractUser):
     week_shift = models.IntegerField(default=0)
     dietary_preference = models.CharField(max_length=20, choices=DIETARY_CHOICES, default='Everything')
     allergies = models.CharField(max_length=70, choices=ALLERGY_CHOICES, default='None')
+
+    def save(self, *args, **kwargs):
+        self.username = self.username.lower()
+        super().save(*args, **kwargs)
 
 class Address(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='address')

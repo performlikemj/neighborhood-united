@@ -23,20 +23,16 @@ from rest_framework.response import Response
 from django.contrib.sites.shortcuts import get_current_site
 from django.template.loader import render_to_string
 from .serializers import CustomUserSerializer, AddressSerializer, PostalCodeSerializer
-
 from local_chefs.models import PostalCode
 import os
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
-
-
+from django.db import IntegrityError
 from django.http import JsonResponse
 import json
 from rest_framework_simplejwt.tokens import RefreshToken
-
 from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
-
 from rest_framework.permissions import IsAuthenticated
 import logging
 import requests
@@ -250,56 +246,58 @@ def register_api_view(request):
     if not user_serializer.is_valid():
         return Response({'errors': user_serializer.errors})
 
-    with transaction.atomic():
-        user = user_serializer.save()
-        UserRole.objects.create(user=user, current_role='customer')
-        address_data = request.data.get('address')
-        address_data['user'] = user.id
+    try:
+        with transaction.atomic():
+            user = user_serializer.save()
+            UserRole.objects.create(user=user, current_role='customer')
+            address_data = request.data.get('address')
+            address_data['user'] = user.id
 
-        address_serializer = AddressSerializer(data=address_data)
-        if not address_serializer.is_valid():
-            return Response({'errors': address_serializer.errors})
+            address_serializer = AddressSerializer(data=address_data)
+            if not address_serializer.is_valid():
+                return Response({'errors': address_serializer.errors})
 
-        address_serializer.save()
+            address_serializer.save()
 
-        # Prepare activation email data
-        mail_subject = 'Activate your account.'
-        uid = urlsafe_base64_encode(force_bytes(user.pk))
-        token = account_activation_token.make_token(user)
-        activation_link = f"{config['STREAMLIT_URL']}/activate?uid={uid}&token={token}&action=activate"        
-        message = f"Hi {user.username},\n\nThank you for signing up for our website!\n\n" \
-                  f"Please click the link below to activate your account:\n\n{activation_link}\n\n" \
-                  "If you have any issues, please contact us at support@sautAI.com.\n\n" \
-                  "Thanks,\nYour SautAI Support Team"
+            # Prepare activation email data
+            mail_subject = 'Activate your account.'
+            uid = urlsafe_base64_encode(force_bytes(user.pk))
+            token = account_activation_token.make_token(user)
+            activation_link = f"{config['STREAMLIT_URL']}/activate?uid={uid}&token={token}&action=activate"        
+            message = f"Hi {user.username},\n\nThank you for signing up for our website!\n\n" \
+                    f"Please click the link below to activate your account:\n\n{activation_link}\n\n" \
+                    "If you have any issues, please contact us at support@sautAI.com.\n\n" \
+                    "Thanks,\nYour SautAI Support Team"
 
-        to_email = user_serializer.validated_data.get('email')
+            to_email = user_serializer.validated_data.get('email')
 
-        # Send data to Zapier
-        zapier_webhook_url = config['ZAP_REGISTER_URL']
-        email_data = {
-            'subject': mail_subject,
-            'message': message,
-            'to': to_email,
-            'from': 'mj@sautai.com',
-            'username': user.username,
-            'activation_link': activation_link,
-        }
-        try:
-            requests.post(zapier_webhook_url, json=email_data)
-            logger.info(f"Activation email data sent to Zapier for: {to_email}")
-        except Exception as e:
-            logger.error(f"Error sending activation email data to Zapier for: {to_email}, error: {str(e)}")
+            # Send data to Zapier
+            zapier_webhook_url = config['ZAP_REGISTER_URL']
+            email_data = {
+                'subject': mail_subject,
+                'message': message,
+                'to': to_email,
+                'from': 'mj@sautai.com',
+                'username': user.username,
+                'activation_link': activation_link,
+            }
+            try:
+                requests.post(zapier_webhook_url, json=email_data)
+                logger.info(f"Activation email data sent to Zapier for: {to_email}")
+            except Exception as e:
+                logger.error(f"Error sending activation email data to Zapier for: {to_email}, error: {str(e)}")
 
-    # After successful registration
-    refresh = RefreshToken.for_user(user)
-    return Response({
-        'refresh': str(refresh),
-        'access': str(refresh.access_token),
-        'status': 'User registered',
-        'navigate_to': 'Assistant'
-    })
-
-
+        # After successful registration
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            'refresh': str(refresh),
+            'access': str(refresh.access_token),
+            'status': 'User registered',
+            'navigate_to': 'Assistant'
+        })
+    except IntegrityError as e:
+        return Response({'errors': {'username': ['This username is already taken.']}})
+    
 @api_view(['POST'])
 def activate_account_api_view(request):
     uidb64 = request.data.get('uid')

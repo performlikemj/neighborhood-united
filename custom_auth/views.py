@@ -29,18 +29,16 @@ import os
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
-
-
 from django.http import JsonResponse
 import json
 from rest_framework_simplejwt.tokens import RefreshToken
-
 from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
-
 from rest_framework.permissions import IsAuthenticated
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 import logging
 from django.contrib.auth.hashers import check_password
+from dotenv import load_dotenv
+load_dotenv("dev.env")
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +47,8 @@ logger = logging.getLogger(__name__)
 @permission_classes([IsAuthenticated])
 def change_password(request):
     current_password = request.data.get('current_password')
-    print(f"Current Password: {current_password}")
     new_password = request.data.get('new_password')
-    print(f"New Password: {new_password}")
     confirm_password = request.data.get('confirm_password')
-    print(f"Confirm Password: {confirm_password}")
 
     # Check if current password is correct
     if not check_password(current_password, request.user.password):
@@ -87,7 +82,7 @@ def password_reset_request(request):
         message = f"Hi {user.username},\n\nPlease click on the link below to reset your password:\n{reset_link}\n\nIf you did not request an email change, please ignore this email."
 
         # Send data to Zapier
-        zapier_webhook_url = 'https://hooks.zapier.com/hooks/catch/17732876/3qku4g7/'
+        zapier_webhook_url = os.getenv('ZAP_PW_RESET_URL')
         email_data = {
             'subject': mail_subject,
             'message': message,
@@ -175,7 +170,7 @@ def update_profile_api(request):
             }
 
             # Send data to Zapier
-            requests.post('https://hooks.zapier.com/hooks/catch/17732876/3qbqiob/', json=zapier_data)
+            requests.post(os.getenv("ZAP_UPDATE_PROFILE_URL"), json=zapier_data)
 
         if 'dietary_preference' in user_serializer.validated_data:
             user.dietary_preference = user_serializer.validated_data['dietary_preference']
@@ -281,7 +276,7 @@ def register_api_view(request):
         to_email = user_serializer.validated_data.get('email')
 
         # Send data to Zapier
-        zapier_webhook_url = 'https://hooks.zapier.com/hooks/catch/17732876/3qznmxc/'
+        zapier_webhook_url = os.getenv('ZAP_REGISTER_URL')
         email_data = {
             'subject': mail_subject,
             'message': message,

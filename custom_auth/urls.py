@@ -25,4 +25,7 @@ urlpatterns = [
     path('api/user_details/', views.user_details_view, name='user_details'),
     path('api/address_details/', views.address_details_view, name='address_details'),
     path('api/update_profile/', views.update_profile_api, name='update_profile_api'),
+    path('api/password_reset_request/', views.password_reset_request, name='password_reset_request'),
+    path('api/change_password/', views.change_password, name='change_password'),
+    path('api/reset_password/', views.reset_password, name='reset_password'),
 ]

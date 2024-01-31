@@ -22,7 +22,6 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from django.contrib.sites.shortcuts import get_current_site
 from django.template.loader import render_to_string
-from django.core.mail import EmailMessage
 from .serializers import CustomUserSerializer, AddressSerializer, PostalCodeSerializer
 
 from local_chefs.models import PostalCode
@@ -39,6 +38,98 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
 
 from rest_framework.permissions import IsAuthenticated
+import logging
+import requests
+from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.contrib.auth.hashers import check_password
+
+
+logger = logging.getLogger(__name__)
+
+# Load configuration from config.json
+with open('/etc/config.json') as config_file:
+    config = json.load(config_file)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def change_password(request):
+    current_password = request.data.get('current_password')
+    new_password = request.data.get('new_password')
+    confirm_password = request.data.get('confirm_password')
+
+    # Check if current password is correct
+    if not check_password(current_password, request.user.password):
+        return Response({'status': 'error', 'message': 'Current password is incorrect.'}, status=400)
+
+    # Check if new password and confirmation match
+    if new_password != confirm_password:
+        return Response({'status': 'error', 'message': 'New password and confirmation do not match.'}, status=400)
+
+    # Change the password
+    try:
+        request.user.set_password(new_password)
+        request.user.save()
+        return Response({'status': 'success', 'message': 'Password changed successfully.'})
+    except Exception as e:
+        return Response({'status': 'error', 'message': str(e)}, status=500)
+
+@api_view(['POST'])
+def password_reset_request(request):
+    try:
+        email = request.data['email']
+        user = CustomUser.objects.get(email=email)
+        token_generator = PasswordResetTokenGenerator()
+        token = token_generator.make_token(user)
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        reset_link = f"{config['STREAMLIT_URL']}/activate?uid={uid}&token={token}&action=password_reset"
+
+        mail_subject = "Password Reset Request"
+        message = f"Hi {user.username},\n\nPlease click on the link below to reset your password:\n{reset_link}\n\nIf you did not request an email change, please ignore this email."
+
+        # Send data to Zapier
+        zapier_webhook_url = config['ZAP_PW_RESET_URL']
+        email_data = {
+            'subject': mail_subject,
+            'message': message,
+            'to': email,
+            'from': 'support@sautai.com'
+        }
+        try:
+            requests.post(zapier_webhook_url, json=email_data)
+            logger.info(f"Password reset email data sent to Zapier for: {email}")
+        except Exception as e:
+            logger.error(f"Error sending password reset email data to Zapier for: {email}, error: {str(e)}")
+
+        return Response({'status': 'success', 'message': 'Password reset email sent.'})
+    except CustomUser.DoesNotExist:
+        logger.warning(f"Password reset attempted for non-existent email: {email}")
+        return Response({'status': 'success', 'message': 'Password reset email sent'})
+    except Exception as e:
+        return Response({'status': 'error', 'message': str(e)})
+
+@api_view(['POST'])
+def reset_password(request):
+    uidb64 = request.data.get('uid')
+    token = request.data.get('token')
+    new_password = request.data.get('new_password')
+    confirm_password = request.data.get('confirm_password')
+
+    try:
+        uid = force_str(urlsafe_base64_decode(uidb64))
+        user = CustomUser.objects.get(id=uid)
+
+        if not PasswordResetTokenGenerator().check_token(user, token):
+            return Response({'status': 'error', 'message': 'Token is invalid.'})
+
+        # Check if new password and confirmation match
+        if new_password != confirm_password:
+            return Response({'status': 'error', 'message': 'New password and confirmation do not match.'}, status=400)
+
+        user.set_password(new_password)
+        user.save()
+        return Response({'status': 'success', 'message': 'Password reset successfully.'})
+    except Exception as e:
+        return Response({'status': 'error', 'message': str(e)})
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -72,14 +163,14 @@ def update_profile_api(request):
             mail_subject = 'Verify your email to resume access.'
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = account_activation_token.make_token(user)
-            activation_link = f"{os.getenv('STREAMLIT_URL')}/activate?uid={uid}&token={token}"
+            activation_link = f"{config['STREAMLIT_URL']}/activate?uid={uid}&token={token}"
             message = f"Hi {user.username},\n\nYou've recently updated your email!\n\n" \
                     f"Please click the link below to verify the change:\n\n{activation_link}\n\n" \
-                    "If you have any issues, please contact us at support@sautAI.com.\n\n" \
+                    f"If you have any issues, please contact us at {config['STREAMLIT_SUPPORT_EMAIL']}.\n\n" \
                     "Thanks,\nYour SautAI Support Team"
 
             to_email = user_serializer.validated_data.get('email')
-            email = EmailMessage(mail_subject, message, from_email='mj@sautai.com', to=[to_email])
+            email = EmailMessage(mail_subject, message, from_email='support@sautai.com', to=[to_email])
             email.send()
         if 'dietary_preference' in user_serializer.validated_data:
             user.dietary_preference = user_serializer.validated_data['dietary_preference']
@@ -165,26 +256,40 @@ def register_api_view(request):
         address_data = request.data.get('address')
         address_data['user'] = user.id
 
-
         address_serializer = AddressSerializer(data=address_data)
         if not address_serializer.is_valid():
             return Response({'errors': address_serializer.errors})
 
         address_serializer.save()
 
-        # Send activation email (adjust the logic as needed)
+        # Prepare activation email data
         mail_subject = 'Activate your account.'
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         token = account_activation_token.make_token(user)
-        activation_link = f"https://sautai.com/activate?uid={uid}&token={token}"
+        activation_link = f"{config['STREAMLIT_URL']}/activate?uid={uid}&token={token}&action=activate"        
         message = f"Hi {user.username},\n\nThank you for signing up for our website!\n\n" \
                   f"Please click the link below to activate your account:\n\n{activation_link}\n\n" \
                   "If you have any issues, please contact us at support@sautAI.com.\n\n" \
                   "Thanks,\nYour SautAI Support Team"
 
         to_email = user_serializer.validated_data.get('email')
-        email = EmailMessage(mail_subject, message, from_email='support@sautai.com', to=[to_email])
-        email.send()
+
+        # Send data to Zapier
+        zapier_webhook_url = config['ZAP_REGISTER_URL']
+        email_data = {
+            'subject': mail_subject,
+            'message': message,
+            'to': to_email,
+            'from': 'mj@sautai.com',
+            'username': user.username,
+            'activation_link': activation_link,
+        }
+        try:
+            requests.post(zapier_webhook_url, json=email_data)
+            logger.info(f"Activation email data sent to Zapier for: {to_email}")
+        except Exception as e:
+            logger.error(f"Error sending activation email data to Zapier for: {to_email}, error: {str(e)}")
+
     # After successful registration
     refresh = RefreshToken.for_user(user)
     return Response({
@@ -363,7 +468,7 @@ def register_view(request):
             email = EmailMessage(
                 mail_subject, 
                 message, 
-                from_email='support@sautai.com',  # Use a different From address
+                from_email=config['STREAMLIT_SUPPORT_EMAIL'],  # Use a different From address
                 to=[to_email]
             )
           # Prepare data for Zapier

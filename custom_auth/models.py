@@ -26,7 +26,6 @@ class CustomUser(AbstractUser):
     ('Low-FODMAP', 'Low-FODMAP'),
     ('Diabetic-Friendly', 'Diabetic-Friendly'),
     ('Everything', 'Everything'),
-    # ... add more as needed
     ]
 
     ALLERGY_CHOICES = [
@@ -61,8 +60,7 @@ class CustomUser(AbstractUser):
         ('Garlic', 'Garlic'),
         ('Chickpeas', 'Chickpeas'),
         ('Lentils', 'Lentils'),
-        ('None', 'None')
-        # ... add more as needed
+        ('None', 'None'),
     ]
     
     email_confirmed = models.BooleanField(default=False)

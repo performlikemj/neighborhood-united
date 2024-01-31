@@ -242,7 +242,6 @@ def logout_api_view(request):
     except (TokenError, InvalidToken):
         return JsonResponse({'status': 'error', 'message': 'Invalid token'}, status=400)
 
-import requests
 
 @api_view(['POST'])
 def register_api_view(request):

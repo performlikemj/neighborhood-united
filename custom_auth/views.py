@@ -22,9 +22,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from django.contrib.sites.shortcuts import get_current_site
 from django.template.loader import render_to_string
-from django.core.mail import EmailMessage
 from .serializers import CustomUserSerializer, AddressSerializer, PostalCodeSerializer
-
+import requests
 from local_chefs.models import PostalCode
 import os
 from django.db import transaction
@@ -39,6 +38,99 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
 
 from rest_framework.permissions import IsAuthenticated
+from django.contrib.auth.tokens import PasswordResetTokenGenerator
+import logging
+from django.contrib.auth.hashers import check_password
+
+logger = logging.getLogger(__name__)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def change_password(request):
+    current_password = request.data.get('current_password')
+    print(f"Current Password: {current_password}")
+    new_password = request.data.get('new_password')
+    print(f"New Password: {new_password}")
+    confirm_password = request.data.get('confirm_password')
+    print(f"Confirm Password: {confirm_password}")
+
+    # Check if current password is correct
+    if not check_password(current_password, request.user.password):
+        return Response({'status': 'error', 'message': 'Current password is incorrect.'}, status=400)
+
+    # Check if new password and confirmation match
+    if new_password != confirm_password:
+        return Response({'status': 'error', 'message': 'New password and confirmation do not match.'}, status=400)
+
+    # Change the password
+    try:
+        request.user.set_password(new_password)
+        request.user.save()
+        return Response({'status': 'success', 'message': 'Password changed successfully.'})
+    except Exception as e:
+        return Response({'status': 'error', 'message': str(e)}, status=500)
+
+import requests
+
+@api_view(['POST'])
+def password_reset_request(request):
+    try:
+        email = request.data['email']
+        user = CustomUser.objects.get(email=email)
+        token_generator = PasswordResetTokenGenerator()
+        token = token_generator.make_token(user)
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        reset_link = f"{os.getenv('STREAMLIT_URL')}/activate?uid={uid}&token={token}&action=password_reset"
+
+        mail_subject = "Password Reset Request"
+        message = f"Hi {user.username},\n\nPlease click on the link below to reset your password:\n{reset_link}\n\nIf you did not request an email change, please ignore this email."
+
+        # Send data to Zapier
+        zapier_webhook_url = 'https://hooks.zapier.com/hooks/catch/17732876/3qku4g7/'
+        email_data = {
+            'subject': mail_subject,
+            'message': message,
+            'to': email,
+            'from': 'support@sautai.com'
+        }
+        try:
+            requests.post(zapier_webhook_url, json=email_data)
+            logger.info(f"Password reset email data sent to Zapier for: {email}")
+        except Exception as e:
+            logger.error(f"Error sending password reset email data to Zapier for: {email}, error: {str(e)}")
+
+        return Response({'status': 'success', 'message': 'Password reset email sent.'})
+    except CustomUser.DoesNotExist:
+        logger.warning(f"Password reset attempted for non-existent email: {email}")
+        return Response({'status': 'success', 'message': 'Password reset email sent'})
+    except Exception as e:
+        return Response({'status': 'error', 'message': str(e)})
+
+@api_view(['POST'])
+def reset_password(request):
+    uidb64 = request.data.get('uid')
+    token = request.data.get('token')
+    new_password = request.data.get('new_password')
+    confirm_password = request.data.get('confirm_password')
+
+    try:
+        uid = force_str(urlsafe_base64_decode(uidb64))
+        user = CustomUser.objects.get(id=uid)
+
+        if not PasswordResetTokenGenerator().check_token(user, token):
+            return Response({'status': 'error', 'message': 'Token is invalid.'})
+
+        # Check if new password and confirmation match
+        if new_password != confirm_password:
+            return Response({'status': 'error', 'message': 'New password and confirmation do not match.'}, status=400)
+
+        user.set_password(new_password)
+        user.save()
+        return Response({'status': 'success', 'message': 'Password reset successfully.'})
+    except Exception as e:
+        return Response({'status': 'error', 'message': str(e)})
+
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -57,30 +149,34 @@ def address_details_view(request):
 @permission_classes([IsAuthenticated])
 def update_profile_api(request):
     user = request.user
-    # Deserialize and update user data
     user_serializer = CustomUserSerializer(user, data=request.data, partial=True)
+
     if user_serializer.is_valid():
         print(f"Validated data: {user_serializer.validated_data}")  # Debug print
 
-        # Check if email is updated
         if 'email' in user_serializer.validated_data:
+            new_email = user_serializer.validated_data['email']
+            if not new_email:
+                return Response({'status': 'failure', 'message': 'Email cannot be empty'}, status=400)
+
             user.email_confirmed = False
-            user.new_email = user_serializer.validated_data['email']
+            user.new_email = new_email
             user.save()
 
-            # Send activation email
-            mail_subject = 'Verify your email to resume access.'
+            # Prepare data for Zapier webhook
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = account_activation_token.make_token(user)
             activation_link = f"{os.getenv('STREAMLIT_URL')}/activate?uid={uid}&token={token}"
-            message = f"Hi {user.username},\n\nYou've recently updated your email!\n\n" \
-                    f"Please click the link below to verify the change:\n\n{activation_link}\n\n" \
-                    "If you have any issues, please contact us at support@sautAI.com.\n\n" \
-                    "Thanks,\nYour SautAI Support Team"
+            zapier_data = {
+                'recipient_email': user_serializer.validated_data.get('email'),
+                'subject': 'Verify your email to resume access.',
+                'username': user.username,
+                'activation_link': activation_link,
+            }
 
-            to_email = user_serializer.validated_data.get('email')
-            email = EmailMessage(mail_subject, message, from_email='mj@sautai.com', to=[to_email])
-            email.send()
+            # Send data to Zapier
+            requests.post('https://hooks.zapier.com/hooks/catch/17732876/3qbqiob/', json=zapier_data)
+
         if 'dietary_preference' in user_serializer.validated_data:
             user.dietary_preference = user_serializer.validated_data['dietary_preference']
 
@@ -151,6 +247,8 @@ def logout_api_view(request):
     except (TokenError, InvalidToken):
         return JsonResponse({'status': 'error', 'message': 'Invalid token'}, status=400)
 
+import requests
+
 @api_view(['POST'])
 def register_api_view(request):
     user_serializer = CustomUserSerializer(data=request.data.get('user'))
@@ -164,26 +262,40 @@ def register_api_view(request):
         address_data = request.data.get('address')
         address_data['user'] = user.id
 
-
         address_serializer = AddressSerializer(data=address_data)
         if not address_serializer.is_valid():
             return Response({'errors': address_serializer.errors})
 
         address_serializer.save()
 
-        # Send activation email (adjust the logic as needed)
+        # Prepare activation email data
         mail_subject = 'Activate your account.'
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         token = account_activation_token.make_token(user)
-        activation_link = f"{os.getenv('STREAMLIT_URL')}/activate?uid={uid}&token={token}"
+        activation_link = f"{os.getenv('STREAMLIT_URL')}/activate?uid={uid}&token={token}&action=activate"        
         message = f"Hi {user.username},\n\nThank you for signing up for our website!\n\n" \
                   f"Please click the link below to activate your account:\n\n{activation_link}\n\n" \
                   "If you have any issues, please contact us at support@sautAI.com.\n\n" \
                   "Thanks,\nYour SautAI Support Team"
 
         to_email = user_serializer.validated_data.get('email')
-        email = EmailMessage(mail_subject, message, from_email='mj@sautai.com', to=[to_email])
-        email.send()
+
+        # Send data to Zapier
+        zapier_webhook_url = 'https://hooks.zapier.com/hooks/catch/17732876/3qznmxc/'
+        email_data = {
+            'subject': mail_subject,
+            'message': message,
+            'to': to_email,
+            'from': 'mj@sautai.com',
+            'username': user.username,
+            'activation_link': activation_link,
+        }
+        try:
+            requests.post(zapier_webhook_url, json=email_data)
+            logger.info(f"Activation email data sent to Zapier for: {to_email}")
+        except Exception as e:
+            logger.error(f"Error sending activation email data to Zapier for: {to_email}, error: {str(e)}")
+
     # After successful registration
     refresh = RefreshToken.for_user(user)
     return Response({

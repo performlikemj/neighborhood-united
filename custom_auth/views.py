@@ -38,6 +38,8 @@ from django.contrib.auth.tokens import PasswordResetTokenGenerator
 import logging
 from django.contrib.auth.hashers import check_password
 from dotenv import load_dotenv
+from django.db import IntegrityError
+
 load_dotenv("dev.env")
 
 logger = logging.getLogger(__name__)
@@ -248,7 +250,7 @@ def register_api_view(request):
     user_serializer = CustomUserSerializer(data=request.data.get('user'))
 
     if not user_serializer.is_valid():
-        return Response({'errors': user_serializer.errors})
+        return Response({'errors': user_serializer.errors}, status=400)
 
     with transaction.atomic():
         user = user_serializer.save()
@@ -268,9 +270,9 @@ def register_api_view(request):
         token = account_activation_token.make_token(user)
         activation_link = f"{os.getenv('STREAMLIT_URL')}/activate?uid={uid}&token={token}&action=activate"        
         message = f"Hi {user.username},\n\nThank you for signing up for our website!\n\n" \
-                  f"Please click the link below to activate your account:\n\n{activation_link}\n\n" \
-                  "If you have any issues, please contact us at support@sautAI.com.\n\n" \
-                  "Thanks,\nYour SautAI Support Team"
+                f"Please click the link below to activate your account:\n\n{activation_link}\n\n" \
+                "If you have any issues, please contact us at support@sautAI.com.\n\n" \
+                "Thanks,\nYour SautAI Support Team"
 
         to_email = user_serializer.validated_data.get('email')
 

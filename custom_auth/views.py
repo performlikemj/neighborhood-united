@@ -244,7 +244,7 @@ def register_api_view(request):
     user_serializer = CustomUserSerializer(data=request.data.get('user'))
 
     if not user_serializer.is_valid():
-        return Response({'errors': user_serializer.errors})
+        return Response({'errors': user_serializer.errors}, status=400)
 
     try:
         with transaction.atomic():

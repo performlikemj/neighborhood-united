@@ -29,7 +29,8 @@ from shared.utils import (get_user_info, post_review, update_review, delete_revi
                           update_goal, adjust_week_shift, get_unupdated_health_metrics, 
                           update_health_metrics, check_allergy_alert, provide_nutrition_advice, 
                           recommend_follow_up, find_nearby_supermarkets,
-                          search_healthy_meal_options, provide_healthy_meal_suggestions, understand_dietary_choices)
+                          search_healthy_meal_options, provide_healthy_meal_suggestions, 
+                          understand_dietary_choices, is_question_relevant)
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
 from .serializers import ChatThreadSerializer, GoalTrackingSerializer, UserHealthMetricsSerializer, CalorieIntakeSerializer
@@ -563,6 +564,7 @@ def guest_chat_with_gpt(request):
         with open(guest_assistant_id_file, 'r') as f:
             guest_assistant_id = f.read().strip()
 
+
     else:
         print("Creating a new assistant")
         # Create an Assistant
@@ -642,6 +644,8 @@ def guest_chat_with_gpt(request):
         if not question:
             return Response({'error': 'No question provided'}, status=400)
         
+        relevant = is_question_relevant(question)
+
         # Check if thread_id is safe
         if thread_id and not re.match("^thread_[a-zA-Z0-9]*$", thread_id):
             return Response({'error': 'Invalid thread_id'}, status=400)
@@ -679,96 +683,103 @@ def guest_chat_with_gpt(request):
         except Exception as e:
             logger.error(f'Failed to create run: {str(e)}')
             return Response({'error': f'Failed to create run: {str(e)}'}, status=500)
-        while True:
-            try:
-                run = client.beta.threads.runs.retrieve(
-                    thread_id=thread_id,
-                    run_id=run.id
-                )
-
-                if run.status == 'completed':
-                    logger.info('Run completed')
-                    break
-                elif run.status == 'failed':
-                    logger.error('Run failed')
-                    break
-                elif run.status in ['expired', 'cancelled']:
-                    logger.warning(f'Run {run.status}')
-                    break
-                elif run.status in ['queued', 'in_progress']:
-                    time.sleep(0.5)
-                    continue
-                elif run.status == "requires_action":
-                    tool_outputs = []
-                    print("Run requires action")
-                    for tool_call in run.required_action.submit_tool_outputs.tool_calls:
-                        # Execute the function call and get the result
-                        tool_call_result = guest_ai_call(tool_call, request)
-                        # Extracting the tool_call_id and the output
-                        tool_call_id = tool_call_result['tool_call_id']
-                        output = tool_call_result['output']
-                        # Assuming 'output' needs to be serialized as a JSON string
-                        # If it's already a string or another format is required, adjust this line accordingly
-                        output_json = json.dumps(output)
-                        # Prepare the output in the required format
-                        formatted_output = {
-                            "tool_call_id": tool_call_id,
-                            "output": output_json
-                        }
-                        tool_outputs.append(formatted_output)
-
-                        formatted_outputs.append(formatted_output)
-                    # Submitting the formatted outputs
-                    client.beta.threads.runs.submit_tool_outputs(
+        if relevant:
+            while True:
+                try:
+                    run = client.beta.threads.runs.retrieve(
                         thread_id=thread_id,
-                        run_id=run.id,
-                        tool_outputs=tool_outputs,
+                        run_id=run.id
                     )
-                    continue
+
+                    if run.status == 'completed':
+                        logger.info('Run completed')
+                        break
+                    elif run.status == 'failed':
+                        logger.error('Run failed')
+                        break
+                    elif run.status in ['expired', 'cancelled']:
+                        logger.warning(f'Run {run.status}')
+                        break
+                    elif run.status in ['queued', 'in_progress']:
+                        time.sleep(0.5)
+                        continue
+                    elif run.status == "requires_action":
+                        tool_outputs = []
+                        print("Run requires action")
+                        for tool_call in run.required_action.submit_tool_outputs.tool_calls:
+                            # Execute the function call and get the result
+                            tool_call_result = guest_ai_call(tool_call, request)
+                            # Extracting the tool_call_id and the output
+                            tool_call_id = tool_call_result['tool_call_id']
+                            output = tool_call_result['output']
+                            # Assuming 'output' needs to be serialized as a JSON string
+                            # If it's already a string or another format is required, adjust this line accordingly
+                            output_json = json.dumps(output)
+                            # Prepare the output in the required format
+                            formatted_output = {
+                                "tool_call_id": tool_call_id,
+                                "output": output_json
+                            }
+                            tool_outputs.append(formatted_output)
+
+                            formatted_outputs.append(formatted_output)
+                        # Submitting the formatted outputs
+                        client.beta.threads.runs.submit_tool_outputs(
+                            thread_id=thread_id,
+                            run_id=run.id,
+                            tool_outputs=tool_outputs,
+                        )
+                        continue
+                except Exception as e:
+                    logger.critical(f'Critical error occurred: {e}', exc_info=True)
+            # Check the status of the Run and retrieve responses
+            try:
+                # Retrieve messages and log them
+                print("Retrieving messages")
+                messages = client.beta.threads.messages.list(thread_id)
+                context = []
+                for message in reversed(messages.data):
+                    role = message.role.capitalize()
+                    text = message.content[0].text.value
+                    context.append(f"{role}: {text}")            
+
+                formatted_context = "\n".join(context)
             except Exception as e:
-                logger.critical(f'Critical error occurred: {e}', exc_info=True)
-        # Check the status of the Run and retrieve responses
-        try:
-            # Retrieve messages and log them
-            print("Retrieving messages")
-            messages = client.beta.threads.messages.list(thread_id)
-            context = []
-            for message in reversed(messages.data):
-                role = message.role.capitalize()
-                text = message.content[0].text.value
-                context.append(f"{role}: {text}")            
-
-            formatted_context = "\n".join(context)
-        except Exception as e:
-            logger.error(f'Failed to list messages: {str(e)}')
-            return Response({'error': f'Failed to list messages: {str(e)}'}, status=500)
+                logger.error(f'Failed to list messages: {str(e)}')
+                return Response({'error': f'Failed to list messages: {str(e)}'}, status=500)
 
 
-        with open("messages.json", "w") as f:
-            messages_json = messages.model_dump()
-            json.dump(messages_json, f, indent=4)
+            with open("messages.json", "w") as f:
+                messages_json = messages.model_dump()
+                json.dump(messages_json, f, indent=4)
+                
+
+            try:
+                # Retrieve the run steps
+                print("Retrieving run steps")
+                run_steps = client.beta.threads.runs.steps.list(thread_id=thread_id, run_id=run.id)
+            except Exception as e:
+                return Response({'error': f'Failed to list run steps: {str(e)}'}, status=500)
+
+            # Save the run steps to a file
+            with open("run_steps.json", "w") as f:
+                run_steps_json = run_steps.model_dump()
+                json.dump(run.model_dump(), f, indent=4)
             
 
-        try:
-            # Retrieve the run steps
-            print("Retrieving run steps")
-            run_steps = client.beta.threads.runs.steps.list(thread_id=thread_id, run_id=run.id)
-        except Exception as e:
-            return Response({'error': f'Failed to list run steps: {str(e)}'}, status=500)
-
-        # Save the run steps to a file
-        with open("run_steps.json", "w") as f:
-            run_steps_json = run_steps.model_dump()
-            json.dump(run.model_dump(), f, indent=4)
-        
-
-        response_data = {
-            'last_assistant_message': next((msg.content[0].text.value for msg in (messages.data) if msg.role == 'assistant'), None),                
-            'run_status': run.status,
-            'new_thread_id': thread_id,
-            'recommend_follow_up': recommend_follow_up(request, formatted_context),
-        }
-
+            response_data = {
+                'last_assistant_message': next((msg.content[0].text.value for msg in (messages.data) if msg.role == 'assistant'), None),                
+                'run_status': run.status,
+                'new_thread_id': thread_id,
+                'recommend_follow_up': recommend_follow_up(request, formatted_context),
+            }
+        else:
+            response_data = {
+                'last_assistant_message': "I'm sorry, I cannot help with that.",
+                'run_status': run.status,
+                'new_thread_id': thread_id,
+                'recommend_follow_up': False,
+            }
         print(thread_id)
         print(f'New thread ID: {thread_id}')
 
@@ -2016,6 +2027,8 @@ def chat_with_gpt(request):
         thread_id = data.get('thread_id')
         print(f"Thread ID: {thread_id}")
 
+        relevant = is_question_relevant(question)
+
         if not question:
             return Response({'error': 'No question provided'}, status=400)
         
@@ -2073,109 +2086,116 @@ def chat_with_gpt(request):
         except Exception as e:
             logger.error(f'Failed to create run: {str(e)}')
             return Response({'error': f'Failed to create run: {str(e)}'}, status=500)
-        while True:
-            try:
-                run = client.beta.threads.runs.retrieve(
-                    thread_id=thread_id,
-                    run_id=run.id
-                )
-
-                if run.status == 'completed':
-                    logger.info('Run completed')
-                    break
-                elif run.status == 'failed':
-                    logger.error('Run failed')
-                    break
-                elif run.status in ['expired', 'cancelled']:
-                    logger.warning(f'Run {run.status}')
-                    break
-                elif run.status in ['queued', 'in_progress', 'running']:
-                    time.sleep(0.5)
-                    continue
-                elif run.status == "requires_action":
-                    tool_outputs = []
-                    print("Run requires action")
-                    for tool_call in run.required_action.submit_tool_outputs.tool_calls:
-                        # Execute the function call and get the result
-                        print(f"New Tool call: {tool_call}")
-                        tool_call_result = ai_call(tool_call, request)
-                        print(f"Tool call result: {tool_call_result}")
-                        # Prepare the update data
-                        update_data = {
-                            'function_name': tool_call_result['function'],  # Example, adjust based on your data structure
-                            'result': tool_call_result
-                        }
-                        # Extracting the tool_call_id and the output
-                        tool_call_id = tool_call_result['tool_call_id']
-                        print(f"Tool call ID: {tool_call_id}")
-                        output = tool_call_result['output']
-                        print(f"Output: {output}")
-                        # Assuming 'output' needs to be serialized as a JSON string
-                        # If it's already a string or another format is required, adjust this line accordingly
-                        output_json = json.dumps(output)
-                        print(f"Output JSON: {output_json}")
-                        # Prepare the output in the required format
-                        formatted_output = {
-                            "tool_call_id": tool_call_id,
-                            "output": output_json
-                        }
-                        print(f"Formatted tool output: {formatted_output}")
-                        tool_outputs.append(formatted_output)
-
-                        formatted_outputs.append(formatted_output)
-                    print(f"Ready to submit tool outputs: {tool_outputs}")
-                    # Submitting the formatted outputs
-                    client.beta.threads.runs.submit_tool_outputs(
+        if relevant:
+            while True:
+                try:
+                    run = client.beta.threads.runs.retrieve(
                         thread_id=thread_id,
-                        run_id=run.id,
-                        tool_outputs=tool_outputs,
+                        run_id=run.id
                     )
-                    continue
+
+                    if run.status == 'completed':
+                        logger.info('Run completed')
+                        break
+                    elif run.status == 'failed':
+                        logger.error('Run failed')
+                        break
+                    elif run.status in ['expired', 'cancelled']:
+                        logger.warning(f'Run {run.status}')
+                        break
+                    elif run.status in ['queued', 'in_progress', 'running']:
+                        time.sleep(0.5)
+                        continue
+                    elif run.status == "requires_action":
+                        tool_outputs = []
+                        print("Run requires action")
+                        for tool_call in run.required_action.submit_tool_outputs.tool_calls:
+                            # Execute the function call and get the result
+                            print(f"New Tool call: {tool_call}")
+                            tool_call_result = ai_call(tool_call, request)
+                            print(f"Tool call result: {tool_call_result}")
+                            # Prepare the update data
+                            update_data = {
+                                'function_name': tool_call_result['function'],  # Example, adjust based on your data structure
+                                'result': tool_call_result
+                            }
+                            # Extracting the tool_call_id and the output
+                            tool_call_id = tool_call_result['tool_call_id']
+                            print(f"Tool call ID: {tool_call_id}")
+                            output = tool_call_result['output']
+                            print(f"Output: {output}")
+                            # Assuming 'output' needs to be serialized as a JSON string
+                            # If it's already a string or another format is required, adjust this line accordingly
+                            output_json = json.dumps(output)
+                            print(f"Output JSON: {output_json}")
+                            # Prepare the output in the required format
+                            formatted_output = {
+                                "tool_call_id": tool_call_id,
+                                "output": output_json
+                            }
+                            print(f"Formatted tool output: {formatted_output}")
+                            tool_outputs.append(formatted_output)
+
+                            formatted_outputs.append(formatted_output)
+                        print(f"Ready to submit tool outputs: {tool_outputs}")
+                        # Submitting the formatted outputs
+                        client.beta.threads.runs.submit_tool_outputs(
+                            thread_id=thread_id,
+                            run_id=run.id,
+                            tool_outputs=tool_outputs,
+                        )
+                        continue
+                except Exception as e:
+                    logger.critical(f'Critical error occurred: {e}', exc_info=True)
+            # Check the status of the Run and retrieve responses
+            try:
+                # Retrieve messages and log them
+                print("Retrieving messages")
+                messages = client.beta.threads.messages.list(thread_id)
+                context = []
+                for message in reversed(messages.data):
+                    role = message.role.capitalize()
+                    text = message.content[0].text.value
+                    context.append(f"{role}: {text}")            
+
+                formatted_context = "\n".join(context)
             except Exception as e:
-                logger.critical(f'Critical error occurred: {e}', exc_info=True)
-        # Check the status of the Run and retrieve responses
-        try:
-            # Retrieve messages and log them
-            print("Retrieving messages")
-            messages = client.beta.threads.messages.list(thread_id)
-            context = []
-            for message in reversed(messages.data):
-                role = message.role.capitalize()
-                text = message.content[0].text.value
-                context.append(f"{role}: {text}")            
-
-            formatted_context = "\n".join(context)
-        except Exception as e:
-            logger.error(f'Failed to list messages: {str(e)}')
-            return Response({'error': f'Failed to list messages: {str(e)}'}, status=500)
+                logger.error(f'Failed to list messages: {str(e)}')
+                return Response({'error': f'Failed to list messages: {str(e)}'}, status=500)
 
 
-        with open("messages.json", "w") as f:
-            messages_json = messages.model_dump()
-            json.dump(messages_json, f, indent=4)
+            with open("messages.json", "w") as f:
+                messages_json = messages.model_dump()
+                json.dump(messages_json, f, indent=4)
+                
+
+            try:
+                # Retrieve the run steps
+                print("Retrieving run steps")
+                run_steps = client.beta.threads.runs.steps.list(thread_id=thread_id, run_id=run.id)
+            except Exception as e:
+                return Response({'error': f'Failed to list run steps: {str(e)}'}, status=500)
+
+            # Save the run steps to a file
+            with open("run_steps.json", "w") as f:
+                run_steps_json = run_steps.model_dump()
+                json.dump(run.model_dump(), f, indent=4)
             
 
-        try:
-            # Retrieve the run steps
-            print("Retrieving run steps")
-            run_steps = client.beta.threads.runs.steps.list(thread_id=thread_id, run_id=run.id)
-        except Exception as e:
-            return Response({'error': f'Failed to list run steps: {str(e)}'}, status=500)
 
-        # Save the run steps to a file
-        with open("run_steps.json", "w") as f:
-            run_steps_json = run_steps.model_dump()
-            json.dump(run.model_dump(), f, indent=4)
-        
-
-
-        response_data = {
-            'last_assistant_message': next((msg.content[0].text.value for msg in (messages.data) if msg.role == 'assistant'), None),                
-            'run_id': run.id,
-            'new_thread_id': thread_id,
-            'recommend_follow_up': recommend_follow_up(request, formatted_context),
-        }
-
+            response_data = {
+                'last_assistant_message': next((msg.content[0].text.value for msg in (messages.data) if msg.role == 'assistant'), None),                
+                'run_id': run.id,
+                'new_thread_id': thread_id,
+                'recommend_follow_up': recommend_follow_up(request, formatted_context),
+            }
+        else:
+            response_data = {
+                'last_assistant_message': "I'm sorry, I cannot help with that.",
+                'run_id': run.id,
+                'new_thread_id': thread_id,
+                'recommend_follow_up': False,
+            }
         print(thread_id)
         print(f'New thread ID: {thread_id}')
 

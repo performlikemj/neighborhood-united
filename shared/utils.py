@@ -92,6 +92,45 @@ def provide_healthy_meal_suggestions(request, user_id):
 
     return user_info
 
+def is_question_relevant(question):
+    """
+    Determine if a question is relevant to the application's functionality, specifically considering health, nutrition, and diet.
+
+    :param question: A string representing the user's question.
+    :return: A boolean indicating whether the question is relevant.
+    """
+    print("From is_question_relevant")
+    client = openai.OpenAI(api_key=settings.OPENAI_KEY)  # Initialize OpenAI client
+
+    # Define application's functionalities and domains for the model to consider
+    app_context = """
+    The application focuses on food delivery, meal planning, health, nutrition, and diet. It allows users to:
+    - Search for dishes and ingredients.
+    - Get personalized meal plans based on dietary preferences and nutritional goals.
+    - Find chefs and meal delivery options catering to specific dietary needs.
+    - Track calorie intake and provide nutrition advice.
+    - Access information on healthy meal options and ingredients.
+    """
+
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "system",
+                "content": f"given the {app_context} and the following question: {question}, determine if the question is relevant to the application's functionalities by returning a 'True' if relevant and 'False' if not."
+            },
+        ],
+    )
+
+    # Interpret the model's response
+    response_content = response.choices[0].message.content.strip()
+    print(f'Is Question Relevant Response: {response_content}')
+    if "False" in response_content:
+        return False
+    else:
+        return True
+
+
 def search_healthy_meal_options(request, search_term, location_id, limit=10, start=0):
     url = "https://api-ce.kroger.com/v1/products"
     headers = {

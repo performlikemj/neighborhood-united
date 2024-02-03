@@ -43,10 +43,18 @@ class UserHealthMetrics(models.Model):
 
 
 class CalorieIntake(models.Model):
+    # Define portion size choices
+    PORTION_SIZES = (
+        ('XS', 'Extra Small'),
+        ('S', 'Small'),
+        ('M', 'Medium'),
+        ('L', 'Large'),
+        ('XL', 'Extra Large'),
+    )
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='calorie_intake')
     meal_name = models.TextField(null=True, blank=True)  # Store the name of the meal
     meal_description = models.TextField(null=True, blank=True)  # Store a description of the meal
-    portion_size = models.CharField(max_length=100)
+    portion_size = models.CharField(max_length=100, choices=PORTION_SIZES, default='M')
     date_recorded = models.DateField(default=timezone.now)
 
     def __str__(self):

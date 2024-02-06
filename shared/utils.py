@@ -208,7 +208,7 @@ def recommend_follow_up(request, context):
         messages=[
             {
                 "role": "user", 
-                "content": f"Given the following context: {context} and functions: {functions}, what prompt should a user write next? Ouput only the recommended prompt in a natural sentence without using the function name."
+                "content": f"Given the following context: {context} and functions: {functions}, what prompt should a user write next? Output only the recommended prompt in a natural sentence without using the function name and without quotations as if the user themselves would type it." 
             }
         ],
     )

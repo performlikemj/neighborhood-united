@@ -204,11 +204,11 @@ def recommend_follow_up(request, context):
         """
 
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo-1106",
+        model="gpt-3.5-turbo-0125",
         messages=[
             {
                 "role": "user", 
-                "content": f"Given the following context: {context} and functions: {functions}, what prompt should a user write next? Output only the recommended prompt in a natural sentence without using the function name and without quotations as if the user themselves would type it." 
+                "content": f"Given the following context: {context} and functions: {functions}, what prompt should a user write next? Output ONLY the recommended prompt in a natural sentence without using the function name, without quotations, and without starting the output with 'the user should write' or anything similar." 
             }
         ],
     )

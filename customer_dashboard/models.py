@@ -61,3 +61,10 @@ class CalorieIntake(models.Model):
         return f"Calorie Intake for {self.user.username} on {self.date_recorded}"
 
 
+class UserSummary(models.Model):
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='summary')
+    summary = models.TextField()  # Store the GPT-generated summary here
+    updated_at = models.DateTimeField(auto_now=True)  # Automatically update timestamp on save
+
+    def __str__(self):
+        return f"Summary for {self.user.username}"

@@ -9,7 +9,7 @@ from datetime import timedelta
 from django.template.loader import render_to_string
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_http_methods
-from .models import GoalTracking, ChatThread, UserHealthMetrics, CalorieIntake
+from .models import GoalTracking, ChatThread, UserHealthMetrics, CalorieIntake, UserSummary
 from .forms import GoalForm
 import openai
 from openai import NotFoundError, OpenAI, OpenAIError
@@ -53,8 +53,74 @@ with open('/etc/config.json') as config_file:
 
 logger = logging.getLogger(__name__)
 
-# Use logger as needed
-logger.warning("This is a warning message")
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsCustomer])
+def api_user_summary(request):
+    user = get_object_or_404(CustomUser, id=request.user.id)
+    user_summary = UserSummary.objects.get(user=user)
+
+    data = {
+        "data": [
+            {
+                "content": [
+                    {
+                        "text": {
+                            "annotations": [],
+                            "value": user_summary.summary
+                        },
+                        "type": "text"
+                    }
+                ],
+                "created_at": int(user_summary.updated_at.timestamp()),
+                "role": "assistant",
+            },
+        ]
+    }
+
+    return Response(data)
+
+
+def generate_user_summary(user_id):
+    user = get_object_or_404(CustomUser, id=user_id)
+
+    # Calculate the date one month ago
+    one_month_ago = timezone.now() - timedelta(days=30)
+
+    # Query the models for records related to the user and within the past month, except for goals
+    goal_tracking = GoalTracking.objects.filter(user=user)
+    user_health_metrics = UserHealthMetrics.objects.filter(user=user, date_recorded__gte=one_month_ago)
+    calorie_intake = CalorieIntake.objects.filter(user=user, date_recorded__gte=one_month_ago)
+
+    # Format the queried data
+    formatted_data = {
+        "Goal Tracking": [f"Goal: {goal.goal_name}, Description: {goal.goal_description}" for goal in goal_tracking] if goal_tracking else ["No goals found."],
+        "User Health Metrics": [
+            f"Date: {metric.date_recorded}, Weight: {metric.weight} kg ({metric.weight * 2.20462} lbs), BMI: {metric.bmi}, Mood: {metric.mood}, Energy Level: {metric.energy_level}" 
+            for metric in user_health_metrics
+        ] if user_health_metrics else ["No health metrics found."],
+        "Calorie Intake": [f"Meal: {intake.meal_name}, Description: {intake.meal_description}, Portion Size: {intake.portion_size}, Date: {intake.date_recorded}" for intake in calorie_intake] if calorie_intake else ["No calorie intake data found."],
+    }
+    message = "No data found for the past month."
+    client = OpenAI(api_key=settings.OPENAI_KEY) # Initialize OpenAI client
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo-1106",
+            messages=[
+                {"role": "system", 
+                 "content": f"Generate a detailed summary based on the following data that gives the user a high level view of their goals, health data, and how their caloric intake relates to those goals. Start the response off with a friendly welcoming tone.: {formatted_data}. If there is no data, please respond with the following message: {message}"
+                 },
+            ],
+        )
+        summary_text = response.choices[0].message.content
+        print(f"Summary generated: {summary_text}")
+    except Exception as e:
+        # Handle exceptions or log errors
+        return {"message": f"An error occurred: {str(e)}"}
+
+    UserSummary.objects.update_or_create(user=user, defaults={'summary': summary_text})
+
+    return {"message": "Summary generated successfully."}
 
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated, IsCustomer])

@@ -34,5 +34,5 @@ urlpatterns = [
     path('api/add_calories/', views.api_add_calorie_intake, name='api_add_calories'),
     path('api/delete_calorie_intake/<int:record_id>/', views.api_delete_calorie_intake, name='api_delete_calorie_intake'),
     path('api/calorie_intake/<int:record_id>/', views.api_update_calorie_intake, name='api_update_calorie_intake'),
-
+    path('api/user_summary/', views.api_user_summary, name='api_user_summary'),
 ]

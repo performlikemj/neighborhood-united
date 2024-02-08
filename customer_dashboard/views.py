@@ -45,7 +45,8 @@ from hood_united.consumers import ToolCallConsumer
 import asyncio
 import logging
 import threading
-
+from decimal import Decimal
+import traceback
 # Load configuration from config.json
 with open('/etc/config.json') as config_file:
     config = json.load(config_file)
@@ -57,33 +58,55 @@ logger = logging.getLogger(__name__)
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_user_summary(request):
+    logger.info(f"Generating user summary for user {request.user.id}")
     user = get_object_or_404(CustomUser, id=request.user.id)
-    user_summary = UserSummary.objects.get(user=user)
+    try:
+        user_summary = UserSummary.objects.get(user=user)
 
-    data = {
-        "data": [
-            {
-                "content": [
-                    {
-                        "text": {
-                            "annotations": [],
-                            "value": user_summary.summary
-                        },
-                        "type": "text"
-                    }
-                ],
-                "created_at": int(user_summary.updated_at.timestamp()),
-                "role": "assistant",
-            },
-        ]
-    }
+        data = {
+            "data": [
+                {
+                    "content": [
+                        {
+                            "text": {
+                                "annotations": [],
+                                "value": user_summary.summary
+                            },
+                            "type": "text"
+                        }
+                    ],
+                    "created_at": int(user_summary.updated_at.timestamp()),
+                    "role": "assistant",
+                },
+            ]
+        }
+    except UserSummary.DoesNotExist:
+        summary = "For me to be more useful, please update your goals in your profile and update your calories and health data"
+        updated_at = int(time.time())  # Use current time if no summary
 
+        data = {
+            "data": [
+                {
+                    "content": [
+                        {
+                            "text": {
+                                "annotations": [],
+                                "value": summary
+                            },
+                            "type": "text"
+                        }
+                    ],
+                    
+                    "role": "assistant",
+                },
+            ]
+        }
     return Response(data)
 
 
 def generate_user_summary(user_id):
     user = get_object_or_404(CustomUser, id=user_id)
-
+    logger.warning(f"Generating user summary for user {user_id}")
     # Calculate the date one month ago
     one_month_ago = timezone.now() - timedelta(days=30)
 
@@ -96,16 +119,17 @@ def generate_user_summary(user_id):
     formatted_data = {
         "Goal Tracking": [f"Goal: {goal.goal_name}, Description: {goal.goal_description}" for goal in goal_tracking] if goal_tracking else ["No goals found."],
         "User Health Metrics": [
-            f"Date: {metric.date_recorded}, Weight: {metric.weight} kg ({metric.weight * 2.20462} lbs), BMI: {metric.bmi}, Mood: {metric.mood}, Energy Level: {metric.energy_level}" 
+            f"Date: {metric.date_recorded}, Weight: {metric.weight} kg ({metric.weight * Decimal('2.20462')} lbs), BMI: {metric.bmi}, Mood: {metric.mood}, Energy Level: {metric.energy_level}"
             for metric in user_health_metrics
         ] if user_health_metrics else ["No health metrics found."],
         "Calorie Intake": [f"Meal: {intake.meal_name}, Description: {intake.meal_description}, Portion Size: {intake.portion_size}, Date: {intake.date_recorded}" for intake in calorie_intake] if calorie_intake else ["No calorie intake data found."],
     }
+    logger.warning(f"Formatted data: {formatted_data}")
     message = "No data found for the past month."
     client = OpenAI(api_key=settings.OPENAI_KEY) # Initialize OpenAI client
     try:
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo-1106",
+            model="gpt-3.5-turbo-0125",
             messages=[
                 {"role": "system", 
                  "content": f"Generate a detailed summary based on the following data that gives the user a high level view of their goals, health data, and how their caloric intake relates to those goals. Start the response off with a friendly welcoming tone.: {formatted_data}. If there is no data, please respond with the following message: {message}"
@@ -116,7 +140,7 @@ def generate_user_summary(user_id):
         print(f"Summary generated: {summary_text}")
     except Exception as e:
         # Handle exceptions or log errors
-        return {"message": f"An error occurred: {str(e)}"}
+        return {"message": f"An error occurred trying to generate the summary. We are working to resolve the issue."}
 
     UserSummary.objects.update_or_create(user=user, defaults={'summary': summary_text})
 
@@ -136,7 +160,7 @@ def api_update_calorie_intake(request):
     except CalorieIntake.DoesNotExist:
         return Response({"error": "Record not found."}, status=404)
     except Exception as e:
-        return Response({"error": str(e)}, status=400)
+        return Response({"error": 'An error occurred trying to update the record. We are working to resolve the issue'}, status=400)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
@@ -153,7 +177,7 @@ def api_get_calories(request):
         serializer = CalorieIntakeSerializer(calorie_records, many=True)
         return Response(serializer.data)
     except Exception as e:
-        return Response({"error": str(e)}, status=400)
+        return Response({"error": 'An error occurred trying to fetch your records. We are working to resolve the issue'}, status=400)
     
 
 @api_view(['POST'])  # This should only be a POST request
@@ -169,10 +193,10 @@ def api_add_calorie_intake(request):
             return Response(serializer.data, status=201)
         return Response(serializer.errors, status=400)
     except Exception as e:
-        return Response({"error": str(e)}, status=400)
+        return Response({"error": 'An error occurred trying to add your record. We are working to resolve the issue'}, status=400)
 
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated, IsCustomer])
+@permission_classes([IsAuthenticated])
 def api_delete_calorie_intake(request, record_id):
     try:
         calorie_record = CalorieIntake.objects.get(id=record_id, user=request.user)
@@ -181,7 +205,11 @@ def api_delete_calorie_intake(request, record_id):
     except CalorieIntake.DoesNotExist:
         return Response({"error": "Record not found."}, status=404)
     except Exception as e:
-        return Response({"error": str(e)}, status=400)
+        print(f"Exception in api_delete_calorie_intake: {e}")
+        logger.warning(e)
+        logger.warning(traceback.format_exc())
+        return Response({"error": "An error occurred trying to delete the record. We are working to resolve the issue."}, status=400)
+
 
 
 @api_view(['GET', 'POST'])

@@ -18,4 +18,4 @@ def handle_model_update(sender, instance, **kwargs):
     else:
         return  # Exit if no user is associated with the instance
     
-    (generate_user_summary(user_id))
+    generate_user_summary(user_id)

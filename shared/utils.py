@@ -135,7 +135,7 @@ def is_question_relevant(question):
     """
 
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model="gpt-3.5-turbo-0125",
         messages=[
             {
                 "role": "system",

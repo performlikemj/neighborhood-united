@@ -38,3 +38,5 @@ node_modules/
 instruction_guide.docx
 index_*.py
 media/
+*.sql
+convert.py

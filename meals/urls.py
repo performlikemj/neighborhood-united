@@ -17,6 +17,7 @@ urlpatterns = [
     path('create_meal/', views.create_meal, name='create_meal'),
     path('meal_detail/<int:meal_id>/', views.meal_detail, name='meal_detail'),
     path('meal_list/', views.meal_list, name='meal_list'),
+    path('embeddings/', views.embeddings_list, name='meal_list'),
     path('approve_meal_plan/', views.meal_plan_approval, name='approve_meal_plan'),
     path('payment/<int:order_id>/', views.process_payment, name='process_payment'),
     path('meal_plan_confirmation/', views.meal_plan_confirmed, name='meal_plan_confirmed'),

@@ -60,6 +60,10 @@ def search_ingredients(query, number=20, apiKey=settings.SPOONACULAR_API_KEY):
     response.raise_for_status()  # Raises an HTTPError if the response status isn't 200
     return response.json()
 
+def embeddings_list(request):
+    meals = Meal.objects.all()  # Fetch all meals, or filter as needed
+    return render(request, 'meals/embeddings_list.html', {'meals': meals})
+
 def get_ingredient_info(id, apiKey=settings.SPOONACULAR_API_KEY):
     info_url = f"https://api.spoonacular.com/food/ingredients/{id}/information"
     info_params = {

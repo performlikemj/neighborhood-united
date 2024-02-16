@@ -8,19 +8,46 @@ from datetime import date, timedelta
 from django.utils import timezone
 from custom_auth.models import CustomUser, Address
 from django.contrib.contenttypes.fields import GenericRelation
+from django.db import migrations
+from pgvector.django import VectorExtension
+from pgvector.django import VectorField
+from openai import OpenAI
 
+client = OpenAI(api_key=settings.OPENAI_KEY)
+
+def get_embedding(text, model="text-embedding-3-small"):
+    text = text.replace("\n", " ")
+    response = client.embeddings.create(input=[text], model=model)
+    return response.data[0].embedding
+
+
+class Migration(migrations.Migration):
+    operations = [
+        VectorExtension()
+    ]
 
 class Ingredient(models.Model):
     chef = models.ForeignKey(Chef, on_delete=models.CASCADE, related_name='ingredients')
     name = models.CharField(max_length=200)
     spoonacular_id = models.IntegerField(null=True) 
     calories = models.FloatField(null=True)
+    ingredeint_embedding = VectorField(dimensions=1536, null=True)
 
     class Meta:
         unique_together = ('spoonacular_id', 'chef',)
 
     def __str__(self):
-        return self.name
+        # Start with the ingredient's name
+        info = self.name
+
+        # Add the chef's name
+        info += f' by {self.chef.user.username}'
+
+        # Add the calories, if available
+        if self.calories is not None:
+            info += f', {self.calories} kcal'
+
+        return info
 
 
 class MealType(models.Model):
@@ -35,6 +62,7 @@ class Dish(models.Model):
     name = models.CharField(max_length=200)
     ingredients = models.ManyToManyField(Ingredient)
     featured = models.BooleanField(default=False)
+    dish_embedding = VectorField(dimensions=1536, null=True)
 
     
     # Nutritional information
@@ -44,7 +72,30 @@ class Dish(models.Model):
     protein = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     
     def __str__(self):
-        return self.name
+        # Start with the basic dish info
+        basic_info = f'{self.name} by {self.chef.user.username}'
+
+        # Ingredients list
+        ingredients_list = ', '.join([ingredient.name for ingredient in self.ingredients.all()][:5])  # Get top 5 ingredients for brevity
+        ingredients_info = f'Ingredients: {ingredients_list}...'
+
+        # Nutritional info, displayed only if available
+        nutritional_info = ''
+        if any([self.calories, self.fat, self.carbohydrates, self.protein]):
+            nutritional_values = []
+            if self.calories:
+                nutritional_values.append(f'Calories: {self.calories} kcal')
+            if self.fat:
+                nutritional_values.append(f'Fat: {self.fat} g')
+            if self.carbohydrates:
+                nutritional_values.append(f'Carbs: {self.carbohydrates} g')
+            if self.protein:
+                nutritional_values.append(f'Protein: {self.protein} g')
+            nutritional_info = ', '.join(nutritional_values)
+
+        # Combine all the elements
+        return f'{basic_info}. {ingredients_info} {nutritional_info}'
+
     
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
@@ -116,13 +167,28 @@ class Meal(models.Model):
     objects = models.Manager()  # The default manager
     postal_objects = PostalCodeManager()  # Attach the custom manager
     dietary_objects = DietaryPreferenceManager()  # Attach the dietary preference manager
+    meal_embedding = VectorField(dimensions=1536, null=True)
     
     class Meta:
         unique_together = ('chef', 'start_date')
 
     def __str__(self):
-        return f'{self.chef.user.username} - {self.start_date}'
-    
+        # Basic meal info
+        meal_info = f'{self.name} by {self.chef.user.username} ({self.dietary_preference})'
+        
+        # Description and review summary (if available)
+        description = f'Description: {self.description[:100]}...' if self.description else ''
+        review_summary = f'Review Summary: {self.review_summary[:100]}...' if self.review_summary else ''
+        
+        # Combining all the elements
+        return f'{meal_info}. {description} {review_summary} Start Date: {self.start_date}, Party Size: {self.party_size}'
+
+
+    def trimmed_embedding(self, length=10):
+        """Return a trimmed version of the meal embedding."""
+        # Ensure the embedding is a list and trim it to the specified length
+        return self.meal_embedding[:length] if self.meal_embedding else []
+
 
     def is_available(self, week_shift=0):
         week_shift = int(week_shift)  # User's ability to plan for future weeks

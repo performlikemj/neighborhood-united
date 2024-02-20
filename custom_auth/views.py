@@ -77,7 +77,7 @@ def password_reset_request(request):
         token_generator = PasswordResetTokenGenerator()
         token = token_generator.make_token(user)
         uid = urlsafe_base64_encode(force_bytes(user.pk))
-        reset_link = f"{config['STREAMLIT_URL']}/activate?uid={uid}&token={token}&action=password_reset"
+        reset_link = f"{config['STREAMLIT_URL']}/account?uid={uid}&token={token}&action=password_reset"
 
         mail_subject = "Password Reset Request"
         message = f"Hi {user.username},\n\nPlease click on the link below to reset your password:\n{reset_link}\n\nIf you did not request an email change, please ignore this email."
@@ -159,7 +159,7 @@ def update_profile_api(request):
             mail_subject = 'Verify your email to resume access.'
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = account_activation_token.make_token(user)
-            activation_link = f"{config['STREAMLIT_URL']}/activate?uid={uid}&token={token}"
+            activation_link = f"{config['STREAMLIT_URL']}/account?uid={uid}&token={token}"
             message = f"Hi {user.username},\n\nYou've recently updated your email!\n\n" \
                     f"Please click the link below to verify the change:\n\n{activation_link}\n\n" \
                     f"If you have any issues, please contact us at {config['STREAMLIT_SUPPORT_EMAIL']}.\n\n" \
@@ -263,7 +263,7 @@ def register_api_view(request):
             mail_subject = 'Activate your account.'
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = account_activation_token.make_token(user)
-            activation_link = f"{config['STREAMLIT_URL']}/activate?uid={uid}&token={token}&action=activate"        
+            activation_link = f"{config['STREAMLIT_URL']}/account?uid={uid}&token={token}&action=activate"        
             message = f"Hi {user.username},\n\nThank you for signing up for our website!\n\n" \
                     f"Please click the link below to activate your account:\n\n{activation_link}\n\n" \
                     "If you have any issues, please contact us at support@sautAI.com.\n\n" \

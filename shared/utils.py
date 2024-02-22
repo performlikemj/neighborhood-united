@@ -159,8 +159,13 @@ def recommend_follow_up(request, context):
     :param context: A string representing the user's last few interactions or context.
     :return: A list of recommended follow-up prompts or actions.
     """
+    if request.data.get('user_id'):
+        user_id = request.data.get('user_id')
+        user = CustomUser.objects.get(id=user_id)
+    else:
+        user = None
     client = OpenAI(api_key=settings.OPENAI_KEY) # Initialize OpenAI client
-    if request.user.is_authenticated:
+    if user.is_authenticated:
         functions = """
             "auth_search_dishes: Search dishes in the database",
             "auth_search_chefs: Search chefs in the database and get their info",
@@ -208,7 +213,7 @@ def recommend_follow_up(request, context):
         messages=[
             {
                 "role": "user", 
-                "content": f"Given the following context: {context} and functions: {functions}, what prompt should a user write next? Output ONLY the recommended prompt in a natural sentence without using the function name, without quotations, and without starting the output with 'the user should write' or anything similar." 
+                "content": f"Given the following context: {context} and functions: {functions}, what prompt should a user write next? Output ONLY the recommended prompt in the first person and in a natural sentence without using the function name, without quotations, and without starting the output with 'the user should write' or anything similar." 
             }
         ],
     )

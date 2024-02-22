@@ -31,7 +31,10 @@ class Ingredient(models.Model):
     name = models.CharField(max_length=200)
     spoonacular_id = models.IntegerField(null=True) 
     calories = models.FloatField(null=True)
-    ingredeint_embedding = VectorField(dimensions=1536, null=True)
+    fat = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    carbohydrates = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    protein = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    ingredient_embedding = VectorField(dimensions=1536, null=True)
 
     class Meta:
         unique_together = ('spoonacular_id', 'chef',)
@@ -97,9 +100,34 @@ class Dish(models.Model):
         return f'{basic_info}. {ingredients_info} {nutritional_info}'
 
     
+    def update_nutritional_info(self):
+        # Initialize nutritional values
+        total_calories = 0
+        total_fat = 0
+        total_carbohydrates = 0
+        total_protein = 0
+
+        # Aggregate nutritional info from all ingredients
+        for ingredient in self.ingredients.all():
+            if ingredient.calories:
+                total_calories += ingredient.calories
+            if ingredient.fat:
+                total_fat += ingredient.fat
+            if ingredient.carbohydrates:
+                total_carbohydrates += ingredient.carbohydrates
+            if ingredient.protein:
+                total_protein += ingredient.protein
+
+        # Update dish nutritional information
+        self.calories = total_calories
+        self.fat = total_fat
+        self.carbohydrates = total_carbohydrates
+        self.protein = total_protein
+
     def save(self, *args, **kwargs):
+        # Update nutritional information before saving
+        self.update_nutritional_info()
         super().save(*args, **kwargs)
-        # Update the nutritional information
 
 
 class PostalCodeManager(models.Manager):

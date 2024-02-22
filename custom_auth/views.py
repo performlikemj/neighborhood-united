@@ -78,7 +78,7 @@ def password_reset_request(request):
         token_generator = PasswordResetTokenGenerator()
         token = token_generator.make_token(user)
         uid = urlsafe_base64_encode(force_bytes(user.pk))
-        reset_link = f"{os.getenv('STREAMLIT_URL')}/activate?uid={uid}&token={token}&action=password_reset"
+        reset_link = f"{os.getenv('STREAMLIT_URL')}/account?uid={uid}&token={token}&action=password_reset"
 
         mail_subject = "Password Reset Request"
         message = f"Hi {user.username},\n\nPlease click on the link below to reset your password:\n{reset_link}\n\nIf you did not request an email change, please ignore this email."
@@ -163,7 +163,7 @@ def update_profile_api(request):
             # Prepare data for Zapier webhook
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = account_activation_token.make_token(user)
-            activation_link = f"{os.getenv('STREAMLIT_URL')}/activate?uid={uid}&token={token}"
+            activation_link = f"{os.getenv('STREAMLIT_URL')}/account?uid={uid}&token={token}"
             zapier_data = {
                 'recipient_email': user_serializer.validated_data.get('email'),
                 'subject': 'Verify your email to resume access.',
@@ -251,7 +251,7 @@ def register_api_view(request):
 
     if not user_serializer.is_valid():
         return Response({'errors': user_serializer.errors}, status=400)
-
+    print(f"Validated data: {user_serializer.validated_data}")  # Debug print
     with transaction.atomic():
         user = user_serializer.save()
         UserRole.objects.create(user=user, current_role='customer')
@@ -268,7 +268,7 @@ def register_api_view(request):
         mail_subject = 'Activate your account.'
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         token = account_activation_token.make_token(user)
-        activation_link = f"{os.getenv('STREAMLIT_URL')}/activate?uid={uid}&token={token}&action=activate"        
+        activation_link = f"{os.getenv('STREAMLIT_URL')}/account?uid={uid}&token={token}&action=activate"        
         message = f"Hi {user.username},\n\nThank you for signing up for our website!\n\n" \
                 f"Please click the link below to activate your account:\n\n{activation_link}\n\n" \
                 "If you have any issues, please contact us at support@sautAI.com.\n\n" \
@@ -345,7 +345,6 @@ def profile(request):
         return redirect('custom_auth:register')  
 
     breadcrumbs = [
-        {'url': reverse('qa_app:home'), 'name': 'Home'},
         {'url': reverse('custom_auth:profile'), 'name': 'Profile'},
     ]
 
@@ -401,7 +400,6 @@ def update_profile(request):
 
     # Prepare context
     breadcrumbs = [
-        {'url': reverse('qa_app:home'), 'name': 'Home'},
         {'url': reverse('custom_auth:profile'), 'name': 'Profile'},
         {'url': reverse('custom_auth:update_profile'), 'name': 'Update Profile'},
     ]
@@ -482,7 +480,6 @@ def register_view(request):
             user_group = request.user.groups.values_list('name', flat=True).first()
 
     breadcrumbs = [
-        {'url': reverse('qa_app:home'), 'name': 'Home'},
         {'url': reverse('custom_auth:register'), 'name': 'Register'},
     ]
     return render(request, 'custom_auth/register.html', {'form': form, 'address_form': address_form, 'user_group': user_group, 'breadcrumbs': breadcrumbs})
@@ -516,7 +513,6 @@ def login_view(request):
         else:
             messages.error(request, 'Invalid username or password')
     breadcrumbs = [
-        {'url': reverse('qa_app:home'), 'name': 'Home'},
         {'url': reverse('custom_auth:login'), 'name': 'Login'},
     ]
     return render(request, 'custom_auth/login.html', {'breadcrumbs' : breadcrumbs})
@@ -537,7 +533,6 @@ def verify_email_view(request):
         show_email_verification_message = True
 
     breadcrumbs = [
-        {'url': reverse('qa_app:home'), 'name': 'Home'},
         {'url': reverse('custom_auth:verify_email'), 'name': 'Verify Email'},
     ]
     return render(request, 'custom_auth/verify_email.html', {
@@ -585,7 +580,6 @@ def re_request_email_change(request):
         form = EmailChangeForm(request.user)
 
     breadcrumbs = [
-        {'url': reverse('qa_app:home'), 'name': 'Home'},
         {'url': reverse('custom_auth:profile'), 'name': 'Profile'},
         {'url': reverse('custom_auth:re_request_email_change'), 'name': 'Re-request Email Change'},
     ]

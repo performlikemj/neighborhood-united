@@ -14,7 +14,6 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 load_dotenv('dev.env')
-from decouple import config
 from datetime import timedelta
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -200,9 +199,9 @@ else:
     # Blob Storage
     DEFAULT_FILE_STORAGE = 'storages.backends.azure_storage.AzureStorage'
 
-    AZURE_ACCOUNT_NAME = config('AZURE_ACCOUNT_NAME')  # your azure account name
-    AZURE_ACCOUNT_KEY = config('AZURE_ACCOUNT_KEY')  # your azure account key
-    AZURE_CONTAINER = config('AZURE_CONTAINER', 'media')  # the default container
+    AZURE_ACCOUNT_NAME = os.getenv('AZURE_ACCOUNT_NAME')  # your azure account name
+    AZURE_ACCOUNT_KEY = os.getenv('AZURE_ACCOUNT_KEY')  # your azure account key
+    AZURE_CONTAINER = os.getenv('AZURE_CONTAINER', 'media')  # the default container
     AZURE_CUSTOM_DOMAIN = f'{AZURE_ACCOUNT_NAME}.blob.core.windows.net'
     MEDIA_URL = f'https://{AZURE_CUSTOM_DOMAIN}/{AZURE_CONTAINER}/'
 
@@ -301,3 +300,9 @@ if DEBUG == False:
     # Other security settings
     SECURE_BROWSER_XSS_FILTER = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
+
+
+    # Celery settings
+    # Celery settings
+    CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL')
+    CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND')

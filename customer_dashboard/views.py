@@ -2168,29 +2168,35 @@ def chat_with_gpt(request):
             return Response(response_data)
 
         if relevant:
+            start_time = time.time()
+            timeout = 300  # Timeout after 300 seconds (5 minutes)
+            sleep_interval = 1  # Start with 1 second
             while True:
+                if time.time() - start_time > timeout:
+                    logger.error('Timeout')
+                    return Response({'error': 'That took way too long. Sorry for the inconvenience. Please try again later.'})
+                
+                print("Creating a message")
                 try:
+                    client.beta.threads.messages.create(
+                        thread_id=thread_id,
+                        role="user",
+                        content=question
+                    )
+                    print("Message created")
+                except Exception as e:
+                    logger.error(f'Failed to create message: {str(e)}')
+                    return Response({'error': f'Failed to create message: {str(e)}'}, status=500)
+
+                try:
+                    # Retrieve the run
+                    print("Retrieving run from while loop")
                     run = client.beta.threads.runs.retrieve(
                         thread_id=thread_id,
                         run_id=run.id
                     )
-
-                    if run.status not in ['queued', 'in_progress', 'running', 'requires_action']:
-                        try:
-                            print("Creating a message")
-                            # Add a Message to a Thread
-                            print(f"Thread ID: {thread_id}")
-                            print(f"Question: {question}")
-                            client.beta.threads.messages.create(
-                                thread_id=thread_id,
-                                role="user",
-                                content=question
-                            )
-                            print("Message created")
-                        except Exception as e:
-                            logger.error(f'Failed to create message: {str(e)}')
-                            return Response({'error': f'Failed to create message: {str(e)}'}, status=500)
-                        break   
+                    print(f'run status: {run.status}')
+                    # Check for terminal statuses and exit the loop if one is encountered
                     if run.status == 'completed':
                         logger.info('Run completed')
                         break
@@ -2203,7 +2209,8 @@ def chat_with_gpt(request):
                     elif run.status in ['queued', 'in_progress', 'running']:
                         time.sleep(0.5)
                         continue
-                    elif run.status == "requires_action":
+                    
+                    if run.status == "requires_action":
                         tool_outputs = []
                         print("Run requires action")
                         for tool_call in run.required_action.submit_tool_outputs.tool_calls:
@@ -2240,21 +2247,30 @@ def chat_with_gpt(request):
                             thread_id=thread_id,
                             run_id=run.id
                         )
-                    if run_status_check.status not in ['queued', 'in_progress', 'running']:
-                        # Submitting the formatted outputs
-                        client.beta.threads.runs.submit_tool_outputs(
-                            thread_id=thread_id,
-                            run_id=run.id,
-                            tool_outputs=tool_outputs,
-                        )
-                    continue
+                        if run_status_check.status not in ['queued', 'in_progress', 'running']:
+                            # Submitting the formatted outputs
+                            client.beta.threads.runs.submit_tool_outputs(
+                                thread_id=thread_id,
+                                run_id=run.id,
+                                tool_outputs=tool_outputs,
+                            )
+                        continue
+                    
+                    time.sleep(sleep_interval)
+                except ValueError as e:
+                    logger.error(f'ValueError: {str(e)}')
+                    return Response({'error': f'A value error occurred. We are looking into it.'}, status=400)
                 except Exception as e:
-                    logger.critical(f'Critical error occurred: {e}', exc_info=True)
+                    logger.error(f'Error: {str(e)}')
+                    return Response({'error': 'An error occurred. We are looking into it.'}, status=500)
             # Check the status of the Run and retrieve responses
             try:
                 # Retrieve messages and log them
                 print("Retrieving messages")
                 messages = client.beta.threads.messages.list(thread_id)
+                print(f"Messages: {messages}")
+                last_assistant_message = next((msg.content[0].text.value for msg in messages.data if msg.role == 'assistant'), None)
+                print(f"Last assistant message: {last_assistant_message}")
                 context = []
                 for message in reversed(messages.data):
                     role = message.role.capitalize()
@@ -2282,12 +2298,10 @@ def chat_with_gpt(request):
             # Save the run steps to a file
             with open("run_steps.json", "w") as f:
                 run_steps_json = run_steps.model_dump()
-                json.dump(run.model_dump(), f, indent=4)
+                json.dump(run_steps_json.model_dump(), f, indent=4)
             
-
-
             response_data = {
-                'last_assistant_message': next((msg.content[0].text.value for msg in (messages.data) if msg.role == 'assistant'), None),                
+                'last_assistant_message': last_assistant_message,                
                 'run_id': run.id,
                 'new_thread_id': thread_id,
                 'recommend_follow_up': recommend_follow_up(request, formatted_context),

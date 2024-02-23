@@ -2147,6 +2147,18 @@ def chat_with_gpt(request):
         # Variable to store tool call results
         formatted_outputs = []
             
+        print("Creating a message")
+        try:
+            client.beta.threads.messages.create(
+                thread_id=thread_id,
+                role="user",
+                content=question
+            )
+            print("Message created")
+        except Exception as e:
+            logger.error(f'Failed to create message: {str(e)}')
+            return Response({'error': f'Failed to create message: {str(e)}'}, status=500)
+        
         try:
             # Run the Assistant
             run = client.beta.threads.runs.create(
@@ -2176,17 +2188,6 @@ def chat_with_gpt(request):
                     logger.error('Timeout')
                     return Response({'error': 'That took way too long. Sorry for the inconvenience. Please try again later.'})
                 
-                print("Creating a message")
-                try:
-                    client.beta.threads.messages.create(
-                        thread_id=thread_id,
-                        role="user",
-                        content=question
-                    )
-                    print("Message created")
-                except Exception as e:
-                    logger.error(f'Failed to create message: {str(e)}')
-                    return Response({'error': f'Failed to create message: {str(e)}'}, status=500)
 
                 try:
                     # Retrieve the run
@@ -2283,22 +2284,20 @@ def chat_with_gpt(request):
                 return Response({'error': f'Failed to list messages: {str(e)}'}, status=500)
 
 
-            with open("messages.json", "w") as f:
-                messages_json = messages.model_dump()
-                json.dump(messages_json, f, indent=4)
-                
+            # with open("messages.json", "w") as f:
+            #     json.dump(messages, f, indent=4)
 
-            try:
-                # Retrieve the run steps
-                print("Retrieving run steps")
-                run_steps = client.beta.threads.runs.steps.list(thread_id=thread_id, run_id=run.id)
-            except Exception as e:
-                return Response({'error': f'Failed to list run steps: {str(e)}'}, status=500)
+            # try:
+            #     # Retrieve the run steps
+            #     print("Retrieving run steps")
+            #     run_steps = client.beta.threads.runs.steps.list(thread_id=thread_id, run_id=run.id)
+            # except Exception as e:
+            #     return Response({'error': f'Failed to list run steps: {str(e)}'}, status=500)
 
-            # Save the run steps to a file
-            with open("run_steps.json", "w") as f:
-                run_steps_json = run_steps.model_dump()
-                json.dump(run_steps_json.model_dump(), f, indent=4)
+            # # Save the run steps to a file
+            # with open("run_steps.json", "w") as f:
+            #     run_steps_json = run_steps.model_dump()
+            #     json.dump(run_steps_json, f, indent=4)
             
             response_data = {
                 'last_assistant_message': last_assistant_message,                

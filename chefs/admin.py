@@ -16,7 +16,7 @@ class ChefAdmin(admin.ModelAdmin):
     list_display = ('user', 'experience', 'bio',)
     search_fields = ('user__username', 'experience', 'bio')
     list_filter = ('user__is_active',)
-    fields = ('user', 'experience', 'bio', 'profile_pic')
+    fields = ('user', 'experience', 'bio', 'profile_pic', 'chef_embedding')
     readonly_fields = ('user',)  # Add any fields you want to be read-only
     inlines = [MealInline, ChefPostalCodeInline]
 

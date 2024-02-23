@@ -2,7 +2,7 @@ import json
 from django.shortcuts import render, redirect
 from django.urls import reverse
 from qa_app.models import FoodQA
-from meals.models import Dish, MealType, Meal, MealPlan, MealPlanMeal, Order, OrderMeal
+from meals.models import Dish, MealType, Meal, MealPlan, MealPlanMeal, Order, OrderMeal, Ingredient
 from local_chefs.models import ChefPostalCode, PostalCode
 from django.conf import settings
 from django_ratelimit.decorators import ratelimit
@@ -12,7 +12,8 @@ from django.core.paginator import Paginator
 from chefs.models import Chef
 from custom_auth.models import Address
 from datetime import date, timedelta, datetime
-from django.db.models import Q
+from django.db.models import Q, F
+from pgvector.django import CosineDistance
 from reviews.models import Review
 from custom_auth.models import CustomUser, UserRole
 from django.contrib.contenttypes.models import ContentType
@@ -31,6 +32,13 @@ from django.core.exceptions import ObjectDoesNotExist
 import base64
 import os
 import requests
+
+client = OpenAI(api_key=settings.OPENAI_KEY)
+
+def get_embedding(text, model="text-embedding-3-small"):
+    text = text.replace("\n", " ")
+    response = client.embeddings.create(input=[text], model=model)
+    return response.data[0].embedding
 
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -122,7 +130,6 @@ def is_question_relevant(question):
     :return: A boolean indicating whether the question is relevant.
     """
     print("From is_question_relevant")
-    client = openai.OpenAI(api_key=settings.OPENAI_KEY)  # Initialize OpenAI client
 
     # Define application's functionalities and domains for the model to consider
     app_context = """
@@ -164,7 +171,6 @@ def recommend_follow_up(request, context):
         user = CustomUser.objects.get(id=user_id)
     else:
         user = None
-    client = OpenAI(api_key=settings.OPENAI_KEY) # Initialize OpenAI client
     if user.is_authenticated:
         functions = """
             "auth_search_dishes: Search dishes in the database",
@@ -879,20 +885,28 @@ def suggest_alternative_meals(request, meal_ids, days_of_week):
 
     return {"alternative_meals": alternative_meals}
 
+
 def search_meal_ingredients(request, query):
     print("From search_meal_ingredients")
-    # Filter meals by the query in their name
     print(f"Query: {query}")
-    meals = Meal.objects.filter(name__icontains=query)
+    
+    # Assuming 'get_embedding' creates a vector for your query
+    query_vector = get_embedding(query)
+    
+    # Find meals with similar embeddings using cosine similarity
+    similar_meals = Meal.objects.annotate(
+        similarity=CosineDistance(F('meal_embedding'), query_vector)
+    ).filter(similarity__lt=0.1)  # Adjust the threshold according to your needs
 
-    if not meals.exists():
+    if not similar_meals.exists():
         return {"error": "No meals found matching the query.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
     result = []
-    for meal in meals:
+    for meal in similar_meals:
         meal_ingredients = {
             "meal_id": meal.id,
             "meal_name": meal.name,
+            "similarity": meal.similarity,  # Include similarity score in the response
             "dishes": []
         }
         print(f"Meal: {meal}")
@@ -909,6 +923,7 @@ def search_meal_ingredients(request, query):
     return {
         "result": result
     }
+
 
 def auth_search_meals_excluding_ingredient(request, query):
     print("From auth_search_meals_excluding_ingredient")
@@ -969,61 +984,39 @@ def auth_search_ingredients(request, query):
     print("From auth_search_ingredients")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
-    
+
     if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+        return {'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'}
 
-
-    # Determine the current date
-    week_shift = max(int(user.week_shift), 0)
-    current_date = timezone.now().date() + timedelta(weeks=week_shift)
+    # Assume get_embedding generates a vector for your query
+    query_vector = get_embedding(query)
     
-    # Filter meals available for the current week and for the user
-    meal_filter_conditions = Q(start_date__gte=current_date)
+    # Find similar ingredients based on cosine similarity
+    similar_ingredients = Ingredient.objects.annotate(
+        similarity=CosineDistance(F('ingredient_embedding'), query_vector)
+    ).filter(similarity__lt=0.1)  # Adjust the threshold based on your needs
 
-    # Filter meals by dietary preferences, postal code, and current week
-    dietary_filtered_meals = Meal.dietary_objects.for_user(user).filter(meal_filter_conditions)
-    postal_filtered_meals = Meal.postal_objects.for_user(user=user).filter(meal_filter_conditions)
+    # Get IDs of similar ingredients
+    similar_ingredient_ids = similar_ingredients.values_list('id', flat=True)
 
-    # Combine both filters
-    available_meals = dietary_filtered_meals & postal_filtered_meals
-    
-    # Find dishes containing the queried ingredient
-    dishes_with_ingredient = Dish.objects.filter(
-        ingredients__name__icontains=query,
-    ).distinct()
-    
-    # Initialize data structure to store meal details
-    meal_details = defaultdict(lambda: {'name': '', 'chefs': [], 'dishes': []})
+    # Find dishes containing similar ingredients
+    dishes_with_similar_ingredients = Dish.objects.filter(ingredients__in=similar_ingredient_ids).distinct()
 
-    # Iterate over found dishes and compile meal details
-    for dish in dishes_with_ingredient:
-        # Fetch meals including the current dish and are available
-        meals_with_dish = available_meals.filter(dishes=dish)
+    # Find meals containing those dishes
+    meals_with_similar_ingredients = Meal.objects.filter(dishes__in=dishes_with_similar_ingredients)
 
-        for meal in meals_with_dish:
-            # Update meal details with chef and dish information
-            meal_detail = meal_details[meal.id]
-            meal_detail['meal_id'] = meal.id
-            meal_detail['name'] = meal.name
-            meal_detail['start_date'] = meal.start_date.strftime('%Y-%m-%d')
-            meal_detail['is_available'] = meal.can_be_ordered()
-
-            # Add chef details if not already present
-            chef_info = {"id": dish.chef.id, "name": dish.chef.user.username}
-            if chef_info not in meal_detail['chefs']:
-                meal_detail['chefs'].append(chef_info)
-
-            # Add dish details
-            dish_info = {
-                "id": dish.id,
-                "name": dish.name,
-                "ingredients": [{"id": ingredient.id, "name": ingredient.name} for ingredient in dish.ingredients.all()]
-            }
-            meal_detail['dishes'].append(dish_info)
-
-    # Convert the result to a list format
-    result = [{"meal_id": k, **v} for k, v in meal_details.items()]
+    # Prepare the result
+    result = []
+    for meal in meals_with_similar_ingredients:
+        meal_info = {
+            'meal_id': meal.id,
+            'name': meal.name,
+            'start_date': meal.start_date.strftime('%Y-%m-%d'),
+            'is_available': meal.can_be_ordered(),
+            'chefs': list(meal.chef.values('id', 'user__username')),
+            'dishes': list(meal.dishes.values('id', 'name', 'ingredients__id', 'ingredients__name')),
+        }
+        result.append(meal_info)
 
     if not result:
         return {
@@ -1035,40 +1028,47 @@ def auth_search_ingredients(request, query):
         "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
 
-def guest_search_ingredients(meal_ids=None):
+def guest_search_ingredients(request, query, meal_ids=None):
     print("From guest_search_ingredients")
-    # Determine the current date and the end of the week
     current_date = timezone.now().date()
-    
-    # First, find the meals available for the current week
-    available_meals = Meal.objects.filter(
-        Q(start_date__gte=current_date)
-    )
+    available_meals = Meal.objects.filter(start_date__gte=current_date)
+
     if meal_ids:
         available_meals = available_meals.filter(id__in=meal_ids)
-    else:
-        return {"error": "No meals with those ingredients found."}
-    # Then, look for the dishes in those meals that contain the ingredient(s) in the query
-    dishes_with_ingredient = Dish.objects.filter(
-        meal__dishes__in=available_meals
-    ).distinct()
-    # Finally, list out those dishes along with their chefs
+    
+    # Again, assuming get_embedding function exists and generates a query vector
+    query_vector = get_embedding(query)  # Assuming you pass 'query' as an argument
+
+    # Find similar ingredients based on cosine similarity
+    similar_ingredients = Ingredient.objects.annotate(
+        similarity=CosineDistance(F('ingredient_embedding'), query_vector)
+    ).filter(similarity__lt=0.1)  # Adjust the threshold based on your needs
+
+    # Get IDs of similar ingredients
+    similar_ingredient_ids = similar_ingredients.values_list('id', flat=True)
+
+    # Find dishes containing similar ingredients
+    dishes_with_similar_ingredients = Dish.objects.filter(ingredients__in=similar_ingredient_ids).distinct()
+
+    # Find meals containing those dishes
+    meals_with_similar_ingredients = Meal.objects.filter(dishes__in=dishes_with_similar_ingredients)
+
+    # Prepare the result
     result = []
-    for dish in dishes_with_ingredient:
-        meal_for_dish = Meal.objects.filter(dishes=dish)  # This should give you the meals where the dish appears
-        meal_info = [{"id": meal.id, "name": meal.name} for meal in meal_for_dish]  # Convert it to a list of dictionaries with id and name
-        result.append({
-            "dish_id": dish.id,
-            "dish_name": dish.name,
-            "chef_id": dish.chef.id,
-            "chef": dish.chef.user.username,
-            "ingredients": [ingredient.name for ingredient in dish.ingredients.all()],
-            "meals": meal_info,
-        })
+    for meal in meals_with_similar_ingredients:
+        meal_info = {
+            'meal_id': meal.id,
+            'name': meal.name,
+            'start_date': meal.start_date.strftime('%Y-%m-%d'),
+            'is_available': meal.can_be_ordered(),
+            'chefs': list(meal.chef.values('id', 'user__username')),
+            'dishes': list(meal.dishes.values('id', 'name', 'ingredients__id', 'ingredients__name')),
+        }
+        result.append(meal_info)
 
     if not result:
         return {
-            "message": "No dishes found containing the queried ingredient(s) in the available meals for this week.",
+            "message": "No meals found containing the queried ingredient(s) in the available meals for this week.",
             "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
         }
     return {
@@ -1077,7 +1077,7 @@ def guest_search_ingredients(meal_ids=None):
     }
 
 
-def auth_search_chefs(request):
+def auth_search_chefs(request, query):
     # Fetch user's dietary preference
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
@@ -1181,7 +1181,7 @@ def auth_search_chefs(request):
     }
 
 
-def guest_search_chefs(request):
+def guest_search_chefs(request, query):
     print("From guest_search_chefs")
 
     chefs = Chef.objects.all()

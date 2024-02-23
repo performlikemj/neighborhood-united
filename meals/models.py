@@ -13,13 +13,6 @@ from pgvector.django import VectorExtension
 from pgvector.django import VectorField
 from openai import OpenAI
 
-client = OpenAI(api_key=settings.OPENAI_KEY)
-
-def get_embedding(text, model="text-embedding-3-small"):
-    text = text.replace("\n", " ")
-    response = client.embeddings.create(input=[text], model=model)
-    return response.data[0].embedding
-
 
 class Migration(migrations.Migration):
     operations = [

@@ -720,52 +720,54 @@ def guest_chat_with_gpt(request):
             return Response({'error': 'No question provided'}, status=400)
         
         relevant = is_question_relevant(question)
-
-        # Check if thread_id is safe
-        if thread_id and not re.match("^thread_[a-zA-Z0-9]*$", thread_id):
-            return Response({'error': 'Invalid thread_id'}, status=400)
-
-        # Handle existing or new thread
-        if not thread_id:
-            openai_thread = client.beta.threads.create()
-            thread_id = openai_thread.id
-    
-        try:
-            print("Creating a message")
-            # Add a Message to a Thread
-            client.beta.threads.messages.create(
-                thread_id=thread_id,
-                role="user",
-                content=question
-            )
-            print("Message created")
-        except Exception as e:
-            logger.error(f'Failed to create message: {str(e)}')
-            return Response({'error': f'Failed to create message: {str(e)}'}, status=500)    
-                
-
-    
-        # Variable to store tool call results
-        formatted_outputs = []
             
-        try:
-            # Run the Assistant
-            run = client.beta.threads.runs.create(
-                thread_id=thread_id,
-                assistant_id=guest_assistant_id,
-                # Optionally, you can add specific instructions here
-            )
-        except Exception as e:
-            logger.error(f'Failed to create run: {str(e)}')
-            
-            response_data = {
-                    'last_assistant_message': "I'm sorry, I'm still processing your request. Please try again later or start a new chat.",
-                    'run_id': run.id,
-                    'new_thread_id': thread_id,
-                    'recommend_follow_up': False,
-                }
-            return Response(response_data)
+
         if relevant:
+
+            # Check if thread_id is safe
+            if thread_id and not re.match("^thread_[a-zA-Z0-9]*$", thread_id):
+                return Response({'error': 'Invalid thread_id'}, status=400)
+
+            # Handle existing or new thread
+            if not thread_id:
+                openai_thread = client.beta.threads.create()
+                thread_id = openai_thread.id
+
+        
+            # Variable to store tool call results
+            formatted_outputs = []
+            
+            try:
+                print("Creating a message")
+                # Add a Message to a Thread
+                client.beta.threads.messages.create(
+                    thread_id=thread_id,
+                    role="user",
+                    content=question
+                )
+                print("Message created")
+            except Exception as e:
+                logger.error(f'Failed to create message: {str(e)}')
+                return Response({'error': f'Failed to create message: {str(e)}'}, status=500)    
+                    
+
+            try:
+                # Run the Assistant
+                run = client.beta.threads.runs.create(
+                    thread_id=thread_id,
+                    assistant_id=guest_assistant_id,
+                    # Optionally, you can add specific instructions here
+                )
+            except Exception as e:
+                logger.error(f'Failed to create run: {str(e)}')
+                
+                response_data = {
+                        'last_assistant_message': "I'm sorry, I'm still processing your request. Please try again later or start a new chat.",
+                        'run_id': run.id,
+                        'new_thread_id': thread_id,
+                        'recommend_follow_up': False,
+                    }
+                return Response(response_data)
             while True:
                 try:
                     run = client.beta.threads.runs.retrieve(
@@ -863,7 +865,6 @@ def guest_chat_with_gpt(request):
         else:
             response_data = {
                 'last_assistant_message': "I'm sorry, I cannot help with that.",
-                'run_status': run.status,
                 'new_thread_id': thread_id,
                 'recommend_follow_up': False,
             }

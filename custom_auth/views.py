@@ -22,7 +22,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from django.contrib.sites.shortcuts import get_current_site
 from django.template.loader import render_to_string
-from .serializers import CustomUserSerializer, AddressSerializer, PostalCodeSerializer
+from .serializers import CustomUserSerializer, AddressSerializer, PostalCodeSerializer, UserRoleSerializer
 import requests
 from local_chefs.models import PostalCode
 import os
@@ -44,6 +44,30 @@ load_dotenv("dev.env")
 
 logger = logging.getLogger(__name__)
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def switch_role_api(request):
+    # Get the user's role, or create a new one with 'customer' as the default
+    user_role, _ = UserRole.objects.get_or_create(user=request.user, defaults={'current_role': 'customer'})
+    print(f"User role: {user_role.current_role}")  # Debug print
+    new_role = 'chef' if user_role.current_role == 'customer' and user_role.is_chef else 'customer'
+
+    print(f"User {request.user.username} is trying to switch role to {new_role}.")
+
+    # Check if the user can switch to chef
+    if new_role == 'chef' and not user_role.is_chef:
+        print(f"User {request.user.username} tried to switch to chef role but is not a chef.")
+        return Response({'error': 'You are not a chef.'}, status=400)
+
+    # Update the user role
+    user_role.current_role = new_role
+    user_role.save()
+
+    print(f"User {request.user.username} switched role to {new_role}.")
+
+    # Serialize and return the new user role
+    serializer = UserRoleSerializer(user_role)
+    return Response(serializer.data)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -68,7 +92,6 @@ def change_password(request):
     except Exception as e:
         return Response({'status': 'error', 'message': str(e)}, status=500)
 
-import requests
 
 @api_view(['POST'])
 def password_reset_request(request):
@@ -216,21 +239,24 @@ def login_api_view(request):
         if user:
             # Create the token for the user
             refresh = RefreshToken.for_user(user)
-            print(f'User {user.username} logged in successfully')
-            print(f'Refresh token: {refresh}')
-            print(f'Access token: {refresh.access_token}')
+            
+            # Get the user's role
+            user_role = UserRole.objects.get(user=user)
+            print(f'User role is_chef: {user_role.is_chef}')
+            # Inside your login_api_view function
             return JsonResponse({
                 'refresh': str(refresh),
                 'access': str(refresh.access_token),
-                'user_id': user.id,  # Include the user_id in the response
+                'user_id': user.id,
                 'email_confirmed': user.email_confirmed,
+                'is_chef': user_role.is_chef,
+                'current_role': user_role.current_role,  # Include the current_role attribute in the response
                 'status': 'success',
                 'message': 'Logged in successfully'
             }, status=200)
         else:
             return JsonResponse({'status': 'error', 'message': 'Invalid username or password'}, status=400)
     return JsonResponse({'status': 'error', 'message': 'Only POST method allowed'}, status=405)
-
 
 @api_view(['POST'])
 @login_required
@@ -436,53 +462,6 @@ def switch_roles(request):
             messages.error(request, 'Invalid role.')
 
     return redirect('custom_auth:profile')  # Always redirect to the profile page after the operation
-
-
-# register view
-def register_view(request):
-    user_group = None
-    if request.method == 'POST':
-        form = RegistrationForm(request.POST)
-        address_form = AddressForm(request.POST)
-        if request.user.is_authenticated:
-            user_group = request.user.groups.values_list('name', flat=True).first()
-        if form.is_valid() and address_form.is_valid():
-            user = form.save(commit=False)
-            user.is_active = True
-            user.save()
-
-            # Save the Address
-            address = address_form.save(commit=False)
-            address.user = user
-            address.save()
-
-            current_site = get_current_site(request)
-            mail_subject = 'Activate your account.'
-            message = render_to_string('custom_auth/acc_active_email.html', {
-                'user': user,
-                'domain': current_site.domain,
-                'uid': urlsafe_base64_encode(force_bytes(user.pk)),
-                'token': account_activation_token.make_token(user),
-            })
-            to_email = form.cleaned_data.get('email')
-            email = EmailMessage(
-                mail_subject, 
-                message, 
-                from_email='mj@sautai.com',  # Use a different From address
-                to=[to_email]
-            )
-            email.send()
-            return redirect('custom_auth:verify_email')
-    else:
-        form = RegistrationForm()
-        address_form = AddressForm()
-        if request.user.is_authenticated:
-            user_group = request.user.groups.values_list('name', flat=True).first()
-
-    breadcrumbs = [
-        {'url': reverse('custom_auth:register'), 'name': 'Register'},
-    ]
-    return render(request, 'custom_auth/register.html', {'form': form, 'address_form': address_form, 'user_group': user_group, 'breadcrumbs': breadcrumbs})
 
 # activate view for clicking the link in the email
 def activate_view(request, uidb64, token):

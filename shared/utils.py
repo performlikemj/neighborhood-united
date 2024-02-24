@@ -449,7 +449,6 @@ def get_goal(request):
 
 def get_user_info(request):
     # Ensure the requesting user is trying to access their own information
-
     try:
         user = CustomUser.objects.get(id=request.data.get('user_id'))
         user_role = UserRole.objects.get(user=user)
@@ -457,14 +456,12 @@ def get_user_info(request):
         if user_role.current_role == 'chef':
             return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
 
-
-        
         address = Address.objects.get(user=user)
         user_info = {
             'user_id': user.id,
             'dietary_preference': user.dietary_preference,
             'week_shift': user.week_shift,
-            'user_goal': user.goal.goal_description if user.goal else 'None',
+            'user_goal': user.goal.goal_description if hasattr(user, 'goal') and user.goal else 'None',
             'postal_code': address.input_postalcode if address.input_postalcode else 'Not provided'
         }
         return {'status': 'success', 'user_info': user_info, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -472,6 +469,7 @@ def get_user_info(request):
         return {'status': 'error', 'message': 'User not found.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     except Address.DoesNotExist:
         return {'status': 'error', 'message': 'Address not found for user.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
 
 def access_past_orders(request, user_id):
     # Check user authorization
@@ -1078,55 +1076,34 @@ def guest_search_ingredients(request, query, meal_ids=None):
 
 
 def auth_search_chefs(request, query):
-    # Fetch user's dietary preference
+    print("From auth_search_chefs")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
     
     if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+        return {'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'}
 
-
-    try:
-        dietary_preference = user.foodpreferences.dietary_preference
-    except AttributeError:
-        dietary_preference = None
-
+    # Generate the embedding for the search query
+    query_vector = get_embedding(query)
+    
     # Retrieve user's primary postal code from Address model
     user_addresses = Address.objects.filter(user=user.id)
-    user_postal_code = user_addresses.input_postalcode if user_addresses.exists() else None
-
-    # Base query
-    base_query = Q()
-
-    # Add dietary preference filtering if available
-    if dietary_preference:
-        base_query &= Q(meals__dietary_preference=dietary_preference)
-
-    # Add postal code filtering if available
+    user_postal_code = user_addresses[0].input_postalcode if user_addresses.exists() else None
+    
+    # Retrieve chefs based on cosine similarity with the query embedding
+    similar_chefs = Chef.objects.annotate(
+        similarity=CosineDistance(F('chef_embedding'), query_vector)
+    ).filter(similarity__lt=0.1)  # Adjust threshold based on your needs
+    # Add additional filters based on user's preferences and location
+    if user.dietary_preference:
+        similar_chefs = similar_chefs.filter(meals__dietary_preference=user.dietary_preference)
     if user_postal_code:
-        base_query &= Q(serving_postalcodes__code=user_postal_code)
-
-    # Final query
-    chefs = Chef.objects.filter(base_query).distinct()
-
-    if dietary_preference:
-        meals = Meal.objects.filter(dietary_preference=dietary_preference)
-        if meals.exists():
-            base_query = Q(meals__in=meals)
-        if user_postal_code:
-            base_query &= Q(serving_postalcodes__code=user_postal_code)
-
-
-    # Add postal code filtering if available
-    if user_postal_code:
-        base_query &= Q(serving_postalcodes__code=user_postal_code)
-
-    print("Base Query:", base_query)
-    # Final query
-    chefs = Chef.objects.filter(base_query).distinct()
+        similar_chefs = similar_chefs.filter(serving_postalcodes__code=user_postal_code)
+    
+    similar_chefs = similar_chefs.distinct()
 
     auth_chef_result = []
-    for chef in chefs:
+    for chef in similar_chefs:
         featured_dishes = []
         # Retrieve service areas for each chef
         postal_codes_served = chef.serving_postalcodes.values_list('code', flat=True)
@@ -1184,10 +1161,16 @@ def auth_search_chefs(request, query):
 def guest_search_chefs(request, query):
     print("From guest_search_chefs")
 
-    chefs = Chef.objects.all()
+    # Generate the embedding for the search query
+    query_vector = get_embedding(query)
+    
+    # Retrieve chefs based on cosine similarity with the query embedding
+    similar_chefs = Chef.objects.annotate(
+        similarity=CosineDistance(F('chef_embedding'), query_vector)
+    ).filter(similarity__lt=0.1).distinct()  # Adjust threshold based on your needs
 
     guest_chef_result = []
-    for chef in chefs:
+    for chef in similar_chefs:
         featured_dishes = []
         for dish in chef.featured_dishes.all():
             dish_meals = Meal.objects.filter(dishes__id=dish.id)
@@ -1220,94 +1203,93 @@ def guest_search_chefs(request, query):
 
         guest_chef_result.append(chef_info)
 
+    if not guest_chef_result:
+        return {
+            "message": "No chefs found matching the query.",
+            "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
+        }
+
     return {
         "guest_chef_result": guest_chef_result,
         "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
 
 
-
-def auth_search_dishes(request):
+def auth_search_dishes(request, query):
     print("From auth_search_dishes")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
     
     if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+        return {'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'}
 
-
-    # Query meals based on postal code
+    # Generate the embedding for the search query
+    query_vector = get_embedding(query)
+    
+    # Query meals based on postal code and dietary preferences
     week_shift = max(int(user.week_shift), 0)
     current_date = timezone.now().date() + timedelta(weeks=week_shift)
-
-    # Filter meals by dietary preferences, postal code, and current week
     dietary_filtered_meals = Meal.dietary_objects.for_user(user).filter(start_date__gte=current_date)
     postal_filtered_meals = Meal.postal_objects.for_user(user=user).filter(start_date__gte=current_date)
-
-    # Apply dietary preference filter
     base_meals = dietary_filtered_meals & postal_filtered_meals
-    # Filter the meals based on the chef's serving postal codes and the meal's dietary preference
-    # Filter the dishes based on the meals and the dish's name
-    dishes = Dish.objects.filter(meal__in=base_meals).distinct()
-
+    
+    # Retrieve dishes based on cosine similarity with the query embedding
+    similar_dishes = Dish.objects.annotate(
+        similarity=CosineDistance(F('dish_embedding'), query_vector)
+    ).filter(meal__in=base_meals, similarity__lt=0.1).distinct()  # Adjust the threshold based on your needs
 
     auth_dish_result = []
-    for dish in dishes:
-        meals_with_dish = set(Meal.objects.filter(dishes=dish))
+    for dish in similar_dishes:
+        meals_with_dish = set(dish.meal_set.filter(start_date__gte=current_date))
         for meal in meals_with_dish:
             meal_detail = {
                 'meal_id': meal.id,
                 'name': meal.name,
                 'start_date': meal.start_date.strftime('%Y-%m-%d'),
                 'is_available': meal.can_be_ordered(),
-                'image_url': meal.image.url if meal.image else None,  # Add this line
+                'image_url': meal.image.url if meal.image else None,
                 'chefs': [{'id': dish.chef.id, 'name': dish.chef.user.username}],
-                'dishes': [{'id': dish.id, 'name': dish.name}],
+                'dishes': [{'id': dish.id, 'name': dish.name, 'similarity': dish.similarity}],
             }
             auth_dish_result.append(meal_detail)
 
-    # Prepare the response
     if not auth_dish_result:
-        return {
-            "message": "No dishes found that match your search.",
-            "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
-        }
-    return {
-        "auth_dish_result": auth_dish_result,
-        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
-    }
+        return {"message": "No dishes found that match your search.", "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-def guest_search_dishes(request):
+    return {"auth_dish_result": auth_dish_result, "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+
+def guest_search_dishes(request, query):
     print("From guest_search_dishes")
 
-    dishes = Dish.objects.all()
+    # Generate the embedding for the search query
+    query_vector = get_embedding(query)
+    
+    # Retrieve dishes based on cosine similarity with the query embedding
+    current_date = timezone.now().date()
+    similar_dishes = Dish.objects.annotate(
+        similarity=CosineDistance(F('dish_embedding'), query_vector)
+    ).filter(similarity__lt=0.1).distinct()  # Adjust threshold based on your needs
 
-    meal_ids = set() 
     meal_details = defaultdict(lambda: {'name': '', 'chefs': [], 'dishes': []})
-
-    for dish in dishes:
-        meals_with_dish = Meal.objects.filter(dishes__id=dish.id)
+    for dish in similar_dishes:
+        meals_with_dish = Meal.objects.filter(dishes=dish, start_date__gte=current_date)
         for meal in meals_with_dish:
-            meal_ids.add(meal.id)
-            meal_details[meal.id] = {
+            meal_details[meal.id].update({
                 "name": meal.name,
                 "start_date": meal.start_date.strftime('%Y-%m-%d'),
                 "is_available": meal.can_be_ordered(),
                 "chefs": [{"id": dish.chef.id, "name": dish.chef.user.username}],
-                "dishes": [{"id": dish.id, "name": dish.name}]
-            }
+                "dishes": [{"id": dish.id, "name": dish.name, 'similarity': dish.similarity}]
+            })
 
     guest_dish_result = [{"meal_id": k, **v} for k, v in meal_details.items()]
 
     if not guest_dish_result:
-        return {
-            "message": "No dishes found that match your search.",
-            "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
-        }
-    return {
-        "guest_dish_result": guest_dish_result,
-        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
-    }
+        return {"message": "No dishes found matching the query.", "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+    return {"guest_dish_result": guest_dish_result, "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
 
 def get_or_create_meal_plan(user, start_of_week, end_of_week):
     meal_plan, created = MealPlan.objects.get_or_create(
@@ -1326,20 +1308,18 @@ def cleanup_past_meals(meal_plan, current_date):
             meal__start_date__lte=current_date  # Only include meals that cannot be ordered
         ).delete()
 
+
 def auth_get_meal_plan(request):
     print("From auth_get_meal_plan")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
-    
+
     if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
-
-
+        return {'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'}
 
     today = timezone.now().date()
     week_shift = max(int(user.week_shift), 0)
-    adjusted_today = today + timedelta(weeks=week_shift)
-    start_of_week = adjusted_today - timedelta(days=adjusted_today.weekday())
+    start_of_week = today + timedelta(days=-today.weekday(), weeks=week_shift)
     end_of_week = start_of_week + timedelta(days=6)
 
     meal_plan = get_or_create_meal_plan(user, start_of_week, end_of_week)
@@ -1347,7 +1327,11 @@ def auth_get_meal_plan(request):
     if week_shift == 0:
         cleanup_past_meals(meal_plan, today)
 
-    meal_plan_details = [{'meal_plan_id': meal_plan.id, 'week_start_date': meal_plan.week_start_date.strftime('%Y-%m-%d'), 'week_end_date': meal_plan.week_end_date.strftime('%Y-%m-%d')}]
+    meal_plan_details = [{
+        'meal_plan_id': meal_plan.id,
+        'week_start_date': meal_plan.week_start_date.strftime('%Y-%m-%d'),
+        'week_end_date': meal_plan.week_end_date.strftime('%Y-%m-%d')
+    }]
 
     for meal_plan_meal in MealPlanMeal.objects.filter(meal_plan=meal_plan):
         meal = meal_plan_meal.meal
@@ -1357,13 +1341,16 @@ def auth_get_meal_plan(request):
             "chef": meal.chef.user.username,
             "start_date": meal.start_date.strftime('%Y-%m-%d'),
             "is_available": meal.can_be_ordered(),
-            "dishes": [dish.name for dish in meal.dishes.all()],
+            "dishes": [{"id": dish.id, "name": dish.name} for dish in meal.dishes.all()],
             "day": meal_plan_meal.day,
             "meal_plan_id": meal_plan.id,
         }
         meal_plan_details.append(meal_details)
 
-    return {"auth_meal_plan": meal_plan_details, "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+    return {
+        "auth_meal_plan": meal_plan_details,
+        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
 
 def guest_get_meal_plan(request):
     print("From guest_get_meal_plan")
@@ -1371,30 +1358,20 @@ def guest_get_meal_plan(request):
     start_of_week = today - timedelta(days=today.weekday())
     end_of_week = start_of_week + timedelta(days=6)
 
-    # Convert DAYS_OF_WEEK to a list of day names
     days_of_week_list = [day[0] for day in MealPlanMeal.DAYS_OF_WEEK]
 
-    # Base query for meals available in the current week
-    base_meals = Meal.objects.filter(start_date__gt=today, start_date__lte=end_of_week)  # Only include meals that can be ordered
+    base_meals = Meal.objects.filter(start_date__gte=today, start_date__lte=end_of_week).distinct()
 
-    # Build the meal plan for each day of the week
     guest_meal_plan = []
     used_meals = set()
-    for i, day_name in enumerate(days_of_week_list):
-        current_day = start_of_week + timedelta(days=i)
+    for day_name in days_of_week_list:
+        current_day = start_of_week + timedelta(days=days_of_week_list.index(day_name))
         
-        # Skip days not within the current week
         if current_day > end_of_week:
             break
 
-        # Find a meal that hasn't been used yet
-        chosen_meal = base_meals.filter(
-            start_date__lte=current_day
-        ).exclude(
-            id__in=used_meals
-        ).first()
+        chosen_meal = base_meals.exclude(id__in=used_meals).first()
 
-        # Add meal details if a suitable meal is found
         if chosen_meal:
             used_meals.add(chosen_meal.id)
             meal_details = {
@@ -1408,17 +1385,11 @@ def guest_get_meal_plan(request):
             }
             guest_meal_plan.append(meal_details)
 
-    # Return the result
-    if not guest_meal_plan:
-        return {
-            "message": "No meals available this week.",
-            "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
-            "guest_meal_plan": []  # Empty list to indicate no meal plans
-        }
     return {
-        "guest_meal_plan": guest_meal_plan,  # List of meal plans
-        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
+        "guest_meal_plan": guest_meal_plan,
+        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')
     }
+
 
 def approve_meal_plan(request, meal_plan_id):
     print("From approve_meal_plan")

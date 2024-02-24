@@ -11,7 +11,6 @@ urlpatterns = [
     path('switch-roles/', views.switch_roles, name='switch_roles'),  
     path('login/', views.login_view, name='login'),
     path('logout/', views.logout_view, name='logout'),
-    path('register/', views.register_view, name='register'),
     path('activate/<uidb64>/<token>/', views.activate_view, name='activate'),
     path('verify-email/', views.verify_email_view, name='verify_email'),
     path('confirm-email/<str:uidb64>/<str:token>', views.confirm_email, name='confirm_email'),
@@ -28,4 +27,5 @@ urlpatterns = [
     path('api/password_reset_request/', views.password_reset_request, name='password_reset_request'),
     path('api/change_password/', views.change_password, name='change_password'),
     path('api/reset_password/', views.reset_password, name='reset_password'),
+    path('api/switch_role/', views.switch_role_api, name='switch_roles_api'),
 ]

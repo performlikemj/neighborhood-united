@@ -30,38 +30,38 @@ class CustomUser(AbstractUser):
     ]
 
     ALLERGY_CHOICES = [
-        ('Peanuts', 'Peanuts'),
-        ('Tree nuts', 'Tree nuts'),  # Includes almonds, cashews, walnuts, etc.
-        ('Milk', 'Milk'),  # Refers to dairy allergy
-        ('Egg', 'Egg'),
-        ('Wheat', 'Wheat'),  # Common in gluten intolerance
-        ('Soy', 'Soy'),
-        ('Fish', 'Fish'),  # Includes allergies to specific types of fish
-        ('Shellfish', 'Shellfish'),  # Includes shrimp, crab, lobster, etc.
-        ('Sesame', 'Sesame'),
-        ('Mustard', 'Mustard'),
-        ('Celery', 'Celery'),
-        ('Lupin', 'Lupin'),  # Common in Europe, refers to Lupin beans and seeds
-        ('Sulfites', 'Sulfites'),  # Often found in dried fruits and wine
-        ('Molluscs', 'Molluscs'),  # Includes snails, slugs, mussels, oysters, etc.
-        ('Corn', 'Corn'),
-        ('Gluten', 'Gluten'),  # For broader gluten-related allergies beyond wheat
-        ('Kiwi', 'Kiwi'),
-        ('Latex', 'Latex'),  # Latex-fruit syndrome related allergies
-        ('Pine Nuts', 'Pine Nuts'),
-        ('Sunflower Seeds', 'Sunflower Seeds'),
-        ('Poppy Seeds', 'Poppy Seeds'),
-        ('Fennel', 'Fennel'),
-        ('Peach', 'Peach'),
-        ('Banana', 'Banana'),
-        ('Avocado', 'Avocado'),
-        ('Chocolate', 'Chocolate'),
-        ('Coffee', 'Coffee'),
-        ('Cinnamon', 'Cinnamon'),
-        ('Garlic', 'Garlic'),
-        ('Chickpeas', 'Chickpeas'),
-        ('Lentils', 'Lentils'),
-        ('None', 'None'),
+    ('Peanuts', 'Peanuts'),
+    ('Tree nuts', 'Tree nuts'),  # Includes almonds, cashews, walnuts, etc.
+    ('Milk', 'Milk'),  # Refers to dairy allergy
+    ('Egg', 'Egg'),
+    ('Wheat', 'Wheat'),  # Common in gluten intolerance
+    ('Soy', 'Soy'),
+    ('Fish', 'Fish'),  # Includes allergies to specific types of fish
+    ('Shellfish', 'Shellfish'),  # Includes shrimp, crab, lobster, etc.
+    ('Sesame', 'Sesame'),
+    ('Mustard', 'Mustard'),
+    ('Celery', 'Celery'),
+    ('Lupin', 'Lupin'),  # Common in Europe, refers to Lupin beans and seeds
+    ('Sulfites', 'Sulfites'),  # Often found in dried fruits and wine
+    ('Molluscs', 'Molluscs'),  # Includes snails, slugs, mussels, oysters, etc.
+    ('Corn', 'Corn'),
+    ('Gluten', 'Gluten'),  # For broader gluten-related allergies beyond wheat
+    ('Kiwi', 'Kiwi'),
+    ('Latex', 'Latex'),  # Latex-fruit syndrome related allergies
+    ('Pine Nuts', 'Pine Nuts'),
+    ('Sunflower Seeds', 'Sunflower Seeds'),
+    ('Poppy Seeds', 'Poppy Seeds'),
+    ('Fennel', 'Fennel'),
+    ('Peach', 'Peach'),
+    ('Banana', 'Banana'),
+    ('Avocado', 'Avocado'),
+    ('Chocolate', 'Chocolate'),
+    ('Coffee', 'Coffee'),
+    ('Cinnamon', 'Cinnamon'),
+    ('Garlic', 'Garlic'),
+    ('Chickpeas', 'Chickpeas'),
+    ('Lentils', 'Lentils'),
+    ('None', 'None'),
     ]
     email = models.EmailField(unique=True, blank=False, null=False)
     email_confirmed = models.BooleanField(default=False)

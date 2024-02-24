@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import Address, CustomUser
+from .models import Address, CustomUser, UserRole
 from local_chefs.models import PostalCode, ChefPostalCode
 
 class CustomUserSerializer(serializers.ModelSerializer):
@@ -42,3 +42,16 @@ class PostalCodeSerializer(serializers.ModelSerializer):
         # Create or update the PostalCode instance
         postal_code, created = PostalCode.objects.get_or_create(**validated_data)
         return postal_code
+
+
+class UserRoleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserRole
+        fields = ['id', 'user', 'is_chef', 'current_role']
+
+    def update(self, instance, validated_data):
+        # Update the UserRole instance
+        instance.current_role = validated_data.get('current_role', instance.current_role)
+        instance.is_chef = validated_data.get('is_chef', instance.is_chef)
+        instance.save()
+        return instance

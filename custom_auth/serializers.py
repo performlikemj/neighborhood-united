@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import Address, CustomUser
-from local_chefs.models import PostalCode, ChefPostalCode, UserRole
+from .models import Address, CustomUser, UserRole
+from local_chefs.models import PostalCode, ChefPostalCode
 
 class CustomUserSerializer(serializers.ModelSerializer):
     class Meta:

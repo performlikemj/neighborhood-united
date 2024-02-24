@@ -22,7 +22,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from django.contrib.sites.shortcuts import get_current_site
 from django.template.loader import render_to_string
-from .serializers import CustomUserSerializer, AddressSerializer, PostalCodeSerializer
+from .serializers import CustomUserSerializer, AddressSerializer, PostalCodeSerializer, UserRoleSerializer
 from local_chefs.models import PostalCode
 import os
 from django.db import transaction
@@ -199,7 +199,28 @@ def update_profile_api(request):
     else:
         return Response({'status': 'failure', 'message': 'Address data not provided'}, status=400)
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def switch_role_api(request):
+    # Get the user's role, or create a new one with 'customer' as the default
+    user_role, _ = UserRole.objects.get_or_create(user=request.user, defaults={'current_role': 'customer'})
+    new_role = 'chef' if user_role.current_role == 'customer' and user_role.is_chef else 'customer'
 
+    print(f"User {request.user.username} is trying to switch role to {new_role}.")
+
+    # Check if the user can switch to chef
+    if new_role == 'chef' and not user_role.is_chef:
+        return Response({'error': 'You are not a chef.'}, status=400)
+
+    # Update the user role
+    user_role.current_role = new_role
+    user_role.save()
+
+    print(f"User {request.user.username} switched role to {new_role}.")
+
+    # Serialize and return the new user role
+    serializer = UserRoleSerializer(user_role)
+    return Response(serializer.data)
 
 @api_view(['POST'])
 def login_api_view(request):
@@ -211,20 +232,25 @@ def login_api_view(request):
         if user:
             # Create the token for the user
             refresh = RefreshToken.for_user(user)
-            print(f'User {user.username} logged in successfully')
-            print(f'Refresh token: {refresh}')
-            print(f'Access token: {refresh.access_token}')
+            
+            # Get the user's role
+            user_role = UserRole.objects.get(user=user)
+            print(f'User role is_chef: {user_role.is_chef}')
+            # Inside your login_api_view function
             return JsonResponse({
                 'refresh': str(refresh),
                 'access': str(refresh.access_token),
-                'user_id': user.id,  # Include the user_id in the response
+                'user_id': user.id,
                 'email_confirmed': user.email_confirmed,
+                'is_chef': user_role.is_chef,
+                'current_role': user_role.current_role,  # Include the current_role attribute in the response
                 'status': 'success',
                 'message': 'Logged in successfully'
             }, status=200)
         else:
             return JsonResponse({'status': 'error', 'message': 'Invalid username or password'}, status=400)
     return JsonResponse({'status': 'error', 'message': 'Only POST method allowed'}, status=405)
+
 
 
 @api_view(['POST'])

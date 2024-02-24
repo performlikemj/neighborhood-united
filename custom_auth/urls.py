@@ -28,4 +28,5 @@ urlpatterns = [
     path('api/password_reset_request/', views.password_reset_request, name='password_reset_request'),
     path('api/change_password/', views.change_password, name='change_password'),
     path('api/reset_password/', views.reset_password, name='reset_password'),
+    path('api/switch_role/', views.switch_role_api, name='switch_roles_api'),
 ]

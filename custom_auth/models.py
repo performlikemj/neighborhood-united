@@ -101,13 +101,11 @@ class UserRole(models.Model):
     current_role = models.CharField(max_length=10, choices=[('chef', 'Chef'), ('customer', 'Customer')], default='customer')
     
     def switch_to_chef(self):
-        self.is_chef = True
         self.current_role = 'chef'
         self.save()
 
     # more methods for role management
     def switch_to_customer(self):
-        self.is_chef = False
         self.current_role = 'customer'
         self.save()
 

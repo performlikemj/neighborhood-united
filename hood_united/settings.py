@@ -301,3 +301,7 @@ if DEBUG == False:
     # Other security settings
     SECURE_BROWSER_XSS_FILTER = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
+
+    # Celery settings
+    CELERY_BROKER_URL = config['CELERY_BROKER_URL']
+    CELERY_RESULT_BACKEND = config['CELERY_RESULT_BACKEND']

@@ -25,6 +25,13 @@ class ChatThread(models.Model):
     def __str__(self):
         return f"Chat Thread for {self.user.username} - ID: {self.openai_thread_id}"
 
+class UserMessage(models.Model):
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='chat_messages')
+    thread = models.ForeignKey(ChatThread, on_delete=models.CASCADE, related_name='messages', null=True)  # Add null=True
+    message = models.TextField()
+    response = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
 
 class UserHealthMetrics(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='health_metrics')

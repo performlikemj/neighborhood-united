@@ -18,6 +18,7 @@ urlpatterns = [
     # streamlit
     path('api/chat_with_gpt/', views.chat_with_gpt, name='chat_with_gpt'),
     path('api/guest_chat_with_gpt/', views.guest_chat_with_gpt, name='guest_chat_with_gpt'),
+    path('api/get_message_status/<int:message_id>/', views.get_message_status, name='get_message_status'),
     path('api/history_page/', views.api_history_page, name='api_history_page'),
     path('api/thread_history/', views.api_thread_history, name='api_thread_history'),
     path('api/thread_detail/<str:openai_thread_id>/', views.api_thread_detail_view, name='api_thread_detail'),
@@ -34,5 +35,5 @@ urlpatterns = [
     path('api/add_calories/', views.api_add_calorie_intake, name='api_add_calories'),
     path('api/delete_calorie_intake/<int:record_id>/', views.api_delete_calorie_intake, name='api_delete_calorie_intake'),
     path('api/calorie_intake/<int:record_id>/', views.api_update_calorie_intake, name='api_update_calorie_intake'),
-    path('api/user_summary/', views.api_user_summary, name='api_user_summary')
+    path('api/user_summary/', views.api_user_summary, name='api_user_summary'),
 ]

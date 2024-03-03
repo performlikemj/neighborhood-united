@@ -1,6 +1,7 @@
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
+from meals.tasks import process_user_message
 from meals.models import Order, Dish, Meal, Cart, MealPlanMeal, MealPlan, Meal
 from custom_auth.models import CustomUser, UserRole
 from django.contrib.auth.decorators import user_passes_test
@@ -9,7 +10,7 @@ from datetime import timedelta
 from django.template.loader import render_to_string
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_http_methods
-from .models import GoalTracking, ChatThread, UserHealthMetrics, CalorieIntake, UserSummary
+from .models import GoalTracking, ChatThread, UserHealthMetrics, CalorieIntake, UserMessage, UserSummary
 from .forms import GoalForm
 import openai
 from openai import NotFoundError, OpenAI, OpenAIError
@@ -41,7 +42,6 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 import datetime
 from asgiref.sync import async_to_sync
-from hood_united.consumers import ToolCallConsumer
 import asyncio
 import logging
 import threading
@@ -847,11 +847,13 @@ def chat_with_gpt(request):
         question = data.get('question')
         print(f"Question: {question}")
         thread_id = data.get('thread_id')
-        print(f"Thread ID: {thread_id}")
 
         if not question:
             return Response({'error': 'No question provided'}, status=400)
-
+        user_message = UserMessage.objects.create(
+            user=user,
+            message=question
+        )
         relevant = is_question_relevant(question)
 
         if not relevant:
@@ -883,148 +885,65 @@ def chat_with_gpt(request):
             )
 
             user.week_shift = 0
-        try:
-            print("Creating a message")
-            # Add a Message to a Thread
-            print(f"Thread ID: {thread_id}")
-            print(f"Question: {question}")
-            client.beta.threads.messages.create(
-                thread_id=thread_id,
-                role="user",
-                content=question
-            )
-            print("Message created")
-        except Exception as e:
-            logger.error(f'Failed to create message: {str(e)}')
-            return Response({'error': f'Failed to create message: {str(e)}'}, status=500)    
-                
-
-    
+            user.save()
+        thread = ChatThread.objects.get(openai_thread_id=thread_id)
+        user_message.thread = thread
+        user_message.save()
         # Variable to store tool call results
         formatted_outputs = []
-            
-        try:
-            # Run the Assistant
-            run = client.beta.threads.runs.create(
-                thread_id=thread_id,
-                assistant_id=assistant_id,
-                # Optionally, you can add specific instructions here
-            )
-        except Exception as e:
-            logger.error(f'Failed to create run: {str(e)}')
-            return Response({'error': f'Failed to create run: {str(e)}'}, status=500)
+
         if relevant:
-            while True:
-                try:
-                    run = client.beta.threads.runs.retrieve(
-                        thread_id=thread_id,
-                        run_id=run.id
-                    )
-
-                    if run.status == 'completed':
-                        logger.info('Run completed')
-                        break
-                    elif run.status == 'failed':
-                        logger.error('Run failed')
-                        break
-                    elif run.status in ['expired', 'cancelled']:
-                        logger.warning(f'Run {run.status}')
-                        break
-                    elif run.status in ['queued', 'in_progress', 'running']:
-                        time.sleep(0.5)
-                        continue
-                    elif run.status == "requires_action":
-                        tool_outputs = []
-                        print("Run requires action")
-                        for tool_call in run.required_action.submit_tool_outputs.tool_calls:
-                            # Execute the function call and get the result
-                            print(f"New Tool call: {tool_call}")
-                            tool_call_result = ai_call(tool_call, request)
-                            print(f"Tool call result: {tool_call_result}")
-                            # Prepare the update data
-                            update_data = {
-                                'function_name': tool_call_result['function'],  # Example, adjust based on your data structure
-                                'result': tool_call_result
-                            }
-                            # Extracting the tool_call_id and the output
-                            tool_call_id = tool_call_result['tool_call_id']
-                            print(f"Tool call ID: {tool_call_id}")
-                            output = tool_call_result['output']
-                            print(f"Output: {output}")
-                            # Assuming 'output' needs to be serialized as a JSON string
-                            # If it's already a string or another format is required, adjust this line accordingly
-                            output_json = json.dumps(output)
-                            print(f"Output JSON: {output_json}")
-                            # Prepare the output in the required format
-                            formatted_output = {
-                                "tool_call_id": tool_call_id,
-                                "output": output_json
-                            }
-                            print(f"Formatted tool output: {formatted_output}")
-                            tool_outputs.append(formatted_output)
-
-                            formatted_outputs.append(formatted_output)
-                        print(f"Ready to submit tool outputs: {tool_outputs}")
-                        # Submitting the formatted outputs
-                        client.beta.threads.runs.submit_tool_outputs(
-                            thread_id=thread_id,
-                            run_id=run.id,
-                            tool_outputs=tool_outputs,
-                        )
-                        continue
-                except Exception as e:
-                    logger.critical(f'Critical error occurred: {e}', exc_info=True)
-            # Check the status of the Run and retrieve responses
-            try:
-                # Retrieve messages and log them
-                print("Retrieving messages")
-                messages = client.beta.threads.messages.list(thread_id)
-                context = []
-                for message in reversed(messages.data):
-                    role = message.role.capitalize()
-                    text = message.content[0].text.value
-                    context.append(f"{role}: {text}")            
-
-                formatted_context = "\n".join(context)
-            except Exception as e:
-                logger.error(f'Failed to list messages: {str(e)}')
-                return Response({'error': f'Failed to list messages: {str(e)}'}, status=500)
-
-
-                
-
-            try:
-                # Retrieve the run steps
-                print("Retrieving run steps")
-                run_steps = client.beta.threads.runs.steps.list(thread_id=thread_id, run_id=run.id)
-            except Exception as e:
-                return Response({'error': f'Failed to list run steps: {str(e)}'}, status=500)
-
-            
-
-
-            response_data = {
-                'last_assistant_message': next((msg.content[0].text.value for msg in (messages.data) if msg.role == 'assistant'), None),                
-                'run_id': run.id,
-                'new_thread_id': thread_id,
-                'recommend_follow_up': recommend_follow_up(request, formatted_context),
-            }
+            process_user_message(request, user_message.id, assistant_id)    
         else:
             response_data = {
                 'last_assistant_message': "I'm sorry, I cannot help with that.",
-                'run_id': run.id,
                 'new_thread_id': thread_id,
                 'recommend_follow_up': False,
             }
-        print(thread_id)
-        print(f'New thread ID: {thread_id}')
+            return Response(response_data)
+        messages = client.beta.threads.messages.list(thread_id)
+        context = []
+        for message in reversed(messages.data):
+            role = message.role.capitalize()
+            text = message.content[0].text.value
+            context.append(f"{role}: {text}")            
 
-        print(f'message: {response_data["last_assistant_message"]}')
-        
-        # Wrap response_data in a Response object
+        formatted_context = "\n".join(context)
+        response_data = {
+            'new_thread_id': thread_id,
+            'recommend_follow_up': recommend_follow_up(request, formatted_context),
+            'message_id': user_message.id,
+        }
         return Response(response_data)
+        #TODO: Tie this function with the shared task, and with a listener that checks whether the message.response is ready
+    
 
     except Exception as e:
         # Return error message wrapped in Response
         logger.error(f'Error: {str(e)}')
         return Response({'error': str(e)}, status=500)
+
+
+@api_view(['GET'])
+def get_message_status(request, message_id):
+    try:
+        user_id = request.query_params.get('user_id')  # Use query_params for GET requests
+        user = CustomUser.objects.get(id=user_id)
+        message = UserMessage.objects.get(id=message_id, user=user)
+        
+        # Check if the message has a response
+        if message.response:
+            return Response({
+                'message_id': message.id,
+                'response': message.response,
+                'status': 'completed'  # Indicate that the message has been processed
+            })
+        else:
+            return Response({
+                'message_id': message.id,
+                'status': 'pending'  # Indicate that the message is still being processed
+            })
+    except CustomUser.DoesNotExist:
+        return Response({'error': 'User not found'}, status=404)
+    except UserMessage.DoesNotExist:
+        return Response({'error': 'Message not found'}, status=404)

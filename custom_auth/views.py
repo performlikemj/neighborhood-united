@@ -236,6 +236,7 @@ def login_api_view(request):
             # Get the user's role
             user_role = UserRole.objects.get(user=user)
             print(f'User role is_chef: {user_role.is_chef}')
+            print(f'User role current_role: {user_role.current_role}')
             # Inside your login_api_view function
             return JsonResponse({
                 'refresh': str(refresh),

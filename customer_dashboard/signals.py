@@ -1,8 +1,7 @@
-# signals.py
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 from .models import GoalTracking, UserHealthMetrics, CalorieIntake
-from .views import generate_user_summary
+from meals.tasks import generate_user_summary  # Import the Celery task
 
 @receiver(post_save, sender=GoalTracking)
 @receiver(post_delete, sender=GoalTracking)
@@ -17,5 +16,5 @@ def handle_model_update(sender, instance, **kwargs):
         user_id = instance.user.id
     else:
         return  # Exit if no user is associated with the instance
-    
-    generate_user_summary(user_id)
+
+    generate_user_summary.delay(user_id)  # Use .delay() to queue the task

@@ -2,15 +2,17 @@ import json
 from django.shortcuts import render, redirect
 from django.urls import reverse
 from qa_app.models import FoodQA
-from meals.models import Dish, MealType, Meal, MealPlan, MealPlanMeal, Order, OrderMeal
+from meals.models import Dish, MealType, Meal, MealPlan, MealPlanMeal, Order, OrderMeal, Ingredient
 from local_chefs.models import ChefPostalCode, PostalCode
 from django.conf import settings
+from django.utils.html import strip_tags
 from django.http import JsonResponse
 from django.core.paginator import Paginator
 from chefs.models import Chef
 from custom_auth.models import Address
 from datetime import date, timedelta, datetime
-from django.db.models import Q
+from django.db.models import Q, F
+from pgvector.django import CosineDistance
 from reviews.models import Review
 from custom_auth.models import CustomUser, UserRole
 from django.contrib.contenttypes.models import ContentType
@@ -29,6 +31,13 @@ from django.core.exceptions import ObjectDoesNotExist
 import base64
 import os
 import requests
+
+client = OpenAI(api_key=settings.OPENAI_KEY)
+
+def get_embedding(text, model="text-embedding-3-small"):
+    text = text.replace("\n", " ")
+    response = client.embeddings.create(input=[text], model=model)
+    return response.data[0].embedding
 
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -92,6 +101,26 @@ def provide_healthy_meal_suggestions(request, user_id):
 
     return user_info
 
+def search_healthy_meal_options(request, search_term, location_id, limit=10, start=0):
+    url = "https://api-ce.kroger.com/v1/products"
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {get_access_token(client_id=os.getenv('KROGER_CLIENT_ID'), client_secret=os.getenv('KROGER_CLIENT_SECRET'))}"
+    }
+    params = {
+        "filter.term": search_term,
+        "filter.locationId": location_id,
+        "filter.limit": limit,
+        "filter.start": start
+    }
+    response = requests.get(url, headers=headers, params=params)
+
+    if response.status_code == 200:
+        return response.json()
+    else:
+        # Handle errors
+        return None
+
 def is_question_relevant(question):
     """
     Determine if a question is relevant to the application's functionality, specifically considering health, nutrition, and diet.
@@ -100,7 +129,6 @@ def is_question_relevant(question):
     :return: A boolean indicating whether the question is relevant.
     """
     print("From is_question_relevant")
-    client = openai.OpenAI(api_key=settings.OPENAI_KEY)  # Initialize OpenAI client
 
     # Define application's functionalities and domains for the model to consider
     app_context = """
@@ -130,28 +158,6 @@ def is_question_relevant(question):
     else:
         return True
 
-
-def search_healthy_meal_options(request, search_term, location_id, limit=10, start=0):
-    url = "https://api-ce.kroger.com/v1/products"
-    headers = {
-        "Accept": "application/json",
-        "Authorization": f"Bearer {get_access_token(client_id=os.getenv('KROGER_CLIENT_ID'), client_secret=os.getenv('KROGER_CLIENT_SECRET'))}"
-    }
-    params = {
-        "filter.term": search_term,
-        "filter.locationId": location_id,
-        "filter.limit": limit,
-        "filter.start": start
-    }
-    response = requests.get(url, headers=headers, params=params)
-
-    if response.status_code == 200:
-        return response.json()
-    else:
-        # Handle errors
-        return None
-
-
 def recommend_follow_up(request, context):
     """
     Recommend follow-up prompts based on the user's interaction context.
@@ -159,8 +165,16 @@ def recommend_follow_up(request, context):
     :param context: A string representing the user's last few interactions or context.
     :return: A list of recommended follow-up prompts or actions.
     """
-    client = OpenAI(api_key=settings.OPENAI_KEY) # Initialize OpenAI client
-    if request.user.is_authenticated:
+    if request.data.get('user_id'):
+        user_id = request.data.get('user_id')
+        try:
+            user = CustomUser.objects.get(id=user_id)
+        except CustomUser.DoesNotExist:
+            user = None
+    else:
+        user = None
+
+    if user and user.is_authenticated:
         functions = """
             "auth_search_dishes: Search dishes in the database",
             "auth_search_chefs: Search chefs in the database and get their info",
@@ -208,7 +222,7 @@ def recommend_follow_up(request, context):
         messages=[
             {
                 "role": "user", 
-                "content": f"Given the following context: {context} and functions: {functions}, what prompt should a user write next? Output ONLY the recommended prompt in a natural sentence without using the function name, without quotations, and without starting the output with 'the user should write' or anything similar." 
+                "content": f"Given the following context: {context} and functions: {functions}, what prompt should a user write next? Output ONLY the recommended prompt in the first person and in a natural sentence without using the function name, without quotations, and without starting the output with 'the user should write' or anything similar." 
             }
         ],
     )
@@ -438,7 +452,6 @@ def get_goal(request):
 
 def get_user_info(request):
     # Ensure the requesting user is trying to access their own information
-
     try:
         user = CustomUser.objects.get(id=request.data.get('user_id'))
         user_role = UserRole.objects.get(user=user)
@@ -446,14 +459,12 @@ def get_user_info(request):
         if user_role.current_role == 'chef':
             return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
 
-
-        
         address = Address.objects.get(user=user)
         user_info = {
             'user_id': user.id,
             'dietary_preference': user.dietary_preference,
             'week_shift': user.week_shift,
-            'user_goal': user.goal.goal_description if user.goal else 'None',
+            'user_goal': user.goal.goal_description if hasattr(user, 'goal') and user.goal else 'None',
             'postal_code': address.input_postalcode if address.input_postalcode else 'Not provided'
         }
         return {'status': 'success', 'user_info': user_info, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -461,6 +472,7 @@ def get_user_info(request):
         return {'status': 'error', 'message': 'User not found.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     except Address.DoesNotExist:
         return {'status': 'error', 'message': 'Address not found for user.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
 
 def access_past_orders(request, user_id):
     # Check user authorization
@@ -570,6 +582,7 @@ def delete_review(request, review_id):
 
     return {'status': 'success', 'message': 'Review deleted successfully', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
+#TODO: turn this into a celery task coupled with a signal
 def generate_review_summary(object_id, category):
     # Step 1: Fetch all the review summaries for a specific chef or meal
     content_type = ContentType.objects.get(model=category)
@@ -629,9 +642,9 @@ def list_upcoming_meals(request):
         {
             "meal_id": meal.id,
             "name": meal.name,
-            "start_date": meal.start_date.strftime('%Y-%m-%d'),
+            "start_date": meal.start_date.strftime('%Y-%m-%d') if meal.start_date else 'N/A',
             "is_available": meal.can_be_ordered(),
-            "chef": meal.chef.user.username,
+            "chef": meal.chef.user.username if meal.chef else 'User Created Meal',
             # Add more details as needed
         } for meal in filtered_meals
     ]
@@ -667,44 +680,32 @@ def create_meal_plan(request):
             week_end_date=end_of_week,
             created_date=timezone.now()
         )
-        return {'status': 'success', 'message': 'Created new meal plan.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+        return {'status': 'success', 'message': 'Created new meal plan. It is currently empty.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
     return {'status': 'error', 'message': 'A meal plan already exists for this week.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+
 
 def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day):
     print("From replace_meal_in_plan")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
-    user_role = UserRole.objects.get(user=user)
     
-    if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
-
-
-
     # Validate meal plan
     try:
         meal_plan = MealPlan.objects.get(id=meal_plan_id, user=user)
     except MealPlan.DoesNotExist:
         return {'status': 'error', 'message': 'Meal plan not found.'}
 
-    # Check if the meal plan is linked to a placed order and if the order is paid
+    # Check if the meal plan is linked to a placed order
     if meal_plan.order:
-        if meal_plan.order.is_paid:
-            return {'status': 'error', 'message': 'Cannot modify a paid meal plan.'}
-        else:
-            return {'status': 'error', 'message': 'Cannot modify a meal plan with an unpaid order.'}
+        return {'status': 'error', 'message': 'Cannot modify a meal plan associated with an order.'}
 
-    # Validate old meal
+    # Validate old and new meals
     try:
         old_meal = Meal.objects.get(id=old_meal_id)
-    except Meal.DoesNotExist:
-        return {'status': 'error', 'message': 'Old meal not found.'}
-
-    # Validate new meal
-    try:
         new_meal = Meal.objects.get(id=new_meal_id)
-    except Meal.DoesNotExist:
-        return {'status': 'error', 'message': 'New meal not found.'}
+    except Meal.DoesNotExist as e:
+        return {'status': 'error', 'message': f'Meal not found: {str(e)}'}
 
     # Validate day
     if day not in dict(MealPlanMeal.DAYS_OF_WEEK):
@@ -713,7 +714,7 @@ def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day):
     # Check if old meal is scheduled for the specified day
     meal_plan_meal = MealPlanMeal.objects.filter(meal_plan=meal_plan, meal=old_meal, day=day).first()
     if not meal_plan_meal:
-        return {'status': 'error', 'message': 'Old meal not scheduled on the specified day.'}
+        return {'status': 'error', 'message': 'The initial meal is not scheduled on the specified day.'}
 
     # Replace old meal with new meal
     meal_plan_meal.meal = new_meal
@@ -726,19 +727,13 @@ def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day):
             'old_meal': old_meal.name,
             'new_meal': new_meal.name,
             'day': day
-        },
-        'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
     }
+
 
 def remove_meal_from_plan(request, meal_plan_id, meal_id, day):
     print("From remove_meal_from_plan")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
-    user_role = UserRole.objects.get(user=user)
-    
-    if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
-
-
 
     # Retrieve the specified MealPlan
     try:
@@ -763,7 +758,45 @@ def remove_meal_from_plan(request, meal_plan_id, meal_id, day):
 
     # Remove the meal from the meal plan
     meal_plan_meal.delete()
-    return {'status': 'success', 'message': 'Meal removed from the plan.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+    return {'status': 'success', 'message': 'Meal removed from the plan.'}
+
+
+def create_meal(request, name, dietary_preference, description):
+    meal_text = f"{name} by No chef ({dietary_preference}). Description: {description[:100]}..."
+
+    # Get the embedding for the concatenated meal description
+    new_meal_embedding = get_embedding(meal_text)
+    # Find similar existing meals based on cosine similarity of embeddings
+    similar_meals = Meal.objects.annotate(
+        similarity=CosineDistance(F('meal_embedding'), new_meal_embedding)
+    ).filter(similarity__gt=0.1)  
+
+    if similar_meals.exists():
+        # If similar meal is found, return the first one
+        existing_meal = similar_meals.first()
+        return {'status': 'info', 'message': 'A similar meal already exists.', 'meal_id': existing_meal.id}
+    
+    # If no similar meals, proceed to create a new one
+    meal = Meal(
+        name=name,
+        dietary_preference=dietary_preference,
+        description=description,
+        meal_embedding=new_meal_embedding  # Assuming your Meal model has a field for the embedding
+    )
+    meal.created_date = timezone.now()
+    meal.save()
+
+    # Convert the Meal object to a dictionary for the response
+    meal_dict = {
+        'id': meal.id,
+        'name': meal.name,
+        'dietary_preference': meal.dietary_preference,
+        'description': meal.description,
+        'created_date': meal.created_date.isoformat(),
+        # Add more fields as needed
+    }
+
+    return {'meal': meal_dict, 'status': 'success', 'message': 'Meal created successfully', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 
 def add_meal_to_plan(request, meal_plan_id, meal_id, day):
@@ -773,7 +806,6 @@ def add_meal_to_plan(request, meal_plan_id, meal_id, day):
     
     if user_role.current_role == 'chef':
         return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
-
 
     try:
         meal_plan = MealPlan.objects.get(id=meal_plan_id, user=user)
@@ -786,14 +818,15 @@ def add_meal_to_plan(request, meal_plan_id, meal_id, day):
         return {'status': 'error', 'message': 'Meal not found.'}
 
     # Check if the meal can be ordered
-    if not meal.can_be_ordered():
+    if meal.chef and not meal.can_be_ordered():
+        message = f'Meal "{meal.name}" cannot be ordered as it starts tomorrow or earlier. To avoid food waste, chefs need at least 24 hours to plan and prepare the meals.'
         return {
             'status': 'error',
-            'message': f'Meal "{meal.name}" cannot be ordered as it starts tomorrow or earlier. To avoid food waste, chefs need at least 24 hours to plan and prepare the meals.'
+            'message': message
         }
 
     # Check if the meal's start date falls within the meal plan's week
-    if meal.start_date < meal_plan.week_start_date or meal.start_date > meal_plan.week_end_date:
+    if meal.chef and (meal.start_date < meal_plan.week_start_date or meal.start_date > meal_plan.week_end_date):
         return {'status': 'error', 'message': 'Meal not available in the selected week.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
     # Check if the day is within the meal plan's week
@@ -811,14 +844,13 @@ def add_meal_to_plan(request, meal_plan_id, meal_id, day):
             'existing_meal': {
                 'meal_id': existing_meal.meal.id,
                 'name': existing_meal.meal.name,
-                'chef': existing_meal.meal.chef.user.username
+                'chef': existing_meal.meal.chef.user.username if existing_meal.meal.chef else 'User Created Meal'
             }
         }
 
     # Create the MealPlanMeal
     MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day)
     return {'status': 'success', 'action': 'added', 'new_meal': meal.name, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
-
 
 def suggest_alternative_meals(request, meal_ids, days_of_week):
     """
@@ -874,20 +906,28 @@ def suggest_alternative_meals(request, meal_ids, days_of_week):
 
     return {"alternative_meals": alternative_meals}
 
+
 def search_meal_ingredients(request, query):
     print("From search_meal_ingredients")
-    # Filter meals by the query in their name
     print(f"Query: {query}")
-    meals = Meal.objects.filter(name__icontains=query)
+    
+    # Assuming 'get_embedding' creates a vector for your query
+    query_vector = get_embedding(query)
+    
+    # Find meals with similar embeddings using cosine similarity
+    similar_meals = Meal.objects.annotate(
+        similarity=CosineDistance(F('meal_embedding'), query_vector)
+    ).filter(similarity__lt=0.1)  # Adjust the threshold according to your needs
 
-    if not meals.exists():
+    if not similar_meals.exists():
         return {"error": "No meals found matching the query.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
     result = []
-    for meal in meals:
+    for meal in similar_meals:
         meal_ingredients = {
             "meal_id": meal.id,
             "meal_name": meal.name,
+            "similarity": meal.similarity,  # Include similarity score in the response
             "dishes": []
         }
         print(f"Meal: {meal}")
@@ -904,6 +944,7 @@ def search_meal_ingredients(request, query):
     return {
         "result": result
     }
+
 
 def auth_search_meals_excluding_ingredient(request, query):
     print("From auth_search_meals_excluding_ingredient")
@@ -964,61 +1005,39 @@ def auth_search_ingredients(request, query):
     print("From auth_search_ingredients")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
-    
+
     if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+        return {'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'}
 
-
-    # Determine the current date
-    week_shift = max(int(user.week_shift), 0)
-    current_date = timezone.now().date() + timedelta(weeks=week_shift)
+    # Assume get_embedding generates a vector for your query
+    query_vector = get_embedding(query)
     
-    # Filter meals available for the current week and for the user
-    meal_filter_conditions = Q(start_date__gte=current_date)
+    # Find similar ingredients based on cosine similarity
+    similar_ingredients = Ingredient.objects.annotate(
+        similarity=CosineDistance(F('ingredient_embedding'), query_vector)
+    ).filter(similarity__lt=0.1)  # Adjust the threshold based on your needs
 
-    # Filter meals by dietary preferences, postal code, and current week
-    dietary_filtered_meals = Meal.dietary_objects.for_user(user).filter(meal_filter_conditions)
-    postal_filtered_meals = Meal.postal_objects.for_user(user=user).filter(meal_filter_conditions)
+    # Get IDs of similar ingredients
+    similar_ingredient_ids = similar_ingredients.values_list('id', flat=True)
 
-    # Combine both filters
-    available_meals = dietary_filtered_meals & postal_filtered_meals
-    
-    # Find dishes containing the queried ingredient
-    dishes_with_ingredient = Dish.objects.filter(
-        ingredients__name__icontains=query,
-    ).distinct()
-    
-    # Initialize data structure to store meal details
-    meal_details = defaultdict(lambda: {'name': '', 'chefs': [], 'dishes': []})
+    # Find dishes containing similar ingredients
+    dishes_with_similar_ingredients = Dish.objects.filter(ingredients__in=similar_ingredient_ids).distinct()
 
-    # Iterate over found dishes and compile meal details
-    for dish in dishes_with_ingredient:
-        # Fetch meals including the current dish and are available
-        meals_with_dish = available_meals.filter(dishes=dish)
+    # Find meals containing those dishes
+    meals_with_similar_ingredients = Meal.objects.filter(dishes__in=dishes_with_similar_ingredients)
 
-        for meal in meals_with_dish:
-            # Update meal details with chef and dish information
-            meal_detail = meal_details[meal.id]
-            meal_detail['meal_id'] = meal.id
-            meal_detail['name'] = meal.name
-            meal_detail['start_date'] = meal.start_date.strftime('%Y-%m-%d')
-            meal_detail['is_available'] = meal.can_be_ordered()
-
-            # Add chef details if not already present
-            chef_info = {"id": dish.chef.id, "name": dish.chef.user.username}
-            if chef_info not in meal_detail['chefs']:
-                meal_detail['chefs'].append(chef_info)
-
-            # Add dish details
-            dish_info = {
-                "id": dish.id,
-                "name": dish.name,
-                "ingredients": [{"id": ingredient.id, "name": ingredient.name} for ingredient in dish.ingredients.all()]
-            }
-            meal_detail['dishes'].append(dish_info)
-
-    # Convert the result to a list format
-    result = [{"meal_id": k, **v} for k, v in meal_details.items()]
+    # Prepare the result
+    result = []
+    for meal in meals_with_similar_ingredients:
+        meal_info = {
+            'meal_id': meal.id,
+            'name': meal.name,
+            'start_date': meal.start_date.strftime('%Y-%m-%d'),
+            'is_available': meal.can_be_ordered(),
+            'chefs': list(meal.chef.values('id', 'user__username')),
+            'dishes': list(meal.dishes.values('id', 'name', 'ingredients__id', 'ingredients__name')),
+        }
+        result.append(meal_info)
 
     if not result:
         return {
@@ -1030,40 +1049,47 @@ def auth_search_ingredients(request, query):
         "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
 
-def guest_search_ingredients(meal_ids=None):
+def guest_search_ingredients(request, query, meal_ids=None):
     print("From guest_search_ingredients")
-    # Determine the current date and the end of the week
     current_date = timezone.now().date()
-    
-    # First, find the meals available for the current week
-    available_meals = Meal.objects.filter(
-        Q(start_date__gte=current_date)
-    )
+    available_meals = Meal.objects.filter(start_date__gte=current_date)
+
     if meal_ids:
         available_meals = available_meals.filter(id__in=meal_ids)
-    else:
-        return {"error": "No meals with those ingredients found."}
-    # Then, look for the dishes in those meals that contain the ingredient(s) in the query
-    dishes_with_ingredient = Dish.objects.filter(
-        meal__dishes__in=available_meals
-    ).distinct()
-    # Finally, list out those dishes along with their chefs
+    
+    # Again, assuming get_embedding function exists and generates a query vector
+    query_vector = get_embedding(query)  # Assuming you pass 'query' as an argument
+
+    # Find similar ingredients based on cosine similarity
+    similar_ingredients = Ingredient.objects.annotate(
+        similarity=CosineDistance(F('ingredient_embedding'), query_vector)
+    ).filter(similarity__lt=0.1)  # Adjust the threshold based on your needs
+
+    # Get IDs of similar ingredients
+    similar_ingredient_ids = similar_ingredients.values_list('id', flat=True)
+
+    # Find dishes containing similar ingredients
+    dishes_with_similar_ingredients = Dish.objects.filter(ingredients__in=similar_ingredient_ids).distinct()
+
+    # Find meals containing those dishes
+    meals_with_similar_ingredients = Meal.objects.filter(dishes__in=dishes_with_similar_ingredients)
+
+    # Prepare the result
     result = []
-    for dish in dishes_with_ingredient:
-        meal_for_dish = Meal.objects.filter(dishes=dish)  # This should give you the meals where the dish appears
-        meal_info = [{"id": meal.id, "name": meal.name} for meal in meal_for_dish]  # Convert it to a list of dictionaries with id and name
-        result.append({
-            "dish_id": dish.id,
-            "dish_name": dish.name,
-            "chef_id": dish.chef.id,
-            "chef": dish.chef.user.username,
-            "ingredients": [ingredient.name for ingredient in dish.ingredients.all()],
-            "meals": meal_info,
-        })
+    for meal in meals_with_similar_ingredients:
+        meal_info = {
+            'meal_id': meal.id,
+            'name': meal.name,
+            'start_date': meal.start_date.strftime('%Y-%m-%d'),
+            'is_available': meal.can_be_ordered(),
+            'chefs': list(meal.chef.values('id', 'user__username')),
+            'dishes': list(meal.dishes.values('id', 'name', 'ingredients__id', 'ingredients__name')),
+        }
+        result.append(meal_info)
 
     if not result:
         return {
-            "message": "No dishes found containing the queried ingredient(s) in the available meals for this week.",
+            "message": "No meals found containing the queried ingredient(s) in the available meals for this week.",
             "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
         }
     return {
@@ -1072,56 +1098,35 @@ def guest_search_ingredients(meal_ids=None):
     }
 
 
-def auth_search_chefs(request):
-    # Fetch user's dietary preference
+def auth_search_chefs(request, query):
+    print("From auth_search_chefs")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
     
     if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+        return {'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'}
 
-
-    try:
-        dietary_preference = user.foodpreferences.dietary_preference
-    except AttributeError:
-        dietary_preference = None
-
+    # Generate the embedding for the search query
+    query_vector = get_embedding(query)
+    
     # Retrieve user's primary postal code from Address model
     user_addresses = Address.objects.filter(user=user.id)
-    user_postal_code = user_addresses.input_postalcode if user_addresses.exists() else None
-
-    # Base query
-    base_query = Q()
-
-    # Add dietary preference filtering if available
-    if dietary_preference:
-        base_query &= Q(meals__dietary_preference=dietary_preference)
-
-    # Add postal code filtering if available
+    user_postal_code = user_addresses[0].input_postalcode if user_addresses.exists() else None
+    
+    # Retrieve chefs based on cosine similarity with the query embedding
+    similar_chefs = Chef.objects.annotate(
+        similarity=CosineDistance(F('chef_embedding'), query_vector)
+    ).filter(similarity__lt=0.1)  # Adjust threshold based on your needs
+    # Add additional filters based on user's preferences and location
+    if user.dietary_preference:
+        similar_chefs = similar_chefs.filter(meals__dietary_preference=user.dietary_preference)
     if user_postal_code:
-        base_query &= Q(serving_postalcodes__code=user_postal_code)
-
-    # Final query
-    chefs = Chef.objects.filter(base_query).distinct()
-
-    if dietary_preference:
-        meals = Meal.objects.filter(dietary_preference=dietary_preference)
-        if meals.exists():
-            base_query = Q(meals__in=meals)
-        if user_postal_code:
-            base_query &= Q(serving_postalcodes__code=user_postal_code)
-
-
-    # Add postal code filtering if available
-    if user_postal_code:
-        base_query &= Q(serving_postalcodes__code=user_postal_code)
-
-    print("Base Query:", base_query)
-    # Final query
-    chefs = Chef.objects.filter(base_query).distinct()
+        similar_chefs = similar_chefs.filter(serving_postalcodes__code=user_postal_code)
+    
+    similar_chefs = similar_chefs.distinct()
 
     auth_chef_result = []
-    for chef in chefs:
+    for chef in similar_chefs:
         featured_dishes = []
         # Retrieve service areas for each chef
         postal_codes_served = chef.serving_postalcodes.values_list('code', flat=True)
@@ -1176,13 +1181,19 @@ def auth_search_chefs(request):
     }
 
 
-def guest_search_chefs(request):
+def guest_search_chefs(request, query):
     print("From guest_search_chefs")
 
-    chefs = Chef.objects.all()
+    # Generate the embedding for the search query
+    query_vector = get_embedding(query)
+    
+    # Retrieve chefs based on cosine similarity with the query embedding
+    similar_chefs = Chef.objects.annotate(
+        similarity=CosineDistance(F('chef_embedding'), query_vector)
+    ).filter(similarity__lt=0.1).distinct()  # Adjust threshold based on your needs
 
     guest_chef_result = []
-    for chef in chefs:
+    for chef in similar_chefs:
         featured_dishes = []
         for dish in chef.featured_dishes.all():
             dish_meals = Meal.objects.filter(dishes__id=dish.id)
@@ -1215,94 +1226,93 @@ def guest_search_chefs(request):
 
         guest_chef_result.append(chef_info)
 
+    if not guest_chef_result:
+        return {
+            "message": "No chefs found matching the query.",
+            "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
+        }
+
     return {
         "guest_chef_result": guest_chef_result,
         "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
     }
 
 
-
-def auth_search_dishes(request):
+def auth_search_dishes(request, query):
     print("From auth_search_dishes")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
     
     if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+        return {'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'}
 
-
-    # Query meals based on postal code
+    # Generate the embedding for the search query
+    query_vector = get_embedding(query)
+    
+    # Query meals based on postal code and dietary preferences
     week_shift = max(int(user.week_shift), 0)
     current_date = timezone.now().date() + timedelta(weeks=week_shift)
-
-    # Filter meals by dietary preferences, postal code, and current week
     dietary_filtered_meals = Meal.dietary_objects.for_user(user).filter(start_date__gte=current_date)
     postal_filtered_meals = Meal.postal_objects.for_user(user=user).filter(start_date__gte=current_date)
-
-    # Apply dietary preference filter
     base_meals = dietary_filtered_meals & postal_filtered_meals
-    # Filter the meals based on the chef's serving postal codes and the meal's dietary preference
-    # Filter the dishes based on the meals and the dish's name
-    dishes = Dish.objects.filter(meal__in=base_meals).distinct()
-
+    
+    # Retrieve dishes based on cosine similarity with the query embedding
+    similar_dishes = Dish.objects.annotate(
+        similarity=CosineDistance(F('dish_embedding'), query_vector)
+    ).filter(meal__in=base_meals, similarity__lt=0.1).distinct()  # Adjust the threshold based on your needs
 
     auth_dish_result = []
-    for dish in dishes:
-        meals_with_dish = set(Meal.objects.filter(dishes=dish))
+    for dish in similar_dishes:
+        meals_with_dish = set(dish.meal_set.filter(start_date__gte=current_date))
         for meal in meals_with_dish:
             meal_detail = {
                 'meal_id': meal.id,
                 'name': meal.name,
                 'start_date': meal.start_date.strftime('%Y-%m-%d'),
                 'is_available': meal.can_be_ordered(),
-                'image_url': meal.image.url if meal.image else None,  # Add this line
+                'image_url': meal.image.url if meal.image else None,
                 'chefs': [{'id': dish.chef.id, 'name': dish.chef.user.username}],
-                'dishes': [{'id': dish.id, 'name': dish.name}],
+                'dishes': [{'id': dish.id, 'name': dish.name, 'similarity': dish.similarity}],
             }
             auth_dish_result.append(meal_detail)
 
-    # Prepare the response
     if not auth_dish_result:
-        return {
-            "message": "No dishes found that match your search.",
-            "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
-        }
-    return {
-        "auth_dish_result": auth_dish_result,
-        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
-    }
+        return {"message": "No dishes found that match your search.", "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-def guest_search_dishes(request):
+    return {"auth_dish_result": auth_dish_result, "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+
+def guest_search_dishes(request, query):
     print("From guest_search_dishes")
 
-    dishes = Dish.objects.all()
+    # Generate the embedding for the search query
+    query_vector = get_embedding(query)
+    
+    # Retrieve dishes based on cosine similarity with the query embedding
+    current_date = timezone.now().date()
+    similar_dishes = Dish.objects.annotate(
+        similarity=CosineDistance(F('dish_embedding'), query_vector)
+    ).filter(similarity__lt=0.1).distinct()  # Adjust threshold based on your needs
 
-    meal_ids = set() 
     meal_details = defaultdict(lambda: {'name': '', 'chefs': [], 'dishes': []})
-
-    for dish in dishes:
-        meals_with_dish = Meal.objects.filter(dishes__id=dish.id)
+    for dish in similar_dishes:
+        meals_with_dish = Meal.objects.filter(dishes=dish, start_date__gte=current_date)
         for meal in meals_with_dish:
-            meal_ids.add(meal.id)
-            meal_details[meal.id] = {
+            meal_details[meal.id].update({
                 "name": meal.name,
                 "start_date": meal.start_date.strftime('%Y-%m-%d'),
                 "is_available": meal.can_be_ordered(),
                 "chefs": [{"id": dish.chef.id, "name": dish.chef.user.username}],
-                "dishes": [{"id": dish.id, "name": dish.name}]
-            }
+                "dishes": [{"id": dish.id, "name": dish.name, 'similarity': dish.similarity}]
+            })
 
     guest_dish_result = [{"meal_id": k, **v} for k, v in meal_details.items()]
 
     if not guest_dish_result:
-        return {
-            "message": "No dishes found that match your search.",
-            "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
-        }
-    return {
-        "guest_dish_result": guest_dish_result,
-        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
-    }
+        return {"message": "No dishes found matching the query.", "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+    return {"guest_dish_result": guest_dish_result, "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
 
 def get_or_create_meal_plan(user, start_of_week, end_of_week):
     meal_plan, created = MealPlan.objects.get_or_create(
@@ -1321,20 +1331,18 @@ def cleanup_past_meals(meal_plan, current_date):
             meal__start_date__lte=current_date  # Only include meals that cannot be ordered
         ).delete()
 
+
 def auth_get_meal_plan(request):
     print("From auth_get_meal_plan")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
-    
+
     if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
-
-
+        return {'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'}
 
     today = timezone.now().date()
     week_shift = max(int(user.week_shift), 0)
-    adjusted_today = today + timedelta(weeks=week_shift)
-    start_of_week = adjusted_today - timedelta(days=adjusted_today.weekday())
+    start_of_week = today + timedelta(days=-today.weekday(), weeks=week_shift)
     end_of_week = start_of_week + timedelta(days=6)
 
     meal_plan = get_or_create_meal_plan(user, start_of_week, end_of_week)
@@ -1342,23 +1350,31 @@ def auth_get_meal_plan(request):
     if week_shift == 0:
         cleanup_past_meals(meal_plan, today)
 
-    meal_plan_details = [{'meal_plan_id': meal_plan.id, 'week_start_date': meal_plan.week_start_date.strftime('%Y-%m-%d'), 'week_end_date': meal_plan.week_end_date.strftime('%Y-%m-%d')}]
+    meal_plan_details = [{
+        'meal_plan_id': meal_plan.id,
+        'week_start_date': meal_plan.week_start_date.strftime('%Y-%m-%d'),
+        'week_end_date': meal_plan.week_end_date.strftime('%Y-%m-%d')
+    }]
 
     for meal_plan_meal in MealPlanMeal.objects.filter(meal_plan=meal_plan):
         meal = meal_plan_meal.meal
+        chef_username = meal.chef.user.username if meal.chef else 'User Created Meal'
         meal_details = {
             "meal_id": meal.id,
             "name": meal.name,
-            "chef": meal.chef.user.username,
+            "chef": chef_username,
             "start_date": meal.start_date.strftime('%Y-%m-%d'),
             "is_available": meal.can_be_ordered(),
-            "dishes": [dish.name for dish in meal.dishes.all()],
+            "dishes": [{"id": dish.id, "name": dish.name} for dish in meal.dishes.all()],
             "day": meal_plan_meal.day,
             "meal_plan_id": meal_plan.id,
         }
         meal_plan_details.append(meal_details)
 
-    return {"auth_meal_plan": meal_plan_details, "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+    return {
+        "auth_meal_plan": meal_plan_details,
+        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
 
 def guest_get_meal_plan(request):
     print("From guest_get_meal_plan")
@@ -1366,36 +1382,27 @@ def guest_get_meal_plan(request):
     start_of_week = today - timedelta(days=today.weekday())
     end_of_week = start_of_week + timedelta(days=6)
 
-    # Convert DAYS_OF_WEEK to a list of day names
     days_of_week_list = [day[0] for day in MealPlanMeal.DAYS_OF_WEEK]
 
-    # Base query for meals available in the current week
-    base_meals = Meal.objects.filter(start_date__gt=today, start_date__lte=end_of_week)  # Only include meals that can be ordered
+    base_meals = Meal.objects.filter(start_date__gte=today, start_date__lte=end_of_week).distinct()
 
-    # Build the meal plan for each day of the week
     guest_meal_plan = []
     used_meals = set()
-    for i, day_name in enumerate(days_of_week_list):
-        current_day = start_of_week + timedelta(days=i)
+    for day_name in days_of_week_list:
+        current_day = start_of_week + timedelta(days=days_of_week_list.index(day_name))
         
-        # Skip days not within the current week
         if current_day > end_of_week:
             break
 
-        # Find a meal that hasn't been used yet
-        chosen_meal = base_meals.filter(
-            start_date__lte=current_day
-        ).exclude(
-            id__in=used_meals
-        ).first()
+        chosen_meal = base_meals.exclude(id__in=used_meals).first()
 
-        # Add meal details if a suitable meal is found
         if chosen_meal:
             used_meals.add(chosen_meal.id)
+            chef_username = chosen_meal.chef.user.username if chosen_meal.chef else 'User Created Meal'
             meal_details = {
                 "meal_id": chosen_meal.id,
                 "name": chosen_meal.name,
-                "chef": chosen_meal.chef.user.username,
+                "chef": chef_username,
                 "start_date": chosen_meal.start_date.strftime('%Y-%m-%d'),
                 "is_available": chosen_meal.can_be_ordered(),
                 "dishes": [{"id": dish.id, "name": dish.name} for dish in chosen_meal.dishes.all()],
@@ -1403,17 +1410,11 @@ def guest_get_meal_plan(request):
             }
             guest_meal_plan.append(meal_details)
 
-    # Return the result
-    if not guest_meal_plan:
-        return {
-            "message": "No meals available this week.",
-            "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
-            "guest_meal_plan": []  # Empty list to indicate no meal plans
-        }
     return {
-        "guest_meal_plan": guest_meal_plan,  # List of meal plans
-        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
+        "guest_meal_plan": guest_meal_plan,
+        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')
     }
+
 
 def approve_meal_plan(request, meal_plan_id):
     print("From approve_meal_plan")
@@ -1445,16 +1446,12 @@ def approve_meal_plan(request, meal_plan_id):
     for meal_plan_meal in meal_plan.mealplanmeal_set.all():
         meal = meal_plan_meal.meal
         if not meal.can_be_ordered():
-            return {
-                'status': 'error',
-                'message': f'Meal "{meal.name}" cannot be ordered as it starts tomorrow or earlier. To avoid food waste, chefs need at least 24 hours to plan and prepare the meals.'
-            }
+            continue  # Skip this meal and move on to the next one
         OrderMeal.objects.create(order=order, meal=meal, meal_plan_meal=meal_plan_meal, quantity=1)  # Include the MealPlanMeal
 
     # Step 4: Link the Order to the MealPlan
     meal_plan.order = order
     meal_plan.save()
-
 
     # Return a success message with the URL
     return {

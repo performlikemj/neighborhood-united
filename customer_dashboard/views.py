@@ -674,7 +674,7 @@ def guest_chat_with_gpt(request):
         relevant = is_question_relevant(question)
 
         if not relevant:
-            guest_assistant_id = config["NAUGHT_ASSISTANT_ID"]
+            guest_assistant_id = config["NAUGHTY_ASSISTANT_ID"]
         else:   
             guest_assistant_id = config["GUEST_ASSISTANT_ID"]
 
@@ -783,9 +783,6 @@ def guest_chat_with_gpt(request):
                 logger.error(f'Failed to list messages: {str(e)}')
                 return Response({'error': f'Failed to list messages: {str(e)}'}, status=500)
 
-
-                
-
             try:
                 # Retrieve the run steps
                 print("Retrieving run steps")
@@ -797,7 +794,6 @@ def guest_chat_with_gpt(request):
 
             response_data = {
                 'last_assistant_message': next((msg.content[0].text.value for msg in (messages.data) if msg.role == 'assistant'), None),                
-                'run_status': run.status,
                 'new_thread_id': thread_id,
                 'recommend_follow_up': recommend_follow_up(request, formatted_context),
             }
@@ -857,7 +853,7 @@ def chat_with_gpt(request):
         relevant = is_question_relevant(question)
 
         if not relevant:
-            assistant_id = config["NAUGHT_ASSISTANT_ID"]
+            assistant_id = config["NAUGHTY_ASSISTANT_ID"]
         else:   
             assistant_id = config["AUTH_ASSISTANT_ID"]
 
@@ -885,7 +881,7 @@ def chat_with_gpt(request):
             )
 
             user.week_shift = 0
-            user.save()
+
         thread = ChatThread.objects.get(openai_thread_id=thread_id)
         user_message.thread = thread
         user_message.save()
@@ -899,6 +895,7 @@ def chat_with_gpt(request):
                 'last_assistant_message': "I'm sorry, I cannot help with that.",
                 'new_thread_id': thread_id,
                 'recommend_follow_up': False,
+                'message_id': False,
             }
             return Response(response_data)
         messages = client.beta.threads.messages.list(thread_id)

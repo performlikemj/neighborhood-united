@@ -19,7 +19,7 @@ class IngredientForm(forms.ModelForm):
 class MealForm(forms.ModelForm):
     class Meta:
         model = Meal
-        fields = ['name', 'start_date', 'dishes', 'price', 'party_size', 'description']
+        fields = ['name', 'start_date', 'dishes', 'price', 'description']
         widgets = {
             'start_date': forms.DateInput(attrs={'type': 'date'}),
         }

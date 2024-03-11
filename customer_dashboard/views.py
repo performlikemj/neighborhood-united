@@ -1,3 +1,4 @@
+from uuid import uuid4
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
@@ -31,7 +32,7 @@ from shared.utils import (get_user_info, post_review, update_review, delete_revi
                           update_health_metrics, check_allergy_alert, provide_nutrition_advice, 
                           recommend_follow_up, find_nearby_supermarkets,
                           search_healthy_meal_options, provide_healthy_meal_suggestions, 
-                          understand_dietary_choices, is_question_relevant)
+                          understand_dietary_choices, is_question_relevant, create_meal)
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
 from .serializers import ChatThreadSerializer, GoalTrackingSerializer, UserHealthMetricsSerializer, CalorieIntakeSerializer
@@ -596,6 +597,7 @@ functions = {
     "search_healthy_meal_options": search_healthy_meal_options,
     "provide_healthy_meal_suggestions": provide_healthy_meal_suggestions,
     "understand_dietary_choices": understand_dietary_choices,
+    "create_meal": create_meal,
 }
 
 
@@ -764,7 +766,6 @@ def guest_chat_with_gpt(request):
                 
                 response_data = {
                         'last_assistant_message': "I'm sorry, I'm still processing your request. Please try again later or start a new chat.",
-                        'run_id': run.id,
                         'new_thread_id': thread_id,
                         'recommend_follow_up': False,
                     }
@@ -858,8 +859,7 @@ def guest_chat_with_gpt(request):
             
 
             response_data = {
-                'last_assistant_message': next((msg.content[0].text.value for msg in (messages.data) if msg.role == 'assistant'), None),                
-                'run_status': run.status,
+                'last_assistant_message': next((msg.content[0].text.value for msg in (messages.data) if msg.role == 'assistant'), None),            
                 'new_thread_id': thread_id,
                 'recommend_follow_up': recommend_follow_up(request, formatted_context),
             }
@@ -2155,6 +2155,7 @@ def chat_with_gpt(request):
                 'last_assistant_message': "I'm sorry, I cannot help with that.",
                 'new_thread_id': thread_id,
                 'recommend_follow_up': False,
+                'message_id': False,
             }
             return Response(response_data)
         messages = client.beta.threads.messages.list(thread_id)

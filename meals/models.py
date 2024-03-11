@@ -170,14 +170,14 @@ class Meal(models.Model):
 
     PARTY_SIZE_CHOICES = [(i, i) for i in range(1, 51)]  # Replace 51 with your maximum party size + 1
     name = models.CharField(max_length=200, default='Meal Name')
-    chef = models.ForeignKey(Chef, on_delete=models.CASCADE, related_name='meals')
+    creator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_meals') 
+    chef = models.ForeignKey(Chef, on_delete=models.CASCADE, related_name='meals', null=True, blank=True)
     image = models.ImageField(upload_to='meals/', blank=True, null=True)
     created_date = models.DateTimeField(auto_now_add=True)
-    start_date = models.DateField()  # The first day the meal is available
-    dishes = models.ManyToManyField(Dish)
+    start_date = models.DateField(null=True, blank=True)  # The first day the meal is available
+    dishes = models.ManyToManyField(Dish, blank=True)
     dietary_preference = models.CharField(max_length=20, choices=DIETARY_CHOICES, null=True, blank=True)
-    price = models.DecimalField(max_digits=6, decimal_places=2)  # Adding price field
-    party_size = models.IntegerField(choices=PARTY_SIZE_CHOICES, default=1)
+    price = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)  # Adding price field
     description = models.TextField(blank=True)  # Adding description field
     review_summary = models.TextField(blank=True, null=True)  # Adding summary field
     reviews = GenericRelation(
@@ -194,15 +194,17 @@ class Meal(models.Model):
         unique_together = ('chef', 'start_date')
 
     def __str__(self):
-        # Basic meal info
-        meal_info = f'{self.name} by {self.chef.user.username} ({self.dietary_preference})'
+        # Modify the string representation to accommodate meals created by users
+        creator_info = self.chef.user.username if self.chef else (self.creator.username if self.creator else 'No creator')
+        meal_info = f'{self.name} by {creator_info} ({self.dietary_preference})'
+
         
         # Description and review summary (if available)
         description = f'Description: {self.description[:100]}...' if self.description else ''
         review_summary = f'Review Summary: {self.review_summary[:100]}...' if self.review_summary else ''
         
         # Combining all the elements
-        return f'{meal_info}. {description} {review_summary} Start Date: {self.start_date}, Party Size: {self.party_size}'
+        return f'{meal_info}. {description} {review_summary} Start Date: {self.start_date}, Price: {self.price}'
 
 
     def trimmed_embedding(self, length=10):
@@ -212,11 +214,17 @@ class Meal(models.Model):
 
 
     def is_available(self, week_shift=0):
+        if not self.chef:
+            return False
+
         week_shift = int(week_shift)  # User's ability to plan for future weeks
         current_date = timezone.now().date() + timedelta(weeks=week_shift) 
         return self.start_date <= current_date  
 
     def can_be_ordered(self):
+        if not self.chef:
+            return False
+
         """
         Check if the meal can be ordered (at least a day in advance).
         """
@@ -227,8 +235,12 @@ class Meal(models.Model):
     def save(self, *args, **kwargs):
         if not self.created_date:
             self.created_date = timezone.now()
+        if self.chef:
+            if self.start_date is None or self.price is None or not self.image:
+                raise ValueError('start_date, price, and image must be provided when a chef creates a meal')
+            if not self.dishes.exists():
+                raise ValueError('At least one dish must be provided when a chef creates a meal')
         super().save(*args, **kwargs)
-
 
 class MealPlan(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)

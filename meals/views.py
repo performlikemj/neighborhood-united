@@ -117,7 +117,7 @@ def api_create_ingredient(request):
         })
 
 @login_required
-def add_to_cart(request, meal_id, party_size):
+def add_to_cart(request, meal_id):
     meal = get_object_or_404(Meal, pk=meal_id)
     user_home_postal_code = request.user.address.postalcode
 
@@ -130,13 +130,9 @@ def add_to_cart(request, meal_id, party_size):
     if not meal.is_available():
         return HttpResponseBadRequest('This meal is no longer available.')
 
-    if party_size not in dict(Meal.PARTY_SIZE_CHOICES):
-        return HttpResponseBadRequest('Invalid party size.')
-
     cart, created = Cart.objects.get_or_create(customer=request.user)
-    cart_item, created = CartItem.objects.get_or_create(cart=cart, meal=meal, defaults={'quantity': 1, 'party_size': party_size})
+    cart_item, created = CartItem.objects.get_or_create(cart=cart, meal=meal, defaults={'quantity': 1})
     if not created:
-        cart_item.party_size = party_size  # Assuming you want to update the party size if it's already in the cart
         cart_item.save()
     cart.save()
 

@@ -168,10 +168,14 @@ def recommend_follow_up(request, context):
     """
     if request.data.get('user_id'):
         user_id = request.data.get('user_id')
-        user = CustomUser.objects.get(id=user_id)
+        try:
+            user = CustomUser.objects.get(id=user_id)
+        except CustomUser.DoesNotExist:
+            user = None
     else:
         user = None
-    if user.is_authenticated:
+
+    if user and user.is_authenticated:
         functions = """
             "auth_search_dishes: Search dishes in the database",
             "auth_search_chefs: Search chefs in the database and get their info",
@@ -579,6 +583,7 @@ def delete_review(request, review_id):
 
     return {'status': 'success', 'message': 'Review deleted successfully', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
+#TODO: turn this into a celery task coupled with a signal
 def generate_review_summary(object_id, category):
     # Step 1: Fetch all the review summaries for a specific chef or meal
     content_type = ContentType.objects.get(model=category)
@@ -638,9 +643,9 @@ def list_upcoming_meals(request):
         {
             "meal_id": meal.id,
             "name": meal.name,
-            "start_date": meal.start_date.strftime('%Y-%m-%d'),
+            "start_date": meal.start_date.strftime('%Y-%m-%d') if meal.start_date else 'N/A',
             "is_available": meal.can_be_ordered(),
-            "chef": meal.chef.user.username,
+            "chef": meal.chef.user.username if meal.chef else 'User Created Meal',
             # Add more details as needed
         } for meal in filtered_meals
     ]
@@ -676,44 +681,32 @@ def create_meal_plan(request):
             week_end_date=end_of_week,
             created_date=timezone.now()
         )
-        return {'status': 'success', 'message': 'Created new meal plan.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+        return {'status': 'success', 'message': 'Created new meal plan. It is currently empty.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
     return {'status': 'error', 'message': 'A meal plan already exists for this week.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+
 
 def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day):
     print("From replace_meal_in_plan")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
-    user_role = UserRole.objects.get(user=user)
     
-    if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
-
-
-
     # Validate meal plan
     try:
         meal_plan = MealPlan.objects.get(id=meal_plan_id, user=user)
     except MealPlan.DoesNotExist:
         return {'status': 'error', 'message': 'Meal plan not found.'}
 
-    # Check if the meal plan is linked to a placed order and if the order is paid
+    # Check if the meal plan is linked to a placed order
     if meal_plan.order:
-        if meal_plan.order.is_paid:
-            return {'status': 'error', 'message': 'Cannot modify a paid meal plan.'}
-        else:
-            return {'status': 'error', 'message': 'Cannot modify a meal plan with an unpaid order.'}
+        return {'status': 'error', 'message': 'Cannot modify a meal plan associated with an order.'}
 
-    # Validate old meal
+    # Validate old and new meals
     try:
         old_meal = Meal.objects.get(id=old_meal_id)
-    except Meal.DoesNotExist:
-        return {'status': 'error', 'message': 'Old meal not found.'}
-
-    # Validate new meal
-    try:
         new_meal = Meal.objects.get(id=new_meal_id)
-    except Meal.DoesNotExist:
-        return {'status': 'error', 'message': 'New meal not found.'}
+    except Meal.DoesNotExist as e:
+        return {'status': 'error', 'message': f'Meal not found: {str(e)}'}
 
     # Validate day
     if day not in dict(MealPlanMeal.DAYS_OF_WEEK):
@@ -722,7 +715,7 @@ def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day):
     # Check if old meal is scheduled for the specified day
     meal_plan_meal = MealPlanMeal.objects.filter(meal_plan=meal_plan, meal=old_meal, day=day).first()
     if not meal_plan_meal:
-        return {'status': 'error', 'message': 'Old meal not scheduled on the specified day.'}
+        return {'status': 'error', 'message': 'The initial meal is not scheduled on the specified day.'}
 
     # Replace old meal with new meal
     meal_plan_meal.meal = new_meal
@@ -735,19 +728,13 @@ def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day):
             'old_meal': old_meal.name,
             'new_meal': new_meal.name,
             'day': day
-        },
-        'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
     }
+
 
 def remove_meal_from_plan(request, meal_plan_id, meal_id, day):
     print("From remove_meal_from_plan")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
-    user_role = UserRole.objects.get(user=user)
-    
-    if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
-
-
 
     # Retrieve the specified MealPlan
     try:
@@ -772,7 +759,45 @@ def remove_meal_from_plan(request, meal_plan_id, meal_id, day):
 
     # Remove the meal from the meal plan
     meal_plan_meal.delete()
-    return {'status': 'success', 'message': 'Meal removed from the plan.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+    return {'status': 'success', 'message': 'Meal removed from the plan.'}
+
+
+def create_meal(request, name, dietary_preference, description):
+    meal_text = f"{name} by No chef ({dietary_preference}). Description: {description[:100]}..."
+
+    # Get the embedding for the concatenated meal description
+    new_meal_embedding = get_embedding(meal_text)
+    # Find similar existing meals based on cosine similarity of embeddings
+    similar_meals = Meal.objects.annotate(
+        similarity=CosineDistance(F('meal_embedding'), new_meal_embedding)
+    ).filter(similarity__gt=0.1)  
+
+    if similar_meals.exists():
+        # If similar meal is found, return the first one
+        existing_meal = similar_meals.first()
+        return {'status': 'info', 'message': 'A similar meal already exists.', 'meal_id': existing_meal.id}
+    
+    # If no similar meals, proceed to create a new one
+    meal = Meal(
+        name=name,
+        dietary_preference=dietary_preference,
+        description=description,
+        meal_embedding=new_meal_embedding  # Assuming your Meal model has a field for the embedding
+    )
+    meal.created_date = timezone.now()
+    meal.save()
+
+    # Convert the Meal object to a dictionary for the response
+    meal_dict = {
+        'id': meal.id,
+        'name': meal.name,
+        'dietary_preference': meal.dietary_preference,
+        'description': meal.description,
+        'created_date': meal.created_date.isoformat(),
+        # Add more fields as needed
+    }
+
+    return {'meal': meal_dict, 'status': 'success', 'message': 'Meal created successfully', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 
 def add_meal_to_plan(request, meal_plan_id, meal_id, day):
@@ -782,7 +807,6 @@ def add_meal_to_plan(request, meal_plan_id, meal_id, day):
     
     if user_role.current_role == 'chef':
         return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
-
 
     try:
         meal_plan = MealPlan.objects.get(id=meal_plan_id, user=user)
@@ -795,14 +819,15 @@ def add_meal_to_plan(request, meal_plan_id, meal_id, day):
         return {'status': 'error', 'message': 'Meal not found.'}
 
     # Check if the meal can be ordered
-    if not meal.can_be_ordered():
+    if meal.chef and not meal.can_be_ordered():
+        message = f'Meal "{meal.name}" cannot be ordered as it starts tomorrow or earlier. To avoid food waste, chefs need at least 24 hours to plan and prepare the meals.'
         return {
             'status': 'error',
-            'message': f'Meal "{meal.name}" cannot be ordered as it starts tomorrow or earlier. To avoid food waste, chefs need at least 24 hours to plan and prepare the meals.'
+            'message': message
         }
 
     # Check if the meal's start date falls within the meal plan's week
-    if meal.start_date < meal_plan.week_start_date or meal.start_date > meal_plan.week_end_date:
+    if meal.chef and (meal.start_date < meal_plan.week_start_date or meal.start_date > meal_plan.week_end_date):
         return {'status': 'error', 'message': 'Meal not available in the selected week.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
     # Check if the day is within the meal plan's week
@@ -820,14 +845,13 @@ def add_meal_to_plan(request, meal_plan_id, meal_id, day):
             'existing_meal': {
                 'meal_id': existing_meal.meal.id,
                 'name': existing_meal.meal.name,
-                'chef': existing_meal.meal.chef.user.username
+                'chef': existing_meal.meal.chef.user.username if existing_meal.meal.chef else 'User Created Meal'
             }
         }
 
     # Create the MealPlanMeal
     MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day)
     return {'status': 'success', 'action': 'added', 'new_meal': meal.name, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
-
 
 def suggest_alternative_meals(request, meal_ids, days_of_week):
     """
@@ -1335,10 +1359,11 @@ def auth_get_meal_plan(request):
 
     for meal_plan_meal in MealPlanMeal.objects.filter(meal_plan=meal_plan):
         meal = meal_plan_meal.meal
+        chef_username = meal.chef.user.username if meal.chef else 'User Created Meal'
         meal_details = {
             "meal_id": meal.id,
             "name": meal.name,
-            "chef": meal.chef.user.username,
+            "chef": chef_username,
             "start_date": meal.start_date.strftime('%Y-%m-%d'),
             "is_available": meal.can_be_ordered(),
             "dishes": [{"id": dish.id, "name": dish.name} for dish in meal.dishes.all()],
@@ -1374,10 +1399,11 @@ def guest_get_meal_plan(request):
 
         if chosen_meal:
             used_meals.add(chosen_meal.id)
+            chef_username = chosen_meal.chef.user.username if chosen_meal.chef else 'User Created Meal'
             meal_details = {
                 "meal_id": chosen_meal.id,
                 "name": chosen_meal.name,
-                "chef": chosen_meal.chef.user.username,
+                "chef": chef_username,
                 "start_date": chosen_meal.start_date.strftime('%Y-%m-%d'),
                 "is_available": chosen_meal.can_be_ordered(),
                 "dishes": [{"id": dish.id, "name": dish.name} for dish in chosen_meal.dishes.all()],
@@ -1421,16 +1447,12 @@ def approve_meal_plan(request, meal_plan_id):
     for meal_plan_meal in meal_plan.mealplanmeal_set.all():
         meal = meal_plan_meal.meal
         if not meal.can_be_ordered():
-            return {
-                'status': 'error',
-                'message': f'Meal "{meal.name}" cannot be ordered as it starts tomorrow or earlier. To avoid food waste, chefs need at least 24 hours to plan and prepare the meals.'
-            }
+            continue  # Skip this meal and move on to the next one
         OrderMeal.objects.create(order=order, meal=meal, meal_plan_meal=meal_plan_meal, quantity=1)  # Include the MealPlanMeal
 
     # Step 4: Link the Order to the MealPlan
     meal_plan.order = order
     meal_plan.save()
-
 
     # Return a success message with the URL
     return {

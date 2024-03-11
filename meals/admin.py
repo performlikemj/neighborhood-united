@@ -26,7 +26,7 @@ class OrderAdmin(admin.ModelAdmin):
     inlines = [OrderMealInline]
 
 class MealAdmin(admin.ModelAdmin):
-    list_display = ('name', 'chef', 'start_date', 'price', 'party_size')
+    list_display = ('name', 'chef', 'start_date', 'price')
     list_filter = ('chef', 'start_date')
     search_fields = ('name', 'chef__user__username')
     filter_horizontal = ('dishes',)

@@ -20,12 +20,13 @@ from shared.utils import (get_user_info, post_review, update_review, delete_revi
                           update_health_metrics, check_allergy_alert, provide_nutrition_advice, 
                           recommend_follow_up, find_nearby_supermarkets,
                           search_healthy_meal_options, provide_healthy_meal_suggestions, 
-                          understand_dietary_choices, is_question_relevant)
+                          understand_dietary_choices, is_question_relevant, create_meal)
 from local_chefs.views import chef_service_areas, service_area_chefs
 from rest_framework.response import Response
 import re
 import time
 import logging
+from openai import OpenAIError
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ functions = {
     "search_healthy_meal_options": search_healthy_meal_options,
     "provide_healthy_meal_suggestions": provide_healthy_meal_suggestions,
     "understand_dietary_choices": understand_dietary_choices,
+    "create_meal": create_meal,
 }
 
 def ai_call(tool_call, request):
@@ -167,11 +169,26 @@ def process_user_message(request, message_id, assistant_id):
                 role="user",
                 content=question
             )
-        except Exception as e:
-            logger.error(f'Failed to create message: {str(e)}')
-            user_message.response = f"Sorry, I was unable to sent your message. Please try again."
-            user_message.save()
-            return  # Stopping the task if message creation fails
+        except OpenAIError as e:
+            print(f'Error: {e}')
+            if 'Can\'t add messages to thread' in str(e) and 'while a run' in str(e) and 'is active' in str(e):
+                # Extract the run ID from the error message
+                match = re.search(r'run (\w+)', str(e))
+                if match:
+                    run_id = match.group(1)
+                    # Cancel the active run
+                    client.beta.threads.runs.cancel(run_id, thread_id=thread_id)
+                    # Try to create the message again
+                    client.beta.threads.messages.create(
+                        thread_id=thread_id,
+                        role="user",
+                        content=question
+                    )
+            else:
+                logger.error(f'Failed to create message: {str(e)}')
+                user_message.response = f"Sorry, I was unable to send your message. Please try again."
+                user_message.save()
+                return  # Stopping the task if message creation fails
 
         # Running the Assistant
         try:

@@ -191,7 +191,12 @@ class Meal(models.Model):
     meal_embedding = VectorField(dimensions=1536, null=True)
     
     class Meta:
-        unique_together = ('chef', 'start_date')
+        # Your existing meta options here
+        constraints = [
+            # Your existing constraints here
+            models.UniqueConstraint(fields=['name', 'creator'], condition=models.Q(creator__isnull=False), name='unique_meal_per_creator'),
+            models.UniqueConstraint(fields=['chef', 'start_date'], condition=models.Q(chef__isnull=False), name='unique_chef_meal_per_date')
+        ]
 
     def __str__(self):
         # Modify the string representation to accommodate meals created by users

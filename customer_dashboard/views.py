@@ -740,19 +740,32 @@ def guest_chat_with_gpt(request):
             # Variable to store tool call results
             formatted_outputs = []
             
+            # Creating a message in the OpenAI thread
             try:
-                print("Creating a message")
-                # Add a Message to a Thread
                 client.beta.threads.messages.create(
                     thread_id=thread_id,
                     role="user",
                     content=question
                 )
-                print("Message created")
-            except Exception as e:
-                logger.error(f'Failed to create message: {str(e)}')
-                return Response({'error': f'Failed to create message: {str(e)}'}, status=500)    
-                    
+            except OpenAIError as e:
+                print(f'Error: {e}')
+                if 'Can\'t add messages to thread' in str(e) and 'while a run' in str(e) and 'is active' in str(e):
+                    # Extract the run ID from the error message
+                    match = re.search(r'run (\w+)', str(e))
+                    if match:
+                        run_id = match.group(1)
+                        # Cancel the active run
+                        client.beta.threads.runs.cancel(run_id, thread_id=thread_id)
+                        # Try to create the message again
+                        client.beta.threads.messages.create(
+                            thread_id=thread_id,
+                            role="user",
+                            content=question
+                        )
+                else:
+                    logger.error(f'Failed to create message: {str(e)}')
+                    return Response({'error': f'Failed to create message: {str(e)}'}, status=500)
+
 
             try:
                 # Run the Assistant
@@ -2155,7 +2168,6 @@ def chat_with_gpt(request):
                 'last_assistant_message': "I'm sorry, I cannot help with that.",
                 'new_thread_id': thread_id,
                 'recommend_follow_up': False,
-                'message_id': False,
             }
             return Response(response_data)
         messages = client.beta.threads.messages.list(thread_id)

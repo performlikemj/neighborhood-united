@@ -138,7 +138,6 @@ class DietaryPreferenceManager(models.Manager):
     def for_user(self, user):
         if user.is_authenticated:
             dietary_preference = user.dietary_preference
-            print(f'Dietary preference: {dietary_preference}')
             if dietary_preference == 'Everything':
                 return super().get_queryset()
             else:
@@ -191,7 +190,11 @@ class Meal(models.Model):
     meal_embedding = VectorField(dimensions=1536, null=True)
     
     class Meta:
-        unique_together = ('chef', 'start_date')
+        constraints = [
+            # Your existing constraints here
+            models.UniqueConstraint(fields=['name', 'creator'], condition=models.Q(creator__isnull=False), name='unique_meal_per_creator'),
+            models.UniqueConstraint(fields=['chef', 'start_date'], condition=models.Q(chef__isnull=False), name='unique_chef_meal_per_date')
+        ]
 
     def __str__(self):
         # Modify the string representation to accommodate meals created by users

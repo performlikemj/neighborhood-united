@@ -282,6 +282,8 @@ def provide_nutrition_advice(request, user_id):
     except Exception as e:
         return {'status': 'error', 'message': f'An unexpected error occurred: {e}', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
+#TODO: Create function to add allergies if user mentions it
+
 def check_allergy_alert(request, user_id):
     print("From check_allergy_alert")
     user = CustomUser.objects.get(id=user_id)
@@ -619,6 +621,7 @@ def generate_review_summary(object_id, category):
 
 
 def list_upcoming_meals(request):
+    print(f'From list_upcoming_meals: {request.data.get("user_id")}')
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
     
@@ -763,26 +766,30 @@ def remove_meal_from_plan(request, meal_plan_id, meal_id, day):
 
 
 def create_meal(request, name, dietary_preference, description):
-    meal_text = f"{name} by No chef ({dietary_preference}). Description: {description[:100]}..."
+    print(f'From create_meal: {name}, {dietary_preference}, {description}')
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
 
-    # Get the embedding for the concatenated meal description
-    new_meal_embedding = get_embedding(meal_text)
-    # Find similar existing meals based on cosine similarity of embeddings
-    similar_meals = Meal.objects.annotate(
-        similarity=CosineDistance(F('meal_embedding'), new_meal_embedding)
-    ).filter(similarity__gt=0.1)  
-
-    if similar_meals.exists():
-        # If similar meal is found, return the first one
-        existing_meal = similar_meals.first()
-        return {'status': 'info', 'message': 'A similar meal already exists.', 'meal_id': existing_meal.id}
+    # Check for existing meals with the same name, description, and created by the same user
+    existing_meal = Meal.objects.filter(
+        creator=user,
+        name=name,
+        description=description
+    ).first()  # You can use .first() as you're interested only in finding if at least one exists
+    
+    if existing_meal:
+        # If a similar meal is found, return it instead of creating a new one
+        return {
+            'status': 'info',
+            'message': 'A similar meal already exists.',
+            'meal_id': existing_meal.id
+        }
     
     # If no similar meals, proceed to create a new one
     meal = Meal(
         name=name,
+        creator=user,
         dietary_preference=dietary_preference,
         description=description,
-        meal_embedding=new_meal_embedding  # Assuming your Meal model has a field for the embedding
     )
     meal.created_date = timezone.now()
     meal.save()
@@ -800,7 +807,7 @@ def create_meal(request, name, dietary_preference, description):
     return {'meal': meal_dict, 'status': 'success', 'message': 'Meal created successfully', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 
-def add_meal_to_plan(request, meal_plan_id, meal_id, day):
+def add_meal_to_plan(request, meal_plan_id, meal_id, day, allow_duplicates=False):
     print("From add_meal_to_plan")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
@@ -839,21 +846,28 @@ def add_meal_to_plan(request, meal_plan_id, meal_id, day):
     # Check if there's already a meal scheduled for that day
     existing_meal = MealPlanMeal.objects.filter(meal_plan=meal_plan, day=day).first()
     if existing_meal:
-        return {
-            'status': 'prompt',
-            'message': 'This day already has a meal scheduled. Would you like to replace it?',
-            'existing_meal': {
-                'meal_id': existing_meal.meal.id,
-                'name': existing_meal.meal.name,
-                'chef': existing_meal.meal.chef.user.username if existing_meal.meal.chef else 'User Created Meal'
+        if allow_duplicates:
+            # Create a new MealPlanMeal even if a meal is scheduled for that day since duplicates are allowed
+            MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day)
+            return {'status': 'success', 'action': 'added_duplicate', 'new_meal': meal.name, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+        else:
+            # If duplicates are not allowed and a meal is already scheduled, offer to replace it
+            return {
+                'status': 'prompt',
+                'message': 'This day already has a meal scheduled. Would you like to replace it?',
+                'existing_meal': {
+                    'meal_id': existing_meal.meal.id,
+                    'name': existing_meal.meal.name,
+                    'chef': existing_meal.meal.chef.user.username if existing_meal.meal.chef else 'User Created Meal'
+                }
             }
-        }
-
-    # Create the MealPlanMeal
-    MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day)
-    return {'status': 'success', 'action': 'added', 'new_meal': meal.name, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+    else:
+        # No existing meal for that day; go ahead and add the new meal
+        MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day)
+        return {'status': 'success', 'action': 'added', 'new_meal': meal.name, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 def suggest_alternative_meals(request, meal_ids, days_of_week):
+    print(f'From suggest_alternative_meals: {meal_ids}, {days_of_week}')
     """
     Suggest alternative meals based on a list of meal IDs and corresponding days of the week.
     """
@@ -1316,6 +1330,7 @@ def guest_search_dishes(request, query):
 
 
 def get_or_create_meal_plan(user, start_of_week, end_of_week):
+    print(f'From get_or_create_meal_plan: {user}, {start_of_week}, {end_of_week}')
     meal_plan, created = MealPlan.objects.get_or_create(
         user=user,
         week_start_date=start_of_week,
@@ -1359,13 +1374,16 @@ def auth_get_meal_plan(request):
 
     for meal_plan_meal in MealPlanMeal.objects.filter(meal_plan=meal_plan):
         meal = meal_plan_meal.meal
-        chef_username = meal.chef.user.username if meal.chef else 'User Created Meal'
+        chef_username = 'User Created Meal' if meal.creator else (meal.chef.user.username if meal.chef else 'No creator')
+        start_date_display = 'User created - No specific date' if meal.creator else (meal.start_date.strftime('%Y-%m-%d') if meal.start_date else 'N/A')
+        is_available = 'This meal is user created' if meal.creator else ('Orderable' if meal.can_be_ordered() else 'Not orderable')
+
         meal_details = {
             "meal_id": meal.id,
             "name": meal.name,
-            "chef": chef_username,
-            "start_date": meal.start_date.strftime('%Y-%m-%d'),
-            "is_available": meal.can_be_ordered(),
+            "chef": chef_username,  # Now indicates 'User Created Meal' if there's a creator
+            "start_date": start_date_display,  # Adjusted for user-created meals without a specific date
+            "availability": is_available,  # Now includes a specific message for user-created meals
             "dishes": [{"id": dish.id, "name": dish.name} for dish in meal.dishes.all()],
             "day": meal_plan_meal.day,
             "meal_plan_id": meal_plan.id,

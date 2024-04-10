@@ -75,3 +75,14 @@ class UserSummary(models.Model):
     def __str__(self):
         return f"Summary for {self.user.username}"
 
+
+class ToolCall(models.Model):
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='tool_calls')
+    function_name = models.CharField(max_length=255)
+    arguments = models.JSONField(default=dict)
+    response = models.JSONField(default=dict, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Tool Call: {self.function_name} by {self.user.username} at {self.created_at}"

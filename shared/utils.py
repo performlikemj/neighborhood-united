@@ -460,12 +460,17 @@ def get_user_info(request):
             return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
 
         address = Address.objects.get(user=user)
+        postal_code = address.input_postalcode if address.input_postalcode else 'Not provided'
+        # Convert postal_code to an integer if it's a valid integer string
+        if isinstance(postal_code, str) and postal_code.isdigit():
+            postal_code = int(postal_code)
+
         user_info = {
             'user_id': user.id,
             'dietary_preference': user.dietary_preference,
             'week_shift': user.week_shift,
             'user_goal': user.goal.goal_description if hasattr(user, 'goal') and user.goal else 'None',
-            'postal_code': address.input_postalcode if address.input_postalcode else 'Not provided'
+            'postal_code': postal_code
         }
         return {'status': 'success', 'user_info': user_info, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     except CustomUser.DoesNotExist:

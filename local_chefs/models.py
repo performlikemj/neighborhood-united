@@ -1,3 +1,4 @@
+# Description: This file contains the models for the local_chefs app.
 from django.db import models
 
 class PostalCode(models.Model):

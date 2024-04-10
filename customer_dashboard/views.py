@@ -11,7 +11,7 @@ from datetime import timedelta
 from django.template.loader import render_to_string
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_http_methods
-from .models import GoalTracking, ChatThread, UserHealthMetrics, CalorieIntake, UserMessage, UserSummary
+from .models import GoalTracking, ChatThread, UserHealthMetrics, CalorieIntake, UserMessage, UserSummary, ToolCall
 from .forms import GoalForm
 import openai
 from openai import NotFoundError, OpenAI, OpenAIError
@@ -35,7 +35,7 @@ from shared.utils import (get_user_info, post_review, update_review, delete_revi
                           understand_dietary_choices, is_question_relevant, create_meal)
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
-from .serializers import ChatThreadSerializer, GoalTrackingSerializer, UserHealthMetricsSerializer, CalorieIntakeSerializer
+from .serializers import ChatThreadSerializer, GoalTrackingSerializer, UserHealthMetricsSerializer, CalorieIntakeSerializer, ToolCallSerializer
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from .permissions import IsCustomer
@@ -61,7 +61,8 @@ logger = logging.getLogger(__name__)
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_user_summary(request):
-    user = get_object_or_404(CustomUser, id=request.user.id)
+    user_id = request.data.get('user_id')
+    user = get_object_or_404(CustomUser, id=user_id)
     user_summary = UserSummary.objects.get(user=user)
 
     data = {
@@ -600,7 +601,6 @@ functions = {
     "create_meal": create_meal,
 }
 
-
 def ai_call(tool_call, request):
     function = tool_call.function
     name = function.name
@@ -707,191 +707,43 @@ def guest_chat_with_gpt(request):
         with open(guest_assistant_id_file, 'w') as f:
             f.write(guest_assistant_id)
 
-    # Processing the POST request
     try:
         print("Processing POST request")
-        try:
-            print(f"Request data: {request.data}")
-            data = request.data
-            print(f"Data: {data}")
-        except json.JSONDecodeError:
-            return Response({'error': 'Failed to parse JSON'}, status=400)
+        data = request.data
+        print(f"Data: {data}")
+
         question = data.get('question')
         thread_id = data.get('thread_id')
 
         if not question:
             return Response({'error': 'No question provided'}, status=400)
-        
+
+
         relevant = is_question_relevant(question)
-            
+
+        if thread_id and not re.match("^thread_[a-zA-Z0-9]*$", thread_id):
+            return Response({'error': 'Invalid thread_id'}, status=400)
+
+        if not thread_id:
+            openai_thread = client.beta.threads.create()
+            thread_id = openai_thread.id
 
         if relevant:
-
-            # Check if thread_id is safe
-            if thread_id and not re.match("^thread_[a-zA-Z0-9]*$", thread_id):
-                return Response({'error': 'Invalid thread_id'}, status=400)
-
-            # Handle existing or new thread
-            if not thread_id:
-                openai_thread = client.beta.threads.create()
-                thread_id = openai_thread.id
-
-        
-            # Variable to store tool call results
-            formatted_outputs = []
-            
-            # Creating a message in the OpenAI thread
-            try:
-                client.beta.threads.messages.create(
-                    thread_id=thread_id,
-                    role="user",
-                    content=question
-                )
-            except OpenAIError as e:
-                print(f'Error: {e}')
-                if 'Can\'t add messages to thread' in str(e) and 'while a run' in str(e) and 'is active' in str(e):
-                    # Extract the run ID from the error message
-                    match = re.search(r'run (\w+)', str(e))
-                    if match:
-                        run_id = match.group(1)
-                        # Cancel the active run
-                        client.beta.threads.runs.cancel(run_id, thread_id=thread_id)
-                        # Try to create the message again
-                        client.beta.threads.messages.create(
-                            thread_id=thread_id,
-                            role="user",
-                            content=question
-                        )
-                else:
-                    logger.error(f'Failed to create message: {str(e)}')
-                    return Response({'error': f'Failed to create message: {str(e)}'}, status=500)
-
-
-            try:
-                # Run the Assistant
-                run = client.beta.threads.runs.create(
-                    thread_id=thread_id,
-                    assistant_id=guest_assistant_id,
-                    # Optionally, you can add specific instructions here
-                )
-            except Exception as e:
-                logger.error(f'Failed to create run: {str(e)}')
-                
-                response_data = {
-                        'last_assistant_message': "I'm sorry, I'm still processing your request. Please try again later or start a new chat.",
-                        'new_thread_id': thread_id,
-                        'recommend_follow_up': False,
-                    }
-                return Response(response_data)
-            while True:
-                try:
-                    run = client.beta.threads.runs.retrieve(
-                        thread_id=thread_id,
-                        run_id=run.id
-                    )
-
-                    if run.status == 'completed':
-                        logger.info('Run completed')
-                        break
-                    elif run.status == 'failed':
-                        logger.error('Run failed')
-                        break
-                    elif run.status in ['expired', 'cancelled']:
-                        logger.warning(f'Run {run.status}')
-                        break
-                    elif run.status in ['queued', 'in_progress']:
-                        time.sleep(0.5)
-                        continue
-                    elif run.status == "requires_action":
-                        tool_outputs = []
-                        print("Run requires action")
-                        for tool_call in run.required_action.submit_tool_outputs.tool_calls:
-                            # Execute the function call and get the result
-                            tool_call_result = guest_ai_call(tool_call, request)
-                            # Extracting the tool_call_id and the output
-                            tool_call_id = tool_call_result['tool_call_id']
-                            output = tool_call_result['output']
-                            # Assuming 'output' needs to be serialized as a JSON string
-                            # If it's already a string or another format is required, adjust this line accordingly
-                            output_json = json.dumps(output)
-                            # Prepare the output in the required format
-                            formatted_output = {
-                                "tool_call_id": tool_call_id,
-                                "output": output_json
-                            }
-                            tool_outputs.append(formatted_output)
-
-                            formatted_outputs.append(formatted_output)
-                        # Chef if the run is still active before submitting the tool outputs
-                            run_status_check = client.beta.threads.runs.retrieve(
-                                thread_id=thread_id,
-                                run_id=run.id
-                            )
-                        if run_status_check not in ['queued', 'in_progress', 'requires_action', 'running']:   
-                            client.beta.threads.runs.submit_tool_outputs(
-                                thread_id=thread_id,
-                                run_id=run.id,
-                                tool_outputs=tool_outputs,
-                            )
-                            continue
-                except Exception as e:
-                    logger.critical(f'Critical error occurred: {e}', exc_info=True)
-            # Check the status of the Run and retrieve responses
-            try:
-                # Retrieve messages and log them
-                print("Retrieving messages")
-                messages = client.beta.threads.messages.list(thread_id)
-                context = []
-                for message in reversed(messages.data):
-                    role = message.role.capitalize()
-                    text = message.content[0].text.value
-                    context.append(f"{role}: {text}")            
-
-                formatted_context = "\n".join(context)
-            except Exception as e:
-                logger.error(f'Failed to list messages: {str(e)}')
-                return Response({'error': f'Failed to list messages: {str(e)}'}, status=500)
-
-
-            with open("messages.json", "w") as f:
-                messages_json = messages.model_dump()
-                json.dump(messages_json, f, indent=4)
-                
-
-            try:
-                # Retrieve the run steps
-                print("Retrieving run steps")
-                run_steps = client.beta.threads.runs.steps.list(thread_id=thread_id, run_id=run.id)
-            except Exception as e:
-                return Response({'error': f'Failed to list run steps: {str(e)}'}, status=500)
-
-            # Save the run steps to a file
-            with open("run_steps.json", "w") as f:
-                run_steps_json = run_steps.model_dump()
-                json.dump(run.model_dump(), f, indent=4)
-            
-
+            client.beta.threads.messages.create(thread_id, role='user', content=question)
             response_data = {
-                'last_assistant_message': next((msg.content[0].text.value for msg in (messages.data) if msg.role == 'assistant'), None),            
                 'new_thread_id': thread_id,
-                'recommend_follow_up': recommend_follow_up(request, formatted_context),
+                'recommend_follow_up': False,
             }
+            return Response(response_data)
         else:
             response_data = {
                 'last_assistant_message': "I'm sorry, I cannot help with that.",
                 'new_thread_id': thread_id,
                 'recommend_follow_up': False,
             }
-        print(thread_id)
-        print(f'New thread ID: {thread_id}')
-
-        print(f'message: {response_data["last_assistant_message"]}')
-        
-        # Wrap response_data in a Response object
-        return Response(response_data)
+            return Response(response_data)
 
     except Exception as e:
-        # Return error message wrapped in Response
         logger.error(f'Error: {str(e)}')
         return Response({'error': str(e)}, status=500)
 
@@ -2162,6 +2014,12 @@ def chat_with_gpt(request):
         formatted_outputs = []
 
         if relevant:
+            client.beta.threads.messages.create(thread_id, role='user', content=question)
+            response_data = {
+                'new_thread_id': thread_id,
+                'recommend_follow_up': False,
+            }
+            return Response(response_data)
             process_user_message(request, user_message.id, assistant_id)    
         else:
             response_data = {
@@ -2216,3 +2074,51 @@ def get_message_status(request, message_id):
         return Response({'error': 'User not found'}, status=404)
     except UserMessage.DoesNotExist:
         return Response({'error': 'Message not found'}, status=404)
+
+@api_view(['POST'])
+def guest_ai_tool_call(request):
+    tool_call = request.data.get('tool_call')
+    print(f"Guest tool call: {tool_call}")
+    name = tool_call['function']
+    arguments = json.loads(tool_call['arguments'])  # Get arguments from tool_call
+    if arguments is None:  # Check if arguments is None
+        arguments = {}  # Assign an empty dictionary to arguments
+    # Ensure that 'request' is included in the arguments if needed
+    arguments['request'] = request
+    return_value = guest_functions[name](**arguments)
+    tool_outputs = {
+        "tool_call_id": tool_call['id'],
+        "output": return_value,
+        "function": name,
+    }
+
+    return Response(tool_outputs)
+
+
+@api_view(['POST'])
+def ai_tool_call(request):
+    user_id = request.data.get('user_id')
+    user = CustomUser.objects.get(id=user_id)
+    tool_call = request.data.get('tool_call')
+    print(f"Tool call: {tool_call}")
+    name = tool_call['function']
+    arguments = json.loads(tool_call['arguments'])  # Get arguments from tool_call
+    if arguments is None:  # Check if arguments is None
+        arguments = {}  # Assign an empty dictionary to arguments
+    # Ensure that 'request' is included in the arguments if needed
+    arguments['request'] = request
+    return_value = functions[name](**arguments)
+    tool_outputs = {
+        "tool_call_id": tool_call['id'],
+        "output": return_value,
+    }
+
+    # Create a new ToolCall instance
+    tool_call_instance = ToolCall.objects.create(
+        user=user,
+        function_name=name,
+        arguments=tool_call['arguments'],
+        response=tool_outputs['output']
+    )
+
+    return Response(tool_outputs)

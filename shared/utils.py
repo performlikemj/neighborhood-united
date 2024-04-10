@@ -463,19 +463,23 @@ def get_user_info(request):
             return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
 
         address = Address.objects.get(user=user)
+        postal_code = address.input_postalcode if address.input_postalcode else 'Not provided'
+        # Convert postal_code to an integer if it's a valid integer string
+        if isinstance(postal_code, str) and postal_code.isdigit():
+            postal_code = int(postal_code)
+
         user_info = {
             'user_id': user.id,
             'dietary_preference': user.dietary_preference,
             'week_shift': user.week_shift,
             'user_goal': user.goal.goal_description if hasattr(user, 'goal') and user.goal else 'None',
-            'postal_code': address.input_postalcode if address.input_postalcode else 'Not provided'
+            'postal_code': postal_code
         }
         return {'status': 'success', 'user_info': user_info, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     except CustomUser.DoesNotExist:
         return {'status': 'error', 'message': 'User not found.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     except Address.DoesNotExist:
         return {'status': 'error', 'message': 'Address not found for user.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
-
 
 def access_past_orders(request, user_id):
     # Check user authorization
@@ -1479,6 +1483,34 @@ def approve_meal_plan(request, meal_plan_id):
         'order_id': order.id, 
         'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
     }
+
+
+def analyze_nutritional_content(request, dish_id):
+    try:
+        dish_id = int(dish_id)
+    except ValueError:
+        return {'status': 'error', 'message': 'Invalid dish_id'}
+
+    # Retrieving the dish by id
+    try:
+        dish = Dish.objects.get(pk=dish_id)
+    except Dish.DoesNotExist:
+        return {'status': 'error', 'message': 'Dish not found'}
+
+    # Preparing the response
+    nutritional_content = {
+        'calories': dish.calories if dish.calories else 0,
+        'fat': dish.fat if dish.fat else 0,
+        'carbohydrates': dish.carbohydrates if dish.carbohydrates else 0,
+        'protein': dish.protein if dish.protein else 0,
+    }
+
+    return {
+        'status': 'success',
+        'dish_id': dish_id,
+        'nutritional_content': nutritional_content
+    }
+
 
 def get_date(request):
     current_time = timezone.now()

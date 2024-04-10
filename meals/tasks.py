@@ -1,9 +1,17 @@
 # might have to move this to the root or the shared folder
+import asyncio
 import json
 from celery import shared_task
 from meals.models import Meal, Dish, Ingredient
 from chefs.models import Chef  # Adjust the import path based on your project structure
 from openai import OpenAI
+from typing_extensions import override
+from openai import AssistantEventHandler, OpenAI
+from openai.types.beta.threads.runs import ToolCall, ToolCallDelta
+from openai.types.beta.threads import Message, MessageDelta
+from openai.types.beta.threads.runs import ToolCall, RunStep
+from openai.types.beta import AssistantStreamEvent
+from openai.types.beta.threads import Text, TextDelta
 from django.conf import settings
 from custom_auth.models import CustomUser
 from customer_dashboard.models import GoalTracking, UserHealthMetrics, CalorieIntake, UserSummary, UserMessage, ChatThread
@@ -27,6 +35,8 @@ import re
 import time
 import logging
 from openai import OpenAIError
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +87,10 @@ functions = {
 def ai_call(tool_call, request):
     function = tool_call.function
     name = function.name
-    arguments = json.loads(function.arguments)
+    try:
+        arguments = json.loads(function.arguments)
+    except json.JSONDecodeError:
+        arguments = {}
     # Ensure that 'request' is included in the arguments if needed
     arguments['request'] = request
     return_value = functions[name](**arguments)
@@ -161,6 +174,7 @@ def process_user_message(request, message_id, assistant_id):
         user = user_message.user
         question = user_message.message
         thread_id = user_message.thread.openai_thread_id  # Assuming 'thread' is a field storing thread ID
+        user_id = user.id
 
         # Creating a message in the OpenAI thread
         try:
@@ -192,69 +206,18 @@ def process_user_message(request, message_id, assistant_id):
 
         # Running the Assistant
         try:
-            run = client.beta.threads.runs.create(
+            with client.beta.threads.runs.create_and_stream(
                 thread_id=thread_id,
-                assistant_id=assistant_id  # Assuming the user has an associated assistant ID
-            )
+                assistant_id=assistant_id,  # Assuming the user has an associated assistant ID
+                event_handler=EventHandler(request, thread_id, assistant_id, user_id) 
+            ) as stream:
+                stream.until_done()
         except Exception as e:
             logger.error(f'Failed to create run: {str(e)}')
             user_message.response = "I'm sorry, I'm still processing your request. Please try again or start a new chat."
             user_message.save()
             return  # Stopping the task if run creation fails
 
-        while True:
-            try:
-                run = client.beta.threads.runs.retrieve(
-                    thread_id=thread_id,
-                    run_id=run.id
-                )
-
-                if run.status == 'completed':
-                    logger.info('Run completed')
-                    break
-                elif run.status == 'failed':
-                    logger.error('Run failed')
-                    break
-                elif run.status in ['expired', 'cancelled']:
-                    logger.warning(f'Run {run.status}')
-                    break
-                elif run.status in ['queued', 'in_progress']:
-                    time.sleep(0.5)
-                    continue
-                elif run.status == "requires_action":
-                    tool_outputs = []
-                    print("Run requires action")
-                    for tool_call in run.required_action.submit_tool_outputs.tool_calls:
-                        # Execute the function call and get the result
-                        tool_call_result = ai_call(tool_call, request)
-                        # Extracting the tool_call_id and the output
-                        tool_call_id = tool_call_result['tool_call_id']
-                        output = tool_call_result['output']
-                        # Assuming 'output' needs to be serialized as a JSON string
-                        # If it's already a string or another format is required, adjust this line accordingly
-                        output_json = json.dumps(output)
-                        # Prepare the output in the required format
-                        formatted_output = {
-                            "tool_call_id": tool_call_id,
-                            "output": output_json
-                        }
-                        tool_outputs.append(formatted_output)
-
-                        formatted_outputs.append(formatted_output)
-                    # Chef if the run is still active before submitting the tool outputs
-                        run_status_check = client.beta.threads.runs.retrieve(
-                            thread_id=thread_id,
-                            run_id=run.id
-                        )
-                    if run_status_check not in ['queued', 'in_progress', 'requires_action', 'running']:   
-                        client.beta.threads.runs.submit_tool_outputs(
-                            thread_id=thread_id,
-                            run_id=run.id,
-                            tool_outputs=tool_outputs,
-                        )
-                        continue
-            except Exception as e:
-                logger.critical(f'Critical error occurred: {e}', exc_info=True)
         # Check the status of the Run and retrieve responses
         #TODO: Move the context and formatted_context part to the function where a message response is received from the assistant
         try:
@@ -278,3 +241,164 @@ def process_user_message(request, message_id, assistant_id):
         user_message.response = f"Sorry, I was unable to process your request. Please try again."
         user_message.save()
         return
+
+class EventHandler(AssistantEventHandler):
+    def __init__(self, request, thread_id, assistant_id, user_id):
+        super().__init__()
+        self.output = None
+        self.request = request
+        self.tool_id = None
+        self.function_arguments = None
+        self.thread_id = thread_id
+        self.assistant_id = assistant_id
+        self.run_id = None
+        self.run_step = None
+        self.function_name = ""
+        self.arguments = ""
+        self.tool_calls = []
+        self.user_id = user_id
+
+    @override
+    def on_text_created(self, text) -> None:
+        print(f"\nassistant on_text_created > ", end="", flush=True)
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f"user_{self.user_id}",
+            {
+                "type": "send_message_to_frontend",
+                "message": text if text else "No content",
+            }
+        )
+
+    @override
+    def on_text_delta(self, delta, snapshot):
+        print(f"{delta.value}")
+
+    @override
+    def on_end(self):
+        print(f"\n end assistant > ", self.current_run_step_snapshot, end="", flush=True)
+        
+        tool_outputs = []
+        if self.current_run_step_snapshot and self.current_run_step_snapshot.step_details.type == 'tool_calls':
+            for tool_call in self.current_run_step_snapshot.step_details.tool_calls:
+                print(f"\nassistant on_end beginning for:> {tool_call}\n", end="", flush=True)
+                print(f"tool_call.function.arguments: {tool_call.function.arguments}")
+                tool_call_result = ai_call(tool_call, self.request)
+                print(f"tool_call_result: {tool_call_result}")
+                tool_call_id = tool_call_result['tool_call_id']
+                output = tool_call_result['output']
+                output_json = json.dumps(output)
+                formatted_output = {
+                    "tool_call_id": tool_call_id,
+                    "output": output_json
+                }
+                tool_outputs.append(formatted_output)
+
+        if tool_outputs:
+            with client.beta.threads.runs.submit_tool_outputs_stream(
+                thread_id=self.thread_id,
+                run_id=self.run_id,
+                tool_outputs=tool_outputs,
+                event_handler=EventHandler(self.request, self.thread_id, self.assistant_id, user_id=self.user_id)
+            ) as stream:
+                stream.until_done()
+
+    @override
+    def on_exception(self, exception: Exception) -> None:
+        print(f"\nassistant > {exception}\n", end="", flush=True)
+
+    @override
+    def on_message_created(self, message: Message) -> None:
+        print(f"\nassistant on_message_created > {message}\n", end="", flush=True)
+
+    @override
+    def on_message_done(self, message: Message) -> None:
+        print(f"\nassistant on_message_done > {message}\n", end="", flush=True)
+
+
+    @override
+    def on_message_delta(self, delta: MessageDelta, snapshot: Message) -> None:
+        pass
+
+    def on_tool_call_created(self, tool_call):
+        print(f"\nassistant on_tool_call_created > {tool_call}")
+        self.function_name = tool_call.function.name
+        self.function_arguments = tool_call.function.arguments  # Capture the arguments
+        self.tool_id = tool_call.id
+        self.tool_calls.append(tool_call)
+        print(f"\on_tool_call_created > run_step.status > {self.run_step.status}")
+        print(f"\nassistant > {tool_call.type} {self.function_name}\n", flush=True)
+        print(f'\nrun_id: {self.run_id}\n', flush=True)
+        print(f'\nthread_id: {self.thread_id}\n', flush=True)
+        keep_retrieving_run = client.beta.threads.runs.retrieve(
+            thread_id=self.thread_id,
+            run_id=self.run_id
+        )
+
+        while keep_retrieving_run.status in ["queued", "in_progress"]: 
+            keep_retrieving_run = client.beta.threads.runs.retrieve(
+                thread_id=self.thread_id,
+                run_id=self.run_id
+            )
+            print(f"\nSTATUS: {keep_retrieving_run.status}")
+
+        
+
+    @override
+    def on_tool_call_done(self, tool_call: ToolCall) -> None:       
+        keep_retrieving_run = client.beta.threads.runs.retrieve(
+            thread_id=self.thread_id,
+            run_id=self.run_id
+        )
+
+        print(f"\nDONE STATUS: {keep_retrieving_run.status}")
+
+        if keep_retrieving_run.status == "completed":
+            all_messages = client.beta.threads.messages.list(
+                thread_id=self.thread_id
+            )
+
+            print(all_messages.data[0].content[0].text.value, "", "")
+            return
+
+        elif keep_retrieving_run.status == "requires_action":
+            print("here you would call your function")
+            print(f'self.tool_calls: {self.tool_calls}')
+
+        else:
+            print(f"\nassistant on_tool_call_done > {tool_call}\n", end="", flush=True)
+
+    @override
+    def on_run_step_created(self, run_step: RunStep) -> None:
+        print(f"on_run_step_created")
+        self.run_id = run_step.run_id
+        self.run_step = run_step
+        print("The type of run_step run step is ", type(run_step), flush=True)
+        print(f"\n run step created assistant > {run_step}\n", flush=True)
+
+    @override
+    def on_run_step_done(self, run_step: RunStep) -> None:
+        print(f"\n run step done assistant > {run_step}\n", flush=True)
+
+    def on_tool_call_delta(self, delta, snapshot): 
+        if delta.type == 'function':
+            print(delta.function.arguments, end="", flush=True)
+            self.arguments += delta.function.arguments
+        elif delta.type == 'code_interpreter':
+            print(f"on_tool_call_delta > code_interpreter")
+            if delta.code_interpreter.input:
+                print(delta.code_interpreter.input, end="", flush=True)
+            if delta.code_interpreter.outputs:
+                print(f"\n\noutput >", flush=True)
+                for output in delta.code_interpreter.outputs:
+                    if output.type == "logs":
+                        print(f"\n{output.logs}", flush=True)
+        else:
+            print("ELSE")
+            print(delta, end="", flush=True)
+
+    @override
+    def on_event(self, event: AssistantStreamEvent) -> None:
+        if event.event == "thread.run.requires_action":
+            print("\nthread.run.requires_action > submit tool call")
+            print(f"ARGS: {self.arguments}")

@@ -231,32 +231,51 @@ def update_profile_api(request):
 
 @api_view(['POST'])
 def login_api_view(request):
-    if request.method == 'POST':
+    # Ensure method is POST
+    print(f'Login request: {request}')
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Only POST method allowed'}, status=405)
+
+    try:
         data = json.loads(request.body)
-        username = data['username']
-        password = data['password']
-        user = authenticate(username=username, password=password)
-        if user:
-            # Create the token for the user
-            refresh = RefreshToken.for_user(user)
-            
-            # Get the user's role
-            user_role = UserRole.objects.get(user=user)
-            print(f'User role is_chef: {user_role.is_chef}')
-            # Inside your login_api_view function
-            return JsonResponse({
-                'refresh': str(refresh),
-                'access': str(refresh.access_token),
-                'user_id': user.id,
-                'email_confirmed': user.email_confirmed,
-                'is_chef': user_role.is_chef,
-                'current_role': user_role.current_role,  # Include the current_role attribute in the response
-                'status': 'success',
-                'message': 'Logged in successfully'
-            }, status=200)
-        else:
-            return JsonResponse({'status': 'error', 'message': 'Invalid username or password'}, status=400)
-    return JsonResponse({'status': 'error', 'message': 'Only POST method allowed'}, status=405)
+    except json.JSONDecodeError as e:
+        return JsonResponse({'status': 'error', 'message': 'Invalid JSON format'}, status=400)
+
+    # Extract username and password
+    username = data.get('username')
+    password = data.get('password')
+
+    if not username or not password:
+        return JsonResponse({'status': 'error', 'message': 'Username and password are required'}, status=400)
+
+    # Authenticate user
+    user = authenticate(username=username, password=password)
+    if not user:
+        return JsonResponse({'status': 'error', 'message': 'Invalid username or password'}, status=400)
+
+    # Successful authentication
+    try:
+        refresh = RefreshToken.for_user(user)
+        user_role = user.userrole  # Assuming a OneToOne relationship for simplicity
+
+        response_data = {
+            'refresh': str(refresh),
+            'access': str(refresh.access_token),
+            'user_id': user.id,
+            'email_confirmed': user.email_confirmed,
+            'is_chef': user_role.is_chef,
+            'current_role': user_role.current_role,
+            'status': 'success',
+            'message': 'Logged in successfully'
+        }
+
+        return JsonResponse(response_data, status=200)
+
+    except Exception as e:
+        # Log the exception details to debug it
+        print(f"Error during user authentication: {str(e)}")
+        return JsonResponse({'status': 'error', 'message': 'An error occurred during authentication'}, status=500)
+
 
 @api_view(['POST'])
 @login_required

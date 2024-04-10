@@ -35,7 +35,7 @@ from shared.utils import (get_user_info, post_review, update_review, delete_revi
                           understand_dietary_choices, is_question_relevant, create_meal)
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
-from .serializers import ChatThreadSerializer, GoalTrackingSerializer, UserHealthMetricsSerializer, CalorieIntakeSerializer, ToolCallSerializer
+from .serializers import ChatThreadSerializer, GoalTrackingSerializer, UserHealthMetricsSerializer, CalorieIntakeSerializer
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from .permissions import IsCustomer

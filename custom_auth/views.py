@@ -168,13 +168,15 @@ def address_details_view(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def update_profile_api(request):
+    print(f"Request data: {request.data}")  # Debug print
+
     user = request.user
     user_serializer = CustomUserSerializer(user, data=request.data, partial=True)
 
     if user_serializer.is_valid():
         print(f"Validated data: {user_serializer.validated_data}")  # Debug print
 
-        if 'email' in user_serializer.validated_data:
+        if 'email' in user_serializer.validated_data and user_serializer.validated_data['email'] != user.email:
             new_email = user_serializer.validated_data['email']
             if not new_email:
                 return Response({'status': 'failure', 'message': 'Email cannot be empty'}, status=400)
@@ -197,10 +199,15 @@ def update_profile_api(request):
             # Send data to Zapier
             requests.post(os.getenv("ZAP_UPDATE_PROFILE_URL"), json=zapier_data)
 
+        if 'username' in user_serializer.validated_data and user_serializer.validated_data['username'] != user.username:
+            user.username = user_serializer.validated_data['username']
+            user.save()
+
         if 'dietary_preference' in user_serializer.validated_data:
             user.dietary_preference = user_serializer.validated_data['dietary_preference']
 
         if 'allergies' in user_serializer.validated_data:
+            print(f"Allergies data: {user_serializer.validated_data['allergies']}")  # Debug print
             user.allergies = user_serializer.validated_data['allergies']
         user_serializer.save()
 
@@ -224,9 +231,10 @@ def update_profile_api(request):
 
             return Response({'status': 'success', 'message': 'Profile updated successfully', 'is_served': is_served})
         else:
+            print(f"Address serializer errors: {address_serializer.errors}")  # Debug print
             return Response({'status': 'failure', 'message': address_serializer.errors}, status=400)
     else:
-        return Response({'status': 'failure', 'message': 'Address data not provided'}, status=400)
+        return Response({'status': 'success', 'message': 'Profile updated successfully without address data'})
 
 
 @api_view(['POST'])

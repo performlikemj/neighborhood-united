@@ -3,24 +3,45 @@ from django.contrib.auth import get_user_model
 from .models import Address, CustomUser, UserRole
 from local_chefs.models import PostalCode, ChefPostalCode
 
+
 class CustomUserSerializer(serializers.ModelSerializer):
+    allergies = serializers.ListField(
+        child=serializers.CharField(max_length=20),
+        allow_empty=True,  # Allow for no allergies
+    )
+
     class Meta:
         model = get_user_model()
         fields = ['id', 'username', 'email', 'password', 'phone_number', 'dietary_preference', 'allergies', 'week_shift', 'email_confirmed']
-        extra_kwargs = {'password': {'write_only': True}}
+        extra_kwargs = {'password': {'write_only': True, 'required': False}, 'username': {'required': False}, 'email': {'required': False}}
 
     def create(self, validated_data):
-        # Create the user instance
         user = get_user_model()(
-            username=validated_data['username'],
-            email=validated_data['email'],
-            phone_number=validated_data['phone_number'],
-            dietary_preference=validated_data['dietary_preference']
+            username=validated_data.get('username'),
+            email=validated_data.get('email'),
+            phone_number=validated_data.get('phone_number'),
+            dietary_preference=validated_data.get('dietary_preference'),
         )
-        # Hash the user's password
         user.set_password(validated_data['password'])
         user.save()
         return user
+
+    def update(self, instance, validated_data):
+        instance.username = validated_data.get('username', instance.username)
+        instance.email = validated_data.get('email', instance.email)
+        instance.phone_number = validated_data.get('phone_number', instance.phone_number)
+        instance.dietary_preference = validated_data.get('dietary_preference', instance.dietary_preference)
+        
+        # Handle allergies; ensure it doesn't override with None if not provided
+        if 'allergies' in validated_data:
+            instance.allergies = validated_data['allergies']
+        
+        # Optional: Handle password updates, if included
+        if 'password' in validated_data:
+            instance.set_password(validated_data['password'])
+
+        instance.save()
+        return instance
 
 class AddressSerializer(serializers.ModelSerializer):
     user = serializers.PrimaryKeyRelatedField(

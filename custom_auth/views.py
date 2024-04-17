@@ -143,35 +143,46 @@ def address_details_view(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def update_profile_api(request):
+    print(f"Request data: {request.data}")  # Debug print
+
     user = request.user
-    # Deserialize and update user data
     user_serializer = CustomUserSerializer(user, data=request.data, partial=True)
+
     if user_serializer.is_valid():
         print(f"Validated data: {user_serializer.validated_data}")  # Debug print
 
-        # Check if email is updated
-        if 'email' in user_serializer.validated_data:
+        if 'email' in user_serializer.validated_data and user_serializer.validated_data['email'] != user.email:
+            new_email = user_serializer.validated_data['email']
+            if not new_email:
+                return Response({'status': 'failure', 'message': 'Email cannot be empty'}, status=400)
+
             user.email_confirmed = False
-            user.new_email = user_serializer.validated_data['email']
+            user.new_email = new_email
             user.save()
 
-            # Send activation email
-            mail_subject = 'Verify your email to resume access.'
+            # Prepare data for Zapier webhook
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = account_activation_token.make_token(user)
-            activation_link = f"{config['STREAMLIT_URL']}/account?uid={uid}&token={token}"
-            message = f"Hi {user.username},\n\nYou've recently updated your email!\n\n" \
-                    f"Please click the link below to verify the change:\n\n{activation_link}\n\n" \
-                    f"If you have any issues, please contact us at {config['STREAMLIT_SUPPORT_EMAIL']}.\n\n" \
-                    "Thanks,\nYour SautAI Support Team"
+            activation_link = f"{os.getenv('STREAMLIT_URL')}/account?uid={uid}&token={token}"
+            zapier_data = {
+                'recipient_email': user_serializer.validated_data.get('email'),
+                'subject': 'Verify your email to resume access.',
+                'username': user.username,
+                'activation_link': activation_link,
+            }
 
-            to_email = user_serializer.validated_data.get('email')
-            email = EmailMessage(mail_subject, message, from_email='support@sautai.com', to=[to_email])
-            email.send()
+            # Send data to Zapier
+            requests.post(os.getenv("ZAP_UPDATE_PROFILE_URL"), json=zapier_data)
+
+        if 'username' in user_serializer.validated_data and user_serializer.validated_data['username'] != user.username:
+            user.username = user_serializer.validated_data['username']
+            user.save()
+
         if 'dietary_preference' in user_serializer.validated_data:
             user.dietary_preference = user_serializer.validated_data['dietary_preference']
 
         if 'allergies' in user_serializer.validated_data:
+            print(f"Allergies data: {user_serializer.validated_data['allergies']}")  # Debug print
             user.allergies = user_serializer.validated_data['allergies']
         user_serializer.save()
 
@@ -195,9 +206,11 @@ def update_profile_api(request):
 
             return Response({'status': 'success', 'message': 'Profile updated successfully', 'is_served': is_served})
         else:
+            print(f"Address serializer errors: {address_serializer.errors}")  # Debug print
             return Response({'status': 'failure', 'message': address_serializer.errors}, status=400)
     else:
-        return Response({'status': 'failure', 'message': 'Address data not provided'}, status=400)
+        return Response({'status': 'success', 'message': 'Profile updated successfully without address data'})
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])

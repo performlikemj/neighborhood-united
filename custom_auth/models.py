@@ -3,6 +3,7 @@ from django.contrib.auth.models import AbstractUser
 from django.contrib.auth import get_user_model
 from django_countries.fields import CountryField
 from local_chefs.models import PostalCode
+from django.contrib.postgres.fields import ArrayField
 
 
 # Create your models here.
@@ -71,7 +72,11 @@ class CustomUser(AbstractUser):
     # Field to store week_shift for context when chatting with assistant
     week_shift = models.IntegerField(default=0)
     dietary_preference = models.CharField(max_length=20, choices=DIETARY_CHOICES, default='Everything')
-    allergies = models.CharField(max_length=70, choices=ALLERGY_CHOICES, default='None')
+    allergies = ArrayField(
+        models.CharField(max_length=20, choices=ALLERGY_CHOICES),
+        default=list,
+        blank=True,
+    )
 
     def save(self, *args, **kwargs):
         self.username = self.username.lower()

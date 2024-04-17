@@ -286,14 +286,13 @@ def check_allergy_alert(request, user_id):
     user = CustomUser.objects.get(id=user_id)
     user_role = UserRole.objects.get(user=user)
     
+    # Check if the user's current role is 'chef' and restrict access
     if user_role.current_role == 'chef':
         return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
 
-
-    if user.allergies:
-        return {'Allergens': [user.allergies]}
-    else:
-        return {'Allergens': []}
+    # Directly return the list of allergies. Since 'user.allergies' is an ArrayField, it's already a list.
+    return {'Allergens': user.allergies}
+  
 
 def update_health_metrics(request, user_id, weight=None, bmi=None, mood=None, energy_level=None):
     user = CustomUser.objects.get(id=request.data.get('user_id'))
@@ -470,7 +469,8 @@ def get_user_info(request):
             'dietary_preference': user.dietary_preference,
             'week_shift': user.week_shift,
             'user_goal': user.goal.goal_description if hasattr(user, 'goal') and user.goal else 'None',
-            'postal_code': postal_code
+            'postal_code': postal_code,
+            'allergies': user.allergies,  
         }
         return {'status': 'success', 'user_info': user_info, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     except CustomUser.DoesNotExist:

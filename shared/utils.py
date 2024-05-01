@@ -450,7 +450,6 @@ def get_goal(request):
 
 
 def get_user_info(request):
-    # Ensure the requesting user is trying to access their own information
     try:
         user = CustomUser.objects.get(id=request.data.get('user_id'))
         user_role = UserRole.objects.get(user=user)
@@ -460,9 +459,10 @@ def get_user_info(request):
 
         address = Address.objects.get(user=user)
         postal_code = address.input_postalcode if address.input_postalcode else 'Not provided'
-        # Convert postal_code to an integer if it's a valid integer string
         if isinstance(postal_code, str) and postal_code.isdigit():
             postal_code = int(postal_code)
+
+        allergies = user.allergies if user.allergies != [{}] else []
 
         user_info = {
             'user_id': user.id,
@@ -470,14 +470,14 @@ def get_user_info(request):
             'week_shift': user.week_shift,
             'user_goal': user.goal.goal_description if hasattr(user, 'goal') and user.goal else 'None',
             'postal_code': postal_code,
-            'allergies': user.allergies,  
+            'allergies': allergies,  
         }
+        print(f'User Info: {user_info}')
         return {'status': 'success', 'user_info': user_info, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     except CustomUser.DoesNotExist:
         return {'status': 'error', 'message': 'User not found.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     except Address.DoesNotExist:
         return {'status': 'error', 'message': 'Address not found for user.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
-
 
 def access_past_orders(request, user_id):
     # Check user authorization

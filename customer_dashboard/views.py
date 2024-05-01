@@ -795,7 +795,7 @@ def chat_with_gpt(request):
             ChatThread.objects.create(
                 user=user,
                 openai_thread_id=thread_id,
-                title=question,
+                title=question[:255],  # Truncate question to 255 characters
                 is_active=True
             )
 

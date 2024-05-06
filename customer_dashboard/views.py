@@ -21,7 +21,7 @@ import re
 import time
 from django.conf import settings
 from shared.utils import (get_user_info, post_review, update_review, delete_review, replace_meal_in_plan, 
-                          remove_meal_from_plan, list_upcoming_meals, get_date, create_meal_plan, 
+                          remove_meal_from_plan, list_upcoming_meals, get_date, create_meal_plan, create_meal, 
                           add_meal_to_plan, auth_get_meal_plan, auth_search_chefs, auth_search_dishes, 
                           approve_meal_plan, auth_search_ingredients, auth_search_meals_excluding_ingredient, 
                           search_meal_ingredients, suggest_alternative_meals,guest_search_ingredients ,
@@ -618,6 +618,7 @@ functions = {
     "search_healthy_meal_options": search_healthy_meal_options,
     "provide_healthy_meal_suggestions": provide_healthy_meal_suggestions,
     "understand_dietary_choices": understand_dietary_choices,
+    "create_meal": create_meal,
 }
 
 

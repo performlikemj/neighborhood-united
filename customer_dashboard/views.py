@@ -295,10 +295,14 @@ def api_thread_history(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_thread_detail_view(request, openai_thread_id):
+    headers = {
+        "Authorization": f"Bearer {settings.OPENAI_KEY}",
+        "Content-Type": "application/json"
+    }
     # Assuming you have a function to handle the OpenAI communication
     client = OpenAI(api_key=settings.OPENAI_KEY)
     try:
-        messages = client.beta.threads.messages.list(openai_thread_id)
+        messages = client.beta.threads.messages.list(openai_thread_id, extra_headers=headers)
         # Format and return the messages as per your requirement
         chat_history = api_format_chat_history(messages)
         return Response({'chat_history': chat_history})
@@ -344,9 +348,13 @@ def history_page(request):
 @login_required
 @user_passes_test(is_customer)
 def thread_detail(request, openai_thread_id):
+    headers = {
+        "Authorization": f"Bearer {settings.OPENAI_KEY}",
+        "Content-Type": "application/json"
+    }
     client = OpenAI(api_key=settings.OPENAI_KEY)
     try:
-        messages = client.beta.threads.messages.list(openai_thread_id)
+        messages = client.beta.threads.messages.list(openai_thread_id, extra_headers=headers)
         chat_history = format_chat_history(messages)
         return render(request, 'customer_dashboard/thread_detail.html', {'chat_history': chat_history})
     except Exception as e:
@@ -654,8 +662,12 @@ def guest_ai_call(tool_call, request):
 @api_view(['POST'])
 def guest_chat_with_gpt(request):
     print("Chatting with Guest GPT")
-  
-  
+
+    headers = {
+        "Authorization": f"Bearer {settings.OPENAI_KEY}",
+        "Content-Type": "application/json"
+    }  
+    
     client = OpenAI(api_key=settings.OPENAI_KEY)    
     # Check if the assistant ID is already stored in a file
   
@@ -688,7 +700,7 @@ def guest_chat_with_gpt(request):
 
         # Handle existing or new thread
         if not thread_id:
-            openai_thread = client.beta.threads.create()
+            openai_thread = client.beta.threads.create(extra_headers=headers)
             thread_id = openai_thread.id
     
         try:
@@ -697,7 +709,8 @@ def guest_chat_with_gpt(request):
             client.beta.threads.messages.create(
                 thread_id=thread_id,
                 role="user",
-                content=question
+                content=question,
+                extra_headers=headers
             )
             print("Message created")
         except Exception as e:
@@ -714,6 +727,7 @@ def guest_chat_with_gpt(request):
             run = client.beta.threads.runs.create(
                 thread_id=thread_id,
                 assistant_id=guest_assistant_id,
+                extra_headers=headers
                 # Optionally, you can add specific instructions here
             )
         except Exception as e:
@@ -745,6 +759,10 @@ def chat_with_gpt(request):
     print("Chatting with GPT")
     # Set up OpenAI
     client = OpenAI(api_key=settings.OPENAI_KEY)    
+    headers = {
+        "Authorization": f"Bearer {settings.OPENAI_KEY}",
+        "Content-Type": "application/json"
+    }
     # Check if the assistant ID is already stored in a file
 
     user = CustomUser.objects.get(id=request.data.get('user_id'))
@@ -790,7 +808,7 @@ def chat_with_gpt(request):
             ChatThread.objects.filter(user=user).update(is_active=False)
             ChatThread.objects.filter(openai_thread_id=thread_id).update(is_active=True)
         else:
-            openai_thread = client.beta.threads.create()
+            openai_thread = client.beta.threads.create(extra_headers=headers)
             thread_id = openai_thread.id
             print(f"New thread ID: {thread_id}")
             ChatThread.objects.create(
@@ -809,7 +827,7 @@ def chat_with_gpt(request):
         formatted_outputs = []
 
         if relevant:
-            client.beta.threads.messages.create(thread_id, role='user', content=question)
+            client.beta.threads.messages.create(thread_id, role='user', content=question, extra_headers=headers)
             response_data = {
                 'new_thread_id': thread_id,
                 'recommend_follow_up': False,

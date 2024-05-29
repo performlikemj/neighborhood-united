@@ -138,7 +138,6 @@ class DietaryPreferenceManager(models.Manager):
     def for_user(self, user):
         if user.is_authenticated:
             dietary_preference = user.dietary_preference
-            print(f'Dietary preference: {dietary_preference}')
             if dietary_preference == 'Everything':
                 return super().get_queryset()
             else:

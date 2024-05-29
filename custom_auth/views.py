@@ -143,13 +143,11 @@ def address_details_view(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def update_profile_api(request):
-    print(f"Request data: {request.data}")  # Debug print
 
     user = request.user
     user_serializer = CustomUserSerializer(user, data=request.data, partial=True)
 
     if user_serializer.is_valid():
-        print(f"Validated data: {user_serializer.validated_data}")  # Debug print
 
         if 'email' in user_serializer.validated_data and user_serializer.validated_data['email'] != user.email:
             new_email = user_serializer.validated_data['email']
@@ -182,12 +180,10 @@ def update_profile_api(request):
             user.dietary_preference = user_serializer.validated_data['dietary_preference']
 
         if 'allergies' in user_serializer.validated_data:
-            print(f"Allergies data: {user_serializer.validated_data['allergies']}")  # Debug print
             user.allergies = user_serializer.validated_data['allergies']
         user_serializer.save()
 
     else:
-        print(f"Serializer errors: {user_serializer.errors}")  # Debug print
         return Response({'status': 'failure', 'message': user_serializer.errors}, status=400)
 
     # Update or create address data
@@ -206,7 +202,6 @@ def update_profile_api(request):
 
             return Response({'status': 'success', 'message': 'Profile updated successfully', 'is_served': is_served})
         else:
-            print(f"Address serializer errors: {address_serializer.errors}")  # Debug print
             return Response({'status': 'failure', 'message': address_serializer.errors}, status=400)
     else:
         return Response({'status': 'success', 'message': 'Profile updated successfully without address data'})
@@ -219,8 +214,6 @@ def switch_role_api(request):
     user_role, _ = UserRole.objects.get_or_create(user=request.user, defaults={'current_role': 'customer'})
     new_role = 'chef' if user_role.current_role == 'customer' and user_role.is_chef else 'customer'
 
-    print(f"User {request.user.username} is trying to switch role to {new_role}.")
-
     # Check if the user can switch to chef
     if new_role == 'chef' and not user_role.is_chef:
         return Response({'error': 'You are not a chef.'}, status=400)
@@ -228,8 +221,6 @@ def switch_role_api(request):
     # Update the user role
     user_role.current_role = new_role
     user_role.save()
-
-    print(f"User {request.user.username} switched role to {new_role}.")
 
     # Serialize and return the new user role
     serializer = UserRoleSerializer(user_role)
@@ -248,8 +239,6 @@ def login_api_view(request):
             
             # Get the user's role
             user_role = UserRole.objects.get(user=user)
-            print(f'User role is_chef: {user_role.is_chef}')
-            print(f'User role current_role: {user_role.current_role}')
             # Inside your login_api_view function
             return JsonResponse({
                 'refresh': str(refresh),

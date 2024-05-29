@@ -170,7 +170,6 @@ def process_user_message(request, message_id, assistant_id):
                 content=question
             )
         except OpenAIError as e:
-            print(f'Error: {e}')
             if 'Can\'t add messages to thread' in str(e) and 'while a run' in str(e) and 'is active' in str(e):
                 # Extract the run ID from the error message
                 match = re.search(r'run (\w+)', str(e))
@@ -223,7 +222,6 @@ def process_user_message(request, message_id, assistant_id):
                     continue
                 elif run.status == "requires_action":
                     tool_outputs = []
-                    print("Run requires action")
                     for tool_call in run.required_action.submit_tool_outputs.tool_calls:
                         # Execute the function call and get the result
                         tool_call_result = ai_call(tool_call, request)
@@ -259,7 +257,6 @@ def process_user_message(request, message_id, assistant_id):
         #TODO: Move the context and formatted_context part to the function where a message response is received from the assistant
         try:
             # Retrieve messages and log them
-            print("Retrieving messages")
             messages = client.beta.threads.messages.list(thread_id)
             last_assistant_message = next((msg.content[0].text.value for msg in (messages.data) if msg.role == 'assistant'), None)               
 

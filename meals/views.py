@@ -73,9 +73,7 @@ def get_ingredient_info(id, apiKey=settings.SPOONACULAR_API_KEY):
 @user_passes_test(is_chef, login_url='custom_auth:login')
 def api_create_ingredient(request):
     if request.method == 'POST':
-        print(request.POST)
         chef = request.user.chef
-        print(chef)
         name = request.POST.get('name')
         spoonacular_id = request.POST.get('spoonacular_id')
         if chef.ingredients.filter(spoonacular_id=spoonacular_id).exists():
@@ -522,8 +520,6 @@ def get_alternative_meals(request):
     # Apply dietary preference filter only if it's not None
     meals = postal_query.filter(id__in=Meal.dietary_objects.for_user(request.user))
 
-    print(meals)
-
     # Return the meals as JSON
     if meals.exists():
         meals_data = [{
@@ -546,8 +542,6 @@ def submit_meal_plan_updates(request):
         # Load the JSON data from the request
         data = json.loads(request.body)
         updated_meals = data.get('mealPlan')
-        print(updated_meals)
-        print(type(updated_meals))
 
         # Assuming each meal in updated_meals includes a 'meal_plan_id'
         if not updated_meals:

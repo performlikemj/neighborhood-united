@@ -137,7 +137,6 @@ def generate_user_summary(user_id):
             ],
         )
         summary_text = response.choices[0].message.content
-        print(f"Summary generated: {summary_text}")
     except Exception as e:
         # Handle exceptions or log errors
         return {"message": f"An error occurred trying to generate the summary. We are working to resolve the issue."}
@@ -166,13 +165,11 @@ def api_update_calorie_intake(request):
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_get_calories(request):
     try:
-        print("Getting calories")
         user = CustomUser.objects.get(id=request.data.get('user_id'))
         date_recorded = request.data.get('date')
         # Using request.user.id to get the authenticated user's ID
         calorie_records = CalorieIntake.objects.filter(user=user)
         if date_recorded:
-            print("date was recorded")
             calorie_records = calorie_records.filter(date_recorded=date_recorded)
         serializer = CalorieIntakeSerializer(calorie_records, many=True)
         return Response(serializer.data)
@@ -205,7 +202,6 @@ def api_delete_calorie_intake(request, record_id):
     except CalorieIntake.DoesNotExist:
         return Response({"error": "Record not found."}, status=404)
     except Exception as e:
-        print(f"Exception in api_delete_calorie_intake: {e}")
         logger.warning(e)
         logger.warning(traceback.format_exc())
         return Response({"error": "An error occurred trying to delete the record. We are working to resolve the issue."}, status=400)
@@ -253,7 +249,6 @@ def api_user_metrics(request):
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_user_goal_view(request):
     # Fetch or create goal for the user
-    print(f'Request: {request}')
     goal, created = GoalTracking.objects.get_or_create(user=request.user)
     serializer = GoalTrackingSerializer(goal)
     return Response(serializer.data)
@@ -336,7 +331,6 @@ def is_customer(user):
 def history(request):
     chat_threads = ChatThread.objects.filter(user=request.user).order_by('-created_at')[:5]  # Limit to 5 recent chats
     data = serializers.serialize('json', chat_threads)
-    print(data)
     return JsonResponse({'chat_threads': data})
 
 @login_required
@@ -661,8 +655,6 @@ def guest_ai_call(tool_call, request):
 
 @api_view(['POST'])
 def guest_chat_with_gpt(request):
-    print("Chatting with Guest GPT")
-
     headers = {
         "Authorization": f"Bearer {settings.OPENAI_KEY}",
         "Content-Type": "application/json"
@@ -674,16 +666,13 @@ def guest_chat_with_gpt(request):
 
     # Processing the POST request
     try:
-        print("Processing POST request")
         try:
-            print(f"Request data: {request.data}")
             data = request.data
-            print(f"Data: {data}")
         except json.JSONDecodeError:
             return Response({'error': 'Failed to parse JSON'}, status=400)
         question = data.get('question')
         thread_id = data.get('thread_id')
-
+        logger.error(f"Thread ID: {thread_id}")
         relevant = is_question_relevant(question)
 
         if not relevant:
@@ -703,8 +692,9 @@ def guest_chat_with_gpt(request):
             openai_thread = client.beta.threads.create(extra_headers=headers)
             thread_id = openai_thread.id
     
+        logger.info(f"Thread ID After Assignment: {thread_id}")
+
         try:
-            print("Creating a message")
             # Add a Message to a Thread
             client.beta.threads.messages.create(
                 thread_id=thread_id,
@@ -712,7 +702,6 @@ def guest_chat_with_gpt(request):
                 content=question,
                 extra_headers=headers
             )
-            print("Message created")
         except Exception as e:
             logger.error(f'Failed to create message: {str(e)}')
             return Response({'error': f'Failed to create message: {str(e)}'}, status=500)    
@@ -738,6 +727,7 @@ def guest_chat_with_gpt(request):
                 'new_thread_id': thread_id,
                 'recommend_follow_up': False,
             }
+            logger.info(f"Response Data Relevant: {response_data}")
             return Response(response_data)
         else:
             response_data = {
@@ -745,6 +735,7 @@ def guest_chat_with_gpt(request):
                 'new_thread_id': thread_id,
                 'recommend_follow_up': False,
             }
+            logger.info(f"Response Data Not Relevant: {response_data}")
             return Response(response_data)
 
     except Exception as e:
@@ -756,7 +747,6 @@ def guest_chat_with_gpt(request):
 # @user_passes_test(is_customer)
 @api_view(['POST'])
 def chat_with_gpt(request):
-    print("Chatting with GPT")
     # Set up OpenAI
     client = OpenAI(api_key=settings.OPENAI_KEY)    
     headers = {
@@ -770,16 +760,12 @@ def chat_with_gpt(request):
         
     # Processing the POST request
     try:
-        print("Processing POST request")
         try:
-            print(f"Request data: {request.data}")
             data = request.data
-            print(f"Data: {data}")
         except json.JSONDecodeError:
             return Response({'error': 'Failed to parse JSON'}, status=400)
 
         question = data.get('question')
-        print(f"Question: {question}")
         thread_id = data.get('thread_id')
 
         if not question:
@@ -810,7 +796,6 @@ def chat_with_gpt(request):
         else:
             openai_thread = client.beta.threads.create(extra_headers=headers)
             thread_id = openai_thread.id
-            print(f"New thread ID: {thread_id}")
             ChatThread.objects.create(
                 user=user,
                 openai_thread_id=thread_id,
@@ -875,7 +860,6 @@ def get_message_status(request, message_id):
 @api_view(['POST'])
 def guest_ai_tool_call(request):
     tool_call = request.data.get('tool_call')
-    print(f"Guest tool call: {tool_call}")
     name = tool_call['function']
     arguments = json.loads(tool_call['arguments'])  # Get arguments from tool_call
     if arguments is None:  # Check if arguments is None
@@ -897,7 +881,6 @@ def ai_tool_call(request):
     user_id = request.data.get('user_id')
     user = CustomUser.objects.get(id=user_id)
     tool_call = request.data.get('tool_call')
-    print(f"Tool call: {tool_call}")
     name = tool_call['function']
     arguments = json.loads(tool_call['arguments'])  # Get arguments from tool_call
     if arguments is None:  # Check if arguments is None

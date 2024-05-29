@@ -128,7 +128,6 @@ def is_question_relevant(question):
     :param question: A string representing the user's question.
     :return: A boolean indicating whether the question is relevant.
     """
-    print("From is_question_relevant")
 
     # Define application's functionalities and domains for the model to consider
     app_context = """
@@ -152,7 +151,6 @@ def is_question_relevant(question):
 
     # Interpret the model's response
     response_content = response.choices[0].message.content.strip()
-    print(f'Is Question Relevant Response: {response_content}')
     if "False" in response_content:
         return False
     else:
@@ -209,7 +207,6 @@ def recommend_follow_up(request, context):
             "provide_healthy_meal_suggestions: Provide healthy meal suggestions based on the user's dietary preferences and health goals"
     """
     else:
-        print("Chatting with Guest GPT")
         functions = """
             "guest_search_dishes: Search dishes in the database",
             "guest_search_chefs: Search chefs in the database and get their info",
@@ -228,16 +225,13 @@ def recommend_follow_up(request, context):
     )
     # Correct way to access the response content
     response_content = response.choices[0].message.content
-    print(f'Follow-Up Response: {response_content}')
     return response_content.strip().split('\n')
 
 
 
 def provide_nutrition_advice(request, user_id):
     try:
-        print("Fetching user...")
         user = CustomUser.objects.get(id=user_id)
-        print("Fetching user role...")
         user_role = UserRole.objects.get(user=user)
 
         if user_role.current_role == 'chef':
@@ -245,7 +239,6 @@ def provide_nutrition_advice(request, user_id):
 
         # Fetch the user's goal
         try:
-            print("Fetching goal tracking...")
             goal_tracking = GoalTracking.objects.get(user=user)
             goal_info = {
                 'goal_name': goal_tracking.goal_name,
@@ -256,7 +249,6 @@ def provide_nutrition_advice(request, user_id):
 
         # Fetch the user's latest health metrics
         try:
-            print("Fetching latest metrics...")
             latest_metrics = UserHealthMetrics.objects.filter(user=user).latest('date_recorded')
             health_metrics = {
                 'weight': float(latest_metrics.weight) if latest_metrics.weight else None,
@@ -276,13 +268,11 @@ def provide_nutrition_advice(request, user_id):
         }
 
     except CustomUser.DoesNotExist:
-        print("User does not exist.")
         return {'status': 'error', 'message': 'User not found.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     except Exception as e:
         return {'status': 'error', 'message': f'An unexpected error occurred: {e}', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 def check_allergy_alert(request, user_id):
-    print("From check_allergy_alert")
     user = CustomUser.objects.get(id=user_id)
     user_role = UserRole.objects.get(user=user)
     
@@ -389,7 +379,6 @@ def update_goal(request, goal_name, goal_description):
             return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
 
 
-        print(f'From update_goal: {goal_name}, {goal_description}')
         # Ensure goal_name and goal_description are not empty
         if not goal_name or not goal_description:
             return {
@@ -472,7 +461,6 @@ def get_user_info(request):
             'postal_code': postal_code,
             'allergies': allergies,  
         }
-        print(f'User Info: {user_info}')
         return {'status': 'success', 'user_info': user_info, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     except CustomUser.DoesNotExist:
         return {'status': 'error', 'message': 'User not found.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -661,7 +649,6 @@ def list_upcoming_meals(request):
     }
 
 def create_meal_plan(request):
-    print("From create_meal_plan")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
     
@@ -692,7 +679,6 @@ def create_meal_plan(request):
 
 
 def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day):
-    print("From replace_meal_in_plan")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     
     # Validate meal plan
@@ -737,7 +723,6 @@ def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day):
 
 
 def remove_meal_from_plan(request, meal_plan_id, meal_id, day):
-    print("From remove_meal_from_plan")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
 
     # Retrieve the specified MealPlan
@@ -767,7 +752,6 @@ def remove_meal_from_plan(request, meal_plan_id, meal_id, day):
 
 
 def create_meal(request, name, dietary_preference, description):
-    print(f'From create_meal: {name}, {dietary_preference}, {description}')
     user = CustomUser.objects.get(id=request.data.get('user_id'))
 
     # Check for existing meals with the same name, description, and created by the same user
@@ -809,7 +793,6 @@ def create_meal(request, name, dietary_preference, description):
 
 
 def add_meal_to_plan(request, meal_plan_id, meal_id, day, allow_duplicates=False):
-    print("From add_meal_to_plan")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
     
@@ -922,10 +905,7 @@ def suggest_alternative_meals(request, meal_ids, days_of_week):
     return {"alternative_meals": alternative_meals}
 
 
-def search_meal_ingredients(request, query):
-    print("From search_meal_ingredients")
-    print(f"Query: {query}")
-    
+def search_meal_ingredients(request, query):    
     # Assuming 'get_embedding' creates a vector for your query
     query_vector = get_embedding(query)
     
@@ -945,7 +925,6 @@ def search_meal_ingredients(request, query):
             "similarity": meal.similarity,  # Include similarity score in the response
             "dishes": []
         }
-        print(f"Meal: {meal}")
         for dish in meal.dishes.all():
             dish_detail = {
                 "dish_name": dish.name,
@@ -962,7 +941,6 @@ def search_meal_ingredients(request, query):
 
 
 def auth_search_meals_excluding_ingredient(request, query):
-    print("From auth_search_meals_excluding_ingredient")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
     
@@ -1017,7 +995,6 @@ def auth_search_meals_excluding_ingredient(request, query):
     }
 
 def auth_search_ingredients(request, query):
-    print("From auth_search_ingredients")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
 
@@ -1065,7 +1042,6 @@ def auth_search_ingredients(request, query):
     }
 
 def guest_search_ingredients(request, query, meal_ids=None):
-    print("From guest_search_ingredients")
     current_date = timezone.now().date()
     available_meals = Meal.objects.filter(start_date__gte=current_date)
 
@@ -1114,7 +1090,6 @@ def guest_search_ingredients(request, query, meal_ids=None):
 
 
 def auth_search_chefs(request, query):
-    print("From auth_search_chefs")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
     
@@ -1197,8 +1172,6 @@ def auth_search_chefs(request, query):
 
 
 def guest_search_chefs(request, query):
-    print("From guest_search_chefs")
-
     # Generate the embedding for the search query
     query_vector = get_embedding(query)
     
@@ -1254,7 +1227,6 @@ def guest_search_chefs(request, query):
 
 
 def auth_search_dishes(request, query):
-    print("From auth_search_dishes")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
     
@@ -1298,7 +1270,6 @@ def auth_search_dishes(request, query):
 
 
 def guest_search_dishes(request, query):
-    print("From guest_search_dishes")
 
     # Generate the embedding for the search query
     query_vector = get_embedding(query)
@@ -1348,7 +1319,6 @@ def cleanup_past_meals(meal_plan, current_date):
 
 
 def auth_get_meal_plan(request):
-    print("From auth_get_meal_plan")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
 
@@ -1378,7 +1348,7 @@ def auth_get_meal_plan(request):
             "meal_id": meal.id,
             "name": meal.name,
             "chef": chef_username,
-            "start_date": meal.start_date.strftime('%Y-%m-%d'),
+            "start_date": meal.start_date.strftime('%Y-%m-%d') if meal.start_date else None,
             "is_available": meal.can_be_ordered(),
             "dishes": [{"id": dish.id, "name": dish.name} for dish in meal.dishes.all()],
             "day": meal_plan_meal.day,
@@ -1392,7 +1362,6 @@ def auth_get_meal_plan(request):
     }
 
 def guest_get_meal_plan(request):
-    print("From guest_get_meal_plan")
     today = timezone.now().date()
     start_of_week = today - timedelta(days=today.weekday())
     end_of_week = start_of_week + timedelta(days=6)
@@ -1432,7 +1401,6 @@ def guest_get_meal_plan(request):
 
 
 def approve_meal_plan(request, meal_plan_id):
-    print("From approve_meal_plan")
     user = CustomUser.objects.get(id=request.data.get('user_id'))
     user_role = UserRole.objects.get(user=user)
     

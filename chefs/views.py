@@ -38,10 +38,6 @@ def chef_detail(request, chef_id):
     featured_dishes = chef.featured_dishes
     summary = chef.review_summary
 
-    print("Chef Image URL:", chef.profile_pic.url)
-    print("MEDIA_ROOT:", settings.MEDIA_ROOT)
-    print("MEDIA_URL:", settings.MEDIA_URL)
-
     breadcrumbs = [
         {'url': reverse('qa_app:home'), 'name': 'Home'},
         {'url': reverse('chefs:chef_list'), 'name': 'Chefs'},

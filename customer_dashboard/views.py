@@ -694,35 +694,25 @@ def guest_chat_with_gpt(request):
     
         logger.info(f"Thread ID After Assignment: {thread_id}")
 
-        try:
-            # Add a Message to a Thread
-            client.beta.threads.messages.create(
-                thread_id=thread_id,
-                role="user",
-                content=question,
-                extra_headers=headers
-            )
-        except Exception as e:
-            logger.error(f'Failed to create message: {str(e)}')
-            return Response({'error': f'Failed to create message: {str(e)}'}, status=500)    
                 
 
     
         # Variable to store tool call results
         formatted_outputs = []
             
-        try:
-            # Run the Assistant
-            run = client.beta.threads.runs.create(
-                thread_id=thread_id,
-                assistant_id=guest_assistant_id,
-                extra_headers=headers
-                # Optionally, you can add specific instructions here
-            )
-        except Exception as e:
-            logger.error(f'Failed to create run: {str(e)}')
-            return Response({'error': f'Failed to create run: {str(e)}'}, status=500)
+
         if relevant:
+            try:
+                # Add a Message to a Thread
+                client.beta.threads.messages.create(
+                    thread_id=thread_id,
+                    role="user",
+                    content=question,
+                    extra_headers=headers
+                )
+            except Exception as e:
+                logger.error(f'Failed to create message: {str(e)}')
+                return Response({'error': f'Failed to create message: {str(e)}'}, status=500)    
             response_data = {
                 'new_thread_id': thread_id,
                 'recommend_follow_up': False,

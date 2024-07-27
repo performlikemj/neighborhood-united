@@ -2,6 +2,8 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import Address, CustomUser, UserRole
 from local_chefs.models import PostalCode, ChefPostalCode
+from django.utils.translation import gettext_lazy as _
+
 
 class CustomUserSerializer(serializers.ModelSerializer):
     allergies = serializers.ListField(
@@ -11,14 +13,36 @@ class CustomUserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = get_user_model()
-        fields = ['id', 'username', 'email', 'password', 'phone_number', 'dietary_preference', 'allergies', 'week_shift', 'email_confirmed']
-        extra_kwargs = {'password': {'write_only': True, 'required': False}, 'username': {'required': False}, 'email': {'required': False}}
+        fields = ['id', 'username', 'email', 'password', 'phone_number', 'dietary_preference', 'custom_dietary_preference', 'allergies', 'custom_allergies', 'week_shift', 'email_confirmed', 'preferred_language', 'timezone']
+        extra_kwargs = {
+            'password': {'write_only': True},
+            'username': {},
+            'email': {},
+            'phone_number': {'required': False}  # Make phone_number not required
+        }
+
+    def __init__(self, *args, **kwargs):
+        super(CustomUserSerializer, self).__init__(*args, **kwargs)
+        request = self.context.get('request')
+        if request and getattr(request, 'method', None) == 'POST':
+            # Require username, email, and password only during registration (POST)
+            self.fields['username'].required = True
+            self.fields['username'].error_messages['required'] = _('Username is required.')
+            self.fields['email'].required = True
+            self.fields['email'].error_messages['required'] = _('Email is required.')
+            self.fields['password'].required = True
+            self.fields['password'].error_messages['required'] = _('Password is required.')
+        else:
+            # Not required during update operations
+            self.fields['username'].required = False
+            self.fields['email'].required = False
+            self.fields['password'].required = False
 
     def create(self, validated_data):
         user = get_user_model()(
             username=validated_data.get('username'),
             email=validated_data.get('email'),
-            phone_number=validated_data.get('phone_number'),
+            phone_number=validated_data.get('phone_number', ''),  
             dietary_preference=validated_data.get('dietary_preference'),
         )
         user.set_password(validated_data['password'])
@@ -26,19 +50,12 @@ class CustomUserSerializer(serializers.ModelSerializer):
         return user
 
     def update(self, instance, validated_data):
-        instance.username = validated_data.get('username', instance.username)
-        instance.email = validated_data.get('email', instance.email)
-        instance.phone_number = validated_data.get('phone_number', instance.phone_number)
-        instance.dietary_preference = validated_data.get('dietary_preference', instance.dietary_preference)
-        
-        # Handle allergies; ensure it doesn't override with None if not provided
-        if 'allergies' in validated_data:
-            instance.allergies = validated_data['allergies']
-        
-        # Optional: Handle password updates, if included
-        if 'password' in validated_data:
-            instance.set_password(validated_data['password'])
-
+        for attr, value in validated_data.items():
+            if attr in ['username', 'email', 'phone_number', 'dietary_preference', 'custom_dietary_preference', 'allergies', 'custom_allergies', 'password', 'preferred_language', 'timezone']:
+                if attr == 'password':
+                    instance.set_password(value)
+                else:
+                    setattr(instance, attr, value)
         instance.save()
         return instance
 
@@ -47,10 +64,16 @@ class AddressSerializer(serializers.ModelSerializer):
         queryset=CustomUser.objects.all(),
         write_only=True
     )
+    street = serializers.CharField(required=False, allow_blank=True)
+    city = serializers.CharField(required=False, allow_blank=True)
+    state = serializers.CharField(required=False, allow_blank=True)
+    input_postalcode = serializers.CharField(required=False, allow_blank=True)
+    country = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
         model = Address
         fields = ['user', 'street', 'city', 'state', 'input_postalcode', 'country']
+
 
 
 class PostalCodeSerializer(serializers.ModelSerializer):

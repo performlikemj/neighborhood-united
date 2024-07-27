@@ -61,10 +61,31 @@ logger = logging.getLogger(__name__)
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_user_summary(request):
-    user_id = request.data.get('user_id')
+    user_id = request.user.id  # Use request.user.id to get the authenticated user's ID
     user = get_object_or_404(CustomUser, id=user_id)
-    user_summary = UserSummary.objects.get(user=user)
 
+
+    # Check if the user has an existing summary
+    try:
+        user_summary_obj = UserSummary.objects.get(user=user)
+        user_summary = user_summary_obj.summary
+    except UserSummary.DoesNotExist:
+        user_summary = "No summary available."
+
+    # Provide a fallback template if the user has no summary data
+    if user_summary.strip() == "No summary available.":
+        fallback_template = "Create a meal plan for the week including breakfast, lunch, and dinner for a {person/family of 3, etc.}, {that want to lower their sugar intake/that want to eat healthy while saving money}. {The meals should also take into account that one of us fasts breakfast and starts eating at 11am}."
+        recommend_prompt = fallback_template
+    else:
+        # Generate a recommended prompt based on the user's summary and context
+        recommend_prompt = recommend_follow_up(request, user_summary)
+
+    # Generate or update the user summary
+    generate_user_summary(user_id)
+    
+    # Fetch the updated summary
+    user_summary = UserSummary.objects.get(user=user)
+    
     data = {
         "data": [
             {
@@ -80,10 +101,12 @@ def api_user_summary(request):
                 "created_at": int(user_summary.updated_at.timestamp()),
                 "role": "assistant",
             },
-        ]
+        ],
+        "recommend_prompt": recommend_prompt
     }
-
+    print(f'data: {data}')
     return Response(data)
+
 
 
 def generate_user_summary(user_id):
@@ -101,24 +124,37 @@ def generate_user_summary(user_id):
     formatted_data = {
         "Goal Tracking": [f"Goal: {goal.goal_name}, Description: {goal.goal_description}" for goal in goal_tracking] if goal_tracking else ["No goals found."],
         "User Health Metrics": [
-            f"Date: {metric.date_recorded}, Weight: {metric.weight} kg ({metric.weight * 2.20462} lbs), BMI: {metric.bmi}, Mood: {metric.mood}, Energy Level: {metric.energy_level}" 
+            f"Date: {metric.date_recorded}, Weight: {metric.weight} kg ({float(metric.weight) * 2.20462} lbs), BMI: {metric.bmi}, Mood: {metric.mood}, Energy Level: {metric.energy_level}" 
             for metric in user_health_metrics
         ] if user_health_metrics else ["No health metrics found."],
         "Calorie Intake": [f"Meal: {intake.meal_name}, Description: {intake.meal_description}, Portion Size: {intake.portion_size}, Date: {intake.date_recorded}" for intake in calorie_intake] if calorie_intake else ["No calorie intake data found."],
     }
+    
+    # Define the message for no data
     message = "No data found for the past month."
-    client = OpenAI(api_key=settings.OPENAI_KEY) # Initialize OpenAI client
+
+    # Initialize OpenAI client
+    client = OpenAI(api_key=settings.OPENAI_KEY)
+    
+    # Define the language prompt based on user's preferred language
+    language_prompt = {
+        'en': 'English',
+        'ja': 'Japanese',
+        'es': 'Spanish',
+        'fr': 'French',
+    }
+    preferred_language = language_prompt.get(user.preferred_language, 'English')
+
     try:
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo-0125",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", 
-                 "content": f"Generate a detailed summary based on the following data that gives the user a high level view of their goals, health data, and how their caloric intake relates to those goals. Start the response off with a friendly welcoming tone.: {formatted_data}. If there is no data, please respond with the following message: {message}"
+                 "content": f"Generate a detailed summary based on the following data that gives the user a high-level view of their goals, health data, and how their caloric intake relates to those goals. Start the response off with a friendly welcoming tone. Respond in {preferred_language}. If there is no data, please respond with the following message: {message}\n\n{formatted_data}"
                  },
             ],
         )
         summary_text = response.choices[0].message.content
-        print(f"Summary generated: {summary_text}")
     except Exception as e:
         # Handle exceptions or log errors
         return {"message": f"An error occurred: {str(e)}"}
@@ -126,6 +162,7 @@ def generate_user_summary(user_id):
     UserSummary.objects.update_or_create(user=user, defaults={'summary': summary_text})
 
     return {"message": "Summary generated successfully."}
+
 
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated, IsCustomer])
@@ -599,6 +636,7 @@ functions = {
     "provide_healthy_meal_suggestions": provide_healthy_meal_suggestions,
     "understand_dietary_choices": understand_dietary_choices,
     "create_meal": create_meal,
+    
 }
 
 def ai_call(tool_call, request):
@@ -2001,7 +2039,7 @@ def chat_with_gpt(request):
             ChatThread.objects.create(
                 user=user,
                 openai_thread_id=thread_id,
-                title=question,
+                title=question[:254],
                 is_active=True
             )
 

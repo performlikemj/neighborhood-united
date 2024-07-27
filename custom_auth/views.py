@@ -9,6 +9,7 @@ from django.utils.encoding import force_bytes, force_str
 from django.core.mail import EmailMessage
 from .tokens import account_activation_token
 from .models import CustomUser, Address, UserRole
+from customer_dashboard.models import GoalTracking
 from chefs.models import ChefRequest
 from .forms import RegistrationForm, UserProfileForm, EmailChangeForm, AddressForm
 from django.urls import reverse
@@ -206,9 +207,21 @@ def update_profile_api(request):
         if 'dietary_preference' in user_serializer.validated_data:
             user.dietary_preference = user_serializer.validated_data['dietary_preference']
 
+        if 'custom_dietary_preference' in user_serializer.validated_data:
+            user.custom_dietary_preference = user_serializer.validated_data['custom_dietary_preference']
+
         if 'allergies' in user_serializer.validated_data:
-            print(f"Allergies data: {user_serializer.validated_data['allergies']}")  # Debug print
             user.allergies = user_serializer.validated_data['allergies']
+        
+        if 'custom_allergies' in user_serializer.validated_data:
+            user.custom_allergies = user_serializer.validated_data['custom_allergies']
+
+        if 'timezone' in user_serializer.validated_data:
+            user.timezone = user_serializer.validated_data['timezone']
+
+        if 'preferred_language' in user_serializer.validated_data:
+            user.preferred_language = user_serializer.validated_data['preferred_language']
+
         user_serializer.save()
 
     else:
@@ -266,13 +279,29 @@ def login_api_view(request):
         refresh = RefreshToken.for_user(user)
         user_role = user.userrole  # Assuming a OneToOne relationship for simplicity
 
+        # Fetch user goals
+        goal = GoalTracking.objects.filter(user=user).first()
+        goal_name = goal.goal_name if goal else ""
+        goal_description = goal.goal_description if goal else ""
+        # Convert the country to a string
+        country = str(user.address.country) if hasattr(user, 'address') and user.address.country else None
+
         response_data = {
             'refresh': str(refresh),
             'access': str(refresh.access_token),
             'user_id': user.id,
             'email_confirmed': user.email_confirmed,
+            'timezone': user.timezone,
+            'preferred_language': user.preferred_language,
+            'allergies': user.allergies,
+            'custom_allergies': user.custom_allergies,
+            'dietary_preference': user.dietary_preference,
+            'custom_dietary_preference': user.custom_dietary_preference,
             'is_chef': user_role.is_chef,
             'current_role': user_role.current_role,
+            'goal_name': goal_name,
+            'goal_description': goal_description,
+            'country': country,
             'status': 'success',
             'message': 'Logged in successfully'
         }
@@ -283,7 +312,6 @@ def login_api_view(request):
         # Log the exception details to debug it
         print(f"Error during user authentication: {str(e)}")
         return JsonResponse({'status': 'error', 'message': 'An error occurred during authentication'}, status=500)
-
 
 @api_view(['POST'])
 @login_required
@@ -300,24 +328,43 @@ def logout_api_view(request):
 
 @api_view(['POST'])
 def register_api_view(request):
-    user_serializer = CustomUserSerializer(data=request.data.get('user'))
+    user_data = request.data.get('user')
+    print(f"User data: {user_data}")  # Debug print
+    if not user_data:
+        return Response({'errors': 'User data is required'}, status=400)
 
+    user_serializer = CustomUserSerializer(data=user_data)
+    print(f"User serializer initialization: {user_serializer}")  # Debug print
     if not user_serializer.is_valid():
+        print(f"Validation errors: {user_serializer.errors}")  # Additional debug print
         return Response({'errors': user_serializer.errors}, status=400)
+
     print(f"Validated data: {user_serializer.validated_data}")  # Debug print
+
     with transaction.atomic():
         user = user_serializer.save()
         UserRole.objects.create(user=user, current_role='customer')
+
         address_data = request.data.get('address')
-        address_data['user'] = user.id
+        # Check if any significant address data is provided
+        if address_data and any(value.strip() for value in address_data.values()):
+            address_data['user'] = user.id
+            address_serializer = AddressSerializer(data=address_data)
+            if not address_serializer.is_valid():
+                return Response({'errors': address_serializer.errors}, status=400)
+            address_serializer.save()
 
-        address_serializer = AddressSerializer(data=address_data)
-        if not address_serializer.is_valid():
-            return Response({'errors': address_serializer.errors})
+        # Handle goal data
+        goal_data = request.data.get('goal')
+        if goal_data:
+            GoalTracking.objects.create(
+                user=user,
+                goal_name=goal_data.get('goal_name', ''),
+                goal_description=goal_data.get('goal_description', '')
+            )
 
-        address_serializer.save()
 
-        # Prepare activation email data
+        # Prepare and send activation email
         mail_subject = 'Activate your account.'
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         token = account_activation_token.make_token(user)
@@ -328,9 +375,6 @@ def register_api_view(request):
                 "Thanks,\nYour SautAI Support Team"
 
         to_email = user_serializer.validated_data.get('email')
-
-        # Send data to Zapier
-        zapier_webhook_url = os.getenv('ZAP_REGISTER_URL')
         email_data = {
             'subject': mail_subject,
             'message': message,
@@ -340,20 +384,19 @@ def register_api_view(request):
             'activation_link': activation_link,
         }
         try:
-            requests.post(zapier_webhook_url, json=email_data)
+            requests.post(os.getenv('ZAP_REGISTER_URL'), json=email_data)
             logger.info(f"Activation email data sent to Zapier for: {to_email}")
         except Exception as e:
             logger.error(f"Error sending activation email data to Zapier for: {to_email}, error: {str(e)}")
 
     # After successful registration
-    refresh = RefreshToken.for_user(user)
+    refresh = RefreshToken.for_user(user)  # Assuming you have RefreshToken defined or imported
     return Response({
         'refresh': str(refresh),
         'access': str(refresh.access_token),
         'status': 'User registered',
         'navigate_to': 'Assistant'
     })
-
 
 @api_view(['POST'])
 def activate_account_api_view(request):

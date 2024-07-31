@@ -32,7 +32,7 @@ from shared.utils import (get_user_info, post_review, update_review, delete_revi
                           update_health_metrics, check_allergy_alert, provide_nutrition_advice, 
                           recommend_follow_up, find_nearby_supermarkets,
                           search_healthy_meal_options, provide_healthy_meal_suggestions, 
-                          understand_dietary_choices, is_question_relevant, create_meal)
+                          understand_dietary_choices, is_question_relevant, create_meal, generate_summary_title)
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
 from .serializers import ChatThreadSerializer, GoalTrackingSerializer, UserHealthMetricsSerializer, CalorieIntakeSerializer
@@ -2035,11 +2035,12 @@ def chat_with_gpt(request):
         else:
             openai_thread = client.beta.threads.create()
             thread_id = openai_thread.id
+            summarized_title = generate_summary_title(question)
             print(f"New thread ID: {thread_id}")
             ChatThread.objects.create(
                 user=user,
                 openai_thread_id=thread_id,
-                title=question[:254],
+                title=summarized_title[:254],
                 is_active=True
             )
 

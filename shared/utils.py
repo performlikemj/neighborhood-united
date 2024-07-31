@@ -605,7 +605,7 @@ def generate_review_summary(object_id, category):
 
     # Step 3: Feed the formatted string into GPT-3.5-turbo-1106 to generate the overall summary
     try:
-        response = openai.ChatCompletion.create(
+        response = openai.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": formatted_summaries}],
         )
@@ -621,6 +621,19 @@ def generate_review_summary(object_id, category):
     
     # Step 5: Return the overall summary
     return {"overall_summary": overall_summary, "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+# Function to generate a summarized title
+def generate_summary_title(question):
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": f"Summarize this question for a chat title: {question}"}],
+        )
+        summary = response['choices'][0]['message']['content']
+        return summary
+    except OpenAIError as e:
+        print(f"Error generating summary: {str(e)}")
+        return question[:254]  # Fallback to truncating the question if an error occurs
 
 
 def list_upcoming_meals(request):

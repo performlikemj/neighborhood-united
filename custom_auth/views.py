@@ -232,6 +232,7 @@ def update_profile_api(request):
     address_fields = [field.name for field in Address._meta.get_fields()]
     address_data = {key: value for key, value in request.data.items() if key in address_fields}
     if address_data:
+        print(f'Address data: {address_data}')  # Debug print
         try:
             address = Address.objects.get(user=user)
         except Address.DoesNotExist:

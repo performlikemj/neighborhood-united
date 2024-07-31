@@ -63,20 +63,32 @@ class CustomUser(AbstractUser):
         ('Lentils', 'Lentils'),
         ('None', 'None'),
     ]
+
+    LANGUAGE_CHOICES = [
+        ('en', 'English'),
+        ('ja', 'Japanese'),
+        ('es', 'Spanish'),
+        ('fr', 'French'),
+    ]
+
     email = models.EmailField(unique=True, blank=False, null=False)
     email_confirmed = models.BooleanField(default=False)
-    phone_number = models.CharField(max_length=20)
+    phone_number = models.CharField(max_length=20, blank=True, null=True)
     new_email = models.EmailField(blank=True, null=True)
     token_created_at = models.DateTimeField(blank=True, null=True)
     initial_email_confirmed = models.BooleanField(default=False)
     # Field to store week_shift for context when chatting with assistant
     week_shift = models.IntegerField(default=0)
-    dietary_preference = models.CharField(max_length=20, choices=DIETARY_CHOICES, default='Everything')
+    dietary_preference = models.CharField(max_length=20, choices=DIETARY_CHOICES, default='Everything', blank=True, null=True)
+    custom_dietary_preference = models.CharField(max_length=200, blank=True, null=True)
+    preferred_language = models.CharField(max_length=2, choices=LANGUAGE_CHOICES, default='en')
     allergies = ArrayField(
         models.CharField(max_length=20, choices=ALLERGY_CHOICES),
         default=list,
         blank=True,
     )
+    custom_allergies = models.CharField(max_length=200, blank=True, null=True)
+    timezone = models.CharField(max_length=100, default='UTC')
 
     def save(self, *args, **kwargs):
         self.username = self.username.lower()

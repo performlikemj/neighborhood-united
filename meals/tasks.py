@@ -136,7 +136,7 @@ def generate_user_summary(user_id):
     client = OpenAI(api_key=settings.OPENAI_KEY) # Initialize OpenAI client
     try:
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo-0125",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", 
                  "content": f"Generate a detailed summary based on the following data that gives the user a high level view of their goals, health data, and how their caloric intake relates to those goals. Start the response off with a friendly welcoming tone.: {formatted_data}. If there is no data, please respond with the following message: {message}"

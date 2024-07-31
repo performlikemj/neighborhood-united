@@ -285,18 +285,25 @@ class MealPlanMeal(models.Model):
         ('Saturday', 'Saturday'),
         ('Sunday', 'Sunday'),
     ]
+
+    MEAL_TYPE_CHOICES = [
+        ('Breakfast', 'Breakfast'),
+        ('Lunch', 'Lunch'),
+        ('Dinner', 'Dinner'),
+    ]
+
     meal = models.ForeignKey(Meal, on_delete=models.CASCADE)
     meal_plan = models.ForeignKey(MealPlan, on_delete=models.CASCADE)
     day = models.CharField(max_length=10, choices=DAYS_OF_WEEK)
+    meal_type = models.CharField(max_length=10, choices=MEAL_TYPE_CHOICES, default='Dinner')
 
     class Meta:
-        # Ensure a meal is unique per day within a specific meal plan
-        unique_together = ('meal_plan', 'meal', 'day')
+        # Ensure a meal is unique per day within a specific meal plan, and meal type
+        unique_together = ('meal_plan', 'meal', 'day', 'meal_type')
 
     def __str__(self):
         meal_name = self.meal.name if self.meal else 'Unknown Meal'
-        return f"{meal_name} on {self.day} for {self.meal_plan}"
-
+        return f"{meal_name} on {self.day} ({self.meal_type}) for {self.meal_plan}"
 
 
 class Cart(models.Model):

@@ -210,7 +210,8 @@ else:
 AUTH_USER_MODEL = 'custom_auth.CustomUser'
 
 AUTHENTICATION_BACKENDS = [
-    'custom_auth.backends.CaseInsensitiveAuthBackend',  # Replace with the actual path
+    'custom_auth.backends.CaseInsensitiveAuthBackend', # Custom backend
+    'django.contrib.auth.backends.ModelBackend',  # Default backend
 ]
 
 

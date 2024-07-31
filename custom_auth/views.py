@@ -9,6 +9,7 @@ from django.utils.encoding import force_bytes, force_str
 from django.core.mail import EmailMessage
 from .tokens import account_activation_token
 from .models import CustomUser, Address, UserRole
+from customer_dashboard.models import GoalTracking
 from chefs.models import ChefRequest
 from .forms import RegistrationForm, UserProfileForm, EmailChangeForm, AddressForm
 from django.urls import reverse
@@ -179,8 +180,20 @@ def update_profile_api(request):
         if 'dietary_preference' in user_serializer.validated_data:
             user.dietary_preference = user_serializer.validated_data['dietary_preference']
 
+        if 'custom_dietary_preference' in user_serializer.validated_data:
+            user.custom_dietary_preference = user_serializer.validated_data['custom_dietary_preference']
+
         if 'allergies' in user_serializer.validated_data:
             user.allergies = user_serializer.validated_data['allergies']
+        
+        if 'custom_allergies' in user_serializer.validated_data:
+            user.custom_allergies = user_serializer.validated_data['custom_allergies']
+
+        if 'timezone' in user_serializer.validated_data:
+            user.timezone = user_serializer.validated_data['timezone']
+
+        if 'preferred_language' in user_serializer.validated_data:
+            user.preferred_language = user_serializer.validated_data['preferred_language']
         user_serializer.save()
 
     else:
@@ -228,31 +241,65 @@ def switch_role_api(request):
 
 @api_view(['POST'])
 def login_api_view(request):
-    if request.method == 'POST':
+    # Ensure method is POST
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Only POST method allowed'}, status=405)
+
+    try:
         data = json.loads(request.body)
-        username = data['username']
-        password = data['password']
-        user = authenticate(username=username, password=password)
-        if user:
-            # Create the token for the user
-            refresh = RefreshToken.for_user(user)
-            
-            # Get the user's role
-            user_role = UserRole.objects.get(user=user)
-            # Inside your login_api_view function
-            return JsonResponse({
-                'refresh': str(refresh),
-                'access': str(refresh.access_token),
-                'user_id': user.id,
-                'email_confirmed': user.email_confirmed,
-                'is_chef': user_role.is_chef,
-                'current_role': user_role.current_role,  # Include the current_role attribute in the response
-                'status': 'success',
-                'message': 'Logged in successfully'
-            }, status=200)
-        else:
-            return JsonResponse({'status': 'error', 'message': 'Invalid username or password'}, status=400)
-    return JsonResponse({'status': 'error', 'message': 'Only POST method allowed'}, status=405)
+    except json.JSONDecodeError as e:
+        return JsonResponse({'status': 'error', 'message': 'Invalid JSON format'}, status=400)
+
+    # Extract username and password
+    username = data.get('username')
+    password = data.get('password')
+
+    if not username or not password:
+        return JsonResponse({'status': 'error', 'message': 'Username and password are required'}, status=400)
+
+    # Authenticate user
+    user = authenticate(username=username, password=password)
+    if not user:
+        return JsonResponse({'status': 'error', 'message': 'Invalid username or password'}, status=400)
+
+    # Successful authentication
+    try:
+        refresh = RefreshToken.for_user(user)
+        user_role = user.userrole  # Assuming a OneToOne relationship for simplicity
+
+        # Fetch user goals
+        goal = GoalTracking.objects.filter(user=user).first()
+        goal_name = goal.goal_name if goal else ""
+        goal_description = goal.goal_description if goal else ""
+        # Convert the country to a string
+        country = str(user.address.country) if hasattr(user, 'address') and user.address.country else None
+
+        response_data = {
+            'refresh': str(refresh),
+            'access': str(refresh.access_token),
+            'user_id': user.id,
+            'email_confirmed': user.email_confirmed,
+            'timezone': user.timezone,
+            'preferred_language': user.preferred_language,
+            'allergies': user.allergies,
+            'custom_allergies': user.custom_allergies,
+            'dietary_preference': user.dietary_preference,
+            'custom_dietary_preference': user.custom_dietary_preference,
+            'is_chef': user_role.is_chef,
+            'current_role': user_role.current_role,
+            'goal_name': goal_name,
+            'goal_description': goal_description,
+            'country': country,
+            'status': 'success',
+            'message': 'Logged in successfully'
+        }
+
+        return JsonResponse(response_data, status=200)
+
+    except Exception as e:
+        # Log the exception details to debug it
+        print(f"Error during user authentication: {str(e)}")
+        return JsonResponse({'status': 'error', 'message': 'An error occurred during authentication'}, status=500)
 
 
 
@@ -270,6 +317,9 @@ def logout_api_view(request):
 
 @api_view(['POST'])
 def register_api_view(request):
+    user_data = request.data.get('user')
+    if not user_data:
+        return Response({'errors': 'User data is required'}, status=400)
     user_serializer = CustomUserSerializer(data=request.data.get('user'))
 
     if not user_serializer.is_valid():
@@ -280,14 +330,21 @@ def register_api_view(request):
             user = user_serializer.save()
             UserRole.objects.create(user=user, current_role='customer')
             address_data = request.data.get('address')
-            address_data['user'] = user.id
+            if address_data and any(value.strip() for value in address_data.values()):
+                address_data['user'] = user.id
+                address_serializer = AddressSerializer(data=address_data)
+                if not address_serializer.is_valid():
+                    return Response({'errors': address_serializer.errors}, status=400)
+                address_serializer.save()
 
-            address_serializer = AddressSerializer(data=address_data)
-            if not address_serializer.is_valid():
-                return Response({'errors': address_serializer.errors})
-
-            address_serializer.save()
-
+            # Handle goal data
+            goal_data = request.data.get('goal')
+            if goal_data:
+                GoalTracking.objects.create(
+                    user=user,
+                    goal_name=goal_data.get('goal_name', ''),
+                    goal_description=goal_data.get('goal_description', '')
+                )
             # Prepare activation email data
             mail_subject = 'Activate your account.'
             uid = urlsafe_base64_encode(force_bytes(user.pk))

@@ -42,6 +42,7 @@ class CartAdmin(admin.ModelAdmin):
 class MealPlanMealInline(admin.TabularInline):
     model = MealPlanMeal
     extra = 1
+    fields = ('meal', 'day', 'meal_type')  # Include the new field
 
 class MealPlanAdmin(admin.ModelAdmin):
     list_display = ('user', 'week_start_date', 'week_end_date', 'get_meals_count')
@@ -53,6 +54,11 @@ class MealPlanAdmin(admin.ModelAdmin):
         return obj.meal.count()
     get_meals_count.short_description = 'Meals Count'
 
+class MealPlanMealAdmin(admin.ModelAdmin):
+    list_display = ('meal_plan', 'meal', 'day', 'meal_type')
+    list_filter = ('day', 'meal_type')
+    search_fields = ('meal__name', 'meal_plan__user__username')
+
 # Register your models here.
 admin.site.register(MealPlan, MealPlanAdmin)
 admin.site.register(Dish, DishAdmin)
@@ -62,3 +68,4 @@ admin.site.register(Cart, CartAdmin)
 admin.site.register(MealType, MealTypeAdmin)
 admin.site.register(Meal, MealAdmin)
 admin.site.register(OrderMeal)  # For easier management of OrderMeal instances if needed
+admin.site.register(MealPlanMeal, MealPlanMealAdmin)

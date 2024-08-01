@@ -277,8 +277,10 @@ def api_goal_management(request):
         serializer = GoalTrackingSerializer(goal, data=request.data)
         if serializer.is_valid():
             serializer.save()
-            return Response({'success': True, 'message': 'Goal updated successfully'})
-        return Response(serializer.errors, status=400)
+            return Response({'success': True, 'message': 'Goal updated successfully'}, status=200)
+        else:
+            logger.error('400 Bad Request: %s', serializer.errors)
+            return Response(serializer.errors, status=400)
 
 
 

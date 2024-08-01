@@ -3,6 +3,8 @@ from django.contrib.auth import get_user_model
 from .models import Address, CustomUser, UserRole
 from local_chefs.models import PostalCode, ChefPostalCode
 from django.utils.translation import gettext_lazy as _
+from django_countries.fields import Country
+from django_countries import countries
 
 class CustomUserSerializer(serializers.ModelSerializer):
     allergies = serializers.ListField(
@@ -36,6 +38,25 @@ class CustomUserSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        country_code = representation.get('country')
+        # Replace the country code with the full name
+        if country_code:
+            country_name = dict(countries).get(country_code, country_code)
+            representation['country'] = country_name
+        return representation
+    
+    def validate_country(self, value):
+        # Convert the full country name back to the two-letter country code
+        if value:
+            country_dict = {name: code for code, name in dict(countries).items()}
+            country_code = country_dict.get(value)
+            if not country_code:
+                raise serializers.ValidationError(f"Invalid country name: {value}")
+            return country_code
+        return value
+    
 class AddressSerializer(serializers.ModelSerializer):
     user = serializers.PrimaryKeyRelatedField(
         queryset=CustomUser.objects.all(),
@@ -46,6 +67,10 @@ class AddressSerializer(serializers.ModelSerializer):
     state = serializers.CharField(required=False, allow_blank=True)
     input_postalcode = serializers.CharField(required=False, allow_blank=True)
     country = serializers.CharField(required=False, allow_blank=True)
+
+    class Meta:
+        model = Address
+        fields = ['user', 'street', 'city', 'state', 'input_postalcode', 'country']
 
 
 class PostalCodeSerializer(serializers.ModelSerializer):

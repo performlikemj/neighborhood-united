@@ -37,6 +37,21 @@ class CustomUserSerializer(serializers.ModelSerializer):
                     setattr(instance, attr, value)
         instance.save()
         return instance
+    
+class AddressSerializer(serializers.ModelSerializer):
+    user = serializers.PrimaryKeyRelatedField(
+        queryset=CustomUser.objects.all(),
+        write_only=True
+    )
+    street = serializers.CharField(required=False, allow_blank=True)
+    city = serializers.CharField(required=False, allow_blank=True)
+    state = serializers.CharField(required=False, allow_blank=True)
+    input_postalcode = serializers.CharField(required=False, allow_blank=True)
+    country = serializers.CharField(required=False, allow_blank=True)
+
+    class Meta:
+        model = Address
+        fields = ['user', 'street', 'city', 'state', 'input_postalcode', 'country']
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
@@ -56,22 +71,6 @@ class CustomUserSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(f"Invalid country name: {value}")
             return country_code
         return value
-    
-class AddressSerializer(serializers.ModelSerializer):
-    user = serializers.PrimaryKeyRelatedField(
-        queryset=CustomUser.objects.all(),
-        write_only=True
-    )
-    street = serializers.CharField(required=False, allow_blank=True)
-    city = serializers.CharField(required=False, allow_blank=True)
-    state = serializers.CharField(required=False, allow_blank=True)
-    input_postalcode = serializers.CharField(required=False, allow_blank=True)
-    country = serializers.CharField(required=False, allow_blank=True)
-
-    class Meta:
-        model = Address
-        fields = ['user', 'street', 'city', 'state', 'input_postalcode', 'country']
-
 
 class PostalCodeSerializer(serializers.ModelSerializer):
     class Meta:

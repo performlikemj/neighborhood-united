@@ -15,6 +15,7 @@ from .forms import RegistrationForm, UserProfileForm, EmailChangeForm, AddressFo
 from django.urls import reverse
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.utils import timezone
+from django_countries import countries
 from datetime import timedelta
 from .utils import send_email_change_confirmation
 from django.views import View
@@ -166,6 +167,11 @@ def address_details_view(request):
     serializer = AddressSerializer(request.user.address)
     return Response(serializer.data)
 
+@api_view(['GET'])
+def get_countries(request):
+    country_list = [{"code": code, "name": name} for code, name in list(countries)]
+    return JsonResponse(country_list, safe=False)
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def update_profile_api(request):
@@ -229,8 +235,7 @@ def update_profile_api(request):
         return Response({'status': 'failure', 'message': user_serializer.errors}, status=400)
 
     # Update or create address data
-    address_fields = [field.name for field in Address._meta.get_fields()]
-    address_data = {key: value for key, value in request.data.items() if key in address_fields}
+    address_data = request.data.get('address')
     if address_data:
         print(f'Address data: {address_data}')  # Debug print
         try:
@@ -238,6 +243,8 @@ def update_profile_api(request):
         except Address.DoesNotExist:
             address = None
 
+        # Correct field name and handle possible missing data
+        address_data['input_postalcode'] = address_data.pop('postalcode', '')
         address_serializer = AddressSerializer(instance=address, data=address_data, partial=True)
         if address_serializer.is_valid():
             address = address_serializer.save(user=user)

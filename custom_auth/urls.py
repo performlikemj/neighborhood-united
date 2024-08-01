@@ -15,6 +15,7 @@ urlpatterns = [
     path('verify-email/', views.verify_email_view, name='verify_email'),
     path('confirm-email/<str:uidb64>/<str:token>', views.confirm_email, name='confirm_email'),
     path('user/re-request-email-change/', views.re_request_email_change, name='re_request_email_change'),
+    path('api/countries/', views.get_countries, name='get_countries'),
     path('api/register/', views.register_api_view, name='register_api'),   
     path('api/register/verify-email/', views.activate_account_api_view, name='verify_email_api'), 
     path('api/login/', views.login_api_view, name='login_api'),

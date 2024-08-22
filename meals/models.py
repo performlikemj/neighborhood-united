@@ -12,7 +12,13 @@ from django.db import migrations
 from pgvector.django import VectorExtension
 from pgvector.django import VectorField
 from openai import OpenAI
+from meals.pydantic_models import ShoppingList as ShoppingListSchema, Instructions as InstructionsSchema
+from django.core.serializers.json import DjangoJSONEncoder
+from django.forms.models import model_to_dict
+import traceback
 
+
+client = OpenAI(api_key=settings.OPENAI_KEY)
 
 class Migration(migrations.Migration):
     operations = [
@@ -252,6 +258,8 @@ class MealPlan(models.Model):
     created_date = models.DateTimeField(auto_now_add=True)
     week_start_date = models.DateField()
     week_end_date = models.DateField()
+    is_approved = models.BooleanField(default=False)  # Track if the meal plan is approved
+    has_changes = models.BooleanField(default=False)  # Track if there are changes to the plan
     order = models.OneToOneField(
         'Order',
         null=True,
@@ -274,6 +282,20 @@ class MealPlan(models.Model):
 
     def __str__(self):
         return f"{self.user.username}'s MealPlan for {self.week_start_date} to {self.week_end_date}"
+
+    def save(self, *args, **kwargs):
+        if self.is_approved:
+            # If the meal plan is being approved (either new or after changes), generate the shopping list
+            super().save(*args, **kwargs)
+            self.generate_shopping_list()  # Call task to generate shopping list
+        else:
+            # If the meal plan is not approved, just save without generating a shopping list
+            super().save(*args, **kwargs)
+
+    def generate_shopping_list(self):
+        """Generate shopping list when the meal plan is approved."""
+        from meals.tasks import generate_shopping_list
+        generate_shopping_list.delay(self.id)
 
 class MealPlanMeal(models.Model):
     DAYS_OF_WEEK = [
@@ -304,6 +326,51 @@ class MealPlanMeal(models.Model):
     def __str__(self):
         meal_name = self.meal.name if self.meal else 'Unknown Meal'
         return f"{meal_name} on {self.day} ({self.meal_type}) for {self.meal_plan}"
+
+    def save(self, *args, **kwargs):
+        # Call super().save() before making changes to update meal plan
+        is_new = self.pk is None
+        super().save(*args, **kwargs)
+        # If this is a new MealPlanMeal or an update, we should update the MealPlan
+        if is_new or self.meal_plan.has_changes:
+            self.meal_plan.is_approved = False
+            self.meal_plan.has_changes = True
+            self.meal_plan.save()
+
+    def delete(self, *args, **kwargs):
+        # Update the meal plan's is_approved and has_changes flags on deletion
+        meal_plan = self.meal_plan
+        super().delete(*args, **kwargs)
+        meal_plan.is_approved = False
+        meal_plan.has_changes = True
+        meal_plan.save()
+
+class ShoppingList(models.Model):
+    meal_plan = models.OneToOneField(MealPlan, on_delete=models.CASCADE, related_name='shopping_list')
+    items = models.JSONField()  # Store the shopping list items as a JSON object
+    last_updated = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f'Shopping List for {self.meal_plan}'
+
+    def update_items(self, items):
+        """Update the shopping list items."""
+        self.items = items
+        self.save()
+
+
+class Instruction(models.Model):
+    meal_plan_meal = models.OneToOneField(MealPlanMeal, on_delete=models.CASCADE, related_name='instructions', null=True, blank=True)
+    content = models.JSONField()  # Store the instructions as a JSON object
+    last_updated = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f'Instructions for {self.meal_plan_meal}'
+
+    def update_content(self, content):
+        """Update the instruction content."""
+        self.content = content
+        self.save()
 
 
 class Cart(models.Model):

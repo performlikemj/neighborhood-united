@@ -60,6 +60,8 @@ INSTALLED_APPS = [
     'corsheaders',
     'stripe',
     'storages',
+    'crew',
+    'django_celery_beat',
 ]
 
 MIDDLEWARE = [

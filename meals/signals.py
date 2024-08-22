@@ -1,11 +1,32 @@
 # meals/signals.py
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, m2m_changed
 from django.dispatch import receiver
-from .models import Meal
+from django.urls import reverse
+from .models import Meal, MealPlan
 import requests
 from django.core.files.base import ContentFile
 from openai import OpenAI
 from django.conf import settings
+from rest_framework.test import APIRequestFactory
+from meals.tasks import generate_shopping_list
+
+@receiver(m2m_changed, sender=MealPlan.meal.through)
+def mealplan_meal_changed(sender, instance, action, **kwargs):
+    if action in ["post_add", "post_remove", "post_clear"]:
+        instance.has_changes = True
+        instance.is_approved = False  # Reset approval when changes are detected
+        instance.save()
+
+@receiver(post_save, sender=MealPlan)
+def send_meal_plan_email(sender, instance, created, **kwargs):
+    user = instance.user
+    if not user.email_meal_plan_saved:
+        return  # Skip sending the email if the user has opted out
+
+    # Only trigger the shopping list generation if the meal plan is approved
+    if instance.is_approved:
+        generate_shopping_list.delay(instance.id)
+
 
 # @receiver(post_save, sender=Meal)
 # def create_meal_image(sender, instance, created, **kwargs):

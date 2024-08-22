@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import MealPlan, MealPlanMeal, Dish, Ingredient, Order, Cart, MealType, Meal, OrderMeal
+from .models import MealPlan, MealPlanMeal, Dish, Ingredient, Order, Cart, MealType, Meal, OrderMeal, ShoppingList, Instruction
 
 class MealTypeAdmin(admin.ModelAdmin):
     list_display = ('name',)
@@ -59,6 +59,14 @@ class MealPlanMealAdmin(admin.ModelAdmin):
     list_filter = ('day', 'meal_type')
     search_fields = ('meal__name', 'meal_plan__user__username')
 
+class ShoppingListAdmin(admin.ModelAdmin):
+    list_display = ('meal_plan', 'last_updated')
+    search_fields = ('meal_plan__user__username',)
+
+class InstructionAdmin(admin.ModelAdmin):
+    list_display = ('meal_plan_meal', 'last_updated')
+    search_fields = ('meal_plan_meal__meal__name', 'meal_plan_meal__meal_plan__user__username')
+
 # Register your models here.
 admin.site.register(MealPlan, MealPlanAdmin)
 admin.site.register(Dish, DishAdmin)
@@ -69,3 +77,5 @@ admin.site.register(MealType, MealTypeAdmin)
 admin.site.register(Meal, MealAdmin)
 admin.site.register(OrderMeal)  # For easier management of OrderMeal instances if needed
 admin.site.register(MealPlanMeal, MealPlanMealAdmin)
+admin.site.register(ShoppingList, ShoppingListAdmin)
+admin.site.register(Instruction, InstructionAdmin)

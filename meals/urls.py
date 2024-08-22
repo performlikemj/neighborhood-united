@@ -29,4 +29,9 @@ urlpatterns = [
     path('api/get_meal_details/', views.get_meal_details, name='get_meal_details'),
     path('api/get_alternative_meals/', views.get_alternative_meals, name='get_alternative_meals'),
     path('view_past_orders/', views.view_past_orders, name='view_past_orders'),
+    path('api/crew_meal_plan/', views.api_crew_meal_plan, name='crew_meal_plan'),
+    path('api/meal_plans/', views.api_get_meal_plans, name='api_get_meal_plans'),
+    path('api/generate_cooking_instructions/', views.api_generate_cooking_instructions, name='api_generate_cooking_instructions'),
+    path('api/fetch_instructions/', views.api_fetch_instructions, name='api_fetch_instructions'),
+    path('api/approve_meal_plan/', views.api_approve_meal_plan, name='api_approve_meal_plan'),
 ]

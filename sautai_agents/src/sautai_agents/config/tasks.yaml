@@ -1,0 +1,32 @@
+shopping_list_task:
+  description: >
+    Create a detailed shopping list based on the approved meal plan. Include all necessary ingredients in appropriate quantities. The list should be complete with all items needed for all meals in the plan.
+  expected_output: >
+    A comprehensive shopping list categorized by food type. The list should include:
+    - **Category**: (e.g., Vegetables, Dairy, Meat).
+    - **Ingredient Name**: The specific items needed.
+    - **Quantity**: The amount required for the week.
+    - **Special Notes**: Any specific brand or type preferences.
+
+
+instruction_creation_task:
+  description: >
+    Develop detailed cooking instructions for each meal in the plan. Ensure instructions are clear and easy to follow in the user's preferred language of {preferred_language}.
+  expected_output: >
+    A set of recipes with step-by-step cooking instructions. Each recipe should include:
+    - **Ingredients List**: Detailed list of ingredients required.
+    - **Preparation Steps**: Sequential steps to prepare the meal.
+    - **Cooking Time**: Total time needed.
+    - **Special Instructions**: Tips or alternatives (e.g., gluten-free options).
+
+
+newsletter_task:
+  description: >
+    Compile and a weekly newsletter to the user. Include the meal plan, shopping list, and cooking instructions. The output should only be the body of the newsletter with all the details included.
+  expected_output: >
+    A newsletter email containing:
+    - **Weekly Meal Plan Overview**: A brief introduction to the week's meal plan.
+    - **Attached Files**: The Excel file and .ics file.
+    - **Shopping List**: A quick access list for users.
+    - **Key Highlights**: Any special notes or tips for the week.
+

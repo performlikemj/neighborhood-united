@@ -3,6 +3,7 @@ from django.shortcuts import render, redirect
 from django.urls import reverse
 from qa_app.models import FoodQA
 from meals.models import Dish, MealType, Meal, MealPlan, MealPlanMeal, Order, OrderMeal, Ingredient
+from meals.pydantic_models import MealOutputSchema
 from local_chefs.models import ChefPostalCode, PostalCode
 from django.conf import settings
 from django_ratelimit.decorators import ratelimit
@@ -32,6 +33,9 @@ from django.core.exceptions import ObjectDoesNotExist
 import base64
 import os
 import requests
+import logging
+
+logger = logging.getLogger(__name__)
 
 client = OpenAI(api_key=settings.OPENAI_KEY)
 
@@ -166,6 +170,7 @@ def recommend_follow_up(request, context):
     :param context: A string representing the user's last few interactions or context.
     :return: A list of recommended follow-up prompts or actions.
     """
+    from shared.pydantic_models import FollowUpList as FollowUpSchema
     if request.data.get('user_id'):
         user_id = request.data.get('user_id')
         try:
@@ -226,12 +231,18 @@ def recommend_follow_up(request, context):
                 "content": f"Given the following context: {context} and functions: {functions}, what prompt should a user write next? Output ONLY the recommended prompt in the first person and in a natural sentence without using the function name, without quotations, and without starting the output with 'the user should write' or anything similar." 
             }
         ],
-    )
+        response_format={
+            'type': 'json_schema',
+            'json_schema': 
+                {
+                    "name": "Instructions", 
+                    "schema": FollowUpSchema.model_json_schema()
+                }
+            }
+        )
     # Correct way to access the response content
     response_content = response.choices[0].message.content
     return response_content.strip().split('\n')
-
-
 
 def provide_nutrition_advice(request, user_id):
     try:
@@ -294,7 +305,6 @@ def check_allergy_alert(request, user_id):
 
     # Directly return the list of allergies. Since 'user.allergies' is an ArrayField, it's already a list.
     return {'Allergens': user.allergies}
-
 
 def update_health_metrics(request, user_id, weight=None, bmi=None, mood=None, energy_level=None):
     user = CustomUser.objects.get(id=request.data.get('user_id'))
@@ -481,46 +491,55 @@ def get_user_info(request):
         return {'status': 'error', 'message': 'Address not found for user.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 def access_past_orders(request, user_id):
-    # Check user authorization
-    user = CustomUser.objects.get(id=request.data.get('user_id'))
-    user_role = UserRole.objects.get(user=user)
-    
-    if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+    try:
+        # Check user authorization
+        user = CustomUser.objects.get(id=request.data.get('user_id'))
+        user_role = UserRole.objects.get(user=user)
+        
+        if user_role.current_role == 'chef':
+            return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
 
-    # Find meal plans within the week range with specific order statuses
-    meal_plans = MealPlan.objects.filter(
-        user_id=user_id,
-        order__status__in=['Completed', 'Cancelled', 'Refunded']
-    )
+        # Find meal plans within the week range with specific order statuses
+        meal_plans = MealPlan.objects.filter(
+            user_id=user_id,
+            order__status__in=['Completed', 'Cancelled', 'Refunded']
+        )
 
-    # If no meal plans are found, return a message
-    if not meal_plans.exists():
-        return {'status': 'info', 'message': "No meal plans found for the current week.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+        # If no meal plans are found, return a message
+        if not meal_plans.exists():
+            return {'status': 'info', 'message': "No meal plans found for the current week.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-    # Retrieve orders associated with the meal plans
-    orders = Order.objects.filter(meal_plan__in=meal_plans)
+        # Retrieve orders associated with the meal plans
+        orders = Order.objects.filter(meal_plan__in=meal_plans)
 
-    # If no orders are found, return a message indicating this
-    if not orders.exists():
-        return {'status': 'info', 'message': "No past orders found.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+        # If no orders are found, return a message indicating this
+        if not orders.exists():
+            return {'status': 'info', 'message': "No past orders found.", 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-    # Prepare order data
-    orders_data = []
-    for order in orders:
-        order_meals = order.ordermeal_set.all()
-        if not order_meals:
-            continue
-        meals_data = [{'meal_id': om.meal.id, 'quantity': om.quantity} for om in order_meals]
-        order_data = {
-            'order_id': order.id,
-            'order_date': order.order_date.strftime('%Y-%m-%d'),
-            'status': order.status,
-            'total_price': order.total_price() if order.total_price() is not None else 0,
-            'meals': meals_data
-        }
-        orders_data.append(order_data)
-    return {'orders': orders_data, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+        # Prepare order data
+        orders_data = []
+        for order in orders:
+            order_meals = order.ordermeal_set.all()
+            if not order_meals:
+                continue
+            meals_data = [{'meal_id': om.meal.id, 'quantity': om.quantity} for om in order_meals]
+            order_data = {
+                'order_id': order.id,
+                'order_date': order.order_date.strftime('%Y-%m-%d'),
+                'status': order.status,
+                'total_price': order.total_price() if order.total_price() is not None else 0,
+                'meals': meals_data
+            }
+            orders_data.append(order_data)
+        return {'orders': orders_data, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+    except KeyError as e:
+        return {'status': 'error', 'message': f"Missing parameter: {str(e)}"}
+    except CustomUser.DoesNotExist:
+        return {'status': 'error', 'message': "User not found."}
+    except UserRole.DoesNotExist:
+        return {'status': 'error', 'message': "User role not found."}
+    except Exception as e:
+        return {'status': 'error', 'message': f"An unexpected error occurred: {str(e)}"}    
 
 def post_review(request, user_id, content, rating, item_id, item_type):
     user = CustomUser.objects.get(id=request.data.get('user_id'))
@@ -605,7 +624,7 @@ def generate_review_summary(object_id, category):
 
     # Step 3: Feed the formatted string into GPT-3.5-turbo-1106 to generate the overall summary
     try:
-        response = openai.chat.completions.create(
+        response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": formatted_summaries}],
         )
@@ -625,11 +644,11 @@ def generate_review_summary(object_id, category):
 # Function to generate a summarized title
 def generate_summary_title(question):
     try:
-        response = openai.chat.completions.create(
+        response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": f"Summarize this question for a chat title: {question}"}],
         )
-        summary = response['choices'][0]['message']['content']
+        summary = response.choices[0].message.content
         return summary
     except OpenAIError as e:
         print(f"Error generating summary: {str(e)}")
@@ -796,43 +815,119 @@ def remove_meal_from_plan(request, meal_plan_id, meal_id, day, meal_type):
     return {'status': 'success', 'message': 'Meal removed from the plan.'}
 
 
-
-def create_meal(request, name, dietary_preference, description):
-    print(f'From create_meal: {name}, {dietary_preference}, {description}')
+def create_meal(request, name, dietary_preference, description, meal_type=None, max_attempts=5, attempt=0):
     user = CustomUser.objects.get(id=request.data.get('user_id'))
 
-    # Check for existing meals with the same name and created by the same user
-    existing_meal = Meal.objects.filter(
-        creator=user,
-        name=name,
-    ).first()  # You can use .first() as you're interested only in finding if at least one exists
-    
-    if existing_meal:
-        # If a similar meal is found, return it instead of creating a new one
-        return {
-            'status': 'info',
-            'message': 'A similar meal already exists.',
-            'meal_id': existing_meal.id
-        }
-    
+    if name:
+        # Check for existing meals with the same name and created by the same user
+        existing_meal = Meal.objects.filter(
+            creator=user,
+            name=name,
+        ).first()
+        
+        if existing_meal:
+            return {
+                'meal': {
+                    'id': existing_meal.id,
+                    'name': existing_meal.name,
+                    'dietary_preference': existing_meal.dietary_preference,
+                    'description': existing_meal.description,
+                    'created_date': existing_meal.created_date.isoformat(),
+                },
+                'status': 'info',
+                'message': 'A similar meal already exists.'
+            }
+
+    # Generate dynamic name, description, and dietary preference using GPT
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-2024-08-06",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant that generates a meal, its description, and dietary preferences based on information about the user."
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Create a meal that meets the user's goals of {user.goal.goal_description}. "
+                        f"It is meant to be served as a {meal_type} meal. "
+                        f"Align it with the user's dietary preferences: {user.dietary_preference} and/or {user.custom_dietary_preference}. "
+                        f"Avoid the following allergens: {user.allergies} and/or {user.custom_allergies}."
+                    )
+                }
+            ],
+            response_format={
+                'type': 'json_schema',
+                'json_schema': 
+                    {
+                        "name":"Meal", 
+                        "schema": MealOutputSchema.model_json_schema()
+                    }
+            }
+        )
+
+        gpt_output = response.choices[0].message.content
+        meal_data = json.loads(gpt_output)
+        # Assign values from meal_data
+        name = meal_data.get('meal', {}).get('name', 'Meal Placeholder')
+        description = meal_data.get('meal', {}).get('description', 'A placeholder for you to create a new meal.')
+        dietary_preference = meal_data.get('meal', {}).get('dietary_preference', user.dietary_preference)
+
+
+        print(f"Created Meal: Name={name}, Dietary Preference={dietary_preference}, Description={description}")
+
+    except Exception as e:
+        logger.error(f"Unexpected error generating meal content: {e}")
+        # Fallback to default values if GPT API fails
+        name = "Fallback Meal Name"
+        description = "Fallback Description"
+        dietary_preference = user.dietary_preference
+
+    # Generate embedding for the new meal
+    meal_embedding = get_embedding(f"{name} {description} {dietary_preference}")
+
+    # Check if a similar meal already exists based on embedding and name
+    similar_meals = Meal.objects.annotate(
+        similarity=CosineDistance(F('meal_embedding'), meal_embedding)  # Adjusted for single value
+    ).filter(similarity__lt=0.03) 
+
+    if similar_meals.exists():
+        if attempt < max_attempts:
+            logger.info(f"Similar meal found. Retrying... Attempt {attempt + 1} of {max_attempts}")
+            return create_meal(request, name=None, dietary_preference=user.dietary_preference, description=None, max_attempts=max_attempts, attempt=attempt + 1)
+        else:
+            similar_meal = similar_meals.first()
+            logger.error(f"Max attempts reached. Returning the similar meal.")
+            return {
+                'meal': {
+                    'id': similar_meal.id,
+                    'name': similar_meal.name,
+                    'dietary_preference': similar_meal.dietary_preference,
+                    'description': similar_meal.description,
+                    'created_date': similar_meal.created_date.isoformat(),
+                },
+                'status': 'info',
+                'message': 'A similar meal already exists.'
+            }
+
     # If no similar meals, proceed to create a new one
     meal = Meal(
         name=name,
         creator=user,
         dietary_preference=dietary_preference,
         description=description,
+        meal_embedding=meal_embedding,
     )
     meal.created_date = timezone.now()
     meal.save()
 
-    # Convert the Meal object to a dictionary for the response
     meal_dict = {
         'id': meal.id,
         'name': meal.name,
         'dietary_preference': meal.dietary_preference,
         'description': meal.description,
         'created_date': meal.created_date.isoformat(),
-        # Add more fields as needed
     }
 
     return {'meal': meal_dict, 'status': 'success', 'message': 'Meal created successfully', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -965,14 +1060,122 @@ def suggest_alternative_meals(request, meal_ids, days_of_week, meal_types):
 
     return {"alternative_meals": alternative_meals}
 
+def replace_meal_based_on_preferences(request, meal_plan_id, old_meal_ids, days_of_week, meal_types):
+    logging.info(f"Starting meal replacement for MealPlan ID: {meal_plan_id}")
+    
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
+    
+    # Validate meal plan
+    try:
+        meal_plan = MealPlan.objects.get(id=meal_plan_id, user=user)
+    except MealPlan.DoesNotExist:
+        logging.error(f"Meal plan with ID {meal_plan_id} not found for user {user.id}.")
+        return {'status': 'error', 'message': 'Meal plan not found.'}
 
+    # Check if the meal plan is linked to a placed order
+    if meal_plan.order:
+        logging.error(f"Meal plan with ID {meal_plan_id} is associated with a placed order and cannot be modified.")
+        return {'status': 'error', 'message': 'Cannot modify a meal plan associated with an order.'}
+
+    replaced_meals = []
+    errors = []
+
+    for old_meal_id, day, meal_type in zip(old_meal_ids, days_of_week, meal_types):
+        try:
+            # Log the current meal being processed
+            logging.info(f"Processing meal with ID: {old_meal_id} for {day} - {meal_type}")
+
+            # Validate the existing meal
+            old_meal = Meal.objects.get(id=old_meal_id)
+
+            # Validate day and meal type
+            if day not in dict(MealPlanMeal.DAYS_OF_WEEK):
+                errors.append(f'Invalid day: {day} for meal ID {old_meal_id}')
+                continue
+            if meal_type not in dict(MealPlanMeal.MEAL_TYPE_CHOICES):
+                errors.append(f'Invalid meal type: {meal_type} for meal ID {old_meal_id}')
+                continue
+
+            # Check if the meal is scheduled for the specified day and meal type
+            meal_plan_meal = MealPlanMeal.objects.filter(meal_plan=meal_plan, meal=old_meal, day=day, meal_type=meal_type).first()
+            if not meal_plan_meal:
+                errors.append(f'The initial meal with ID {old_meal_id} is not scheduled on {day} and {meal_type}.')
+                continue
+
+            # Suggest alternatives or create a new meal based on user preferences and restrictions
+            suggested_meals_response = suggest_alternative_meals(request, [old_meal_id], [day], [meal_type])
+
+            if suggested_meals_response['alternative_meals']:
+                # If alternatives are found, select the first one as the replacement
+                new_meal_id = suggested_meals_response['alternative_meals'][0]['meal_id']
+            else:
+                # If no alternatives found, create a new meal
+                new_meal_response = create_meal(request, name=None, dietary_preference=user.dietary_preference, description=None, meal_type=meal_type)
+                new_meal_id = new_meal_response['meal']['id']
+
+            # Remove the old meal from the plan
+            remove_meal_response = remove_meal_from_plan(request, meal_plan_id, old_meal_id, day, meal_type)
+            if remove_meal_response['status'] != 'success':
+                errors.append(f'Failed to remove the old meal with ID {old_meal_id}.')
+                continue
+
+            # Add the new meal to the plan
+            add_meal_response = add_meal_to_plan(request, meal_plan_id, new_meal_id, day, meal_type)
+            if add_meal_response['status'] != 'success':
+                errors.append(f'Failed to add the new meal for {day} and {meal_type}.')
+                continue
+
+            # Collect information about the replaced meal
+            replaced_meals.append({
+                'old_meal': old_meal.name,
+                'new_meal_id': new_meal_id,
+                'day': day,
+                'meal_type': meal_type
+            })
+
+        except Meal.DoesNotExist:
+            logging.error(f"Old meal with ID {old_meal_id} not found.")
+            errors.append(f'Old meal with ID {old_meal_id} not found.')
+        except Exception as e:
+            logging.error(f"An unexpected error occurred while processing meal with ID {old_meal_id}: {str(e)}")
+            errors.append(f'An unexpected error occurred while processing meal with ID {old_meal_id}.')
+
+    if errors:
+        return {
+            'status': 'error',
+            'message': 'Some meals could not be replaced.',
+            'errors': errors,
+            'replaced_meals': replaced_meals
+        }
+    else:
+        return {
+            'status': 'success',
+            'message': 'All meals replaced successfully.',
+            'replaced_meals': replaced_meals
+        }
+
+def find_similar_meals(query_vector, threshold=0.1):
+    # Find meals with similar embeddings using cosine similarity
+    similar_meals = Meal.objects.annotate(
+        similarity=CosineDistance(F('meal_embedding'), query_vector)
+    ).filter(similarity__lt=threshold)  # Adjust the threshold according to your needs
+    
+    return similar_meals
 
 def search_meal_ingredients(request, query):
     print("From search_meal_ingredients")
     print(f"Query: {query}")
     
-    # Assuming 'get_embedding' creates a vector for your query
-    query_vector = get_embedding(query)
+    # Check if the query is valid
+    if not query or not isinstance(query, str):
+        return {'status': 'error', 'message': 'Invalid search query.'}
+
+    try:
+        # Generate the embedding for the search query
+        query_vector = get_embedding(query)
+    except Exception as e:
+        return {'status': 'error', 'message': f'Error generating embedding: {str(e)}'}
+
     
     # Find meals with similar embeddings using cosine similarity
     similar_meals = Meal.objects.annotate(
@@ -1069,9 +1272,16 @@ def auth_search_ingredients(request, query):
     if user_role.current_role == 'chef':
         return {'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'}
 
-    # Assume get_embedding generates a vector for your query
-    query_vector = get_embedding(query)
-    
+    # Check if the query is valid
+    if not query or not isinstance(query, str):
+        return {'status': 'error', 'message': 'Invalid search query.'}
+
+    try:
+        # Generate the embedding for the search query
+        query_vector = get_embedding(query)
+    except Exception as e:
+        return {'status': 'error', 'message': f'Error generating embedding: {str(e)}'}
+
     # Find similar ingredients based on cosine similarity
     similar_ingredients = Ingredient.objects.annotate(
         similarity=CosineDistance(F('ingredient_embedding'), query_vector)
@@ -1117,8 +1327,15 @@ def guest_search_ingredients(request, query, meal_ids=None):
     if meal_ids:
         available_meals = available_meals.filter(id__in=meal_ids)
     
-    # Again, assuming get_embedding function exists and generates a query vector
-    query_vector = get_embedding(query)  # Assuming you pass 'query' as an argument
+    # Check if the query is valid
+    if not query or not isinstance(query, str):
+        return {'status': 'error', 'message': 'Invalid search query.'}
+
+    try:
+        # Generate the embedding for the search query
+        query_vector = get_embedding(query)
+    except Exception as e:
+        return {'status': 'error', 'message': f'Error generating embedding: {str(e)}'}
 
     # Find similar ingredients based on cosine similarity
     similar_ingredients = Ingredient.objects.annotate(
@@ -1166,9 +1383,16 @@ def auth_search_chefs(request, query):
     if user_role.current_role == 'chef':
         return {'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'}
 
-    # Generate the embedding for the search query
-    query_vector = get_embedding(query)
-    
+    # Check if the query is valid
+    if not query or not isinstance(query, str):
+        return {'status': 'error', 'message': 'Invalid search query.'}
+
+    try:
+        # Generate the embedding for the search query
+        query_vector = get_embedding(query)
+    except Exception as e:
+        return {'status': 'error', 'message': f'Error generating embedding: {str(e)}'}
+
     # Retrieve user's primary postal code from Address model
     user_addresses = Address.objects.filter(user=user.id)
     user_postal_code = user_addresses[0].input_postalcode if user_addresses.exists() else None
@@ -1244,9 +1468,16 @@ def auth_search_chefs(request, query):
 def guest_search_chefs(request, query):
     print("From guest_search_chefs")
 
-    # Generate the embedding for the search query
-    query_vector = get_embedding(query)
-    
+    # Check if the query is valid
+    if not query or not isinstance(query, str):
+        return {'status': 'error', 'message': 'Invalid search query.'}
+
+    try:
+        # Generate the embedding for the search query
+        query_vector = get_embedding(query)
+    except Exception as e:
+        return {'status': 'error', 'message': f'Error generating embedding: {str(e)}'}
+
     # Retrieve chefs based on cosine similarity with the query embedding
     similar_chefs = Chef.objects.annotate(
         similarity=CosineDistance(F('chef_embedding'), query_vector)
@@ -1306,8 +1537,16 @@ def auth_search_dishes(request, query):
     if user_role.current_role == 'chef':
         return {'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'}
 
-    # Generate the embedding for the search query
-    query_vector = get_embedding(query)
+    # Check if the query is valid
+    if not query or not isinstance(query, str):
+        return {'status': 'error', 'message': 'Invalid search query.'}
+
+    try:
+        # Generate the embedding for the search query
+        query_vector = get_embedding(query)
+    except Exception as e:
+        return {'status': 'error', 'message': f'Error generating embedding: {str(e)}'}
+
     
     # Query meals based on postal code and dietary preferences
     week_shift = max(int(user.week_shift), 0)
@@ -1345,8 +1584,16 @@ def auth_search_dishes(request, query):
 def guest_search_dishes(request, query):
     print("From guest_search_dishes")
 
-    # Generate the embedding for the search query
-    query_vector = get_embedding(query)
+    # Check if the query is valid
+    if not query or not isinstance(query, str):
+        return {'status': 'error', 'message': 'Invalid search query.'}
+
+    try:
+        # Generate the embedding for the search query
+        query_vector = get_embedding(query)
+    except Exception as e:
+        return {'status': 'error', 'message': f'Error generating embedding: {str(e)}'}
+
     
     # Retrieve dishes based on cosine similarity with the query embedding
     current_date = timezone.now().date()
@@ -1484,49 +1731,68 @@ def guest_get_meal_plan(request):
 
 def approve_meal_plan(request, meal_plan_id):
     print("From approve_meal_plan")
-    user = CustomUser.objects.get(id=request.data.get('user_id'))
-    user_role = UserRole.objects.get(user=user)
-    
-    if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+    logger.info(f"Approving meal plan with ID: {meal_plan_id}")
+    try:
+        user = CustomUser.objects.get(id=request.data.get('user_id'))
+        user_role = UserRole.objects.get(user=user)
+        
+        if user_role.current_role == 'chef':
+            return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
 
 
-    # Step 1: Retrieve the MealPlan using the provided ID
-    meal_plan = MealPlan.objects.get(id=meal_plan_id, user=user)
-    
-    # Check if the meal plan is already associated with an order
-    if meal_plan.order:
-        if meal_plan.order.is_paid:
-            # If the order is paid, return a message
-            return {'status': 'info', 'message': 'This meal plan has already been paid for.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
-        else:
-            # If the order is not paid, return a message
-            return {'status': 'info', 'message': 'This meal plan has an unpaid order. Please complete the payment.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+        # Step 1: Retrieve the MealPlan using the provided ID
+        meal_plan = MealPlan.objects.get(id=meal_plan_id, user=user)
+        
+        # Check if the meal plan is already associated with an order
+        if meal_plan.order:
+            if meal_plan.order.is_paid:
+                # If the order is paid, return a message
+                return {'status': 'info', 'message': 'This meal plan has already been paid for.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+            else:
+                # If the order is not paid, return a message
+                return {'status': 'info', 'message': 'This meal plan has an unpaid order. Please complete the payment.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-    # Step 2: Handle meal plan approval
-    # Create an Order object
-    order = Order(customer=user)
-    order.save()  # Save the order to generate an ID
-    
-    # Step 3: Create OrderMeal objects for each meal in the meal plan
-    for meal_plan_meal in meal_plan.mealplanmeal_set.all():
-        meal = meal_plan_meal.meal
-        if not meal.can_be_ordered():
-            continue  # Skip this meal and move on to the next one
-        OrderMeal.objects.create(order=order, meal=meal, meal_plan_meal=meal_plan_meal, quantity=1)  # Include the MealPlanMeal
+        # Handle meal plan approval
+        # Create an Order object only if there are paid meals
+        paid_meals_exist = False
+        for meal_plan_meal in meal_plan.mealplanmeal_set.all():
+            meal = meal_plan_meal.meal
+            if meal.price and meal.price > 0:
+                paid_meals_exist = True
+                break
+        
+        if not paid_meals_exist:
+            meal_plan.is_approved = True
+            meal_plan.has_changes = False
+            meal_plan.save()
+            return {'status': 'success', 'message': 'Meal plan approved with no payment required.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-    # Step 4: Link the Order to the MealPlan
-    meal_plan.order = order
-    meal_plan.save()
+        order = Order(customer=user)
+        order.save()  # Save the order to generate an ID
 
-    # Return a success message with the URL
-    return {
-        'status': 'success', 
-        'message': 'Meal plan approved. Proceed to payment.',
-        'order_id': order.id, 
-        'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
-    }
+        # Create OrderMeal objects for each meal in the meal plan
+        for meal_plan_meal in meal_plan.mealplanmeal_set.all():
+            meal = meal_plan_meal.meal
+            if not meal.can_be_ordered():
+                continue  # Skip this meal if it can't be ordered
+            if meal.price and meal.price > 0:
+                OrderMeal.objects.create(order=order, meal=meal, meal_plan_meal=meal_plan_meal, quantity=1)
 
+        # Link the Order to the MealPlan
+        meal_plan.order = order
+        meal_plan.is_approved = True
+        meal_plan.has_changes = False
+        meal_plan.save()
+
+
+        return {
+            'status': 'success', 
+            'message': 'Meal plan approved. Proceed to payment.',
+            'order_id': order.id, 
+            'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+    except Exception as e:
+        return {'status': 'error', 'message': f'An unexpected error occurred: {str(e)}'}
 
 def analyze_nutritional_content(request, dish_id):
     try:

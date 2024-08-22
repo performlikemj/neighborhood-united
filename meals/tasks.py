@@ -1,17 +1,12 @@
 # might have to move this to the root or the shared folder
 import asyncio
 import json
+import os
 from celery import shared_task
-from meals.models import Meal, Dish, Ingredient
-from chefs.models import Chef  # Adjust the import path based on your project structure
+from django.shortcuts import get_object_or_404
 from openai import OpenAI
 from typing_extensions import override
 from openai import AssistantEventHandler, OpenAI
-from openai.types.beta.threads.runs import ToolCall, ToolCallDelta
-from openai.types.beta.threads import Message, MessageDelta
-from openai.types.beta.threads.runs import ToolCall, RunStep
-from openai.types.beta import AssistantStreamEvent
-from openai.types.beta.threads import Text, TextDelta
 from django.conf import settings
 from custom_auth.models import CustomUser
 from customer_dashboard.models import GoalTracking, UserHealthMetrics, CalorieIntake, UserSummary, UserMessage, ChatThread
@@ -33,10 +28,21 @@ from local_chefs.views import chef_service_areas, service_area_chefs
 from rest_framework.response import Response
 import re
 import time
+import pytz
+from datetime import datetime
 import logging
 from openai import OpenAIError
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+from pydantic import BaseModel, Field, ValidationError
+from typing import List
+from meals.pydantic_models import ShoppingList as ShoppingListSchema, Instructions as InstructionsSchema
+from rest_framework.renderers import JSONRenderer
+from meals.serializers import MealPlanSerializer, MealPlanMealSerializer
+from django.utils.timezone import now
+import requests
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -47,62 +53,9 @@ def get_embedding(text, model="text-embedding-3-small"):
     response = client.embeddings.create(input=[text], model=model)
     return response.data[0].embedding if response.data else None
 
-functions = {
-    "auth_search_dishes": auth_search_dishes,
-    "auth_search_chefs": auth_search_chefs,
-    "auth_get_meal_plan": auth_get_meal_plan,
-    "chef_service_areas": chef_service_areas,
-    "service_area_chefs": service_area_chefs,
-    "approve_meal_plan": approve_meal_plan,
-    "auth_search_ingredients": auth_search_ingredients,
-    "search_meal_ingredients": search_meal_ingredients,
-    "auth_search_meals_excluding_ingredient": auth_search_meals_excluding_ingredient,
-    "suggest_alternative_meals": suggest_alternative_meals,
-    "add_meal_to_plan": add_meal_to_plan,
-    "create_meal_plan": create_meal_plan,
-    "get_date": get_date,
-    "list_upcoming_meals": list_upcoming_meals,
-    "remove_meal_from_plan": remove_meal_from_plan,
-    "replace_meal_in_plan": replace_meal_in_plan,
-    "post_review": post_review,
-    "update_review": update_review,
-    "delete_review": delete_review,
-    "generate_review_summary": generate_review_summary,
-    "access_past_orders": access_past_orders,
-    "get_user_info": get_user_info,
-    "get_goal": get_goal,
-    "update_goal": update_goal,
-    "adjust_week_shift": adjust_week_shift,
-    "get_unupdated_health_metrics": get_unupdated_health_metrics,
-    "update_health_metrics": update_health_metrics,
-    "check_allergy_alert": check_allergy_alert,
-    "provide_nutrition_advice": provide_nutrition_advice,
-    "find_nearby_supermarkets": find_nearby_supermarkets,
-    "search_healthy_meal_options": search_healthy_meal_options,
-    "provide_healthy_meal_suggestions": provide_healthy_meal_suggestions,
-    "understand_dietary_choices": understand_dietary_choices,
-    "create_meal": create_meal,
-}
-
-def ai_call(tool_call, request):
-    function = tool_call.function
-    name = function.name
-    try:
-        arguments = json.loads(function.arguments)
-    except json.JSONDecodeError:
-        arguments = {}
-    # Ensure that 'request' is included in the arguments if needed
-    arguments['request'] = request
-    return_value = functions[name](**arguments)
-    tool_outputs = {
-        "tool_call_id": tool_call.id,
-        "output": return_value,
-        "function": name,
-    }
-    return tool_outputs
-
 @shared_task
 def update_chef_embeddings():    
+    from chefs.models import Chef  # Adjust the import path based on your project structure
     for chef in Chef.objects.filter(chef_embedding__isnull=True):
         chef_str = str(chef)  # Generate the string representation for the chef
         chef.chef_embedding = get_embedding(chef_str)  # Generate and assign the new embedding
@@ -110,7 +63,7 @@ def update_chef_embeddings():
 
 @shared_task
 def update_embeddings():
-
+    from meals.models import Meal, Dish, Ingredient  # Adjust the import path based on your project structure
     for meal in Meal.objects.filter(meal_embedding__isnull=True):
         meal.meal_embedding = get_embedding(str(meal))
         meal.save()
@@ -123,10 +76,334 @@ def update_embeddings():
         ingredient.ingredient_embedding = get_embedding(str(ingredient))
         ingredient.save()
 
+def serialize_data(data):
+    """ Helper function to serialize data into JSON-compatible format """
+    try:
+        print(f"Attempting to serialize data: {data}")
+        serialized_data = JSONRenderer().render(data)
+        print(f"Serialized Data: {serialized_data}")
+        return json.loads(serialized_data)
+    except Exception as e:
+        print(f"Error serializing data: {e}")
+        raise
+
+@shared_task
+def generate_shopping_list(meal_plan_id):
+    from meals.models import MealPlan, ShoppingList as ShoppingListModel
+    meal_plan = get_object_or_404(MealPlan, id=meal_plan_id)
+
+    # Serialize the meal plan data
+    serializer = MealPlanSerializer(meal_plan)
+    meal_plan_data = serializer.data
+
+    # Extract user information
+    user_info = meal_plan_data.get('user', {})
+    user_email = user_info.get('email')
+    user_name = user_info.get('username')
+
+    # Check if a shopping list already exists for this meal plan
+    existing_shopping_list = ShoppingListModel.objects.filter(meal_plan=meal_plan).first()
+
+
+    if existing_shopping_list:
+        logger.info(f"Shopping list already exists for MealPlan ID {meal_plan_id}. Sending existing list.")
+        shopping_list = existing_shopping_list.items
+    else:
+        # Generate shopping list if it doesn't exist
+        try:
+            user_data_json = serialize_data(meal_plan_data)
+        except Exception as e:
+            logger.error(f"Serialization error: {e}")
+            return
+
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-2024-08-06",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant that generates shopping lists in JSON format."
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Generate a shopping list based on the following meals: {json.dumps(user_data_json)}. "
+                            f"The user has the following dietary preferences: {user_info['user']['dietary_preference']}, "
+                            f"allergies: {user_info['user']['allergies']}, custom allergies: {user_info['user']['custom_allergies']}, "
+                            f"and custom dietary preferences: {user_info['user']['custom_dietary_preference']}."
+                        )
+                    }
+                ],
+                response_format={
+                    'type': 'json_schema',
+                    'json_schema': 
+                        {
+                            "name":"ShoppingList", 
+                            "schema": ShoppingListSchema.model_json_schema()
+                        }
+                    }
+            )
+
+            shopping_list = response.choices[0].message.content  # Use the parsed response
+
+            if hasattr(meal_plan, 'shopping_list'):
+                meal_plan.shopping_list.update_items(shopping_list)
+            else:
+                ShoppingListModel.objects.create(meal_plan=meal_plan, items=shopping_list)
+
+        except ValidationError as e:
+            logger.error(f"Error parsing shopping list: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error generating shopping list for meal plan {meal_plan_id}: {e}")
+
+    try:
+        shopping_list_dict = json.loads(shopping_list)
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse shopping list as JSON: {e}")
+        return
+
+    user = meal_plan.user
+    if not user.email_meal_plan_saved:
+        return
+
+    # Format the shopping list into a more readable format
+    formatted_shopping_list = f"""
+    <html>
+    <body>
+        <div style="text-align: center;">
+            <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+        </div>
+        <h2 style="color: #333;">Your Personalized Shopping List</h2>
+        <p>Dear {user_name},</p>
+        <p>We're excited to help you prepare for the week ahead! Below is your personalized shopping list, thoughtfully curated to complement the delicious meals you've planned.</p>
+        <table style="width: 100%; border-collapse: collapse;">
+            <thead>
+                <tr style="background-color: #f2f2f2;">
+                    <th style="padding: 8px; text-align: left;">Meal</th>
+                    <th style="padding: 8px; text-align: left;">Ingredient</th>
+                    <th style="padding: 8px; text-align: left;">Quantity</th>
+                    <th style="padding: 8px; text-align: left;">Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+
+    for item in shopping_list_dict.get("items", []):
+        meal_name = item.get("meal_name", "General Items")
+        ingredient = item.get("ingredient", "Unknown Ingredient")
+        quantity = item.get("quantity", "Unknown Quantity")
+        unit = item.get("unit", "")
+        notes = item.get("notes", "")
+
+        formatted_shopping_list += f"""
+        <tr>
+            <td style="padding: 8px;">{meal_name}</td>
+            <td style="padding: 8px;">{ingredient}</td>
+            <td style="padding: 8px;">{quantity} {unit}</td>
+            <td style="padding: 8px;">{notes}</td>
+        </tr>
+        """
+
+        logger.info(f"Meal: {meal_name}, Ingredient: {ingredient}, Quantity: {quantity} {unit}, Notes: {notes}")
+
+    formatted_shopping_list += """
+            </tbody>
+        </table>
+        <p style="color: #555;">We hope this makes your shopping experience smoother and more enjoyable. If you have any questions or need further assistance, we're here to help.</p>
+        <p style="color: #555;">Happy cooking!</p>
+        <p style="color: #555;">Warm regards,<br>The SautAI Team</p>
+    </body>
+    </html>
+    """
+
+    print(f"Formatted shopping list: {formatted_shopping_list}")
+    
+    # Prepare data for Zapier webhook
+    email_data = {
+        'subject': f'Your Curated Shopping List for {meal_plan.week_start_date} - {meal_plan.week_end_date}',
+        'message': formatted_shopping_list,
+        'to': user_email,
+        'from': 'support@sautai.com',
+    }
+
+    # Send data to Zapier
+    try:
+        zap_url = os.getenv("ZAP_GENERATE_SHOPPING_LIST_URL")  
+        requests.post(zap_url, json=email_data)
+        logger.info(f"Shopping list sent to Zapier for: {user_email}")
+    except Exception as e:
+        logger.error(f"Error sending shopping list to Zapier for: {user_email}, error: {str(e)}")
+
+@shared_task
+def send_daily_meal_instructions():
+    from meals.models import MealPlanMeal
+
+    # Get the current time in UTC
+    current_utc_time = timezone.now()
+
+    # Loop through all users who have email_daily_instructions enabled
+    users = CustomUser.objects.filter(email_daily_instructions=True)
+    
+    for user in users:
+        # Convert current UTC time to the user's time zone
+        user_timezone = pytz.timezone(user.timezone)
+        user_time = current_utc_time.astimezone(user_timezone)
+
+        # Check if it's midnight in the user's time zone
+        if user_time.hour == 0:
+            # Get the current day in the user's time zone
+            current_day = user_time.strftime('%A')
+            
+            # Filter all MealPlanMeal instances scheduled for the current day for this user
+            meal_plan_meals_for_today = MealPlanMeal.objects.filter(
+                meal_plan__user=user,
+                day=current_day
+            )
+
+            # Loop through each meal and send instructions
+            for meal_plan_meal in meal_plan_meals_for_today:
+                if user.email_daily_instructions:
+                    generate_instructions.delay(meal_plan_meal.id)
+
+@shared_task
+def generate_instructions(meal_plan_meal_id):
+    from meals.models import MealPlanMeal, Instruction as InstructionModel
+    meal_plan_meal = get_object_or_404(MealPlanMeal, id=meal_plan_meal_id)
+
+    # Extract user information from meal_plan_meal_data
+    serializer = MealPlanMealSerializer(meal_plan_meal)
+    meal_plan_meal_data = serializer.data
+    user_info = meal_plan_meal_data.get('user', {})
+    user_email = user_info.get('email')
+    user_name = user_info.get('username')
+
+    # Check if instructions already exist for this meal plan meal
+    existing_instruction = InstructionModel.objects.filter(meal_plan_meal=meal_plan_meal).first()
+    
+    if existing_instruction:
+        logger.info(f"Instructions already exist for MealPlanMeal ID {meal_plan_meal_id}. Sending existing instructions.")
+        instructions = existing_instruction.content
+    else:
+        # If instructions don't exist, generate them
+        user_dietary_preference = user_info.get('dietary_preference', 'Unknown')
+        user_allergies = user_info.get('allergies', 'None')
+        user_custom_allergies = user_info.get('custom_allergies', 'None')
+        user_custom_dietary_preference = user_info.get('custom_dietary_preference', 'None')
+        user_preferred_language = user_info.get('preferred_language', 'English')
+        try:
+            meal_data_json = json.dumps(meal_plan_meal_data)
+        except Exception as e:
+            logger.error(f"Serialization error: {e}")
+            return
+
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-2024-08-06",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": f"You are a helpful assistant that generates cooking instructions in {user_preferred_language}."
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Generate detailed cooking instructions for the following meal: {meal_data_json}. "
+                            f"The meal is described as follows: '{meal_plan_meal_data['meal']['description']}' and "
+                            f"it adheres to the dietary preference: {user_dietary_preference}."
+                            f"allergies: {user_allergies}, custom allergies: {user_custom_allergies}."
+                            f"and custom dietary preferences: {user_custom_dietary_preference}."
+                        )
+                    }
+                ],
+                response_format={
+                    'type': 'json_schema',
+                    'json_schema': 
+                        {
+                            "name": "Instructions", 
+                            "schema": InstructionsSchema.model_json_schema()
+                        }
+                    }
+                )
+
+            instructions = response.choices[0].message.content  # Use the parsed response
+
+            if hasattr(meal_plan_meal, 'instructions'):
+                meal_plan_meal.instructions.update_content(instructions)
+            else:
+                InstructionModel.objects.create(meal_plan_meal=meal_plan_meal, content=instructions)
+
+        except ValidationError as e:
+            logger.error(f"Error parsing instructions: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error generating instructions for meal plan {meal_plan_meal_id}: {e}")
+
+    try:
+        instructions_dict = json.loads(meal_plan_meal.instructions.content)
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse instructions as JSON: {e}")
+        return
+    except AttributeError as e:
+        logger.error(f"Instructions content not found: {e}")
+        return
+
+    user = meal_plan_meal.meal_plan.user
+    if not user.email_instruction_generation:
+        return
+    # Format the instructions into a more readable format
+    formatted_instructions = ""
+    for step in instructions_dict.get("steps", []):
+        step_description = step["description"]
+        duration = step.get("duration", "No specific time")
+        formatted_instructions += f"""
+        <tr>
+            <td style="padding: 8px; font-weight: bold;">Step {step['step_number']}:</td>
+            <td style="padding: 8px;">{step_description}</td>
+        </tr>
+        <tr>
+            <td style="padding: 8px; font-style: italic;">Estimated Time:</td>
+            <td style="padding: 8px;">{duration}</td>
+        </tr>
+        <tr><td colspan="2" style="padding: 8px; border-bottom: 1px solid #ddd;"></td></tr>
+        """
+
+    # HTML Email Body
+    email_body = f"""
+    <html>
+    <body>
+        <div style="text-align: center;">
+            <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+        </div>
+        <h2 style="color: #333;">Step-by-Step Cooking Instructions for {meal_plan_meal.meal.name}</h2>
+        <p>Dear {user_name},</p>
+        <p>Get ready to cook up something delicious! Here are your step-by-step instructions:</p>
+        <table style="width: 100%; border-collapse: collapse;">
+            {formatted_instructions}
+        </table>
+        <p style="color: #555;">We hope you enjoy every bite. If you need any help or have questions, feel free to reach out!</p>
+        <p style="color: #555;">Bon appétit!</p>
+        <p style="color: #555;">Warm regards,<br>The SautAI Team</p>
+    </body>
+    </html>
+    """
+
+    # Prepare data for Zapier webhook
+    email_data = {
+        'subject': f'Your Cooking Instructions for {meal_plan_meal.meal.name}',
+        'message': email_body,
+        'to': user_email,
+        'from': 'support@sautai.com',
+    }
+    # Send data to Zapier
+    try:
+        zap_url = os.getenv("ZAP_GENERATE_INSTRUCTIONS_URL")  
+        requests.post(zap_url, json=email_data)
+        logger.info(f"Cooking instructions sent to Zapier for: {user_email}")
+    except Exception as e:
+        logger.error(f"Error sending cooking instructions to Zapier for: {user_email}, error: {str(e)}")
 
 @shared_task
 def generate_user_summary(user_id):
-    user = CustomUser.objects.get(id=user_id)
+    user = get_object_or_404(CustomUser, id=user_id)
 
     # Calculate the date one month ago
     one_month_ago = timezone.now() - timedelta(days=30)
@@ -140,19 +417,33 @@ def generate_user_summary(user_id):
     formatted_data = {
         "Goal Tracking": [f"Goal: {goal.goal_name}, Description: {goal.goal_description}" for goal in goal_tracking] if goal_tracking else ["No goals found."],
         "User Health Metrics": [
-            f"Date: {metric.date_recorded}, Weight: {metric.weight} kg ({metric.weight * 2.20462} lbs), BMI: {metric.bmi}, Mood: {metric.mood}, Energy Level: {metric.energy_level}" 
+            f"Date: {metric.date_recorded}, Weight: {metric.weight} kg ({float(metric.weight) * 2.20462} lbs), BMI: {metric.bmi}, Mood: {metric.mood}, Energy Level: {metric.energy_level}" 
             for metric in user_health_metrics
         ] if user_health_metrics else ["No health metrics found."],
         "Calorie Intake": [f"Meal: {intake.meal_name}, Description: {intake.meal_description}, Portion Size: {intake.portion_size}, Date: {intake.date_recorded}" for intake in calorie_intake] if calorie_intake else ["No calorie intake data found."],
     }
+    
+    # Define the message for no data
     message = "No data found for the past month."
-    client = OpenAI(api_key=settings.OPENAI_KEY) # Initialize OpenAI client
+
+    # Initialize OpenAI client
+    client = OpenAI(api_key=settings.OPENAI_KEY)
+    
+    # Define the language prompt based on user's preferred language
+    language_prompt = {
+        'en': 'English',
+        'ja': 'Japanese',
+        'es': 'Spanish',
+        'fr': 'French',
+    }
+    preferred_language = language_prompt.get(user.preferred_language, 'English')
+
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", 
-                 "content": f"Generate a detailed summary based on the following data that gives the user a high level view of their goals, health data, and how their caloric intake relates to those goals. Start the response off with a friendly welcoming tone.: {formatted_data}. If there is no data, please respond with the following message: {message}"
+                 "content": f"Generate a detailed summary based on the following data that gives the user a high-level view of their goals, health data, and how their caloric intake relates to those goals. Start the response off with a friendly welcoming tone. Respond in {preferred_language}. If there is no data, please respond with the following message: {message}\n\n{formatted_data}"
                  },
             ],
         )
@@ -164,241 +455,3 @@ def generate_user_summary(user_id):
     UserSummary.objects.update_or_create(user=user, defaults={'summary': summary_text})
 
     return {"message": "Summary generated successfully."}
-
-
-@shared_task
-def process_user_message(request, message_id, assistant_id):
-    try:
-        formatted_outputs = []
-        user_message = UserMessage.objects.get(id=message_id)
-        user = user_message.user
-        question = user_message.message
-        thread_id = user_message.thread.openai_thread_id  # Assuming 'thread' is a field storing thread ID
-        user_id = user.id
-
-        # Creating a message in the OpenAI thread
-        try:
-            client.beta.threads.messages.create(
-                thread_id=thread_id,
-                role="user",
-                content=question
-            )
-        except OpenAIError as e:
-            print(f'Error: {e}')
-            if 'Can\'t add messages to thread' in str(e) and 'while a run' in str(e) and 'is active' in str(e):
-                # Extract the run ID from the error message
-                match = re.search(r'run (\w+)', str(e))
-                if match:
-                    run_id = match.group(1)
-                    # Cancel the active run
-                    client.beta.threads.runs.cancel(run_id, thread_id=thread_id)
-                    # Try to create the message again
-                    client.beta.threads.messages.create(
-                        thread_id=thread_id,
-                        role="user",
-                        content=question
-                    )
-            else:
-                logger.error(f'Failed to create message: {str(e)}')
-                user_message.response = f"Sorry, I was unable to send your message. Please try again."
-                user_message.save()
-                return  # Stopping the task if message creation fails
-
-        # Running the Assistant
-        try:
-            with client.beta.threads.runs.create_and_stream(
-                thread_id=thread_id,
-                assistant_id=assistant_id,  # Assuming the user has an associated assistant ID
-                event_handler=EventHandler(request, thread_id, assistant_id, user_id) 
-            ) as stream:
-                stream.until_done()
-        except Exception as e:
-            logger.error(f'Failed to create run: {str(e)}')
-            user_message.response = "I'm sorry, I'm still processing your request. Please try again or start a new chat."
-            user_message.save()
-            return  # Stopping the task if run creation fails
-
-        # Check the status of the Run and retrieve responses
-        #TODO: Move the context and formatted_context part to the function where a message response is received from the assistant
-        try:
-            # Retrieve messages and log them
-            print("Retrieving messages")
-            messages = client.beta.threads.messages.list(thread_id)
-            last_assistant_message = next((msg.content[0].text.value for msg in (messages.data) if msg.role == 'assistant'), None)               
-
-            # Updating the UserMessage instance with the response
-            user_message.response = last_assistant_message
-            user_message.save()
-        except Exception as e:
-            logger.error(f'Failed to list messages: {str(e)}')
-            user_message.response = f"Sorry, I was unable to retrieve the message. Please try again."
-            return 
-
-    except Exception as e:
-        logger.error(f'Error processing message: {str(e)}')
-        # Optionally update the message with an error notice
-        user_message = UserMessage.objects.get(id=message_id)  # Re-fetch in case of failure before initial fetch
-        user_message.response = f"Sorry, I was unable to process your request. Please try again."
-        user_message.save()
-        return
-
-class EventHandler(AssistantEventHandler):
-    def __init__(self, request, thread_id, assistant_id, user_id):
-        super().__init__()
-        self.output = None
-        self.request = request
-        self.tool_id = None
-        self.function_arguments = None
-        self.thread_id = thread_id
-        self.assistant_id = assistant_id
-        self.run_id = None
-        self.run_step = None
-        self.function_name = ""
-        self.arguments = ""
-        self.tool_calls = []
-        self.user_id = user_id
-
-    @override
-    def on_text_created(self, text) -> None:
-        print(f"\nassistant on_text_created > ", end="", flush=True)
-        channel_layer = get_channel_layer()
-        async_to_sync(channel_layer.group_send)(
-            f"user_{self.user_id}",
-            {
-                "type": "send_message_to_frontend",
-                "message": text if text else "No content",
-            }
-        )
-
-    @override
-    def on_text_delta(self, delta, snapshot):
-        print(f"{delta.value}")
-
-    @override
-    def on_end(self):
-        print(f"\n end assistant > ", self.current_run_step_snapshot, end="", flush=True)
-        
-        tool_outputs = []
-        if self.current_run_step_snapshot and self.current_run_step_snapshot.step_details.type == 'tool_calls':
-            for tool_call in self.current_run_step_snapshot.step_details.tool_calls:
-                print(f"\nassistant on_end beginning for:> {tool_call}\n", end="", flush=True)
-                print(f"tool_call.function.arguments: {tool_call.function.arguments}")
-                tool_call_result = ai_call(tool_call, self.request)
-                print(f"tool_call_result: {tool_call_result}")
-                tool_call_id = tool_call_result['tool_call_id']
-                output = tool_call_result['output']
-                output_json = json.dumps(output)
-                formatted_output = {
-                    "tool_call_id": tool_call_id,
-                    "output": output_json
-                }
-                tool_outputs.append(formatted_output)
-
-        if tool_outputs:
-            with client.beta.threads.runs.submit_tool_outputs_stream(
-                thread_id=self.thread_id,
-                run_id=self.run_id,
-                tool_outputs=tool_outputs,
-                event_handler=EventHandler(self.request, self.thread_id, self.assistant_id, user_id=self.user_id)
-            ) as stream:
-                stream.until_done()
-
-    @override
-    def on_exception(self, exception: Exception) -> None:
-        print(f"\nassistant > {exception}\n", end="", flush=True)
-
-    @override
-    def on_message_created(self, message: Message) -> None:
-        print(f"\nassistant on_message_created > {message}\n", end="", flush=True)
-
-    @override
-    def on_message_done(self, message: Message) -> None:
-        print(f"\nassistant on_message_done > {message}\n", end="", flush=True)
-
-
-    @override
-    def on_message_delta(self, delta: MessageDelta, snapshot: Message) -> None:
-        pass
-
-    def on_tool_call_created(self, tool_call):
-        print(f"\nassistant on_tool_call_created > {tool_call}")
-        self.function_name = tool_call.function.name
-        self.function_arguments = tool_call.function.arguments  # Capture the arguments
-        self.tool_id = tool_call.id
-        self.tool_calls.append(tool_call)
-        print(f"\on_tool_call_created > run_step.status > {self.run_step.status}")
-        print(f"\nassistant > {tool_call.type} {self.function_name}\n", flush=True)
-        print(f'\nrun_id: {self.run_id}\n', flush=True)
-        print(f'\nthread_id: {self.thread_id}\n', flush=True)
-        keep_retrieving_run = client.beta.threads.runs.retrieve(
-            thread_id=self.thread_id,
-            run_id=self.run_id
-        )
-
-        while keep_retrieving_run.status in ["queued", "in_progress"]: 
-            keep_retrieving_run = client.beta.threads.runs.retrieve(
-                thread_id=self.thread_id,
-                run_id=self.run_id
-            )
-            print(f"\nSTATUS: {keep_retrieving_run.status}")
-
-        
-
-    @override
-    def on_tool_call_done(self, tool_call: ToolCall) -> None:       
-        keep_retrieving_run = client.beta.threads.runs.retrieve(
-            thread_id=self.thread_id,
-            run_id=self.run_id
-        )
-
-        print(f"\nDONE STATUS: {keep_retrieving_run.status}")
-
-        if keep_retrieving_run.status == "completed":
-            all_messages = client.beta.threads.messages.list(
-                thread_id=self.thread_id
-            )
-
-            print(all_messages.data[0].content[0].text.value, "", "")
-            return
-
-        elif keep_retrieving_run.status == "requires_action":
-            print("here you would call your function")
-            print(f'self.tool_calls: {self.tool_calls}')
-
-        else:
-            print(f"\nassistant on_tool_call_done > {tool_call}\n", end="", flush=True)
-
-    @override
-    def on_run_step_created(self, run_step: RunStep) -> None:
-        print(f"on_run_step_created")
-        self.run_id = run_step.run_id
-        self.run_step = run_step
-        print("The type of run_step run step is ", type(run_step), flush=True)
-        print(f"\n run step created assistant > {run_step}\n", flush=True)
-
-    @override
-    def on_run_step_done(self, run_step: RunStep) -> None:
-        print(f"\n run step done assistant > {run_step}\n", flush=True)
-
-    def on_tool_call_delta(self, delta, snapshot): 
-        if delta.type == 'function':
-            print(delta.function.arguments, end="", flush=True)
-            self.arguments += delta.function.arguments
-        elif delta.type == 'code_interpreter':
-            print(f"on_tool_call_delta > code_interpreter")
-            if delta.code_interpreter.input:
-                print(delta.code_interpreter.input, end="", flush=True)
-            if delta.code_interpreter.outputs:
-                print(f"\n\noutput >", flush=True)
-                for output in delta.code_interpreter.outputs:
-                    if output.type == "logs":
-                        print(f"\n{output.logs}", flush=True)
-        else:
-            print("ELSE")
-            print(delta, end="", flush=True)
-
-    @override
-    def on_event(self, event: AssistantStreamEvent) -> None:
-        if event.event == "thread.run.requires_action":
-            print("\nthread.run.requires_action > submit tool call")
-            print(f"ARGS: {self.arguments}")

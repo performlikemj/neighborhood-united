@@ -1,3 +1,4 @@
+# custom_auth/serializers.py
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import Address, CustomUser, UserRole
@@ -15,7 +16,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = get_user_model()
-        fields = ['id', 'username', 'email', 'password', 'phone_number', 'dietary_preference', 'custom_dietary_preference', 'allergies', 'custom_allergies', 'week_shift', 'email_confirmed', 'preferred_language', 'timezone']
+        fields = ['id', 'username', 'email', 'email_daily_instructions', 'email_meal_plan_saved', 'email_instruction_generation', 'password', 'phone_number', 'dietary_preference', 'custom_dietary_preference', 'allergies', 'custom_allergies', 'week_shift', 'email_confirmed', 'preferred_language', 'timezone']
         extra_kwargs = {
             'password': {'write_only': True},
             'username': {},
@@ -53,7 +54,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         for attr, value in validated_data.items():
-            if attr in ['username', 'email', 'phone_number', 'dietary_preference', 'custom_dietary_preference', 'allergies', 'custom_allergies', 'password', 'preferred_language', 'timezone']:
+            if attr in ['username', 'email', 'email_daily_instructions', 'email_meal_plan_saved', 'email_instruction_generation', 'phone_number', 'dietary_preference', 'custom_dietary_preference', 'allergies', 'custom_allergies', 'password', 'preferred_language', 'timezone']:
                 if attr == 'password':
                     instance.set_password(value)
                 else:

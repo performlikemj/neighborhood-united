@@ -18,8 +18,12 @@ app.autodiscover_tasks(lambda: settings.INSTALLED_APPS)
 
 
 app.conf.beat_schedule = {
+    'send-daily-meal-instructions-hourly': {
+        'task': 'meals.tasks.send_daily_meal_instructions',
+        'schedule': crontab(minute=0),  # Runs every hour
+    },
     'update-embeddings-daily': {
         'task': 'meals.tasks.update_embeddings',
-        'schedule': crontab(hour=0, minute=0),  # Adjust to your needs
+        'schedule': crontab(hour=0, minute=0),  # Runs every day at midnight
     },
 }

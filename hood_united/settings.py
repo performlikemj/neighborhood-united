@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     'stripe',
     'storages',
     'pgvector',
+    'crew',
 ]
 
 MIDDLEWARE = [
@@ -252,30 +253,37 @@ LOGGING = {
     },
     'handlers': {
         'console': {
-            'level': 'WARNING',  # Adjusted level
+            'level': 'INFO',  # Set to INFO for more concise output
             'class': 'logging.StreamHandler',
             'formatter': 'verbose',
         },
         'file': {
-            'level': 'WARNING',  # Adjusted level
+            'level': 'DEBUG',  # Keep DEBUG level for detailed output in file
             'class': 'logging.FileHandler',
-            'filename': os.path.join(BASE_DIR, 'django_warnings.log'),  # Updated filename
+            'filename': os.path.join(BASE_DIR, 'django_debug.log'),
             'formatter': 'verbose',
         },
     },
     'loggers': {
         'django': {
             'handlers': ['console', 'file'],
-            'level': 'WARNING',  # Adjusted level
+            'level': 'INFO',  # Set to INFO to reduce verbosity in console
             'propagate': True,
         },
-        'customer_dashboard': {  
+        'customer_dashboard': {
             'handlers': ['console', 'file'],
-            'level': 'WARNING',  # Adjusted level
+            'level': 'INFO',  # Set to INFO to reduce verbosity in console
+            'propagate': True,
+        },
+        'meals': {
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG',  # Keep DEBUG level for detailed output in file
             'propagate': True,
         },
     },
 }
+
+
 if DEBUG == False:
 # Cookie settings
     SESSION_COOKIE_SECURE = True

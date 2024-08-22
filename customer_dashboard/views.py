@@ -2,8 +2,8 @@ from uuid import uuid4
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
-from meals.tasks import process_user_message
 from meals.models import Order, Dish, Meal, Cart, MealPlanMeal, MealPlan, Meal
+from meals.tasks import generate_user_summary
 from custom_auth.models import CustomUser, UserRole
 from django.contrib.auth.decorators import user_passes_test
 from django.utils import timezone
@@ -32,7 +32,8 @@ from shared.utils import (get_user_info, post_review, update_review, delete_revi
                           update_health_metrics, check_allergy_alert, provide_nutrition_advice, 
                           recommend_follow_up, find_nearby_supermarkets,
                           search_healthy_meal_options, provide_healthy_meal_suggestions, 
-                          understand_dietary_choices, is_question_relevant, create_meal, generate_summary_title)
+                          understand_dietary_choices, is_question_relevant, create_meal, generate_summary_title, 
+                          analyze_nutritional_content, replace_meal_based_on_preferences)
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
 from .serializers import ChatThreadSerializer, GoalTrackingSerializer, UserHealthMetricsSerializer, CalorieIntakeSerializer
@@ -57,6 +58,39 @@ logger = logging.getLogger(__name__)
 # Use logger as needed
 # example: logger.warning("This is a warning message")
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsCustomer])
+def api_recommend_follow_up(request):
+    user_id = request.user.id
+    user = get_object_or_404(CustomUser, id=user_id)
+
+    # Step 1: Retrieve the most recent active chat thread for the user
+    try:
+        print(f'Recommend follow-up for user: {user}')
+        chat_thread = ChatThread.objects.filter(user=user, is_active=True).latest('created_at')
+    except ChatThread.DoesNotExist:
+        return Response({'error': 'No active chat thread found.'}, status=404)
+
+    # Step 2: Fetch the chat history using the openai_thread_id
+    try:
+        client = OpenAI(api_key=settings.OPENAI_KEY)
+        messages = client.beta.threads.messages.list(chat_thread.openai_thread_id)
+        chat_history = api_format_chat_history(messages)
+    except Exception as e:
+        return Response({'error': f'Failed to fetch chat history: {str(e)}'}, status=400)
+
+    # Step 3: Generate the context string from the chat history
+    context = '\n'.join([f"{msg['role']}: {msg['content']}" for msg in chat_history])
+
+    # Step 4: Call the recommend_follow_up function to get follow-up prompts
+    try:
+        follow_up_recommendations = recommend_follow_up(request, context)
+    except Exception as e:
+        logger.error(f"Error generating follow-up recommendations: {e}")
+        return Response({'error': f'Failed to generate follow-up recommendations'})
+
+    # Step 5: Return the recommendations in the expected format
+    return Response(follow_up_recommendations)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
@@ -104,65 +138,7 @@ def api_user_summary(request):
         ],
         "recommend_prompt": recommend_prompt
     }
-    print(f'data: {data}')
     return Response(data)
-
-
-
-def generate_user_summary(user_id):
-    user = get_object_or_404(CustomUser, id=user_id)
-
-    # Calculate the date one month ago
-    one_month_ago = timezone.now() - timedelta(days=30)
-
-    # Query the models for records related to the user and within the past month, except for goals
-    goal_tracking = GoalTracking.objects.filter(user=user)
-    user_health_metrics = UserHealthMetrics.objects.filter(user=user, date_recorded__gte=one_month_ago)
-    calorie_intake = CalorieIntake.objects.filter(user=user, date_recorded__gte=one_month_ago)
-
-    # Format the queried data
-    formatted_data = {
-        "Goal Tracking": [f"Goal: {goal.goal_name}, Description: {goal.goal_description}" for goal in goal_tracking] if goal_tracking else ["No goals found."],
-        "User Health Metrics": [
-            f"Date: {metric.date_recorded}, Weight: {metric.weight} kg ({float(metric.weight) * 2.20462} lbs), BMI: {metric.bmi}, Mood: {metric.mood}, Energy Level: {metric.energy_level}" 
-            for metric in user_health_metrics
-        ] if user_health_metrics else ["No health metrics found."],
-        "Calorie Intake": [f"Meal: {intake.meal_name}, Description: {intake.meal_description}, Portion Size: {intake.portion_size}, Date: {intake.date_recorded}" for intake in calorie_intake] if calorie_intake else ["No calorie intake data found."],
-    }
-    
-    # Define the message for no data
-    message = "No data found for the past month."
-
-    # Initialize OpenAI client
-    client = OpenAI(api_key=settings.OPENAI_KEY)
-    
-    # Define the language prompt based on user's preferred language
-    language_prompt = {
-        'en': 'English',
-        'ja': 'Japanese',
-        'es': 'Spanish',
-        'fr': 'French',
-    }
-    preferred_language = language_prompt.get(user.preferred_language, 'English')
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", 
-                 "content": f"Generate a detailed summary based on the following data that gives the user a high-level view of their goals, health data, and how their caloric intake relates to those goals. Start the response off with a friendly welcoming tone. Respond in {preferred_language}. If there is no data, please respond with the following message: {message}\n\n{formatted_data}"
-                 },
-            ],
-        )
-        summary_text = response.choices[0].message.content
-    except Exception as e:
-        # Handle exceptions or log errors
-        return {"message": f"An error occurred: {str(e)}"}
-
-    UserSummary.objects.update_or_create(user=user, defaults={'summary': summary_text})
-
-    return {"message": "Summary generated successfully."}
-
 
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated, IsCustomer])
@@ -636,6 +612,8 @@ functions = {
     "provide_healthy_meal_suggestions": provide_healthy_meal_suggestions,
     "understand_dietary_choices": understand_dietary_choices,
     "create_meal": create_meal,
+    "analyze_nutritional_content": analyze_nutritional_content,
+    "replace_meal_based_on_preferences": replace_meal_based_on_preferences,
     
 }
 
@@ -767,7 +745,30 @@ def guest_chat_with_gpt(request):
             thread_id = openai_thread.id
 
         if relevant:
-            client.beta.threads.messages.create(thread_id, role='user', content=question)
+            try:
+                client.beta.threads.messages.create(
+                    thread_id=thread_id,
+                    role="user",
+                    content=question
+                )
+            except OpenAIError as e:
+                print(f'Error: {e}')
+                if 'Can\'t add messages to thread' in str(e) and 'while a run' in str(e) and 'is active' in str(e):
+                    # Extract the run ID from the error message
+                    match = re.search(r'run (\w+)', str(e))
+                    if match:
+                        run_id = match.group(1)
+                        # Cancel the active run
+                        client.beta.threads.runs.cancel(run_id, thread_id=thread_id)
+                        # Try to create the message again
+                        client.beta.threads.messages.create(
+                            thread_id=thread_id,
+                            role="user",
+                            content=question
+                        )
+                else:
+                    logger.error(f'Failed to create message: {str(e)}')
+                    return  # Stopping the task if message creation fails
             response_data = {
                 'new_thread_id': thread_id,
                 'recommend_follow_up': False,
@@ -1422,7 +1423,7 @@ def chat_with_gpt(request):
             name="Food Expert",
             instructions=create_openai_prompt(user.id),
             # model="gpt-3.5-turbo-1106",
-            model="gpt-4-1106-preview",
+            model="gpt-4o",
             tools=[ 
                 {"type": "code_interpreter",},
                 {
@@ -1991,6 +1992,118 @@ def chat_with_gpt(request):
                         }
                     }
                 },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "understand_dietary_choices",
+                        "description": "Understand the available dietary choices that all users have access to. Use this to create more precise queries.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {},
+                            "required": []
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "create_meal",
+                        "description": "Create custom meals in the database that will be used as part of meal plans.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "description": "The name of the meal."
+                                },
+                                "dietary_preference": {
+                                    "type": "string",
+                                    "description": "The dietary preference category of the meal.",
+                                    "enum": [
+                                        "Vegan",
+                                        "Vegetarian",
+                                        "Pescatarian",
+                                        "Gluten-Free",
+                                        "Keto",
+                                        "Paleo",
+                                        "Halal",
+                                        "Kosher",
+                                        "Low-Calorie",
+                                        "Low-Sodium",
+                                        "High-Protein",
+                                        "Dairy-Free",
+                                        "Nut-Free",
+                                        "Raw Food",
+                                        "Whole 30",
+                                        "Low-FODMAP",
+                                        "Diabetic-Friendly",
+                                        "Everything"
+                                    ]
+                                },
+                                "description": {
+                                    "type": "string",
+                                    "description": "A brief description of the meal."
+                                }
+                            },
+                            "required": [
+                                "name",
+                                "dietary_preference",
+                                "description"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "replace_meal_based_on_preferences",
+                        "description": "Replace one or more meals in a user's meal plan based on their dietary preferences and restrictions. If no suitable alternative meal is found, a new meal is created.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "meal_plan_id": {
+                                    "type": "integer",
+                                    "description": "The unique identifier of the meal plan."
+                                },
+                                "old_meal_ids": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "integer",
+                                        "description": "A unique identifier for a meal."
+                                    },
+                                    "description": "List of unique identifiers of the meals to be replaced."
+                                },
+                                "days_of_week": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string",
+                                        "description": "The day of the week on which the meal is scheduled, e.g., 'Monday', 'Tuesday', etc."
+                                    },
+                                    "description": "List of days of the week corresponding to each meal ID."
+                                },
+                                "meal_types": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string",
+                                        "description": "The type of the meals, e.g., 'Breakfast', 'Lunch', 'Dinner'.",
+                                        "enum": [
+                                            "Breakfast",
+                                            "Lunch",
+                                            "Dinner"
+                                        ]
+                                    },
+                                    "description": "List of meal types corresponding to each meal ID."
+                                }
+                            },
+                            "required": [
+                                "meal_plan_id",
+                                "old_meal_ids",
+                                "days_of_week",
+                                "meal_types"
+                            ]
+                        }
+                    }
+                },                        
             ],
         )        
         assistant_id = assistant.id
@@ -2053,13 +2166,37 @@ def chat_with_gpt(request):
         formatted_outputs = []
 
         if relevant:
-            client.beta.threads.messages.create(thread_id, role='user', content=question)
+            try:
+                client.beta.threads.messages.create(
+                    thread_id=thread_id,
+                    role="user",
+                    content=question,
+                )
+            except OpenAIError as e:
+                print(f'Error: {e}')
+                if 'Can\'t add messages to thread' in str(e) and 'while a run' in str(e) and 'is active' in str(e):
+                    # Extract the run ID from the error message
+                    match = re.search(r'run (\w+)', str(e))
+                    if match:
+                        run_id = match.group(1)
+                        # Cancel the active run
+                        client.beta.threads.runs.cancel(run_id, thread_id=thread_id)
+                        # Try to create the message again
+                        client.beta.threads.messages.create(
+                            thread_id=thread_id,
+                            role="user",
+                            content=question
+                        )
+                else:
+                    logger.error(f'Failed to create message: {str(e)}')
+                    user_message.response = f"Sorry, I was unable to send your message. Please try again."
+                    user_message.save()
+                    return  # Stopping the task if message creation fails
             response_data = {
                 'new_thread_id': thread_id,
                 'recommend_follow_up': False,
             }
-            return Response(response_data)
-            process_user_message(request, user_message.id, assistant_id)    
+            return Response(response_data)  
         else:
             response_data = {
                 'last_assistant_message': "I'm sorry, I cannot help with that.",
@@ -2067,26 +2204,13 @@ def chat_with_gpt(request):
                 'recommend_follow_up': False,
             }
             return Response(response_data)
-        messages = client.beta.threads.messages.list(thread_id)
-        context = []
-        for message in reversed(messages.data):
-            role = message.role.capitalize()
-            text = message.content[0].text.value
-            context.append(f"{role}: {text}")            
-
-        formatted_context = "\n".join(context)
-        response_data = {
-            'new_thread_id': thread_id,
-            'recommend_follow_up': recommend_follow_up(request, formatted_context),
-            'message_id': user_message.id,
-        }
-        return Response(response_data)
         #TODO: Tie this function with the shared task, and with a listener that checks whether the message.response is ready
     
-
     except Exception as e:
         # Return error message wrapped in Response
-        logger.error(f'Error: {str(e)}')
+        tb = traceback.format_exc()
+        # Log the detailed error message
+        logger.error(f'Error: {str(e)}\nTraceback: {tb}')
         return Response({'error': str(e)}, status=500)
 
 
@@ -2136,28 +2260,58 @@ def guest_ai_tool_call(request):
 
 @api_view(['POST'])
 def ai_tool_call(request):
-    user_id = request.data.get('user_id')
-    user = CustomUser.objects.get(id=user_id)
-    tool_call = request.data.get('tool_call')
-    print(f"Tool call: {tool_call}")
-    name = tool_call['function']
-    arguments = json.loads(tool_call['arguments'])  # Get arguments from tool_call
-    if arguments is None:  # Check if arguments is None
-        arguments = {}  # Assign an empty dictionary to arguments
-    # Ensure that 'request' is included in the arguments if needed
-    arguments['request'] = request
-    return_value = functions[name](**arguments)
-    tool_outputs = {
-        "tool_call_id": tool_call['id'],
-        "output": return_value,
-    }
+    try:
+        user_id = request.data.get('user_id')
+        user = CustomUser.objects.get(id=user_id)
+        tool_call = request.data.get('tool_call')
+        logger.info(f"Tool call received: {tool_call}")
+        
+        name = tool_call['function']
+        logger.info(f"Function to call: {name}")
 
-    # Create a new ToolCall instance
-    tool_call_instance = ToolCall.objects.create(
-        user=user,
-        function_name=name,
-        arguments=tool_call['arguments'],
-        response=tool_outputs['output']
-    )
+        try:
+            arguments = json.loads(tool_call['arguments'])  # Get arguments from tool_call
+            logger.info(f"Parsed arguments: {arguments}")
+        except json.JSONDecodeError as json_err:
+            logger.error(f"JSON decode error: {json_err} - Raw arguments: {tool_call['arguments']}")
+            return Response({'status': 'error', 'message': f"JSON decode error: {json_err}"})
 
-    return Response(tool_outputs)
+        if arguments is None:  # Check if arguments is None
+            arguments = {}  # Assign an empty dictionary to arguments
+        
+        # Ensure that 'request' is included in the arguments if needed
+        arguments['request'] = request
+
+        try:
+            # This inner try block specifically catches TypeError that may occur 
+            # when calling the function with incorrect arguments
+            return_value = functions[name](**arguments)
+            logger.info(f"Function {name} executed successfully with return value: {return_value}")
+        except TypeError as e:
+            # Handle unexpected arguments or missing arguments
+            logger.error(f'Function call error: {str(e)} - Function: {name}, Arguments: {arguments}')
+            return Response({'status': 'error', 'message': f"Function call error: {str(e)}"})
+        except Exception as e:
+            # Catch other unexpected errors
+            logger.error(f'Tool Call Error: {str(e)} - Function: {name}, Arguments: {arguments}')
+            return Response({'status': 'error', 'message': f"An unexpected error occurred: {str(e)}"})
+        
+        tool_outputs = {
+            "tool_call_id": tool_call['id'],
+            "output": return_value,
+        }
+
+        # Create a new ToolCall instance
+        tool_call_instance = ToolCall.objects.create(
+            user=user,
+            function_name=name,
+            arguments=tool_call['arguments'],
+            response=tool_outputs['output']
+        )
+        logger.info(f"Tool call logged successfully: {tool_call_instance.id}")
+
+        return Response(tool_outputs)
+    except Exception as e:
+        # Handle errors that occur outside the function call
+        logger.error(f'Error: {str(e)} - Tool call: {tool_call}')
+        return Response({'status': 'error', 'message': f"An unexpected error occurred: {str(e)}"})

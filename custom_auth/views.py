@@ -106,7 +106,25 @@ def password_reset_request(request):
         reset_link = f"{os.getenv('STREAMLIT_URL')}/account?uid={uid}&token={token}&action=password_reset"
 
         mail_subject = "Password Reset Request"
-        message = f"Hi {user.username},\n\nPlease click on the link below to reset your password:\n{reset_link}\n\nIf you did not request an email change, please ignore this email."
+        message = f"""
+        <html>
+        <body>
+            <div style="text-align: center;">
+                <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+            </div>
+            <h2 style="color: #333;">Password Reset Request</h2>
+            <p>Hi {user.username},</p>
+            <p>We received a request to reset your password. Please click the button below to proceed:</p>
+            <div style="text-align: center; margin: 20px 0;">
+                <a href="{reset_link}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Reset Your Password</a>
+            </div>
+            <p>If the button above doesn't work, you can copy and paste the following link into your web browser:</p>
+            <p><a href="{reset_link}" style="color: #4CAF50;">{reset_link}</a></p>
+            <p>If you did not request a password reset, please ignore this email or contact us at <a href="mailto:support@sautai.com">support@sautai.com</a>.</p>
+            <p>Thanks,<br>The SautAI Support Team</p>
+        </body>
+        </html>
+        """
 
         # Send data to Zapier
         zapier_webhook_url = os.getenv('ZAP_PW_RESET_URL')
@@ -114,7 +132,7 @@ def password_reset_request(request):
             'subject': mail_subject,
             'message': message,
             'to': email,
-            'from': 'support@sautai.com'
+            'from': 'support@sautai.com',
         }
         try:
             requests.post(zapier_webhook_url, json=email_data)
@@ -164,7 +182,12 @@ def user_details_view(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def address_details_view(request):
-    serializer = AddressSerializer(request.user.address)
+    try:
+        address = request.user.address
+    except Address.DoesNotExist:
+        return Response({"detail": "Address not found for this user."})
+    
+    serializer = AddressSerializer(address)
     return Response(serializer.data)
 
 @api_view(['GET'])
@@ -196,13 +219,34 @@ def update_profile_api(request):
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = account_activation_token.make_token(user)
             activation_link = f"{os.getenv('STREAMLIT_URL')}/account?uid={uid}&token={token}"
+            # HTML email content
+            email_content = f"""
+            <html>
+            <body>
+                <div style="text-align: center;">
+                    <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+                </div>
+                <h2 style="color: #333;">Email Verification Required, {user.username}</h2>
+                <p>We noticed that you've updated your email address. To continue accessing your account, please verify your new email address by clicking the button below:</p>
+                <div style="text-align: center; margin: 20px 0;">
+                    <a href="{activation_link}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Verify Your Email</a>
+                </div>
+                <p>If the button above doesn't work, you can copy and paste the following link into your web browser:</p>
+                <p><a href="{activation_link}" style="color: #4CAF50;">{activation_link}</a></p>
+                <p>If you did not request this change, please contact our support team at <a href="mailto:support@sautai.com">support@sautai.com</a> immediately.</p>
+                <p>Thanks,<br>The SautAI Support Team</p>
+            </body>
+            </html>
+            """
+
             zapier_data = {
                 'recipient_email': user_serializer.validated_data.get('email'),
                 'subject': 'Verify your email to resume access.',
+                'message': email_content,
                 'username': user.username,
                 'activation_link': activation_link,
+                'html': True  # Indicate that the message is in HTML format
             }
-
             # Send data to Zapier
             requests.post(os.getenv("ZAP_UPDATE_PROFILE_URL"), json=zapier_data)
 
@@ -227,6 +271,15 @@ def update_profile_api(request):
 
         if 'preferred_language' in user_serializer.validated_data:
             user.preferred_language = user_serializer.validated_data['preferred_language']
+
+        if 'email_daily_instructions' in user_serializer.validated_data:
+            user.email_daily_instructions = user_serializer.validated_data['email_daily_instructions']
+        
+        if 'email_meal_plan_saved' in user_serializer.validated_data:
+            user.email_meal_plan_saved = user_serializer.validated_data['email_meal_plan_saved']
+        
+        if 'email_instruction_generation' in user_serializer.validated_data:
+            user.email_instruction_generation = user_serializer.validated_data['email_instruction_generation']
 
         user_serializer.save()
 
@@ -337,7 +390,6 @@ def logout_api_view(request):
 @api_view(['POST'])
 def register_api_view(request):
     user_data = request.data.get('user')
-    print(f"User data: {user_data}")  # Debug print
     if not user_data:
         return Response({'errors': 'User data is required'}, status=400)
 
@@ -348,64 +400,86 @@ def register_api_view(request):
         return Response({'errors': user_serializer.errors}, status=400)
 
     print(f"Validated data: {user_serializer.validated_data}")  # Debug print
+    try:
+        with transaction.atomic():
+            user = user_serializer.save()
+            UserRole.objects.create(user=user, current_role='customer')
 
-    with transaction.atomic():
-        user = user_serializer.save()
-        UserRole.objects.create(user=user, current_role='customer')
+            address_data = request.data.get('address')
+            # Check if any significant address data is provided
+            if address_data and any(value.strip() for value in address_data.values()):
+                address_data['user'] = user.id
+                address_serializer = AddressSerializer(data=address_data)
+                if not address_serializer.is_valid():
+                    return Response({'errors': address_serializer.errors}, status=400)
+                address_serializer.save()
 
-        address_data = request.data.get('address')
-        # Check if any significant address data is provided
-        if address_data and any(value.strip() for value in address_data.values()):
-            address_data['user'] = user.id
-            address_serializer = AddressSerializer(data=address_data)
-            if not address_serializer.is_valid():
-                return Response({'errors': address_serializer.errors}, status=400)
-            address_serializer.save()
-
-        # Handle goal data
-        goal_data = request.data.get('goal')
-        if goal_data:
-            GoalTracking.objects.create(
-                user=user,
-                goal_name=goal_data.get('goal_name', ''),
-                goal_description=goal_data.get('goal_description', '')
-            )
+            # Handle goal data
+            goal_data = request.data.get('goal')
+            if goal_data:
+                GoalTracking.objects.create(
+                    user=user,
+                    goal_name=goal_data.get('goal_name', ''),
+                    goal_description=goal_data.get('goal_description', '')
+                )
 
 
-        # Prepare and send activation email
-        mail_subject = 'Activate your account.'
-        uid = urlsafe_base64_encode(force_bytes(user.pk))
-        token = account_activation_token.make_token(user)
-        activation_link = f"{os.getenv('STREAMLIT_URL')}/account?uid={uid}&token={token}&action=activate"        
-        message = f"Hi {user.username},\n\nThank you for signing up for our website!\n\n" \
-                f"Please click the link below to activate your account:\n\n{activation_link}\n\n" \
-                "If you have any issues, please contact us at support@sautAI.com.\n\n" \
-                "Thanks,\nYour SautAI Support Team"
+            # Prepare and send activation email
+            mail_subject = 'Activate your account.'
+            uid = urlsafe_base64_encode(force_bytes(user.pk))
+            token = account_activation_token.make_token(user)
+            activation_link = f"{os.getenv('STREAMLIT_URL')}/account?uid={uid}&token={token}&action=activate"        
+            message = f"""
+            <html>
+            <body>
+                <div style="text-align: center;">
+                    <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+                </div>
+                <h2 style="color: #333;">Welcome to SautAI, {user.username}!</h2>
+                <p>Thank you for signing up! We’re excited to have you on board.</p>
+                <p>To get started, please confirm your email address by clicking the button below:</p>
+                <div style="text-align: center; margin: 20px 0;">
+                    <a href="{activation_link}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Activate Your Account</a>
+                </div>
+                <p>If the button above doesn't work, you can copy and paste the following link into your web browser:</p>
+                <p><a href="{activation_link}" style="color: #4CAF50;">{activation_link}</a></p>
+                <p>If you have any issues, feel free to reach out to us at <a href="mailto:support@sautAI.com">support@sautAI.com</a>.</p>
+                <p>Thanks,<br>The SautAI Support Team</p>
+            </body>
+            </html>
+            """
 
-        to_email = user_serializer.validated_data.get('email')
-        email_data = {
-            'subject': mail_subject,
-            'message': message,
-            'to': to_email,
-            'from': 'mj@sautai.com',
-            'username': user.username,
-            'activation_link': activation_link,
-        }
-        try:
-            requests.post(os.getenv('ZAP_REGISTER_URL'), json=email_data)
-            logger.info(f"Activation email data sent to Zapier for: {to_email}")
-        except Exception as e:
-            logger.error(f"Error sending activation email data to Zapier for: {to_email}, error: {str(e)}")
+            to_email = user_serializer.validated_data.get('email')
+            email_data = {
+                'subject': mail_subject,
+                'message': message,
+                'to': to_email,
+                'from': 'mj@sautai.com',
+                'username': user.username,
+                'activation_link': activation_link,
+                'html': True  # Indicate that the message is in HTML format
+            }
+            try:
+                requests.post(os.getenv('ZAP_REGISTER_URL'), json=email_data)
+                logger.info(f"Activation email data sent to Zapier for: {to_email}")
+            except Exception as e:
+                logger.error(f"Error sending activation email data to Zapier for: {to_email}, error: {str(e)}")
 
-    # After successful registration
-    refresh = RefreshToken.for_user(user)  # Assuming you have RefreshToken defined or imported
-    return Response({
-        'refresh': str(refresh),
-        'access': str(refresh.access_token),
-        'status': 'User registered',
-        'navigate_to': 'Assistant'
-    })
-
+        # After successful registration
+        refresh = RefreshToken.for_user(user)  # Assuming you have RefreshToken defined or imported
+        return Response({
+            'refresh': str(refresh),
+            'access': str(refresh.access_token),
+            'status': 'User registered',
+            'navigate_to': 'Assistant'
+        })
+    except IntegrityError as e:
+        logger.error(f"Integrity Error during user registration: {str(e)}")
+        return Response({'errors': 'Error occurred while registering. Support team has been notified.'}, status=400)
+    except Exception as e:
+        logger.error(f"Exception Error during user registration: {str(e)}")
+        return Response({'errors': str(e)}, status=500)
+    
 @api_view(['POST'])
 def activate_account_api_view(request):
     uidb64 = request.data.get('uid')

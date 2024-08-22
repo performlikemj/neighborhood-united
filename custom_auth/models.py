@@ -89,7 +89,10 @@ class CustomUser(AbstractUser):
     )
     custom_allergies = models.CharField(max_length=200, blank=True, null=True)
     timezone = models.CharField(max_length=100, default='UTC')
-
+    # Email preferences fields
+    email_daily_instructions = models.BooleanField(default=True)
+    email_meal_plan_saved = models.BooleanField(default=True)
+    email_instruction_generation = models.BooleanField(default=True)
 
     def save(self, *args, **kwargs):
         self.username = self.username.lower()

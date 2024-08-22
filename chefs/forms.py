@@ -1,3 +1,4 @@
+# chefs/forms.py
 from django import forms
 from .models import Chef
 from meals.models import Meal, Dish
@@ -11,7 +12,6 @@ class MealForm(forms.ModelForm):
             'dishes': forms.CheckboxSelectMultiple,
             'price': forms.NumberInput(attrs={'class':'form-control', 'placeholder':'Enter a price'}),
         }
-
         
 class ChefProfileForm(forms.ModelForm):
     class Meta:

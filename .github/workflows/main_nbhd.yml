@@ -61,6 +61,9 @@ jobs:
       - name: Unzip artifact for deployment
         run: unzip release.zip
 
+      - name: Wait for SCM container to stabilize
+        run: sleep 30  # Adjust the sleep duration as necessary
+        
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -74,4 +77,4 @@ jobs:
         with:
           app-name: 'nbhd'
           slot-name: 'Production'
-          enable-verbose-logging: true
+

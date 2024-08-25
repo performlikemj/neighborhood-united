@@ -18,9 +18,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python version
-        uses: actions/setup-python@v1
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.10'
 
       - name: Create and start virtual environment
         run: |
@@ -36,7 +36,7 @@ jobs:
         run: zip release.zip ./* -r
 
       - name: Upload artifact for deployment jobs
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: python-app
           path: |
@@ -54,7 +54,7 @@ jobs:
 
     steps:
       - name: Download artifact from build job
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: python-app
 
@@ -63,14 +63,14 @@ jobs:
 
       
       - name: Login to Azure
-        uses: azure/login@v1
+        uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_B158C09D181D45DD8947AAA7256FE75B }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_E17F9B95342D4726BE6FED6E6217962E }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F04C2D78967740068F44A275D15A9DDF }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_35DCB20331464D82B4FE00D7D25541F6 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_A7E8D0BB1E034FB7B64E63B5E33ADF05 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_93943A519B91469D986AF42E7AA49915 }}
 
       - name: 'Deploy to Azure Web App'
-        uses: azure/webapps-deploy@v2
+        uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
         with:
           app-name: 'nbhd'

@@ -94,32 +94,69 @@ def api_recommend_follow_up(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
+def api_user_summary_status(request):
+    if not request.user.is_authenticated:
+        return Response({"status": "error", "message": "User is not authenticated"}, status=401)
+    
+    user_id = request.user.id
+    user_summary = UserSummary.objects.filter(user_id=user_id).first()
+    print(f'User Summary: {user_summary}')
+    
+
+    # Check if the summary doesn't exist or contains "No summary available"
+    if not user_summary or user_summary.summary.strip() == "No summary available":
+        print(f"Generating user summary for user {user_id}")
+        if not user_summary:
+            user_summary = UserSummary.objects.create(user_id=user_id, status='pending')
+        else:
+            # If summary exists but is "No summary available," update the status to pending
+            user_summary.status = 'pending'
+            user_summary.save()
+
+        generate_user_summary.delay(user_id)
+        return Response({"status": "pending", "message": "Summary generation started."}, status=202)
+
+    # Add debug logging to inspect the content of user_summary.summary
+    if user_summary:
+        user_summary.status = 'completed'
+        user_summary.save()
+
+    if user_summary.status == 'pending':
+        return Response({"status": "pending", "message": "Summary is still being generated."}, status=202)
+    elif user_summary.status == 'completed':
+        return Response({"status": "completed"})
+    else:
+        return Response({"status": "error", "message": "An error occurred during summary generation."}, status=500)
+
+
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsCustomer])
 def api_user_summary(request):
-    user_id = request.user.id  # Use request.user.id to get the authenticated user's ID
+    user_id = request.user.id
     user = get_object_or_404(CustomUser, id=user_id)
 
+    # Fetch or create the user summary
+    user_summary_obj, created = UserSummary.objects.get_or_create(user=user)
 
-    # Check if the user has an existing summary
-    try:
-        user_summary_obj = UserSummary.objects.get(user=user)
+    if user_summary_obj.status == 'completed':
         user_summary = user_summary_obj.summary
-    except UserSummary.DoesNotExist:
-        user_summary = "No summary available."
+    elif user_summary_obj.status == 'pending':
+        return Response({"status": "pending", "message": "Summary is still being generated."}, status=202)
+    else:
+        # If status is not 'completed', trigger the generation task
+        generate_user_summary.delay(user_id)
+        return Response({"status": "pending", "message": "Summary generation started."}, status=202)
 
     # Provide a fallback template if the user has no summary data
     if user_summary.strip() == "No summary available.":
-        fallback_template = "Create a meal plan for the week including breakfast, lunch, and dinner for a {person/family of 3, etc.}, {that want to lower their sugar intake/that want to eat healthy while saving money}. {The meals should also take into account that one of us fasts breakfast and starts eating at 11am}."
+        fallback_template = f"Create a meal plan for the week including breakfast, lunch, and dinner for a person with: {user.allergies} and/or {user.custom_allergies}, {user.dietary_preferences} and/or {user.custom_dietary_preference}, and {user.goals}."
         recommend_prompt = fallback_template
     else:
         # Generate a recommended prompt based on the user's summary and context
         recommend_prompt = recommend_follow_up(request, user_summary)
 
-    # Generate or update the user summary
-    generate_user_summary(user_id)
-    
-    # Fetch the updated summary
-    user_summary = UserSummary.objects.get(user=user)
-    
     data = {
         "data": [
             {
@@ -127,18 +164,19 @@ def api_user_summary(request):
                     {
                         "text": {
                             "annotations": [],
-                            "value": user_summary.summary
+                            "value": user_summary
                         },
                         "type": "text"
                     }
                 ],
-                "created_at": int(user_summary.updated_at.timestamp()),
+                "created_at": int(user_summary_obj.updated_at.timestamp()),
                 "role": "assistant",
             },
         ],
         "recommend_prompt": recommend_prompt
     }
     return Response(data)
+
 
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated, IsCustomer])

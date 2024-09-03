@@ -57,7 +57,6 @@ INSTALLED_APPS = [
     'stripe',
     'storages',
     'pgvector',
-    'crew',
 ]
 
 MIDDLEWARE = [

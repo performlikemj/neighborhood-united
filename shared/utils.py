@@ -3,6 +3,7 @@ from django.shortcuts import render, redirect
 from django.urls import reverse
 from qa_app.models import FoodQA
 from meals.models import Dish, MealType, Meal, MealPlan, MealPlanMeal, Order, OrderMeal, Ingredient
+from django.db import transaction, IntegrityError
 from meals.pydantic_models import MealOutputSchema
 from local_chefs.models import ChefPostalCode, PostalCode
 from django.conf import settings
@@ -815,120 +816,137 @@ def remove_meal_from_plan(request, meal_plan_id, meal_id, day, meal_type):
     return {'status': 'success', 'message': 'Meal removed from the plan.'}
 
 
-def create_meal(request, name, dietary_preference, description, meal_type=None, max_attempts=5, attempt=0):
-    user = CustomUser.objects.get(id=request.data.get('user_id'))
+def create_meal(request=None, user_id=None, name=None, dietary_preference=None, description=None, meal_type=None, max_attempts=5, attempt=0):
+    if request:
+        user = CustomUser.objects.get(id=request.data.get('user_id'))
+    elif user_id:
+        user = CustomUser.objects.get(id=user_id)
+    else:
+        logger.error("Either request or user_id must be provided.")
+        return {'status': 'error', 'message': 'User identification is missing'}
 
-    if name:
-        # Check for existing meals with the same name and created by the same user
-        existing_meal = Meal.objects.filter(
-            creator=user,
-            name=name,
-        ).first()
-        
-        if existing_meal:
-            return {
-                'meal': {
-                    'id': existing_meal.id,
-                    'name': existing_meal.name,
-                    'dietary_preference': existing_meal.dietary_preference,
-                    'description': existing_meal.description,
-                    'created_date': existing_meal.created_date.isoformat(),
-                },
-                'status': 'info',
-                'message': 'A similar meal already exists.'
-            }
-
-    # Generate dynamic name, description, and dietary preference using GPT
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-2024-08-06",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that generates a meal, its description, and dietary preferences based on information about the user."
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Create a meal that meets the user's goals of {user.goal.goal_description}. "
-                        f"It is meant to be served as a {meal_type} meal. "
-                        f"Align it with the user's dietary preferences: {user.dietary_preference} and/or {user.custom_dietary_preference}. "
-                        f"Avoid the following allergens: {user.allergies} and/or {user.custom_allergies}."
-                    )
-                }
-            ],
-            response_format={
-                'type': 'json_schema',
-                'json_schema': 
-                    {
-                        "name":"Meal", 
-                        "schema": MealOutputSchema.model_json_schema()
+        with transaction.atomic():
+            if name:
+                # Check for existing meals with the same name and created by the same user
+                existing_meal = Meal.objects.filter(
+                    creator=user,
+                    name=name,
+                ).first()
+                
+                if existing_meal:
+                    return {
+                        'meal': {
+                            'id': existing_meal.id,
+                            'name': existing_meal.name,
+                            'dietary_preference': existing_meal.dietary_preference,
+                            'description': existing_meal.description,
+                            'created_date': existing_meal.created_date.isoformat(),
+                        },
+                        'status': 'info',
+                        'message': 'A similar meal already exists.'
                     }
+
+            # Generate dynamic name, description, and dietary preference using GPT
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4o-2024-08-06",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "You are a helpful assistant that generates a meal, its description, and dietary preferences based on information about the user."
+                        },
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Create the meal {name}, that meets the user's goals of {user.goal.goal_description}. "
+                                f"It is meant to be served as a {meal_type} meal. "
+                                f"Align it with the user's dietary preferences: {user.dietary_preference} and/or {user.custom_dietary_preference}. "
+                                f"Avoid the following allergens: {user.allergies} and/or {user.custom_allergies}."
+                            )
+                        }
+                    ],
+                    response_format={
+                        'type': 'json_schema',
+                        'json_schema': 
+                            {
+                                "name":"Meal", 
+                                "schema": MealOutputSchema.model_json_schema()
+                            }
+                    }
+                )
+
+                gpt_output = response.choices[0].message.content
+                meal_data = json.loads(gpt_output)
+                name = meal_data.get('meal', {}).get('name', 'Meal Placeholder')
+                description = meal_data.get('meal', {}).get('description', 'A placeholder for you to create a new meal.')
+                dietary_preference = meal_data.get('meal', {}).get('dietary_preference', user.dietary_preference)
+
+                print(f"Created Meal: Name={name}, Dietary Preference={dietary_preference}, Description={description}")
+
+            except Exception as e:
+                logger.error(f"Unexpected error generating meal content: {e}")
+                # Fallback to default values if GPT API fails
+                name = "Fallback Meal Name"
+                description = "Fallback Description"
+                dietary_preference = user.dietary_preference
+
+            meal_embedding = get_embedding(f"{name} {description} {dietary_preference}")
+
+            # Check if a similar meal already exists based on embedding and name
+            similar_meals = Meal.objects.annotate(
+                similarity=CosineDistance(F('meal_embedding'), meal_embedding)  
+            ).filter(similarity__lt=0.03)
+
+            if similar_meals.exists():
+                similar_meal = similar_meals.first()
+                return {
+                    'meal': {
+                        'id': similar_meal.id,
+                        'name': similar_meal.name,
+                        'dietary_preference': similar_meal.dietary_preference,
+                        'description': similar_meal.description,
+                        'created_date': similar_meal.created_date.isoformat(),
+                    },
+                    'status': 'info',
+                    'message': 'A similar meal already exists.'
+                }
+
+            # Validate the dietary preference against the allowed choices
+            allowed_preferences = dict(Meal.DIETARY_CHOICES).keys()
+
+            if dietary_preference not in allowed_preferences:
+                custom_dietary_preference = dietary_preference
+                dietary_preference = None  
+            else:
+                custom_dietary_preference = None
+
+            meal = Meal(
+                name=name,
+                creator=user,
+                dietary_preference=dietary_preference,
+                custom_dietary_preference=custom_dietary_preference,
+                description=description,
+                meal_embedding=meal_embedding,
+            )
+            meal.created_date = timezone.now()
+            meal.save()
+
+            meal_dict = {
+                'id': meal.id,
+                'name': meal.name,
+                'dietary_preference': meal.dietary_preference or meal.custom_dietary_preference,
+                'description': meal.description,
+                'created_date': meal.created_date.isoformat(),
             }
-        )
 
-        gpt_output = response.choices[0].message.content
-        meal_data = json.loads(gpt_output)
-        # Assign values from meal_data
-        name = meal_data.get('meal', {}).get('name', 'Meal Placeholder')
-        description = meal_data.get('meal', {}).get('description', 'A placeholder for you to create a new meal.')
-        dietary_preference = meal_data.get('meal', {}).get('dietary_preference', user.dietary_preference)
-
-
-        print(f"Created Meal: Name={name}, Dietary Preference={dietary_preference}, Description={description}")
+    except IntegrityError as e:
+        logger.error(f"IntegrityError during meal creation: {e}")
+        return create_meal(request, user_id, name=None, dietary_preference=dietary_preference, description=description, meal_type=meal_type, max_attempts=max_attempts, attempt=attempt + 1)
 
     except Exception as e:
-        logger.error(f"Unexpected error generating meal content: {e}")
-        # Fallback to default values if GPT API fails
-        name = "Fallback Meal Name"
-        description = "Fallback Description"
-        dietary_preference = user.dietary_preference
-
-    # Generate embedding for the new meal
-    meal_embedding = get_embedding(f"{name} {description} {dietary_preference}")
-
-    # Check if a similar meal already exists based on embedding and name
-    similar_meals = Meal.objects.annotate(
-        similarity=CosineDistance(F('meal_embedding'), meal_embedding)  # Adjusted for single value
-    ).filter(similarity__lt=0.03) 
-
-    if similar_meals.exists():
-        if attempt < max_attempts:
-            logger.info(f"Similar meal found. Retrying... Attempt {attempt + 1} of {max_attempts}")
-            return create_meal(request, name=None, dietary_preference=user.dietary_preference, description=None, max_attempts=max_attempts, attempt=attempt + 1)
-        else:
-            similar_meal = similar_meals.first()
-            logger.error(f"Max attempts reached. Returning the similar meal.")
-            return {
-                'meal': {
-                    'id': similar_meal.id,
-                    'name': similar_meal.name,
-                    'dietary_preference': similar_meal.dietary_preference,
-                    'description': similar_meal.description,
-                    'created_date': similar_meal.created_date.isoformat(),
-                },
-                'status': 'info',
-                'message': 'A similar meal already exists.'
-            }
-
-    # If no similar meals, proceed to create a new one
-    meal = Meal(
-        name=name,
-        creator=user,
-        dietary_preference=dietary_preference,
-        description=description,
-        meal_embedding=meal_embedding,
-    )
-    meal.created_date = timezone.now()
-    meal.save()
-
-    meal_dict = {
-        'id': meal.id,
-        'name': meal.name,
-        'dietary_preference': meal.dietary_preference,
-        'description': meal.description,
-        'created_date': meal.created_date.isoformat(),
-    }
+        logger.error(f"Unexpected error during meal creation: {e}")
+        return {'status': 'error', 'message': 'An unexpected error occurred during meal creation.'}
 
     return {'meal': meal_dict, 'status': 'success', 'message': 'Meal created successfully', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 

@@ -100,11 +100,11 @@ class CustomUser(AbstractUser):
 
 class Address(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='address')
-    street = models.CharField(max_length=255)
-    city = models.CharField(max_length=255)
-    state = models.CharField(max_length=255)
-    input_postalcode = models.CharField(max_length=10, blank=True, null=True)  # User input postal code
-    country = CountryField()
+    street = models.CharField(max_length=255, blank=True, null=True)
+    city = models.CharField(max_length=255, blank=True, null=True)
+    state = models.CharField(max_length=255, blank=True, null=True)
+    input_postalcode = models.CharField(max_length=10, blank=True, null=True)
+    country = CountryField(blank=True, null=True)
 
     def __str__(self):
         return f'{self.user} - {self.input_postalcode}, {self.country}'
@@ -115,6 +115,10 @@ class Address(models.Model):
         Returns True if served, False otherwise.
         """
         return PostalCode.objects.filter(code=self.input_postalcode).exists()
+
+    def save(self, *args, **kwargs):
+        self.full_clean()  # This ensures that the model is validated before saving
+        super().save(*args, **kwargs)
 
 class UserRole(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)

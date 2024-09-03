@@ -25,6 +25,7 @@ from rest_framework.response import Response
 from django.contrib.sites.shortcuts import get_current_site
 from django.template.loader import render_to_string
 from .serializers import CustomUserSerializer, AddressSerializer, PostalCodeSerializer, UserRoleSerializer
+from rest_framework import serializers
 import requests
 from local_chefs.models import PostalCode
 import os
@@ -41,6 +42,8 @@ import logging
 from django.contrib.auth.hashers import check_password
 from dotenv import load_dotenv
 from django.db import IntegrityError
+from meals.tasks import create_meal_plan_for_new_user, generate_user_summary
+from django.core.mail import send_mail
 
 load_dotenv("dev.env")
 
@@ -394,12 +397,10 @@ def register_api_view(request):
         return Response({'errors': 'User data is required'}, status=400)
 
     user_serializer = CustomUserSerializer(data=user_data)
-    print(f"User serializer initialization: {user_serializer}")  # Debug print
     if not user_serializer.is_valid():
-        print(f"Validation errors: {user_serializer.errors}")  # Additional debug print
-        return Response({'errors': user_serializer.errors}, status=400)
+        logger.error(f"User serializer errors: {user_serializer.errors}")
+        return Response({'errors': f"We've experienced an issue when updating your user information: {user_serializer.errors}"}, status=400)
 
-    print(f"Validated data: {user_serializer.validated_data}")  # Debug print
     try:
         with transaction.atomic():
             user = user_serializer.save()
@@ -411,7 +412,8 @@ def register_api_view(request):
                 address_data['user'] = user.id
                 address_serializer = AddressSerializer(data=address_data)
                 if not address_serializer.is_valid():
-                    return Response({'errors': address_serializer.errors}, status=400)
+                    logger.error(f"Address serializer errors: {address_serializer.errors}")
+                    raise serializers.ValidationError(f"We've experienced an issue when updating your address information: {address_serializer.errors}")
                 address_serializer.save()
 
             # Handle goal data
@@ -454,17 +456,18 @@ def register_api_view(request):
                 'subject': mail_subject,
                 'message': message,
                 'to': to_email,
-                'from': 'mj@sautai.com',
+                'from': 'support@sautai.com',
                 'username': user.username,
                 'activation_link': activation_link,
                 'html': True  # Indicate that the message is in HTML format
             }
             try:
-                requests.post(os.getenv('ZAP_REGISTER_URL'), json=email_data)
+                # requests.post(os.getenv('ZAP_REGISTER_URL'), json=email_data)
                 logger.info(f"Activation email data sent to Zapier for: {to_email}")
+                print(f"Email data: {email_data}")
             except Exception as e:
                 logger.error(f"Error sending activation email data to Zapier for: {to_email}, error: {str(e)}")
-
+                raise 
         # After successful registration
         refresh = RefreshToken.for_user(user)  # Assuming you have RefreshToken defined or imported
         return Response({
@@ -473,6 +476,9 @@ def register_api_view(request):
             'status': 'User registered',
             'navigate_to': 'Assistant'
         })
+    except serializers.ValidationError as ve:
+        logger.error(f"Validation Error during user registration: {str(ve)}")
+        return Response({'errors': ve.detail}, status=400)
     except IntegrityError as e:
         logger.error(f"Integrity Error during user registration: {str(e)}")
         return Response({'errors': 'Error occurred while registering. Support team has been notified.'}, status=400)
@@ -487,16 +493,84 @@ def activate_account_api_view(request):
     try:
         uid = force_str(urlsafe_base64_decode(uidb64))
         user = get_user_model().objects.get(pk=uid)
+        
         if user and account_activation_token.check_token(user, token):
             user.email_confirmed = True
             user.initial_email_confirmed = True
             user.save()
+            
+            # Trigger the Celery tasks to create the meal plan and generate the user summary
+            transaction.on_commit(lambda: create_meal_plan_for_new_user.delay(user.id))
+            transaction.on_commit(lambda: generate_user_summary.delay(user.id))
+            
             return Response({'status': 'success', 'message': 'Account activated successfully.'})
         else:
             return Response({'status': 'failure', 'message': 'Activation link is invalid.'})
     except Exception as e:
         return Response({'status': 'error', 'message': str(e)})
 
+@api_view(['POST'])
+def resend_activation_link(request):
+    try:
+        print(f"Request data: {request.data}")
+        user_id = request.data.get('user_id')
+        
+        if not user_id:
+            return Response({'status': 'error', 'message': 'User ID is required.'}, status=400)
+        
+        user = CustomUser.objects.get(pk=user_id)
+        
+        if user.email_confirmed:
+            return Response({'status': 'error', 'message': 'This email is already verified.'}, status=400)
+        
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = account_activation_token.make_token(user)
+        activation_link = f"{os.getenv('STREAMLIT_URL')}/account?uid={uid}&token={token}&action=activate"
+        
+        mail_subject = 'Resend Activation Link'
+        message = f"""
+        <html>
+        <body>
+            <div style="text-align: center;">
+                <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+            </div>
+            <h2 style="color: #333;">Welcome back to SautAI, {user.username}!</h2>
+            <p>You requested a new activation link. Please confirm your email address by clicking the button below:</p>
+            <div style="text-align: center; margin: 20px 0;">
+                <a href="{activation_link}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Activate Your Account</a>
+            </div>
+            <p>If the button above doesn't work, you can copy and paste the following link into your web browser:</p>
+            <p><a href="{activation_link}" style="color: #4CAF50;">{activation_link}</a></p>
+            <p>If you have any issues, feel free to reach out to us at <a href="mailto:support@sautAI.com">support@sautAI.com</a>.</p>
+            <p>Thanks,<br>The SautAI Support Team</p>
+        </body>
+        </html>
+        """
+        
+        to_email = user.email
+        email_data = {
+            'subject': mail_subject,
+            'message': message,
+            'to': to_email,
+            'from': 'support@sautai.com',
+            'username': user.username,
+            'activation_link': activation_link,
+            'html': True  # Indicate that the message is in HTML format
+        }
+        try:
+            requests.post(os.getenv('ZAP_RESEND_URL'), json=email_data)
+            logger.info(f"Activation email data sent to Zapier for: {to_email}")
+        except Exception as e:
+            logger.error(f"Error sending activation email data to Zapier for: {to_email}, error: {str(e)}")
+        
+        return Response({'status': 'success', 'message': 'A new activation link has been sent to your email.'})
+    
+    except CustomUser.DoesNotExist:
+        return Response({'status': 'error', 'message': 'User not found.'}, status=400)
+    except Exception as e:
+        return Response({'status': 'error', 'message': str(e)}, status=500)
+
+    
 def email_confirmed_required(function):
     def wrap(request, *args, **kwargs):
         if request.user.is_authenticated and request.user.email_confirmed:

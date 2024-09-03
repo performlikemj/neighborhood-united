@@ -181,7 +181,8 @@ class Meal(models.Model):
     created_date = models.DateTimeField(auto_now_add=True)
     start_date = models.DateField(null=True, blank=True)  # The first day the meal is available
     dishes = models.ManyToManyField(Dish, blank=True)
-    dietary_preference = models.CharField(max_length=20, choices=DIETARY_CHOICES, null=True, blank=True)
+    dietary_preference = models.CharField(max_length=20, null=True, blank=True)
+    custom_dietary_preference = models.CharField(max_length=200, null=True, blank=True) 
     price = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)  # Adding price field
     description = models.TextField(blank=True)  # Adding description field
     review_summary = models.TextField(blank=True, null=True)  # Adding summary field
@@ -241,6 +242,30 @@ class Meal(models.Model):
         current_date = timezone.now().date()
         return self.start_date > current_date
 
+    def clean(self):
+        """
+        Clean method to validate the fields before saving the model instance.
+        """
+        # Validate dietary preference
+        if self.dietary_preference and len(self.dietary_preference) > 20:
+            self.dietary_preference = self.dietary_preference[:20]
+
+        # Validate price, if provided
+        if self.price and (self.price <= 0 or self.price > 9999.99):
+            raise ValidationError(('Price must be greater than 0 and less than 10,000.'))
+
+        # Validate that start_date is not in the past
+        if self.start_date and self.start_date < timezone.now().date():
+            raise ValidationError(('Start date cannot be in the past.'))
+
+        # Ensure at least one dish is provided if the meal has a chef
+        if self.chef and not self.dishes.exists():
+            raise ValidationError(('At least one dish must be provided when a chef creates a meal.'))
+
+        # Ensure an image is provided if the meal has a chef
+        if self.chef and not self.image:
+            raise ValidationError(('An image must be provided when a chef creates a meal.'))
+
 
     def save(self, *args, **kwargs):
         if not self.created_date:
@@ -250,6 +275,7 @@ class Meal(models.Model):
                 raise ValueError('start_date, price, and image must be provided when a chef creates a meal')
             if not self.dishes.exists():
                 raise ValueError('At least one dish must be provided when a chef creates a meal')
+        self.clean()  # Validate the fields before saving
         super().save(*args, **kwargs)
 
 class MealPlan(models.Model):
@@ -284,13 +310,13 @@ class MealPlan(models.Model):
         return f"{self.user.username}'s MealPlan for {self.week_start_date} to {self.week_end_date}"
 
     def save(self, *args, **kwargs):
-        if self.is_approved:
-            # If the meal plan is being approved (either new or after changes), generate the shopping list
-            super().save(*args, **kwargs)
-            self.generate_shopping_list()  # Call task to generate shopping list
-        else:
-            # If the meal plan is not approved, just save without generating a shopping list
-            super().save(*args, **kwargs)
+        was_approved = self.is_approved  # Track approval state before saving
+
+        super().save(*args, **kwargs)  # Save normally
+
+        # Only generate the shopping list if the meal plan was just approved
+        if self.is_approved and not was_approved:
+            self.generate_shopping_list()
 
     def generate_shopping_list(self):
         """Generate shopping list when the meal plan is approved."""

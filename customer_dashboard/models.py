@@ -68,9 +68,20 @@ class CalorieIntake(models.Model):
 
 
 class UserSummary(models.Model):
+    PENDING = 'pending'
+    COMPLETED = 'completed'
+    ERROR = 'error'
+    
+    STATUS_CHOICES = [
+        (PENDING, 'Pending'),
+        (COMPLETED, 'Completed'),
+        (ERROR, 'Error'),
+    ]
+    
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='summary')
-    summary = models.TextField()  # Store the GPT-generated summary here
+    summary = models.TextField(default="No summary available")  # Store the GPT-generated summary here
     updated_at = models.DateTimeField(auto_now=True)  # Automatically update timestamp on save
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=PENDING)
 
     def __str__(self):
         return f"Summary for {self.user.username}"

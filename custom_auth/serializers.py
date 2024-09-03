@@ -6,6 +6,10 @@ from local_chefs.models import PostalCode, ChefPostalCode
 from django.utils.translation import gettext_lazy as _
 from django_countries.fields import Country
 from django_countries import countries
+from django.core.exceptions import ValidationError
+import logging
+
+logger = logging.getLogger(__name__)
 
 class CustomUserSerializer(serializers.ModelSerializer):
     allergies = serializers.ListField(
@@ -40,19 +44,26 @@ class CustomUserSerializer(serializers.ModelSerializer):
         return instance
     
 class AddressSerializer(serializers.ModelSerializer):
-    user = serializers.PrimaryKeyRelatedField(
-        queryset=CustomUser.objects.all(),
-        write_only=True
-    )
-    street = serializers.CharField(required=False, allow_blank=True)
-    city = serializers.CharField(required=False, allow_blank=True)
-    state = serializers.CharField(required=False, allow_blank=True)
-    input_postalcode = serializers.CharField(required=False, allow_blank=True)
-    country = serializers.CharField(required=False, allow_blank=True)
+    user = serializers.PrimaryKeyRelatedField(queryset=CustomUser.objects.all(), write_only=True)
+    street = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    city = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    state = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    input_postalcode = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    country = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
 
     class Meta:
         model = Address
         fields = ['user', 'street', 'city', 'state', 'input_postalcode', 'country']
+
+    # def validate_country(self, value):
+    #     # Directly validate against the model's CountryField
+    #     try:
+    #         address = Address(country=value)
+    #         address.full_clean()  # Trigger full validation, including country code validation
+    #     except ValidationError as e:
+    #         raise serializers.ValidationError(f"Invalid country code: {value}")
+    #     return value
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
@@ -63,15 +74,24 @@ class AddressSerializer(serializers.ModelSerializer):
             representation['country'] = country_name
         return representation
     
-    def validate_country(self, value):
-        # Convert the full country name back to the two-letter country code
-        if value:
-            country_dict = {name: code for code, name in dict(countries).items()}
-            country_code = country_dict.get(value)
-            if not country_code:
-                raise serializers.ValidationError(f"Invalid country name: {value}")
-            return country_code
-        return value
+    def create(self, validated_data):
+        user = validated_data.get('user')
+        # Check if an address already exists for this user
+        if Address.objects.filter(user=user).exists():
+            raise serializers.ValidationError("An address for this user already exists.")
+        
+        # If no address exists, create a new one
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        # Update the existing address instance with new data
+        instance.street = validated_data.get('street', instance.street)
+        instance.city = validated_data.get('city', instance.city)
+        instance.state = validated_data.get('state', instance.state)
+        instance.input_postalcode = validated_data.get('input_postalcode', instance.input_postalcode)
+        instance.country = validated_data.get('country', instance.country)
+        instance.save()
+        return instance
 
 class PostalCodeSerializer(serializers.ModelSerializer):
     class Meta:

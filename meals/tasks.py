@@ -8,6 +8,7 @@ from openai import OpenAI
 from typing_extensions import override
 from openai import AssistantEventHandler, OpenAI
 from django.conf import settings
+from meals.models import Meal, MealPlan, MealPlanMeal, Ingredient
 from custom_auth.models import CustomUser
 from customer_dashboard.models import GoalTracking, UserHealthMetrics, CalorieIntake, UserSummary, UserMessage, ChatThread
 from django.utils import timezone
@@ -36,17 +37,167 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from pydantic import BaseModel, Field, ValidationError
 from typing import List
-from meals.pydantic_models import ShoppingList as ShoppingListSchema, Instructions as InstructionsSchema
+from meals.pydantic_models import ShoppingList as ShoppingListSchema, Instructions as InstructionsSchema, MealOutputSchema
 from rest_framework.renderers import JSONRenderer
 from meals.serializers import MealPlanSerializer, MealPlanMealSerializer
 from django.utils.timezone import now
 import requests
+from collections import defaultdict
+import numpy as np
+from numpy.linalg import norm
 
 
 
 logger = logging.getLogger(__name__)
 
 client = OpenAI(api_key=settings.OPENAI_KEY)
+
+@shared_task
+def create_meal_plan_for_new_user(user_id):
+    try:
+        user = CustomUser.objects.get(id=user_id)
+        week_shift = user.week_shift
+    except CustomUser.DoesNotExist:
+        logger.error(f"User with id {user_id} does not exist.")
+        return
+
+    today = timezone.now().date()
+    start_of_week = today - timedelta(days=today.weekday()) + timedelta(weeks=week_shift)
+    end_of_week = start_of_week + timedelta(days=6)
+
+    meal_plan, created = MealPlan.objects.get_or_create(
+        user=user,
+        week_start_date=start_of_week,
+        week_end_date=end_of_week,
+    )
+
+    meal_types = ['Breakfast', 'Lunch', 'Dinner']
+
+    # Fetch existing meals in the meal plan for context
+    existing_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan).select_related('meal')
+
+    # Create a set of meal names to avoid duplicates
+    existing_meal_names = set(existing_meals.values_list('meal__name', flat=True))
+
+    # Create a list of existing meal embeddings to avoid duplicates
+    existing_meal_embeddings = list(existing_meals.values_list('meal__meal_embedding', flat=True))
+
+    # Generate meals for the entire week
+    for day_offset in range(7):  # 7 days in a week
+        meal_date = start_of_week + timedelta(days=day_offset)
+        for meal_type in meal_types:
+            # Generate meal details using GPT with existing meal context
+            meal_details = generate_meal_details(user, meal_type, existing_meal_names, existing_meal_embeddings)
+
+            if meal_details:
+                # Create or retrieve the meal using the create_meal function
+                meal_data = create_meal(
+                    user_id=user_id,
+                    name=meal_details.get('name'),
+                    dietary_preference=meal_details.get('dietary_preference'),
+                    description=meal_details.get('description'),
+                    meal_type=meal_type,
+                )
+
+                if meal_data['status'] == 'success':
+                    meal = Meal.objects.get(id=meal_data['meal']['id'])
+                    MealPlanMeal.objects.create(
+                        meal_plan=meal_plan,
+                        meal=meal,
+                        day=meal_date.strftime('%A'),  # Convert date to weekday name
+                        meal_type=meal_type,
+                    )
+                    # Add the meal name and embedding to the respective lists to avoid duplicates
+                    existing_meal_names.add(meal.name)
+                    existing_meal_embeddings.append(meal.meal_embedding)
+                else:
+                    logger.error(f"Failed to create a meal for user {user.username} on {meal_date}: {meal_data['message']}")
+
+    logger.info(f"Meal plan created successfully for user {user.username} for the week {start_of_week} to {end_of_week}")
+
+
+
+def cosine_similarity(embedding1, embedding2):
+    """Compute the cosine similarity between two embeddings."""
+    return np.dot(embedding1, embedding2) / (norm(embedding1) * norm(embedding2))
+
+def generate_meal_details(user, meal_type, existing_meal_names, existing_meal_embeddings, min_similarity=0.03):
+    """
+    Use GPT to generate meal details based on the user's preferences and meal type, while avoiding duplicates.
+    Compare the new meal's embedding to existing meals to ensure sufficient uniqueness.
+    """
+    for attempt in range(5):  # Limit the number of attempts to avoid infinite loops
+        try:
+            # GPT API call to generate meal details
+            response = client.chat.completions.create(
+                model="gpt-4o-2024-08-06",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a helpful assistant that generates a meal, its description, and dietary preferences based on information about the user. "
+                            f"The following meals have already been created: {', '.join(existing_meal_names)}. "
+                            "Please ensure that the meal is unique and not similar to the existing meals."
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Create a meal that meets the user's goals of {user.goal.goal_description}. "
+                            f"It is meant to be served as a {meal_type} meal. "
+                            f"Align it with the user's dietary preferences: {user.dietary_preference} and/or {user.custom_dietary_preference}. "
+                            f"Avoid the following allergens: {user.allergies} and/or {user.custom_allergies}."
+                        )
+                    }
+                ],
+                response_format={
+                    'type': 'json_schema',
+                    'json_schema': {
+                        "name": "Meal",
+                        "schema": MealOutputSchema.model_json_schema()
+                    }
+                }
+            )
+
+            gpt_output = response.choices[0].message.content
+            meal_data = json.loads(gpt_output)
+
+            meal_name = meal_data.get('meal', {}).get('name')
+            description = meal_data.get('meal', {}).get('description')
+            dietary_preference = meal_data.get('meal', {}).get('dietary_preference')
+
+            # Generate the embedding for the new meal
+            new_meal_embedding = get_embedding(f"{meal_name} {description} {dietary_preference}")
+
+            # Check if a similar meal already exists based on embedding similarity
+            similar_meal_found = False
+            for existing_embedding in existing_meal_embeddings:
+                similarity = cosine_similarity(new_meal_embedding, existing_embedding)
+                if similarity > (1 - min_similarity):  # Cosine similarity closer to 1 indicates more similarity
+                    similar_meal_found = True
+                    break
+
+            if similar_meal_found:
+                logger.warning(f"Generated meal {meal_name} is too similar to an existing meal. Attempt {attempt + 1} of 5.")
+            else:
+                # Append the new embedding to the list of existing embeddings
+                existing_meal_embeddings.append(new_meal_embedding)
+                return {
+                    'name': meal_name,
+                    'description': description,
+                    'dietary_preference': dietary_preference,
+                    'meal_embedding': new_meal_embedding,
+                }
+
+        except Exception as e:
+            logger.error(f"Unexpected error generating meal content: {e}")
+            return None
+
+    logger.error(f"Failed to generate a unique meal after 5 attempts.")
+    return None
+
+
+
 
 def get_embedding(text, model="text-embedding-3-small"):
     text = text.replace("\n", " ")
@@ -84,7 +235,7 @@ def serialize_data(data):
         print(f"Serialized Data: {serialized_data}")
         return json.loads(serialized_data)
     except Exception as e:
-        print(f"Error serializing data: {e}")
+        logger.error(f"Error serializing data: {e}")
         raise
 
 @shared_task
@@ -127,10 +278,12 @@ def generate_shopping_list(meal_plan_id):
                     {
                         "role": "user",
                         "content": (
+                            f"Answering in the user's preferred language: {user_info['preferred_language']},"
                             f"Generate a shopping list based on the following meals: {json.dumps(user_data_json)}. "
-                            f"The user has the following dietary preferences: {user_info['user']['dietary_preference']}, "
-                            f"allergies: {user_info['user']['allergies']}, custom allergies: {user_info['user']['custom_allergies']}, "
-                            f"and custom dietary preferences: {user_info['user']['custom_dietary_preference']}."
+                            f"The user has the following dietary preferences: {user_info['dietary_preference']}, "
+                            f"allergies: {user_info['allergies']}, custom allergies: {user_info['custom_allergies']}, "
+                            f"and custom dietary preferences: {user_info['custom_dietary_preference']},"
+                            
                         )
                     }
                 ],
@@ -162,9 +315,53 @@ def generate_shopping_list(meal_plan_id):
         logger.error(f"Failed to parse shopping list as JSON: {e}")
         return
 
-    user = meal_plan.user
-    if not user.email_meal_plan_saved:
-        return
+    # Group items by category and aggregate quantities
+    categorized_items = defaultdict(lambda: defaultdict(lambda: {'quantity': 0, 'unit': '', 'notes': []}))
+
+    for item in shopping_list_dict.get("items", []):
+        logger.info(f"Shopping list item: {item}")
+        category = item.get("category", "Miscellaneous")
+        ingredient = item.get("ingredient")
+        quantity_str = item.get("quantity", "")
+        unit = item.get("unit", "")
+        meal_name = item.get("meal_name", "")
+        notes = item.get("notes", "")
+
+        # Handle fractional quantities
+        try:
+            if '/' in quantity_str:
+                numerator, denominator = quantity_str.split('/')
+                quantity = float(numerator) / float(denominator)
+            else:
+                quantity = float(quantity_str)
+        except ValueError:
+            # For non-numeric quantities like "To taste", set quantity to None
+            quantity = None
+            logger.info(f"Non-numeric quantity '{quantity_str}' for ingredient '{ingredient}'")
+
+        if quantity is not None:
+            # Aggregate the quantities if it's a valid numeric quantity
+            if categorized_items[category][ingredient]['unit'] == unit or not categorized_items[category][ingredient]['unit']:
+                categorized_items[category][ingredient]['quantity'] += quantity
+                categorized_items[category][ingredient]['unit'] = unit
+            else:
+                # If units differ, treat them as separate entries
+                if categorized_items[category][ingredient]['unit']:
+                    logger.warning(f"Conflicting units for {ingredient} in {category}: {categorized_items[category][ingredient]['unit']} vs {unit}")
+                categorized_items[category][ingredient]['quantity'] += quantity
+                categorized_items[category][ingredient]['unit'] += f" and {quantity} {unit}"
+
+        # Add a special case for non-numeric quantities (e.g., "To taste")
+        else:
+            if not categorized_items[category][ingredient]['unit']:
+                categorized_items[category][ingredient]['quantity'] = quantity_str  # Store the non-numeric quantity
+                categorized_items[category][ingredient]['unit'] = unit  # Still keep track of the unit
+
+        # Only add notes if they do not contain 'none' and are not None
+        if notes is not None and 'none' not in notes.lower():
+            categorized_items[category][ingredient]['notes'].append(f"{meal_name}: {notes} ({quantity_str} {unit})")
+
+
 
     # Format the shopping list into a more readable format
     formatted_shopping_list = f"""
@@ -176,39 +373,41 @@ def generate_shopping_list(meal_plan_id):
         <h2 style="color: #333;">Your Personalized Shopping List</h2>
         <p>Dear {user_name},</p>
         <p>We're excited to help you prepare for the week ahead! Below is your personalized shopping list, thoughtfully curated to complement the delicious meals you've planned.</p>
+    """
+
+    for category, items in categorized_items.items():
+        formatted_shopping_list += f"<h3 style='color: #555;'>{category}</h3>"
+        formatted_shopping_list += """
         <table style="width: 100%; border-collapse: collapse;">
             <thead>
                 <tr style="background-color: #f2f2f2;">
-                    <th style="padding: 8px; text-align: left;">Meal</th>
                     <th style="padding: 8px; text-align: left;">Ingredient</th>
-                    <th style="padding: 8px; text-align: left;">Quantity</th>
+                    <th style="padding: 8px; text-align: left;">Total Quantity</th>
                     <th style="padding: 8px; text-align: left;">Notes</th>
                 </tr>
             </thead>
             <tbody>
-    """
-
-    for item in shopping_list_dict.get("items", []):
-        meal_name = item.get("meal_name", "General Items")
-        ingredient = item.get("ingredient", "Unknown Ingredient")
-        quantity = item.get("quantity", "Unknown Quantity")
-        unit = item.get("unit", "")
-        notes = item.get("notes", "")
-
-        formatted_shopping_list += f"""
-        <tr>
-            <td style="padding: 8px;">{meal_name}</td>
-            <td style="padding: 8px;">{ingredient}</td>
-            <td style="padding: 8px;">{quantity} {unit}</td>
-            <td style="padding: 8px;">{notes}</td>
-        </tr>
         """
 
-        logger.info(f"Meal: {meal_name}, Ingredient: {ingredient}, Quantity: {quantity} {unit}, Notes: {notes}")
+        for ingredient, details in items.items():
+            total_quantity = details['quantity']
+            unit = details['unit']
+            notes = "; ".join(details['notes'])
 
-    formatted_shopping_list += """
+            formatted_shopping_list += f"""
+            <tr>
+                <td style="padding: 8px;">{ingredient}</td>
+                <td style="padding: 8px;">{total_quantity} {unit}</td>
+                <td style="padding: 8px;">{notes}</td>
+            </tr>
+            """
+
+        formatted_shopping_list += """
             </tbody>
         </table>
+        """
+
+    formatted_shopping_list += """
         <p style="color: #555;">We hope this makes your shopping experience smoother and more enjoyable. If you have any questions or need further assistance, we're here to help.</p>
         <p style="color: #555;">Happy cooking!</p>
         <p style="color: #555;">Warm regards,<br>The SautAI Team</p>
@@ -216,7 +415,7 @@ def generate_shopping_list(meal_plan_id):
     </html>
     """
 
-    print(f"Formatted shopping list: {formatted_shopping_list}")
+    # print(f"Formatted shopping list: {formatted_shopping_list}")
     
     # Prepare data for Zapier webhook
     email_data = {
@@ -254,10 +453,16 @@ def send_daily_meal_instructions():
             # Get the current day in the user's time zone
             current_day = user_time.strftime('%A')
             
-            # Filter all MealPlanMeal instances scheduled for the current day for this user
+            # Get the current week start and end dates
+            week_start_date = user_time - timedelta(days=user_time.weekday())
+            week_end_date = week_start_date + timedelta(days=6)
+
+            # Filter MealPlanMeal instances for this user, day, and week
             meal_plan_meals_for_today = MealPlanMeal.objects.filter(
                 meal_plan__user=user,
-                day=current_day
+                day=current_day,
+                meal_plan__week_start_date=week_start_date.date(),
+                meal_plan__week_end_date=week_end_date.date(),
             )
 
             # Loop through each meal and send instructions
@@ -307,11 +512,12 @@ def generate_instructions(meal_plan_meal_id):
                     {
                         "role": "user",
                         "content": (
+                            f"Answering in the user's preferred language: {user_preferred_language},"
                             f"Generate detailed cooking instructions for the following meal: {meal_data_json}. "
                             f"The meal is described as follows: '{meal_plan_meal_data['meal']['description']}' and "
                             f"it adheres to the dietary preference: {user_dietary_preference}."
                             f"allergies: {user_allergies}, custom allergies: {user_custom_allergies}."
-                            f"and custom dietary preferences: {user_custom_dietary_preference}."
+                            f"and custom dietary preferences: {user_custom_dietary_preference},"
                         )
                     }
                 ],
@@ -403,7 +609,13 @@ def generate_instructions(meal_plan_meal_id):
 
 @shared_task
 def generate_user_summary(user_id):
+    print(f'Generating summary for user {user_id}')
     user = get_object_or_404(CustomUser, id=user_id)
+    user_summary_obj, created = UserSummary.objects.get_or_create(user=user)
+
+    # Set status to 'pending'
+    user_summary_obj.status = 'pending'
+    user_summary_obj.save()
 
     # Calculate the date one month ago
     one_month_ago = timezone.now() - timedelta(days=30)
@@ -437,21 +649,22 @@ def generate_user_summary(user_id):
         'fr': 'French',
     }
     preferred_language = language_prompt.get(user.preferred_language, 'English')
-
+    print(f'Preferred language: {preferred_language}')
+    print(f'User\'s preferred language: {user.preferred_language}')
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", 
-                 "content": f"Generate a detailed summary based on the following data that gives the user a high-level view of their goals, health data, and how their caloric intake relates to those goals. Start the response off with a friendly welcoming tone. Respond in {preferred_language}. If there is no data, please respond with the following message: {message}\n\n{formatted_data}"
+                 "content": f"Answering in {preferred_language}, Generate a detailed summary based on the following data that gives the user a high-level view of their goals, health data, and how their caloric intake relates to those goals. Start the response off with a friendly welcoming tone. If there is no data, please respond with the following message: {message}\n\n{formatted_data}"
                  },
             ],
         )
         summary_text = response.choices[0].message.content
+        user_summary_obj.summary = summary_text
+        user_summary_obj.status = 'completed'
     except Exception as e:
-        # Handle exceptions or log errors
-        return {"message": f"An error occurred: {str(e)}"}
+        user_summary_obj.status = 'error'
+        user_summary_obj.summary = f"An error occurred: {str(e)}"
 
-    UserSummary.objects.update_or_create(user=user, defaults={'summary': summary_text})
-
-    return {"message": "Summary generated successfully."}
+    user_summary_obj.save()

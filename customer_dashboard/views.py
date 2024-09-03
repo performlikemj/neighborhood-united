@@ -91,17 +91,57 @@ def api_recommend_follow_up(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
+def api_user_summary_status(request):
+    if not request.user.is_authenticated:
+        return Response({"status": "error", "message": "User is not authenticated"}, status=401)
+    
+    user_id = request.user.id
+    user_summary = UserSummary.objects.filter(user_id=user_id).first()
+    print(f'User Summary: {user_summary}')
+    
+
+    # Check if the summary doesn't exist or contains "No summary available"
+    if not user_summary or user_summary.summary.strip() == "No summary available":
+        print(f"Generating user summary for user {user_id}")
+        if not user_summary:
+            user_summary = UserSummary.objects.create(user_id=user_id, status='pending')
+        else:
+            # If summary exists but is "No summary available," update the status to pending
+            user_summary.status = 'pending'
+            user_summary.save()
+
+        generate_user_summary.delay(user_id)
+        return Response({"status": "pending", "message": "Summary generation started."}, status=202)
+
+    # Add debug logging to inspect the content of user_summary.summary
+    if user_summary:
+        user_summary.status = 'completed'
+        user_summary.save()
+
+    if user_summary.status == 'pending':
+        return Response({"status": "pending", "message": "Summary is still being generated."}, status=202)
+    elif user_summary.status == 'completed':
+        return Response({"status": "completed"})
+    else:
+        return Response({"status": "error", "message": "An error occurred during summary generation."}, status=500)
+    
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsCustomer])
 def api_user_summary(request):
     user_id = request.user.id  # Use request.user.id to get the authenticated user's ID
     user = get_object_or_404(CustomUser, id=user_id)
 
+    # Fetch or create the user summary
+    user_summary_obj, created = UserSummary.objects.get_or_create(user=user)
 
-    # Check if the user has an existing summary
-    try:
-        user_summary_obj = UserSummary.objects.get(user=user)
+    if user_summary_obj.status == 'completed':
         user_summary = user_summary_obj.summary
-    except UserSummary.DoesNotExist:
-        user_summary = "No summary available."
+    elif user_summary_obj.status == 'pending':
+        return Response({"status": "pending", "message": "Summary is still being generated."}, status=202)
+    else:
+        # If status is not 'completed', trigger the generation task
+        generate_user_summary.delay(user_id)
+        return Response({"status": "pending", "message": "Summary generation started."}, status=202)
 
     # Provide a fallback template if the user has no summary data
     if user_summary.strip() == "No summary available.":
@@ -111,12 +151,7 @@ def api_user_summary(request):
         # Generate a recommended prompt based on the user's summary and context
         recommend_prompt = recommend_follow_up(request, user_summary)
 
-    # Generate or update the user summary
-    generate_user_summary(user_id)
-    
-    # Fetch the updated summary
-    user_summary = UserSummary.objects.get(user=user)
-    
+   
     data = {
         "data": [
             {
@@ -124,12 +159,12 @@ def api_user_summary(request):
                     {
                         "text": {
                             "annotations": [],
-                            "value": user_summary.summary
+                            "value": user_summary
                         },
                         "type": "text"
                     }
                 ],
-                "created_at": int(user_summary.updated_at.timestamp()),
+                "created_at": int(user_summary_obj.updated_at.timestamp()),
                 "role": "assistant",
             },
         ],
@@ -649,6 +684,26 @@ def guest_ai_call(tool_call, request):
     }
     return tool_outputs
 
+def handle_openai_error(action, thread_id, question, client):
+    """
+    Handles OpenAI errors by trying to cancel any active runs and retrying the action.
+    """
+    try:
+        action()
+        return {"status": "success", "message": "Message sent successfully"}
+    except OpenAIError as e:
+        if 'Can\'t add messages to thread' in str(e) and 'while a run' in str(e) and 'is active' in str(e):
+            match = re.search(r'run (\w+)', str(e))
+            if match:
+                run_id = match.group(1)
+                client.beta.threads.runs.cancel(run_id, thread_id=thread_id)
+                try:
+                    action()  # Retry the action after canceling the run
+                    return {"status": "success", "message": "Message sent after resolving the issue"}
+                except OpenAIError as retry_e:
+                    logger.error(f'Retry failed after canceling run: {str(retry_e)}')
+                    return {"status": "error", "message": "Failed to send the message after resolving an issue."}
+        return {"status": "error", "message": "Failed to create message."}
 
 @api_view(['POST'])
 def guest_chat_with_gpt(request):
@@ -722,7 +777,7 @@ def guest_chat_with_gpt(request):
                         )
                 else:
                     logger.error(f'Failed to create message: {str(e)}')
-                    return  # Stopping the task if message creation fails
+                    return Response({'error': 'Failed to create message'})
             response_data = {
                 'new_thread_id': thread_id,
                 'recommend_follow_up': False,
@@ -812,38 +867,34 @@ def chat_with_gpt(request):
         # Variable to store tool call results
         formatted_outputs = []
 
+
+        # # Step 1: Fetch the chat history using the openai_thread_id
+        # try:
+        #     messages = client.beta.threads.messages.list(thread.openai_thread_id)
+        #     chat_history = api_format_chat_history(messages)
+        # except Exception as e:
+        #     logger.error(f'Failed to fetch chat history: {str(e)}')
+        #     chat_history = []
+
+        # # Step 2: Generate the context string from the chat history
+        # context = '\n'.join([f"{msg['role']}: {msg['content']}" for msg in chat_history])
+        # follow_up = recommend_follow_up(request, context)
         if relevant:
-            try:
-                client.beta.threads.messages.create(
-                    thread_id=thread_id,
-                    role="user",
-                    content=question,
-                )
-            except OpenAIError as e:
-                print(f'Error: {e}')
-                if 'Can\'t add messages to thread' in str(e) and 'while a run' in str(e) and 'is active' in str(e):
-                    # Extract the run ID from the error message
-                    match = re.search(r'run (\w+)', str(e))
-                    if match:
-                        run_id = match.group(1)
-                        # Cancel the active run
-                        client.beta.threads.runs.cancel(run_id, thread_id=thread_id)
-                        # Try to create the message again
-                        client.beta.threads.messages.create(
-                            thread_id=thread_id,
-                            role="user",
-                            content=question
-                        )
-                else:
-                    logger.error(f'Failed to create message: {str(e)}')
-                    user_message.response = f"Sorry, I was unable to send your message. Please try again."
-                    user_message.save()
-                    return  # Stopping the task if message creation fails
-            response_data = {
-                'new_thread_id': thread_id,
-                'recommend_follow_up': False,
-            }
-            return Response(response_data)  
+            # Attempt to create the message in the thread
+            result = handle_openai_error(
+                lambda: client.beta.threads.messages.create(
+                    thread_id=thread_id, role="user", content=question
+                ),
+                thread_id, question, client
+            )
+
+            if result["status"] == "error":
+                user_message.response = result["message"]
+                user_message.save()
+                return Response({'error': result["message"]}, status=500)
+            
+        return Response({'new_thread_id': thread_id, 'recommend_follow_up': False})
+  
 
     except Exception as e:
         # Return error message wrapped in Response

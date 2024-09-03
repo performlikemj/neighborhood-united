@@ -32,7 +32,7 @@ SECRET_KEY = config['SECRET_KEY']
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = False
 
-ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '4.242.33.69', 'www.nbhdunited.com', 'nbhdunited.com', 'www.sautai.com', 'sautai.com', 'neighborhoodunited.org', 'hoodunited.org']
+ALLOWED_HOSTS = config['ALLOWED_HOSTS']
 
 
 # Application definition
@@ -242,6 +242,40 @@ EMAIL_HOST_USER = config['EMAIL_HOST_USER']
 EMAIL_HOST_PASSWORD = config['EMAIL_HOST_PASSWORD']
 DEFAULT_FROM_EMAIL = config['DEFAULT_FROM_EMAIL']
 
+
+
+DJANGO_REDIS_LOG_IGNORED_EXCEPTIONS = True
+DJANGO_REDIS_LOGGER = 'django.request'
+
+CACHE = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': f"rediss://{config['REDIS_URL']}:6380/0?ssl_cert_reqs=CERT_REQUIRED",
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            'PASSWORD': config['REDIS_PASSWORD'],
+            'SOCKET_CONNECT_TIMEOUT': 15,  # Try increasing to 15 seconds
+            'SOCKET_TIMEOUT': 15,  # Similarly increase to 15 seconds
+            'RETRY_ON_TIMEOUT': True,  # Retry on timeout
+            'SOCKET_KEEPALIVE': True,  # Keep the connection alive
+        }
+    }
+}
+
+# Celery settings
+CELERY_BROKER_URL = config['CELERY_BROKER_URL']
+CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+CELERY_REDIS_MAX_CONNECTIONS = 10
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    'visibility_timeout': 3600,  # Task visibility timeout
+    'ssl': {
+        'ssl_cert_reqs': 'CERT_REQUIRED',  # You can also set this to 'CERT_OPTIONAL' or 'CERT_NONE'
+        'ssl_ca_certs': '/etc/ssl/certs/ca-certificates.crt',  # Path to your CA certificates
+    }
+}
+CELERYD_LOG_FILE = "/var/log/celery/celery.log"
+CELERYD_LOG_LEVEL = "DEBUG"
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -275,7 +309,17 @@ LOGGING = {
             'level': 'WARNING',  # Adjusted level
             'propagate': True,
         },
-    },
+        'django_redis': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+        'celery': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+    }
 }
 if DEBUG == False:
 # Cookie settings
@@ -303,7 +347,3 @@ if DEBUG == False:
     # Other security settings
     SECURE_BROWSER_XSS_FILTER = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
-
-    # Celery settings
-    CELERY_BROKER_URL = config['CELERY_BROKER_URL']
-    CELERY_RESULT_BACKEND = config['CELERY_RESULT_BACKEND']

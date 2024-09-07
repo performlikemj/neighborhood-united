@@ -294,6 +294,16 @@ def update_profile_api(request):
     address_data = request.data.get('address')
     if address_data:
         print(f'Address data: {address_data}')  # Debug print
+        
+        # Convert full country name to country code
+        country_name = address_data.get('country')
+        if country_name:
+            country_code = get_country_code(country_name)  # Use the new function to get the country code
+            print(f"Country name: {country_name}, Country code: {country_code}")  # Debugging print
+            if not country_code:
+                return Response({'status': 'failure', 'message': f'Invalid country name: {country_name}'}, status=400)
+            address_data['country'] = country_code
+
         try:
             address = Address.objects.get(user=user)
         except Address.DoesNotExist:
@@ -302,6 +312,7 @@ def update_profile_api(request):
         # Correct field name and handle possible missing data
         address_data['input_postalcode'] = address_data.pop('postalcode', '')
         address_serializer = AddressSerializer(instance=address, data=address_data, partial=True)
+        print(f"Address serializer data: {address_serializer.initial_data}")  # Debug print
         if address_serializer.is_valid():
             address = address_serializer.save(user=user)
             is_served = address.is_postalcode_served()
@@ -313,6 +324,12 @@ def update_profile_api(request):
     else:
         return Response({'status': 'success', 'message': 'Profile updated successfully without address data'})
 
+def get_country_code(country_name):
+    # Search through the country dictionary and find the corresponding country code
+    for code, name in countries:
+        if name.lower() == country_name.lower():  # Match ignoring case
+            return code
+    return None  # Return None if the country is not found
 
 @api_view(['POST'])
 def login_api_view(request):

@@ -73,47 +73,41 @@ class AddressSerializer(serializers.ModelSerializer):
     input_postalcode = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     country = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
-
     class Meta:
         model = Address
         fields = ['user', 'street', 'city', 'state', 'input_postalcode', 'country']
 
-    # def validate_country(self, value):
-    #     # Directly validate against the model's CountryField
-    #     try:
-    #         address = Address(country=value)
-    #         address.full_clean()  # Trigger full validation, including country code validation
-    #     except ValidationError as e:
-    #         raise serializers.ValidationError(f"Invalid country code: {value}")
-    #     return value
-
     def to_representation(self, instance):
+        """
+        Convert the country code back to the country name for output.
+        """
         representation = super().to_representation(instance)
         country_code = representation.get('country')
-        # Replace the country code with the full name
         if country_code:
+            # Replace the country code with the full name
             country_name = dict(countries).get(country_code, country_code)
             representation['country'] = country_name
         return representation
-    
+
     def create(self, validated_data):
         user = validated_data.get('user')
-        # Check if an address already exists for this user
         if Address.objects.filter(user=user).exists():
             raise serializers.ValidationError("An address for this user already exists.")
-        
-        # If no address exists, create a new one
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
-        # Update the existing address instance with new data
+        print(f'country: {validated_data.get("country")}')
         instance.street = validated_data.get('street', instance.street)
         instance.city = validated_data.get('city', instance.city)
         instance.state = validated_data.get('state', instance.state)
         instance.input_postalcode = validated_data.get('input_postalcode', instance.input_postalcode)
-        instance.country = validated_data.get('country', instance.country)
+
+        # Use the validated country code, not the full name
+        instance.country = validated_data.get('country', instance.country)  # This will now be the code 'JP'
+        
         instance.save()
         return instance
+
     
 
 class PostalCodeSerializer(serializers.ModelSerializer):

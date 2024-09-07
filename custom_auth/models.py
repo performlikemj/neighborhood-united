@@ -120,6 +120,7 @@ class Address(models.Model):
         self.full_clean()  # This ensures that the model is validated before saving
         super().save(*args, **kwargs)
 
+
 class UserRole(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
     is_chef = models.BooleanField(default=False)

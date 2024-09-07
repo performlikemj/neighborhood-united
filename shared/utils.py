@@ -224,26 +224,40 @@ def recommend_follow_up(request, context):
             "guest_search_ingredients: Search ingredients used in dishes and get their info"
         """
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {
-                "role": "user", 
-                "content": f"Given the following context: {context} and functions: {functions}, what prompt should a user write next? Output ONLY the recommended prompt in the first person and in a natural sentence without using the function name, without quotations, and without starting the output with 'the user should write' or anything similar." 
-            }
-        ],
-        response_format={
-            'type': 'json_schema',
-            'json_schema': 
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
                 {
-                    "name": "Instructions", 
-                    "schema": FollowUpSchema.model_json_schema()
+                    "role": "system",
+                    "content": "You are a helpful assistant that provides the user with the next prompt they should write based on given context and functions."
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Given the following context: {context} and functions: {functions}, "
+                        f"Answering in the user's language of {user.preferred_language}, "
+                        f"what prompt should a user write next? Output ONLY the recommended prompt in the first person and in a natural sentence "
+                        f"without using the function name, without quotations, and without starting the output with 'the user should write' or anything similar."
+                    )
                 }
-            }
-        )
-    # Correct way to access the response content
-    response_content = response.choices[0].message.content
-    return response_content.strip().split('\n')
+            ],
+            response_format={
+                'type': 'json_schema',
+                'json_schema': 
+                    {
+                        "name": "Instructions", 
+                        "schema": FollowUpSchema.model_json_schema()
+                    }
+                }
+            )
+        # Correct way to access the response content
+        response_content = response.choices[0].message.content
+        return response_content.strip().split('\n')
+
+    except Exception as e:
+        return f"An error occurred: {str(e)}"
+
 
 def provide_nutrition_advice(request, user_id):
     try:
@@ -647,13 +661,23 @@ def generate_summary_title(question):
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role": "user", "content": f"Summarize this question for a chat title: {question}"}],
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant that generates concise titles for chat conversations."
+                },
+                {
+                    "role": "user",
+                    "content": f"Summarize this question for a chat title: {question}"
+                }
+            ],
         )
         summary = response.choices[0].message.content
         return summary
     except OpenAIError as e:
         print(f"Error generating summary: {str(e)}")
         return question[:254]  # Fallback to truncating the question if an error occurs
+
 
 
 def list_upcoming_meals(request):

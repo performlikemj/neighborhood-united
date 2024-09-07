@@ -84,10 +84,10 @@ def api_recommend_follow_up(request):
         follow_up_recommendations = recommend_follow_up(request, context)
     except Exception as e:
         logger.error(f"Error generating follow-up recommendations: {e}")
-        return Response({'error': f'Failed to generate follow-up recommendations'})
+        return Response({'error': f'Failed to generate follow-up recommendations'}, status=500)
 
     # Step 5: Return the recommendations in the expected format
-    return Response(follow_up_recommendations)
+    return Response(follow_up_recommendations, status=200)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])

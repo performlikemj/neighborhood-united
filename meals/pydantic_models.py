@@ -65,3 +65,17 @@ class MealOutputSchema(BaseModel):
     status: str
     message: str
     current_time: str
+
+class SanitySchema(BaseModel):
+    allergen_check: bool = Field(
+        ..., 
+        description="True if the meal is allergen-free, False if it contains any allergens."
+    )
+
+    model_config = {
+        "schema_extra": {
+            "example": {
+                "allergen_check": True
+            }
+        }
+    }

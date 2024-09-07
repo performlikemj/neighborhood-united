@@ -37,7 +37,7 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from pydantic import BaseModel, Field, ValidationError
 from typing import List
-from meals.pydantic_models import ShoppingList as ShoppingListSchema, Instructions as InstructionsSchema, MealOutputSchema
+from meals.pydantic_models import ShoppingList as ShoppingListSchema, Instructions as InstructionsSchema, MealOutputSchema, SanitySchema
 from rest_framework.renderers import JSONRenderer
 from meals.serializers import MealPlanSerializer, MealPlanMealSerializer
 from django.utils.timezone import now
@@ -51,6 +51,21 @@ from numpy.linalg import norm
 logger = logging.getLogger(__name__)
 
 client = OpenAI(api_key=settings.OPENAI_KEY)
+
+# Load configuration from config.json
+with open('/etc/config.json') as config_file:
+    config = json.load(config_file)
+
+@shared_task
+def test_email_task():
+    email_data = {
+        'subject': 'Test Email',
+        'message': 'This is a test email.',
+        'to': 'mleonjones@gmail.com',
+        'from': 'support@sautai.com',
+    }
+    zap_url = config["ZAP_GENERATE_SHOPPING_LIST_URL"]
+    requests.post(zap_url, json=email_data)
 
 @shared_task
 def create_meal_plan_for_new_user(user_id):
@@ -82,44 +97,162 @@ def create_meal_plan_for_new_user(user_id):
     # Create a list of existing meal embeddings to avoid duplicates
     existing_meal_embeddings = list(existing_meals.values_list('meal__meal_embedding', flat=True))
 
-    # Generate meals for the entire week
+    # Attempt to find similar meals already in the database before creating new ones
     for day_offset in range(7):  # 7 days in a week
         meal_date = start_of_week + timedelta(days=day_offset)
         for meal_type in meal_types:
-            # Generate meal details using GPT with existing meal context
-            meal_details = generate_meal_details(user, meal_type, existing_meal_names, existing_meal_embeddings)
+            # Check if a meal for this day and meal type already exists
+            if MealPlanMeal.objects.filter(meal_plan=meal_plan, day=meal_date.strftime('%A'), meal_type=meal_type).exists():
+                continue  # Skip this meal type if it already exists for the day
 
-            if meal_details:
-                # Create or retrieve the meal using the create_meal function
-                meal_data = create_meal(
-                    user_id=user_id,
-                    name=meal_details.get('name'),
-                    dietary_preference=meal_details.get('dietary_preference'),
-                    description=meal_details.get('description'),
-                    meal_type=meal_type,
-                )
+            # Try finding a suitable existing meal from the database
+            meal_found = find_existing_meal(user, meal_type, existing_meal_embeddings, existing_meal_names)
 
-                if meal_data['status'] == 'success':
-                    meal = Meal.objects.get(id=meal_data['meal']['id'])
-                    MealPlanMeal.objects.create(
-                        meal_plan=meal_plan,
-                        meal=meal,
-                        day=meal_date.strftime('%A'),  # Convert date to weekday name
+            if not meal_found:
+                # Generate a new meal if no suitable meal is found
+                meal_details = generate_meal_details(user, meal_type, existing_meal_names, existing_meal_embeddings)
+
+                if meal_details:
+                    meal_data = create_meal(
+                        user_id=user_id,
+                        name=meal_details.get('name'),
+                        dietary_preference=meal_details.get('dietary_preference'),
+                        description=meal_details.get('description'),
                         meal_type=meal_type,
                     )
-                    # Add the meal name and embedding to the respective lists to avoid duplicates
-                    existing_meal_names.add(meal.name)
-                    existing_meal_embeddings.append(meal.meal_embedding)
+
+                    if meal_data['status'] == 'success':
+                        meal = Meal.objects.get(id=meal_data['meal']['id'])
+                        
+                        # Perform the OpenAI sanity check for generated meals
+                        if perform_openai_sanity_check(meal, user):
+                            MealPlanMeal.objects.create(
+                                meal_plan=meal_plan,
+                                meal=meal,
+                                day=meal_date.strftime('%A'),
+                                meal_type=meal_type,
+                            )
+                            # Add to the respective lists
+                            existing_meal_names.add(meal.name)
+                            existing_meal_embeddings.append(meal.meal_embedding)
+                        else:
+                            logger.warning(f"Generated meal {meal.name} contains allergens. Skipping.")
+                    else:
+                        logger.error(f"Failed to create a meal for user {user.username} on {meal_date}: {meal_data['message']}")
+            elif meal_found.name and meal_found not in existing_meal_names:
+                  # Perform the OpenAI sanity check on the found meal
+                if perform_openai_sanity_check(meal_found, user):
+                    # If the meal passes the sanity check, add it to the meal plan
+                    MealPlanMeal.objects.create(
+                        meal_plan=meal_plan,
+                        meal=meal_found,
+                        day=meal_date.strftime('%A'),
+                        meal_type=meal_type,
+                    )
+                    existing_meal_names.add(meal_found.name)
+                    existing_meal_embeddings.append(meal_found.meal_embedding)
                 else:
-                    logger.error(f"Failed to create a meal for user {user.username} on {meal_date}: {meal_data['message']}")
-
+                    logger.warning(f"Meal {meal_found.name} contains allergens. Skipping.")
     logger.info(f"Meal plan created successfully for user {user.username} for the week {start_of_week} to {end_of_week}")
-
-
 
 def cosine_similarity(embedding1, embedding2):
     """Compute the cosine similarity between two embeddings."""
     return np.dot(embedding1, embedding2) / (norm(embedding1) * norm(embedding2))
+
+def find_existing_meal(user, meal_type, existing_meal_embeddings, existing_meal_names, min_similarity=0.03):
+    """
+    Search for an existing meal that is sufficiently unique compared to existing embeddings
+    and hasn't already been added to the current meal plan.
+    """
+    # Gather user's allergies
+    user_allergies = user.allergies.split(',') if user.allergies else []
+    custom_allergies = user.custom_allergies.split(',') if user.custom_allergies else []
+    all_allergies = user_allergies + custom_allergies
+
+    # Query the database for meals that match the user's dietary preferences, exclude meals with allergens
+    potential_meals = Meal.objects.filter(
+        dietary_preference=user.dietary_preference,
+        custom_dietary_preference=user.custom_dietary_preference,
+    ).exclude(
+        meal_embedding__isnull=True
+    ).exclude(
+        name__in=existing_meal_names  # Exclude meals that have already been added to the plan
+    ).exclude(
+        dishes__ingredients__name__in=all_allergies  # Exclude meals with ingredients that match the user's allergens
+    ).distinct()
+
+    # If there are no existing embeddings, return any potential meal directly
+    if not existing_meal_embeddings:
+        if potential_meals.exists():
+            return potential_meals.first()  # Return the first potential meal
+        return None  # No existing meals
+
+    # If there are existing embeddings, check for similarity
+    for meal in potential_meals:
+        for existing_embedding in existing_meal_embeddings:
+            similarity = cosine_similarity(meal.meal_embedding, existing_embedding)
+            if similarity < (1 - min_similarity):  # The closer the similarity is to 0, the more unique
+                return meal  # Return the first sufficiently unique meal
+
+    return None  # No sufficiently unique meal found
+
+def perform_openai_sanity_check(meal, user):
+    """
+    Use OpenAI to generate missing ingredient data for meals and ensure allergens are avoided.
+    """
+    # Gather user's allergies
+    user_allergies = user.allergies.split(',') if user.allergies else []
+    custom_allergies = user.custom_allergies.split(',') if user.custom_allergies else []
+    all_allergies = user_allergies + custom_allergies
+    print(f"Checking meal: {meal.name} for user {user.username}")
+    print(f"User allergies: {all_allergies}")
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a helpful assistant that checks whether a meal has the possibility of including a user's allergens and meets their preference. "
+                        "If they do, you return 'False'. If they are allergen-free, you return 'True'."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"The meal is called '{meal.name}' and is described as: {meal.description}. "
+                        f"The dietary preference is: {meal.dietary_preference} and/or {meal.custom_dietary_preference}. "
+                        f"Please ensure none of the following allergens are present: {', '.join(all_allergies)}."
+                    )
+                }
+            ],
+            response_format={
+                'type': 'json_schema',
+                'json_schema': 
+                    {
+                        "name": "Sanity",
+                        "schema": SanitySchema.model_json_schema()
+                    }
+                }
+            )
+
+        gpt_output = response.choices[0].message.content
+        print(f"GPT output: {gpt_output}")
+
+        allergen_check = json.loads(gpt_output).get('allergen_check', False)
+
+        if allergen_check:
+            logger.info(f"Meal {meal.name} is allergen-free for user {user.username}.")
+        else:
+            logger.warning(f"Meal {meal.name} contains allergens for user {user.username}.")
+
+        return allergen_check
+
+    except Exception as e:
+        logger.error(f"Error during OpenAI sanity check: {e}")
+        return False  # Return False if an error occurs
+
+
 
 def generate_meal_details(user, meal_type, existing_meal_names, existing_meal_embeddings, min_similarity=0.03):
     """
@@ -427,7 +560,7 @@ def generate_shopping_list(meal_plan_id):
 
     # Send data to Zapier
     try:
-        zap_url = os.getenv("ZAP_GENERATE_SHOPPING_LIST_URL")  
+        zap_url = config["ZAP_GENERATE_SHOPPING_LIST_URL"]
         requests.post(zap_url, json=email_data)
         logger.info(f"Shopping list sent to Zapier for: {user_email}")
     except Exception as e:
@@ -601,9 +734,9 @@ def generate_instructions(meal_plan_meal_id):
     }
     # Send data to Zapier
     try:
-        zap_url = os.getenv("ZAP_GENERATE_INSTRUCTIONS_URL")  
+        zap_url = config["ZAP_GENERATE_INSTRUCTIONS_URL"]  
         requests.post(zap_url, json=email_data)
-        logger.info(f"Cooking instructions sent to Zapier for: {user_email}")
+        logger.info(f"                zgrep -r 'instruction' .: {user_email}")
     except Exception as e:
         logger.error(f"Error sending cooking instructions to Zapier for: {user_email}, error: {str(e)}")
 

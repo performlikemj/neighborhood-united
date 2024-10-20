@@ -1,12 +1,13 @@
 import logging
 import os
+import traceback
 from django.shortcuts import get_object_or_404, render, redirect
 from django.contrib.auth.decorators import login_required, user_passes_test
 from datetime import date, datetime, timedelta
 from .forms import DishForm, IngredientForm, MealForm
-from .models import Meal, Cart, Dish, Ingredient, Order, OrderMeal, MealPlan, MealPlanMeal, Instruction
+from .models import Meal, Cart, Dish, Ingredient, Order, OrderMeal, MealPlan, MealPlanMeal, Instruction, PantryItem
 from django.http import JsonResponse, HttpResponseBadRequest
-from .serializers import MealPlanSerializer
+from .serializers import MealPlanSerializer, PantryItemSerializer
 from chefs.models import Chef
 from django.conf import settings
 import requests
@@ -28,6 +29,7 @@ from django.views.decorators.http import require_http_methods
 from customer_dashboard.models import GoalTracking, ChatThread, UserHealthMetrics, CalorieIntake
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.pagination import PageNumberPagination
 from customer_dashboard.permissions import IsCustomer
 from django.http import JsonResponse
 from django.http import HttpResponseForbidden
@@ -719,16 +721,13 @@ def api_generate_cooking_instructions(request):
             return Response({"error": "No valid meal plan meals found or you do not have permission to access them."}, status=404)
 
         # Call the Celery task to generate cooking instructions for each valid meal plan meal
-        for meal_plan_meal_id in valid_meal_plan_meal_ids:
-            print(f'MealPlanMeal id in generation view: {meal_plan_meal_id}')
-            generate_instructions.delay(meal_plan_meal_id)
+        generate_instructions.delay(valid_meal_plan_meal_ids)
 
         return Response({"message": "Cooking instructions generation initiated successfully for the selected meal plan meals."}, status=200)
 
     except Exception as e:
         logger.error(f"An error occurred while initiating cooking instructions generation: {str(e)}")
         return Response({"error": "An unexpected error occurred. Please try again later."}, status=500)
-    
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -777,3 +776,87 @@ def api_approve_meal_plan(request):
 
     # Return the result of the approval process
     return Response(result)
+
+class PantryItemPagination(PageNumberPagination):
+    page_size = 10  # Adjust as needed
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def api_pantry_items(request):
+    """
+    GET: List all pantry items for the authenticated user with pagination.
+    POST: Create a new pantry item for the authenticated user.
+    """
+    print(f'Request Info: {request}')
+    print(f'Request User: {request.user}')
+    print(f'Request Data: {request.data}')
+    print(f'Request Method: {request.method}')
+    
+    if request.method == 'GET':
+        pantry_items = PantryItem.objects.filter(user=request.user).order_by('-expiration_date')
+        paginator = PantryItemPagination()
+        result_page = paginator.paginate_queryset(pantry_items, request)
+        serializer = PantryItemSerializer(result_page, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+    elif request.method == 'POST':
+        # Ensure request.data is a dictionary, not a string
+        if isinstance(request.data, str):
+            try:
+                data = json.loads(request.data)
+            except json.JSONDecodeError:
+                return Response({"error": "Invalid JSON format."}, status=400)
+        else:
+            data = request.data
+
+        serializer = PantryItemSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save(user=request.user) 
+            return Response(serializer.data, status=201)
+        else:
+            print(f"Serializer Errors: {serializer.errors}")  # Log the errors
+            return Response(serializer.errors, status=400)
+    
+@api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def api_pantry_item_detail(request, pk):
+    """
+    Handles GET, PUT/PATCH, DELETE methods for a single pantry item.
+    """
+    pantry_item = get_object_or_404(PantryItem, pk=pk, user=request.user)
+
+    if request.method == 'GET':
+        serializer = PantryItemSerializer(pantry_item)
+        return Response(serializer.data, status=200)
+
+    elif request.method in ['PUT', 'PATCH']:
+        # If request.data is a string (which it shouldn't be in a correctly configured API request)
+        if isinstance(request.data, str):
+            try:
+                # Convert the string to a dictionary
+                data = json.loads(request.data)
+            except json.JSONDecodeError:
+                return Response({"error": "Invalid JSON format."}, status=400)
+        else:
+            # Otherwise, use request.data as is
+            data = request.data
+
+
+        # Set partial=True for PATCH and False for PUT
+        partial = request.method == 'PATCH'
+        serializer = PantryItemSerializer(pantry_item, data=data, partial=partial)
+        
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=200)
+        else:
+            print(f"Serializer Errors: {serializer.errors}")
+            return Response(serializer.errors, status=400)
+
+    elif request.method == 'DELETE':
+        pantry_item.delete()
+        return Response(status=204)
+
+

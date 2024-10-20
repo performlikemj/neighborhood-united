@@ -1,4 +1,5 @@
 from django.db import models
+from django.apps import apps
 from django.contrib.auth.models import AbstractUser
 from django.contrib.auth import get_user_model
 from django_countries.fields import CountryField
@@ -79,8 +80,16 @@ class CustomUser(AbstractUser):
     initial_email_confirmed = models.BooleanField(default=False)
     # Field to store week_shift for context when chatting with assistant
     week_shift = models.IntegerField(default=0)
-    dietary_preference = models.CharField(max_length=20, choices=DIETARY_CHOICES, default='Everything', blank=True, null=True)
-    custom_dietary_preference = models.CharField(max_length=200, blank=True, null=True)
+    dietary_preferences = models.ManyToManyField(
+        'meals.DietaryPreference',  # Use the app name and model name as a string
+        blank=True,
+        related_name='users'
+    )
+    custom_dietary_preferences = models.ManyToManyField(
+        'meals.CustomDietaryPreference',
+        blank=True,
+        related_name='users'
+    )
     preferred_language = models.CharField(max_length=2, choices=LANGUAGE_CHOICES, default='en')
     allergies = ArrayField(
         models.CharField(max_length=20, choices=ALLERGY_CHOICES),
@@ -93,6 +102,8 @@ class CustomUser(AbstractUser):
     email_daily_instructions = models.BooleanField(default=True)
     email_meal_plan_saved = models.BooleanField(default=True)
     email_instruction_generation = models.BooleanField(default=True)
+    # Emergency supply goal
+    emergency_supply_goal = models.PositiveIntegerField(default=0)  # Number of days of supplies the user wants
     
     def save(self, *args, **kwargs):
         self.username = self.username.lower()

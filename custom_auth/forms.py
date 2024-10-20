@@ -3,6 +3,7 @@ from .models import CustomUser, Address
 from django.contrib.auth.forms import UserCreationForm
 from local_chefs.models import PostalCode  # Import the PostalCode model
 from .utils import send_email_change_confirmation
+from meals.models import DietaryPreference
 
 
 ROLE_CHOICES = (
@@ -12,9 +13,16 @@ ROLE_CHOICES = (
 
 
 class UserProfileForm(forms.ModelForm):
+    dietary_preferences = forms.ModelMultipleChoiceField(
+        queryset=DietaryPreference.objects.all(),
+        required=False,
+        widget=forms.CheckboxSelectMultiple
+    )
+    custom_dietary_preferences = forms.CharField(max_length=200, required=False)
     class Meta:
         model = CustomUser
-        fields = ['username', 'first_name', 'last_name', 'email', 'phone_number', 'dietary_preference']
+        fields = ['username', 'first_name', 'last_name', 'email', 'phone_number', 'dietary_preferences', 'custom_dietary_preferences']
+
 
     def __init__(self, *args, **kwargs):
         self.request = kwargs.pop('request', None)

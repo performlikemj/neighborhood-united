@@ -1,7 +1,6 @@
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
-from meals.tasks import generate_user_summary
 from meals.models import Order, Dish, Meal, Cart, MealPlanMeal, MealPlan, Meal
 from custom_auth.models import CustomUser, UserRole
 from django.contrib.auth.decorators import user_passes_test
@@ -16,6 +15,7 @@ import openai
 from openai import NotFoundError, OpenAI, OpenAIError
 import pytz
 import json
+from django.db.models.query import QuerySet
 import os
 import re
 import time
@@ -36,11 +36,15 @@ from shared.utils import (get_user_info, post_review, update_review, delete_revi
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
 from .serializers import ChatThreadSerializer, GoalTrackingSerializer, UserHealthMetricsSerializer, CalorieIntakeSerializer
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from .permissions import IsCustomer
+from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
+from rest_framework.views import APIView
 import datetime
 from asgiref.sync import async_to_sync
 import asyncio
@@ -48,6 +52,15 @@ import logging
 import threading
 from decimal import Decimal
 import traceback
+from django.conf import settings
+
+class GuestChatThrottle(UserRateThrottle):
+    rate = '100/day'  
+
+class AuthChatThrottle(UserRateThrottle):
+    rate = '1000/day'
+
+
 # Load configuration from config.json
 with open('/etc/config.json') as config_file:
     config = json.load(config_file)
@@ -63,7 +76,6 @@ def api_recommend_follow_up(request):
 
     # Step 1: Retrieve the most recent active chat thread for the user
     try:
-        print(f'Recommend follow-up for user: {user}')
         chat_thread = ChatThread.objects.filter(user=user, is_active=True).latest('created_at')
     except ChatThread.DoesNotExist:
         return Response({'error': 'No active chat thread found.'}, status=404)
@@ -92,17 +104,16 @@ def api_recommend_follow_up(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_user_summary_status(request):
+    from meals.tasks import generate_user_summary
     if not request.user.is_authenticated:
         return Response({"status": "error", "message": "User is not authenticated"}, status=401)
     
     user_id = request.user.id
     user_summary = UserSummary.objects.filter(user_id=user_id).first()
-    print(f'User Summary: {user_summary}')
     
 
     # Check if the summary doesn't exist or contains "No summary available"
     if not user_summary or user_summary.summary.strip() == "No summary available":
-        print(f"Generating user summary for user {user_id}")
         if not user_summary:
             user_summary = UserSummary.objects.create(user_id=user_id, status='pending')
         else:
@@ -128,6 +139,7 @@ def api_user_summary_status(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_user_summary(request):
+    from meals.tasks import generate_user_summary
     user_id = request.user.id  # Use request.user.id to get the authenticated user's ID
     user = get_object_or_404(CustomUser, id=user_id)
 
@@ -706,6 +718,7 @@ def handle_openai_error(action, thread_id, question, client):
         return {"status": "error", "message": "Failed to create message."}
 
 @api_view(['POST'])
+@throttle_classes([GuestChatThrottle])
 def guest_chat_with_gpt(request):
     headers = {
         "Authorization": f"Bearer {settings.OPENAI_KEY}",
@@ -761,7 +774,6 @@ def guest_chat_with_gpt(request):
                     content=question
                 )
             except OpenAIError as e:
-                print(f'Error: {e}')
                 if 'Can\'t add messages to thread' in str(e) and 'while a run' in str(e) and 'is active' in str(e):
                     # Extract the run ID from the error message
                     match = re.search(r'run (\w+)', str(e))
@@ -801,6 +813,7 @@ def guest_chat_with_gpt(request):
 # @login_required
 # @user_passes_test(is_customer)
 @api_view(['POST'])
+@throttle_classes([AuthChatThrottle])
 def chat_with_gpt(request):
     # Set up OpenAI
     client = OpenAI(api_key=settings.OPENAI_KEY)    
@@ -928,20 +941,47 @@ def get_message_status(request, message_id):
     except UserMessage.DoesNotExist:
         return Response({'error': 'Message not found'}, status=404)
 
+# Function to handle serialization of non-JSON serializable objects
+def serialize_return_value(value):
+    if isinstance(value, QuerySet):
+        # Convert QuerySet to a list of dicts using .values()
+        return list(value.values())
+    elif isinstance(value, dict):
+        # Recursively serialize dict values
+        return {k: serialize_return_value(v) for k, v in value.items()}
+    elif isinstance(value, list):
+        # Recursively serialize list elements
+        return [serialize_return_value(v) for v in value]
+    return value  # Return as is if it's serializable
 
 @api_view(['POST'])
 def guest_ai_tool_call(request):
     tool_call = request.data.get('tool_call')
+    print(f"Guest tool call: {tool_call}")
     name = tool_call['function']
-    arguments = json.loads(tool_call['arguments'])  # Get arguments from tool_call
-    if arguments is None:  # Check if arguments is None
-        arguments = {}  # Assign an empty dictionary to arguments
-    # Ensure that 'request' is included in the arguments if needed
+    
+    # Safely load the arguments, ensuring **kwargs captures any extra parameters
+    try:
+        arguments = json.loads(tool_call.get('arguments', '{}'))  # Use empty dict if missing arguments
+    except json.JSONDecodeError as json_err:
+        logger.error(f"JSON decode error: {json_err}")
+        return Response({'status': 'error', 'message': f"JSON decode error: {json_err}"})
+
+    if arguments is None:
+        arguments = {}
+
+    # Add the request object to arguments
     arguments['request'] = request
+
+    # Handle extra arguments with **kwargs
     return_value = guest_functions[name](**arguments)
+
+    # Serialize the return value
+    serialized_return_value = serialize_return_value(return_value)
+
     tool_outputs = {
         "tool_call_id": tool_call['id'],
-        "output": return_value,
+        "output": serialized_return_value,
         "function": name,
     }
 
@@ -951,6 +991,7 @@ def guest_ai_tool_call(request):
 @api_view(['POST'])
 def ai_tool_call(request):
     try:
+        print(f"Tool call received: {request.data}")
         user_id = request.data.get('user_id')
         user = CustomUser.objects.get(id=user_id)
         tool_call = request.data.get('tool_call')
@@ -959,24 +1000,27 @@ def ai_tool_call(request):
         name = tool_call['function']
         logger.info(f"Function to call: {name}")
 
+        # Safely load the arguments, ensuring **kwargs captures any extra parameters
         try:
-            arguments = json.loads(tool_call['arguments'])  # Get arguments from tool_call
+            arguments = json.loads(tool_call.get('arguments', '{}'))  # Use empty dict if missing arguments
             logger.info(f"Parsed arguments: {arguments}")
         except json.JSONDecodeError as json_err:
-            logger.error(f"JSON decode error: {json_err} - Raw arguments: {tool_call['arguments']}")
+            logger.error(f"JSON decode error: {json_err} - Raw arguments: {tool_call.get('arguments', '{}')}")
             return Response({'status': 'error', 'message': f"JSON decode error: {json_err}"})
 
-        if arguments is None:  # Check if arguments is None
-            arguments = {}  # Assign an empty dictionary to arguments
-        
-        # Ensure that 'request' is included in the arguments if needed
+        if arguments is None:
+            arguments = {}
+
+        # Add the request object to arguments
         arguments['request'] = request
 
+        # Handle extra arguments with **kwargs
         try:
-            # This inner try block specifically catches TypeError that may occur 
-            # when calling the function with incorrect arguments
             return_value = functions[name](**arguments)
-            logger.info(f"Function {name} executed successfully with return value: {return_value}")
+
+            # Serialize the return value if needed
+            serialized_return_value = serialize_return_value(return_value)
+
         except TypeError as e:
             # Handle unexpected arguments or missing arguments
             logger.error(f'Function call error: {str(e)} - Function: {name}, Arguments: {arguments}')
@@ -988,7 +1032,7 @@ def ai_tool_call(request):
         
         tool_outputs = {
             "tool_call_id": tool_call['id'],
-            "output": return_value,
+            "output": serialized_return_value,
         }
 
         # Create a new ToolCall instance
@@ -1005,3 +1049,4 @@ def ai_tool_call(request):
         # Handle errors that occur outside the function call
         logger.error(f'Error: {str(e)} - Tool call: {tool_call}')
         return Response({'status': 'error', 'message': f"An unexpected error occurred: {str(e)}"})
+

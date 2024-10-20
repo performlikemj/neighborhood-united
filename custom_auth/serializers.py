@@ -2,6 +2,7 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import Address, CustomUser, UserRole
+from meals.models import CustomDietaryPreference, DietaryPreference
 from local_chefs.models import PostalCode, ChefPostalCode
 from django.utils.translation import gettext_lazy as _
 from django_countries.fields import Country
@@ -17,31 +18,98 @@ class CustomUserSerializer(serializers.ModelSerializer):
         allow_empty=True,  # Allow for no allergies
     )
 
+    # Handle dietary_preferences as ManyToManyField
+    dietary_preferences = serializers.SlugRelatedField(
+        many=True,
+        slug_field='name',  # Using 'name' to represent dietary preferences
+        queryset=DietaryPreference.objects.all(),
+        required=False
+    )
+    
+    # Handle custom_dietary_preferences as ManyToManyField
+    custom_dietary_preferences = serializers.SlugRelatedField(
+        many=True,
+        slug_field='name',
+        queryset=CustomDietaryPreference.objects.all(),
+        required=False
+    )
+
     class Meta:
         model = get_user_model()
-        fields = ['id', 'username', 'email', 'email_daily_instructions', 'email_meal_plan_saved', 'email_instruction_generation', 'password', 'phone_number', 'dietary_preference', 'custom_dietary_preference', 'allergies', 'custom_allergies', 'week_shift', 'email_confirmed', 'preferred_language', 'timezone']
-        extra_kwargs = {'password': {'write_only': True, 'required': False}, 'username': {'required': False}, 'email': {'required': False}, 'phone_number': {'required': False}}
+        fields = [
+            'id', 'username', 'email', 'email_daily_instructions', 'email_meal_plan_saved',
+            'email_instruction_generation', 'password', 'phone_number', 'dietary_preferences',
+            'custom_dietary_preferences', 'allergies', 'custom_allergies', 'week_shift', 
+            'email_confirmed', 'preferred_language', 'timezone', 'emergency_supply_goal'  # Add this field
+        ]
+        extra_kwargs = {
+            'password': {'write_only': True},
+            'username': {},
+            'email': {},
+            'phone_number': {'required': False},  # Make phone_number not required
+            'custom_dietary_preferences': {'required': False},  # Optional field
+        }
+
+    def to_representation(self, instance):
+        """Customize the representation to ensure ManyToMany fields are properly serialized"""
+        ret = super().to_representation(instance)
+
+        # Ensure dietary preferences are serialized properly
+        ret['dietary_preferences'] = list(instance.dietary_preferences.all().values_list('name', flat=True))
+        ret['custom_dietary_preferences'] = list(instance.custom_dietary_preferences.all().values_list('name', flat=True))
+
+        return ret
+
+    def __init__(self, *args, **kwargs):
+        super(CustomUserSerializer, self).__init__(*args, **kwargs)
+        request = self.context.get('request')
+        if request and getattr(request, 'method', None) == 'POST':
+            # Require username, email, and password only during registration (POST)
+            self.fields['username'].required = True
+            self.fields['username'].error_messages['required'] = _('Username is required.')
+            self.fields['email'].required = True
+            self.fields['email'].error_messages['required'] = _('Email is required.')
+            self.fields['password'].required = True
+            self.fields['password'].error_messages['required'] = _('Password is required.')
+        else:
+            # Not required during update operations
+            self.fields['username'].required = False
+            self.fields['email'].required = False
+            self.fields['password'].required = False
 
     def create(self, validated_data):
+        custom_dietary_prefs = validated_data.pop('custom_dietary_preferences', [])
         user = get_user_model()(
             username=validated_data.get('username'),
             email=validated_data.get('email'),
-            phone_number=validated_data.get('phone_number', ''), 
-            dietary_preference=validated_data.get('dietary_preference'),
+            phone_number=validated_data.get('phone_number', ''),  
+            preferred_language=validated_data.get('preferred_language', 'en'),
+            timezone=validated_data.get('timezone', 'UTC'),
+            allergies=validated_data.get('allergies', []),
+            custom_allergies=validated_data.get('custom_allergies', ''),
+            emergency_supply_goal=validated_data.get('emergency_supply_goal', 0),  
         )
         user.set_password(validated_data['password'])
         user.save()
+        user.dietary_preferences.set(validated_data.get('dietary_preferences', []))
+        user.custom_dietary_preferences.set(custom_dietary_prefs)
         return user
 
+
     def update(self, instance, validated_data):
+        custom_dietary_prefs = validated_data.pop('custom_dietary_preferences', None)
         for attr, value in validated_data.items():
-            if attr in ['username', 'email', 'email_daily_instructions', 'email_meal_plan_saved', 'email_instruction_generation', 'phone_number', 'dietary_preference', 'custom_dietary_preference', 'allergies', 'custom_allergies', 'password', 'preferred_language', 'timezone']:
-                if attr == 'password':
-                    instance.set_password(value)
-                else:
-                    setattr(instance, attr, value)
+            if attr == 'password':
+                instance.set_password(value)
+            elif attr == 'dietary_preferences':
+                instance.dietary_preferences.set(value)  # Update ManyToMany field
+            else:
+                setattr(instance, attr, value)
+        if custom_dietary_prefs is not None:
+            instance.custom_dietary_preferences.set(custom_dietary_prefs)
         instance.save()
         return instance
+
     
 class AddressSerializer(serializers.ModelSerializer):
     user = serializers.PrimaryKeyRelatedField(queryset=CustomUser.objects.all(), write_only=True)
@@ -51,47 +119,40 @@ class AddressSerializer(serializers.ModelSerializer):
     input_postalcode = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     country = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
-
     class Meta:
         model = Address
         fields = ['user', 'street', 'city', 'state', 'input_postalcode', 'country']
 
-    # def validate_country(self, value):
-    #     # Directly validate against the model's CountryField
-    #     try:
-    #         address = Address(country=value)
-    #         address.full_clean()  # Trigger full validation, including country code validation
-    #     except ValidationError as e:
-    #         raise serializers.ValidationError(f"Invalid country code: {value}")
-    #     return value
-
     def to_representation(self, instance):
+        """
+        Convert the country code back to the country name for output.
+        """
         representation = super().to_representation(instance)
         country_code = representation.get('country')
-        # Replace the country code with the full name
         if country_code:
+            # Replace the country code with the full name
             country_name = dict(countries).get(country_code, country_code)
             representation['country'] = country_name
         return representation
-    
+
     def create(self, validated_data):
         user = validated_data.get('user')
-        # Check if an address already exists for this user
         if Address.objects.filter(user=user).exists():
             raise serializers.ValidationError("An address for this user already exists.")
-        
-        # If no address exists, create a new one
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
-        # Update the existing address instance with new data
         instance.street = validated_data.get('street', instance.street)
         instance.city = validated_data.get('city', instance.city)
         instance.state = validated_data.get('state', instance.state)
         instance.input_postalcode = validated_data.get('input_postalcode', instance.input_postalcode)
-        instance.country = validated_data.get('country', instance.country)
+
+        # Use the validated country code, not the full name
+        instance.country = validated_data.get('country', instance.country)  # This will now be the code 'JP'
+        
         instance.save()
         return instance
+
 
 class PostalCodeSerializer(serializers.ModelSerializer):
     class Meta:

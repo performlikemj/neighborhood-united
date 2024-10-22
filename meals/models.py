@@ -11,12 +11,15 @@ from django.contrib.contenttypes.fields import GenericRelation
 from django.db import migrations
 from pgvector.django import VectorExtension
 from pgvector.django import VectorField
-from openai import OpenAI
-from meals.pydantic_models import ShoppingList as ShoppingListSchema, Instructions as InstructionsSchema
+from openai import OpenAI, OpenAIError
+from meals.pydantic_models import ShoppingList as ShoppingListSchema, Instructions as InstructionsSchema, DietaryPreferencesSchema
 from django.core.serializers.json import DjangoJSONEncoder
 from django.forms.models import model_to_dict
 import traceback
+import numpy as np
+import logging
 
+logger = logging.getLogger(__name__)
 
 client = OpenAI(api_key=settings.OPENAI_KEY)
 
@@ -140,39 +143,38 @@ class PostalCodeManager(models.Manager):
                 pass
         return super().get_queryset()
 
+class DietaryPreference(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+
+    def __str__(self):
+        return self.name
+
+
 class DietaryPreferenceManager(models.Manager):
     def for_user(self, user):
         if user.is_authenticated:
-            dietary_preference = user.dietary_preference
-            if dietary_preference == 'Everything':
+            user_prefs = user.dietary_preferences.all()  # Assuming this is now a many-to-many relationship
+            if user_prefs.filter(name='Everything').exists():
                 return super().get_queryset()
             else:
-                return super().get_queryset().filter(dietary_preference=dietary_preference)
+                return super().get_queryset().filter(dietary_preferences__in=user_prefs)
         return super().get_queryset()
+
+class CustomDietaryPreference(models.Model):
+    name = models.CharField(max_length=200, unique=True)
+    description = models.TextField(blank=True, null=True)
+    allowed = models.JSONField(default=list, blank=True)
+    excluded = models.JSONField(default=list, blank=True)
+
+    def __str__(self):
+        return self.name
     
 class Meal(models.Model):
-    DIETARY_CHOICES = [
-    ('Vegan', 'Vegan'),
-    ('Vegetarian', 'Vegetarian'),
-    ('Pescatarian', 'Pescatarian'),
-    ('Gluten-Free', 'Gluten-Free'),
-    ('Keto', 'Keto'),
-    ('Paleo', 'Paleo'),
-    ('Halal', 'Halal'),
-    ('Kosher', 'Kosher'),
-    ('Low-Calorie', 'Low-Calorie'),
-    ('Low-Sodium', 'Low-Sodium'),
-    ('High-Protein', 'High-Protein'),
-    ('Dairy-Free', 'Dairy-Free'),
-    ('Nut-Free', 'Nut-Free'),
-    ('Raw Food', 'Raw Food'),
-    ('Whole 30', 'Whole 30'),
-    ('Low-FODMAP', 'Low-FODMAP'),
-    ('Diabetic-Friendly', 'Diabetic-Friendly'),
-    ('Everything', 'Everything'),
-    # ... add more as needed
+    MEAL_TYPE_CHOICES = [
+        ('Breakfast', 'Breakfast'),
+        ('Lunch', 'Lunch'),
+        ('Dinner', 'Dinner'),
     ]
-
     PARTY_SIZE_CHOICES = [(i, i) for i in range(1, 51)]  # Replace 51 with your maximum party size + 1
     name = models.CharField(max_length=200, default='Meal Name')
     creator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_meals') 
@@ -181,11 +183,14 @@ class Meal(models.Model):
     created_date = models.DateTimeField(auto_now_add=True)
     start_date = models.DateField(null=True, blank=True)  # The first day the meal is available
     dishes = models.ManyToManyField(Dish, blank=True)
-    dietary_preference = models.CharField(max_length=20, choices=DIETARY_CHOICES, null=True, blank=True)
-    custom_dietary_preference = models.CharField(max_length=200, null=True, blank=True) 
+    dietary_preferences = models.ManyToManyField(DietaryPreference, blank=True, related_name='meals')
+    custom_dietary_preferences = models.ManyToManyField(
+        CustomDietaryPreference, blank=True, related_name='meals'
+    )    
     price = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)  # Adding price field
     description = models.TextField(blank=True)  # Adding description field
     review_summary = models.TextField(blank=True, null=True)  # Adding summary field
+    meal_type = models.CharField(max_length=10, choices=MEAL_TYPE_CHOICES, default='Dinner')
     reviews = GenericRelation(
         'reviews.Review',  # The model to use
         'object_id',  # The foreign key on the related model (Review)
@@ -203,18 +208,112 @@ class Meal(models.Model):
             models.UniqueConstraint(fields=['chef', 'start_date'], condition=models.Q(chef__isnull=False), name='unique_chef_meal_per_date')
         ]
 
-    def __str__(self):
-        # Modify the string representation to accommodate meals created by users
-        creator_info = self.chef.user.username if self.chef else (self.creator.username if self.creator else 'No creator')
-        meal_info = f'{self.name} by {creator_info} ({self.dietary_preference})'
+    def save(self, *args, **kwargs):
+        is_new = self._state.adding  # Check if the meal is new
 
+        super(Meal, self).save(*args, **kwargs)  # Save the instance before any operations
+
+        if not self.created_date:
+            self.created_date = timezone.now()
         
+        # Validation for chef-created meals
+        if self.chef:
+            if self.start_date is None or self.price is None or not self.image:
+                raise ValueError('start_date, price, and image must be provided when a chef creates a meal')
+            if not self.dishes.exists():
+                raise ValueError('At least one dish must be provided when a chef creates a meal')
+        # Step 1: Save the instance first to ensure it has an ID
+        if not self.pk:  # Check if the instance is new (i.e., no primary key yet)
+            super(Meal, self).save(*args, **kwargs)
+
+    def generate_messages(self):
+        """
+        Generate the list of messages for the OpenAI API based on the meal's details.
+        This returns an array of message objects.
+        """
+        # Gather dietary preferences
+        dietary_prefs = [pref.name for pref in self.dietary_preferences.all()]
+        custom_dietary_prefs = [pref.name for pref in self.custom_dietary_preferences.all()]
+        all_dietary_prefs = dietary_prefs + custom_dietary_prefs
+        dietary_prefs_str = ', '.join(all_dietary_prefs) if all_dietary_prefs else "None"
+
+        prompt = (
+            f"Analyze the following meal and determine its dietary preferences.\n\n"
+            f"Meal Name: {self.name}\n"
+            f"Description: {self.description}\n"
+            f"Dishes: {', '.join(dish.name for dish in self.dishes.all())}\n"
+            f"Ingredients: {', '.join(ingredient.name for dish in self.dishes.all() for ingredient in dish.ingredients.all())}\n"
+            f"Existing Dietary Preferences: {dietary_prefs_str}\n"
+            f"Please list all additional applicable dietary preferences (e.g., Vegetarian, Gluten-Free) for this meal in the following JSON format exactly as shown:\n"
+            f"{{\n"
+            f'  "dietary_preferences": [\n'
+            f'    "Preference1",\n'
+            f'    "Preference2"\n'
+            f'  ]\n'
+            f"}}"
+        )
+
+        # The messages array contains a system and a user message
+        messages = [
+            {"role": "system", "content": "You are an assistant that assigns dietary preferences to meals."},
+            {"role": "user", "content": prompt}
+        ]
+        return messages
+
+
+    def parse_dietary_preferences(self, response_content):
+        """
+        Parse the dietary preferences returned by OpenAI into a list.
+        The response_content is expected to be a JSON string with a key "dietary_preferences".
+        """
+        try:
+            # Parse the JSON string
+            parsed_response = json.loads(response_content)
+            # Extract the dietary preferences list
+            dietary_prefs = parsed_response.get('dietary_preferences', [])
+            if not isinstance(dietary_prefs, list):
+                logger.error(f"'dietary_preferences' is not a list in response: {parsed_response}")
+                return []
+            return dietary_prefs
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decoding JSON: {e}")
+            logger.error(f"Response content: {response_content}")
+            return []
+
+    def __str__(self):
+        # Identify the creator
+        creator_info = self.chef.user.username if self.chef else (self.creator.username if self.creator else 'No creator')
+
+        # Initialize dietary preferences and custom dietary preferences
+        dietary_prefs = "No preferences"
+        custom_dietary_prefs = "No custom preferences"
+
+        # Only access dietary preferences if the Meal instance has been saved
+        if self.pk:  # Ensure the meal has an ID before accessing ManyToMany fields
+            try:
+                dietary_prefs_list = [pref.name for pref in self.dietary_preferences.all()] or ["No preferences"]
+                dietary_prefs = ", ".join(dietary_prefs_list)
+            except Exception as e:
+                dietary_prefs = "Error retrieving preferences"
+                logger.error(f"Error accessing dietary preferences for meal '{self.name}': {e}")
+            
+            try:
+                custom_dietary_prefs_list = [pref.name for pref in self.custom_dietary_preferences.all()] or ["No custom preferences"]
+                custom_dietary_prefs = ", ".join(custom_dietary_prefs_list)
+            except Exception as e:
+                custom_dietary_prefs = "Error retrieving custom preferences"
+                logger.error(f"Error accessing custom dietary preferences for meal '{self.name}': {e}")
+
         # Description and review summary (if available)
         description = f'Description: {self.description[:100]}...' if self.description else ''
         review_summary = f'Review Summary: {self.review_summary[:100]}...' if self.review_summary else ''
-        
-        # Combining all the elements
-        return f'{meal_info}. {description} {review_summary} Start Date: {self.start_date}, Price: {self.price}'
+
+        # Combine all the elements
+        return (
+            f'{self.name} by {creator_info} (Preferences: {dietary_prefs}, Custom Preferences: {custom_dietary_prefs}). '
+            f'{description} {review_summary} Start Date: {self.start_date}, Price: {self.price}'
+        )
+
 
 
     def trimmed_embedding(self, length=10):
@@ -240,17 +339,6 @@ class Meal(models.Model):
         """
         current_date = timezone.now().date()
         return self.start_date > current_date
-
-
-    def save(self, *args, **kwargs):
-        if not self.created_date:
-            self.created_date = timezone.now()
-        if self.chef:
-            if self.start_date is None or self.price is None or not self.image:
-                raise ValueError('start_date, price, and image must be provided when a chef creates a meal')
-            if not self.dishes.exists():
-                raise ValueError('At least one dish must be provided when a chef creates a meal')
-        super().save(*args, **kwargs)
 
 class MealPlan(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
@@ -296,6 +384,7 @@ class MealPlan(models.Model):
         """Generate shopping list when the meal plan is approved."""
         from meals.tasks import generate_shopping_list
         generate_shopping_list.delay(self.id)
+    
 
 class MealPlanMeal(models.Model):
     DAYS_OF_WEEK = [
@@ -321,7 +410,7 @@ class MealPlanMeal(models.Model):
 
     class Meta:
         # Ensure a meal is unique per day within a specific meal plan, and meal type
-        unique_together = ('meal_plan', 'meal', 'day', 'meal_type')
+        unique_together = ('meal_plan', 'day', 'meal_type')
 
     def __str__(self):
         meal_name = self.meal.name if self.meal else 'Unknown Meal'
@@ -337,13 +426,37 @@ class MealPlanMeal(models.Model):
             self.meal_plan.has_changes = True
             self.meal_plan.save()
 
+    # def delete(self, *args, **kwargs):
+    #     # Update the meal plan's is_approved and has_changes flags on deletion
+    #     meal_plan = self.meal_plan
+    #     super().delete(*args, **kwargs)
+    #     meal_plan.is_approved = False
+    #     meal_plan.has_changes = True
+    #     meal_plan.save()
+
     def delete(self, *args, **kwargs):
-        # Update the meal plan's is_approved and has_changes flags on deletion
-        meal_plan = self.meal_plan
-        super().delete(*args, **kwargs)
-        meal_plan.is_approved = False
-        meal_plan.has_changes = True
-        meal_plan.save()
+        try:
+            # Add logging to trace what's happening
+            logger.info(f"Attempting to delete MealPlanMeal for {self.meal_plan} on {self.day} ({self.meal_type}).")
+
+            # Access and save the meal_plan before deletion
+            meal_plan = self.meal_plan
+
+            # Perform the deletion
+            super().delete(*args, **kwargs)
+            logger.info(f"Successfully deleted MealPlanMeal for {self.meal_plan} on {self.day} ({self.meal_type}).")
+
+            # Update meal plan status and save changes
+            meal_plan.is_approved = False
+            meal_plan.has_changes = True
+            meal_plan.save()
+            logger.info(f"Updated MealPlan {meal_plan} after deleting associated MealPlanMeal.")
+
+        except Exception as e:
+            # Log the error with a detailed traceback
+            logger.error(f"Error occurred while deleting MealPlanMeal: {e}")
+            logger.error(traceback.format_exc())  # This will add the full traceback to the logs
+            raise
 
 class ShoppingList(models.Model):
     meal_plan = models.OneToOneField(MealPlan, on_delete=models.CASCADE, related_name='shopping_list')
@@ -434,3 +547,33 @@ class OrderMeal(models.Model):
 
     def __str__(self):
         return f'{self.meal} - {self.order} on {self.meal_plan_meal.day}'
+
+class MealPlanThread(models.Model):
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
+    thread_id = models.CharField(max_length=255, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"MealPlanThread for {self.user.username} with thread_id {self.thread_id}"
+
+class PantryItem(models.Model):
+    ITEM_TYPE_CHOICES = [
+        ('Canned', 'Canned'),
+        ('Dry', 'Dry Goods'),
+    ]
+
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='pantry_items')
+    item_name = models.CharField(max_length=100)
+    quantity = models.PositiveIntegerField(default=1)
+    expiration_date = models.DateField(blank=True, null=True)
+    item_type = models.CharField(max_length=10, choices=ITEM_TYPE_CHOICES, default='Canned')
+    notes = models.TextField(blank=True, null=True)
+
+    def is_expiring_soon(self):
+        if self.expiration_date:
+            days_until_expiration = (self.expiration_date - timezone.now().date()).days
+            return days_until_expiration <= 7  # Consider items expiring within 7 days
+        return False  # If no expiration date, assume it's not expiring soon
+
+    def __str__(self):
+        return f"{self.item_name} (x{self.quantity})"

@@ -3,7 +3,6 @@ from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
 from meals.models import Order, Dish, Meal, Cart, MealPlanMeal, MealPlan, Meal
-from meals.tasks import generate_user_summary
 from custom_auth.models import CustomUser, UserRole
 from django.contrib.auth.decorators import user_passes_test
 from django.utils import timezone
@@ -37,11 +36,15 @@ from shared.utils import (get_user_info, post_review, update_review, delete_revi
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
 from .serializers import ChatThreadSerializer, GoalTrackingSerializer, UserHealthMetricsSerializer, CalorieIntakeSerializer
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
 from .permissions import IsCustomer
+from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
+from rest_framework.views import APIView
 import datetime
 from asgiref.sync import async_to_sync
 from hood_united.consumers import ToolCallConsumer
@@ -52,6 +55,12 @@ from django.views import View
 import traceback
 from django.conf import settings
 from asgiref.sync import async_to_sync
+
+class GuestChatThrottle(UserRateThrottle):
+    rate = '100/day'  
+
+class AuthChatThrottle(UserRateThrottle):
+    rate = '1000/day'
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +104,7 @@ def api_recommend_follow_up(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_user_summary_status(request):
+    from meals.tasks import generate_user_summary
     if not request.user.is_authenticated:
         return Response({"status": "error", "message": "User is not authenticated"}, status=401)
     
@@ -134,6 +144,7 @@ def api_user_summary_status(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_user_summary(request):
+    from meals.tasks import generate_user_summary
     user_id = request.user.id
     user = get_object_or_404(CustomUser, id=user_id)
 
@@ -151,7 +162,7 @@ def api_user_summary(request):
 
     # Provide a fallback template if the user has no summary data
     if user_summary.strip() == "No summary available.":
-        fallback_template = f"Create a meal plan for the week including breakfast, lunch, and dinner for a person with: {user.allergies} and/or {user.custom_allergies}, {user.dietary_preferences} and/or {user.custom_dietary_preference}, and {user.goals}."
+        fallback_template = f"Create a meal plan for the week including breakfast, lunch, and dinner for a person with: {user.allergies} and/or {user.custom_allergies}, {user.dietary_preferences.all()} and/or {user.custom_dietary_preferences.all()}, and {user.goals}."
         recommend_prompt = fallback_template
     else:
         # Generate a recommended prompt based on the user's summary and context
@@ -685,6 +696,7 @@ def guest_ai_call(tool_call, request):
 
 
 @api_view(['POST'])
+@throttle_classes([GuestChatThrottle])
 def guest_chat_with_gpt(request):
     print("Chatting with Guest GPT")
     guest_assistant_id_file = "guest_assistant_id.txt"
@@ -822,12 +834,14 @@ def guest_chat_with_gpt(request):
 
     except Exception as e:
         logger.error(f'Error: {str(e)}')
+        traceback.print_exc()
         return Response({'error': str(e)}, status=500)
 
 
 # @login_required
 # @user_passes_test(is_customer)
 @api_view(['POST'])
+@throttle_classes([AuthChatThrottle])
 def chat_with_gpt(request):
     print("Chatting with GPT")
     assistant_id_file = "assistant_id.txt"
@@ -1589,12 +1603,6 @@ def chat_with_gpt(request):
         user_message.save()
         # Variable to store tool call results
         formatted_outputs = []
-        print(f'User dietary preference: {user.dietary_preference}')
-        print(f'User custom dietary preference: {user.custom_dietary_preference}')
-        print(f'User allergies: {user.allergies}')
-        print(f'User custom allergies: {user.custom_allergies}')
-        print(f'User goal: {user.goal}')
-        print(f'User preferred language: {user.preferred_language}')
         if relevant:
             try:
                 client.beta.threads.messages.create(

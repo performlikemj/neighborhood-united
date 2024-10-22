@@ -2,7 +2,9 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import Address, CustomUser, UserRole
+from meals.models import CustomDietaryPreference
 from local_chefs.models import PostalCode, ChefPostalCode
+from meals.models import DietaryPreference
 from django.utils.translation import gettext_lazy as _
 from django_countries.fields import Country
 from django_countries import countries
@@ -17,14 +19,36 @@ class CustomUserSerializer(serializers.ModelSerializer):
         allow_empty=True,  # Allow for no allergies
     )
 
+    # Handle dietary_preferences as ManyToManyField
+    dietary_preferences = serializers.SlugRelatedField(
+        many=True,
+        slug_field='name',  # Using 'name' to represent dietary preferences
+        queryset=DietaryPreference.objects.all(),
+        required=False
+    )
+    
+    # Handle custom_dietary_preferences as ManyToManyField
+    custom_dietary_preferences = serializers.SlugRelatedField(
+        many=True,
+        slug_field='name',
+        queryset=CustomDietaryPreference.objects.all(),
+        required=False
+    )
+
     class Meta:
         model = get_user_model()
-        fields = ['id', 'username', 'email', 'email_daily_instructions', 'email_meal_plan_saved', 'email_instruction_generation', 'password', 'phone_number', 'dietary_preference', 'custom_dietary_preference', 'allergies', 'custom_allergies', 'week_shift', 'email_confirmed', 'preferred_language', 'timezone']
+        fields = [
+            'id', 'username', 'email', 'email_daily_instructions', 'email_meal_plan_saved',
+            'email_instruction_generation', 'password', 'phone_number', 'dietary_preferences',
+            'custom_dietary_preferences', 'allergies', 'custom_allergies', 'week_shift', 
+            'email_confirmed', 'preferred_language', 'timezone', 'emergency_supply_goal'  # Add this field
+        ]
         extra_kwargs = {
             'password': {'write_only': True},
             'username': {},
             'email': {},
-            'phone_number': {'required': False}  # Make phone_number not required
+            'phone_number': {'required': False},  # Make phone_number not required
+            'custom_dietary_preferences': {'required': False},  # Optional field
         }
 
     def __init__(self, *args, **kwargs):
@@ -45,23 +69,35 @@ class CustomUserSerializer(serializers.ModelSerializer):
             self.fields['password'].required = False
 
     def create(self, validated_data):
+        custom_dietary_prefs = validated_data.pop('custom_dietary_preferences', [])
         user = get_user_model()(
             username=validated_data.get('username'),
             email=validated_data.get('email'),
             phone_number=validated_data.get('phone_number', ''),  
-            dietary_preference=validated_data.get('dietary_preference'),
+            preferred_language=validated_data.get('preferred_language', 'en'),
+            timezone=validated_data.get('timezone', 'UTC'),
+            allergies=validated_data.get('allergies', []),
+            custom_allergies=validated_data.get('custom_allergies', ''),
+            emergency_supply_goal=validated_data.get('emergency_supply_goal', 0),  
         )
         user.set_password(validated_data['password'])
         user.save()
+        user.dietary_preferences.set(validated_data.get('dietary_preferences', []))
+        user.custom_dietary_preferences.set(custom_dietary_prefs)
         return user
 
+
     def update(self, instance, validated_data):
+        custom_dietary_prefs = validated_data.pop('custom_dietary_preferences', None)
         for attr, value in validated_data.items():
-            if attr in ['username', 'email', 'email_daily_instructions', 'email_meal_plan_saved', 'email_instruction_generation', 'phone_number', 'dietary_preference', 'custom_dietary_preference', 'allergies', 'custom_allergies', 'password', 'preferred_language', 'timezone']:
-                if attr == 'password':
-                    instance.set_password(value)
-                else:
-                    setattr(instance, attr, value)
+            if attr == 'password':
+                instance.set_password(value)
+            elif attr == 'dietary_preferences':
+                instance.dietary_preferences.set(value)  # Update ManyToMany field
+            else:
+                setattr(instance, attr, value)
+        if custom_dietary_prefs is not None:
+            instance.custom_dietary_preferences.set(custom_dietary_prefs)
         instance.save()
         return instance
 

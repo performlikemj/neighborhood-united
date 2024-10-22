@@ -42,7 +42,8 @@ import logging
 from django.contrib.auth.hashers import check_password
 from dotenv import load_dotenv
 from django.db import IntegrityError
-from meals.tasks import create_meal_plan_for_new_user, generate_user_summary
+from meals.tasks import create_meal_plan_for_new_user, generate_user_summary, handle_custom_dietary_preference
+from meals.models import CustomDietaryPreference
 from django.core.mail import send_mail
 
 load_dotenv("dev.env")
@@ -74,6 +75,35 @@ def switch_role_api(request):
     serializer = UserRoleSerializer(user_role)
     return Response(serializer.data)
 
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_account(request):
+    user = request.user
+
+    # Get confirmation and password from request data
+    confirmation = request.data.get('confirmation')
+    password = request.data.get('password')
+
+    if confirmation != 'done eating':
+        return Response({'status': 'error', 'message': 'Please type "done eating" to confirm account deletion.'}, status=400)
+
+    if not password or not check_password(password, user.password):
+        return Response({'status': 'error', 'message': 'Incorrect password.'}, status=400)
+
+    try:
+        user_id = user.id
+        user_email = user.email
+
+        # Delete the user account
+        user.delete()
+        logout(request)
+        logger.info(f'User account deleted: ID={user_id}, Email={user_email}')
+
+        return Response({'status': 'success', 'message': 'Account deleted successfully.'})
+    except Exception as e:
+        logger.error(f'Error deleting user account: {str(e)}')
+        return Response({'status': 'error', 'message': 'An error occurred while deleting your account.'}, status=500)
+    
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def change_password(request):
@@ -257,11 +287,21 @@ def update_profile_api(request):
             user.username = user_serializer.validated_data['username']
             user.save()
 
-        if 'dietary_preference' in user_serializer.validated_data:
-            user.dietary_preference = user_serializer.validated_data['dietary_preference']
+        if 'dietary_preferences' in user_serializer.validated_data:
+            # Use .set() to update the many-to-many relationship
+            user.dietary_preferences.set(user_serializer.validated_data['dietary_preferences'])
 
-        if 'custom_dietary_preference' in user_serializer.validated_data:
-            user.custom_dietary_preference = user_serializer.validated_data['custom_dietary_preference']
+        # If new custom dietary preferences are added, dispatch tasks
+        if 'custom_dietary_preferences' in user_serializer.validated_data:
+            new_custom_prefs = user_serializer.validated_data['custom_dietary_preferences']
+            # Identify newly added custom preferences
+            existing_custom_prefs = set(user.custom_dietary_preferences.values_list('name', flat=True))
+            added_custom_prefs = set([pref.name for pref in new_custom_prefs]) - existing_custom_prefs
+            if added_custom_prefs:
+                # Dispatch task for newly added custom preferences
+                handle_custom_dietary_preference.delay(list(added_custom_prefs))
+                logger.info(f"Dispatched tasks for new custom dietary preferences: {added_custom_prefs}")
+
 
         if 'allergies' in user_serializer.validated_data:
             user.allergies = user_serializer.validated_data['allergies']
@@ -283,6 +323,9 @@ def update_profile_api(request):
         
         if 'email_instruction_generation' in user_serializer.validated_data:
             user.email_instruction_generation = user_serializer.validated_data['email_instruction_generation']
+
+        if 'emergency_supply_goal' in user_serializer.validated_data:
+            user.emergency_supply_goal = user_serializer.validated_data['emergency_supply_goal']
 
         user_serializer.save()
 
@@ -376,8 +419,8 @@ def login_api_view(request):
             'preferred_language': user.preferred_language,
             'allergies': user.allergies,
             'custom_allergies': user.custom_allergies,
-            'dietary_preference': user.dietary_preference,
-            'custom_dietary_preference': user.custom_dietary_preference,
+            'dietary_preferences': list(user.dietary_preferences.values_list('name', flat=True)),
+            'custom_dietary_preferences': list(user.custom_dietary_preferences.values_list('name', flat=True)),
             'is_chef': user_role.is_chef,
             'current_role': user_role.current_role,
             'goal_name': goal_name,
@@ -386,6 +429,9 @@ def login_api_view(request):
             'status': 'success',
             'message': 'Logged in successfully'
         }
+
+        # Convert ManyRelatedManager fields to lists
+        response_data['allergies'] = list(user.allergies)  # Assuming allergies are simple strings
 
         return JsonResponse(response_data, status=200)
 
@@ -406,22 +452,42 @@ def logout_api_view(request):
     except (TokenError, InvalidToken):
         return JsonResponse({'status': 'error', 'message': 'Invalid token'}, status=400)
 
-
 @api_view(['POST'])
 def register_api_view(request):
     user_data = request.data.get('user')
     if not user_data:
         return Response({'errors': 'User data is required'}, status=400)
 
-    user_serializer = CustomUserSerializer(data=user_data)
-    if not user_serializer.is_valid():
-        logger.error(f"User serializer errors: {user_serializer.errors}")
-        return Response({'errors': f"We've experienced an issue when updating your user information: {user_serializer.errors}"}, status=400)
-
     try:
+        custom_diet_prefs_input = user_data.pop('custom_dietary_preferences', None)  # Extract custom dietary preferences
+        custom_prefs = []
+
+        # Handle custom dietary preferences: Create if they don't exist
+        if custom_diet_prefs_input:
+            new_custom_prefs = []
+            for custom_pref in custom_diet_prefs_input:  # Iterating over the list directly
+                custom_pref_obj, created = CustomDietaryPreference.objects.get_or_create(name=custom_pref.strip())
+                handle_custom_dietary_preference.delay([custom_pref])
+                new_custom_prefs.append(custom_pref_obj)  # Collect the created objects
+        
+        # Create the user via serializer
+        user_serializer = CustomUserSerializer(data=user_data)
+        if not user_serializer.is_valid():
+            logger.error(f"User serializer errors: {user_serializer.errors}")
+            return Response({'errors': f"We've experienced an issue when updating your user information: {user_serializer.errors}"}, status=400)
+        
         with transaction.atomic():
             user = user_serializer.save()
             UserRole.objects.create(user=user, current_role='customer')
+
+            # Add custom dietary preferences to the user
+            if new_custom_prefs:
+                user.custom_dietary_preferences.set(new_custom_prefs)
+
+            # Handle the emergency_supply_goal during user creation
+            if 'emergency_supply_goal' in user_serializer.validated_data:
+                user.emergency_supply_goal = user_serializer.validated_data['emergency_supply_goal']
+                user.save()
 
             address_data = request.data.get('address')
             # Check if any significant address data is provided
@@ -441,6 +507,19 @@ def register_api_view(request):
                     goal_name=goal_data.get('goal_name', ''),
                     goal_description=goal_data.get('goal_description', '')
                 )
+
+            # Handle custom dietary preferences
+            custom_diet_prefs_input = request.data.get('custom_dietary_preferences')
+            if custom_diet_prefs_input:
+                custom_prefs = [cp.strip() for cp in custom_diet_prefs_input.split(',')]
+                new_custom_prefs = []
+                for custom_pref in custom_prefs:
+                    custom_pref_obj, created = CustomDietaryPreference.objects.get_or_create(name=custom_pref)
+                    if created:
+                        # Call the task to generate details using OpenAI API
+                        handle_custom_dietary_preference.delay([custom_pref])
+                        new_custom_prefs.append(custom_pref_obj)
+                    user.custom_dietary_preferences.add(custom_pref_obj)
 
 
             # Prepare and send activation email

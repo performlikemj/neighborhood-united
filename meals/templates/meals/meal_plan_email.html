@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <div style="text-align: center;">
+        <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+    </div>
+    <title>Your Meal Plan is Ready!</title>
+    <style>
+        /* You can add your CSS styles here */
+        body { font-family: Arial, sans-serif; color: #333; }
+        h1 { color: #5cb85c; }
+        a { color: #5cb85c; text-decoration: none; }
+        .meal-list { list-style-type: none; padding: 0; }
+        .meal-list li { margin-bottom: 15px; }
+        .meal-name { font-weight: bold; }
+        .meal-description { font-style: italic; }
+    </style>
+</head>
+<body>
+    <p>Hi {{ user_name }},</p>
+    <p>{{ summary_text }}</p>
+    <p>Your meal plan for the week {{ meal_plan_week_start }} to {{ meal_plan_week_end }} includes:</p>
+    <ul class="meal-list">
+        {% for meal in meals %}
+        <li>
+            <div class="meal-name">{{ meal.day }} - {{ meal.meal_type }}: {{ meal.meal_name }}</div>
+            <div class="meal-description">{{ meal.description }}</div>
+        </li>
+        {% endfor %}
+    </ul>
+    <p><a href="{{ approval_link }}">Click here to approve your meal plan</a></p>
+    <p>Bon Appétit!</p>
+    <!-- Add the footer with the button -->
+    <div style="text-align: center; margin-top: 40px;">
+        <p style="color: #777;">You are receiving this email because you opted in for meal plan emails.</p>
+        <a href="{{ profile_url }}" style="
+            display: inline-block;
+            background-color: #007BFF;
+            color: #fff;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 5px;
+            font-size: 16px;
+            margin-top: 10px;
+        ">Manage Your Email Preferences</a>
+    </div>
+</body>
+</html>

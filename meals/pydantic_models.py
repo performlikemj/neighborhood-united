@@ -159,3 +159,43 @@ class ReplenishItem(BaseModel):
 
 class ReplenishItemsSchema(BaseModel):
     items_to_replenish: List[ReplenishItem] = Field(..., description="List of items to replenish")
+
+# New Pydantic Models for Approving Meal Plans
+class MealItem(BaseModel):
+    meal_name: str = Field(..., description="Name of the meal.")
+    meal_type: str = Field(..., description="Type of the meal (e.g., Breakfast, Lunch, Dinner).")
+    day: str = Field(..., description="Day of the week the meal is planned for.")
+    description: str = Field(..., description="A tempting description of the meal.")
+
+class MealPlanApprovalEmailSchema(BaseModel):
+    user_name: str = Field(..., description="Name of the user.")
+    meal_plan_week_start: str = Field(..., description="Start date of the meal plan week.")
+    meal_plan_week_end: str = Field(..., description="End date of the meal plan week.")
+    approval_link: str = Field(..., description="Link for the user to approve the meal plan.")
+    meals: List[MealItem] = Field(..., description="List of a few meals included in the meal plan.")
+    summary_text: str = Field(..., description="A tempting summary of the meal plan designed to entice the user to click the approval link.")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "user_name": "JohnDoe",
+                "meal_plan_week_start": "2024-10-22",
+                "meal_plan_week_end": "2024-10-28",
+                "approval_link": "https://example.com/meal-plan/approve/1234abcd",
+                "meals": [
+                    {
+                        "meal_name": "Oatmeal with Fresh Berries",
+                        "meal_type": "Breakfast",
+                        "day": "Monday",
+                        "description": "A warm bowl of hearty oatmeal topped with juicy, fresh berries to start your day off right."
+                    },
+                    {
+                        "meal_name": "Grilled Chicken Salad",
+                        "meal_type": "Lunch",
+                        "day": "Monday",
+                        "description": "Tender grilled chicken over a bed of crisp greens with a zesty vinaigrette."
+                    }
+                ],
+                "summary_text": "We've put together a week of mouthwatering meals just for you, JohnDoe! Whether you're enjoying a hearty breakfast of Oatmeal with Fresh Berries or a refreshing Grilled Chicken Salad, your week is set to be delicious. Ready to approve your meal plan?"
+            }
+        }

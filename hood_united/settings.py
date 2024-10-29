@@ -13,7 +13,6 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 from pathlib import Path
 import os
 from datetime import timedelta
-
 import json
 
 # Load configuration from config.json
@@ -295,26 +294,26 @@ LOGGING = {
     },
     'handlers': {
         'console': {
-            'level': 'WARNING',  # Adjusted level
+            'level': 'WARNING',
             'class': 'logging.StreamHandler',
             'formatter': 'verbose',
         },
         'file': {
-            'level': 'WARNING',  # Adjusted level
-            'class': 'logging.FileHandler',
-            'filename': os.path.join(BASE_DIR, 'django_warnings.log'),  # Updated filename
+            'level': 'WARNING',
+            'class': 'logging.FileHandler',  # Use FileHandler instead of RotatingFileHandler
+            'filename': os.path.join(BASE_DIR, 'django_warnings.log'),
             'formatter': 'verbose',
         },
     },
     'loggers': {
         'django': {
             'handlers': ['console', 'file'],
-            'level': 'WARNING',  # Adjusted level
+            'level': 'WARNING',
             'propagate': True,
         },
-        'customer_dashboard': {  
+        'customer_dashboard': {
             'handlers': ['console', 'file'],
-            'level': 'WARNING',  # Adjusted level
+            'level': 'WARNING',
             'propagate': True,
         },
         'django_redis': {

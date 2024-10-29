@@ -28,7 +28,7 @@ from openai import OpenAI
 from django.views.decorators.http import require_http_methods
 from customer_dashboard.models import GoalTracking, ChatThread, UserHealthMetrics, CalorieIntake
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.pagination import PageNumberPagination
 from customer_dashboard.permissions import IsCustomer
 from django.http import JsonResponse
@@ -64,6 +64,17 @@ def api_search_ingredients(request):
     results = search_ingredients(query)
     return JsonResponse(results)
 
+@api_view(['POST'])
+@permission_classes([AllowAny])  # Allow unauthenticated access
+def api_email_approved_meal_plan(request):
+    approval_token = request.data.get('approval_token')
+    try:
+        meal_plan = MealPlan.objects.get(approval_token=approval_token)
+        meal_plan.is_approved = True
+        meal_plan.save()
+        return Response({'status': 'success', 'message': 'Meal plan approved successfully.'})
+    except MealPlan.DoesNotExist:
+        return Response({'status': 'error', 'message': 'Invalid or expired approval token.'}, status=400)
 
 def search_ingredients(query, number=20, apiKey=settings.SPOONACULAR_API_KEY):
     search_url = "https://api.spoonacular.com/food/ingredients/search"

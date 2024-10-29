@@ -3,6 +3,8 @@ import asyncio
 import json
 import os
 import textwrap
+import uuid
+from jinja2 import Environment, FileSystemLoader
 from celery import shared_task
 from django.shortcuts import get_object_or_404
 from openai import OpenAI
@@ -41,7 +43,7 @@ from pydantic import BaseModel, Field, ValidationError
 from typing import List, Set, Optional, Tuple
 from meals.pydantic_models import (ShoppingList as ShoppingListSchema, Instructions as InstructionsSchema, 
                                    MealOutputSchema, SanitySchema, MealPlanSchema, MealsToReplaceSchema, 
-                                    DietaryPreferencesSchema, DietaryPreferenceDetail, ReplenishItemsSchema)
+                                    DietaryPreferencesSchema, DietaryPreferenceDetail, ReplenishItemsSchema, MealPlanApprovalEmailSchema)
 from rest_framework.renderers import JSONRenderer
 from meals.serializers import MealPlanSerializer, MealPlanMealSerializer
 from django.utils.timezone import now
@@ -58,7 +60,7 @@ from numpy.linalg import norm
 import random
 from random import shuffle
 from django.db.models import Q
-
+from django.db import transaction
 
 
 logger = logging.getLogger(__name__)
@@ -87,8 +89,146 @@ def get_expiring_pantry_items(user, days_threshold=7):
     """
     today = timezone.now().date()
     expiring_date = today + timedelta(days=days_threshold)
-    expiring_items = user.pantry_items.filter(expiration_date__lte=expiring_date)
+    expiring_items = user.pantry_items.filter(
+        expiration_date__gt=today,  # Exclude expired items
+        expiration_date__lte=expiring_date  # Include items expiring soon
+    )
     return [item.item_name.lower() for item in expiring_items]
+
+def send_meal_plan_approval_email(meal_plan_id):
+    from meals.models import MealPlan, MealPlanMeal
+    from shared.utils import generate_user_context
+    import uuid
+    from django.utils import timezone
+    import json
+    from jinja2 import Environment, FileSystemLoader
+    from django.conf import settings
+    import os
+
+    try:
+        # Start a database transaction
+        with transaction.atomic():
+            meal_plan = get_object_or_404(MealPlan, id=meal_plan_id)
+            
+            # Assign approval_token if not present
+            if not meal_plan.approval_token:
+                meal_plan.approval_token = uuid.uuid4()
+                meal_plan.token_created_at = timezone.now()
+                meal_plan.save()
+            
+            # Retrieve the full user object
+            user = meal_plan.user
+            user_name = user.username
+            user_email = user.email
+
+            # **Check if the user has opted in to receive meal plan emails**
+            if not user.email_meal_plan_saved:
+                logger.info(f"User {user.username} has opted out of meal plan emails.")
+                return  # Do not send the email
+
+        # Proceed with external calls after the transaction is successful
+        try:
+            user_context = generate_user_context(user)
+        except Exception as e:
+            logger.error(f"Error generating user context: {e}")
+            user_context = "User context not available."
+
+        try:
+            preferred_language = user.preferred_language
+        except Exception as e:
+            logger.error(f"Error fetching preferred language for user {user.username}: {e}")
+            preferred_language = "English"
+
+        # Generate the approval link with query parameter
+        full_approval_url = f"{config['STREAMLIT_URL']}/meal_plans?approval_token={meal_plan.approval_token}"
+
+        # Serialize the meal plan data
+        meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan).select_related('meal')
+        meals_list = [
+            f"{meal.meal.name} for {meal.meal_type} on {meal.day}" for meal in meal_plan_meals
+        ]
+        meal_plan_content = "\n".join(meals_list)
+
+        # Call OpenAI to generate the email content
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant that generates meal plan approval emails."
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Generate an email in {preferred_language}, given what you know about the user: {user_context}, that includes the following:\n\n"
+                            f"1. Greet the user by their name: {user_name}.\n"
+                            f"2. Inform them that their meal plan for the week {meal_plan.week_start_date} to {meal_plan.week_end_date} has been created.\n"
+                            f"3. Include the approval link: {full_approval_url}.\n"
+                            f"4. Encourage them to click the link to approve their meal plan.\n"
+                            f"5. Include a summary of the following list of meals in their plan:\n{meal_plan_content}. Make the summary enticing and engaging."
+                        )
+                    }
+                ],
+                response_format={
+                    'type': 'json_schema',
+                    'json_schema': 
+                        {
+                            "name": "ApprovalEmail",
+                            "schema": MealPlanApprovalEmailSchema.model_json_schema()
+                        }
+                    }
+            )
+
+            response_content = response.choices[0].message.content
+            email_data_dict = json.loads(response_content)
+            email_model = MealPlanApprovalEmailSchema(**email_data_dict)
+
+            # Set up Jinja2 environment
+            project_dir = settings.BASE_DIR
+            env = Environment(loader=FileSystemLoader(os.path.join(project_dir, 'meals', 'templates')))
+            template = env.get_template('meals/meal_plan_email.html')
+
+            # Generate the profile URL
+            profile_url = f"{config['STREAMLIT_URL']}/profile"
+
+            # Render the template with data from the Pydantic model
+            email_body_html = template.render(
+                user_name=email_model.user_name,
+                meal_plan_week_start=email_model.meal_plan_week_start,
+                meal_plan_week_end=email_model.meal_plan_week_end,
+                approval_link=email_model.approval_link,
+                meals=email_model.meals,
+                summary_text=email_model.summary_text,
+                profile_url=profile_url
+            )
+
+            email_data = {
+                'subject': f'Your Meal Plan for {meal_plan.week_start_date} - {meal_plan.week_end_date}',
+                'html_message': email_body_html,
+                'to': user_email,
+                'from': 'support@sautai.com',
+            }
+
+            # Send data to Zapier
+            try:
+                logger.debug(f"Sending approval email to Zapier for: {user_email}")
+                zap_url = config["ZAP_GENERATE_APPROVAL_EMAIL_URL"] 
+                response = requests.post(zap_url, json=email_data)
+                response.raise_for_status()
+            except Exception as e:
+                logger.error(f"Error sending approval email to Zapier for: {user_email}, error: {str(e)}")
+
+            logger.info(f"Approval email sent to Zapier for: {user_email}")
+
+        except Exception as e:
+            logger.error(f"Error generating or sending approval email: {e}")
+            # Optionally, re-raise the exception if needed
+            # raise
+
+    except Exception as e:
+        logger.error(f"Transaction failed: {e}")
+        # Handle exception as needed
 
 def determine_items_to_replenish(user):
     """
@@ -208,6 +348,34 @@ def generate_meal_embedding(meal_id):
 
     # Generate the embedding using the combined representation
     return get_embedding(meal_representation)
+
+@shared_task
+def update_embeddings():
+    from meals.models import Meal, Dish, Ingredient  # Adjust the import path based on your project structure
+
+    # Update meal embeddings using the comprehensive embedding function
+    for meal in Meal.objects.filter(meal_embedding__isnull=True):
+        meal_embedding = generate_meal_embedding(meal.id)
+        if meal_embedding:
+            meal.meal_embedding = meal_embedding
+            meal.save()
+            logger.info(f"Updated embedding for Meal ID {meal.id}")
+
+    # Update dish embeddings (you may want to create a similar embedding function for Dish if necessary)
+    for dish in Dish.objects.filter(dish_embedding__isnull=True):
+        dish_embedding = get_embedding(str(dish))
+        if dish_embedding:
+            dish.dish_embedding = dish_embedding
+            dish.save()
+            logger.info(f"Updated embedding for Dish ID {dish.id}")
+
+    # Update ingredient embeddings (again, you may want a similar embedding function for Ingredients if needed)
+    for ingredient in Ingredient.objects.filter(ingredient_embedding__isnull=True):
+        ingredient_embedding = get_embedding(str(ingredient))
+        if ingredient_embedding:
+            ingredient.ingredient_embedding = ingredient_embedding
+            ingredient.save()
+            logger.info(f"Updated embedding for Ingredient ID {ingredient.id}")
 
 @shared_task
 def handle_custom_dietary_preference(custom_prefs):
@@ -342,25 +510,48 @@ def create_meal_plan_for_new_user(user_id):
         today = timezone.now().date()
         start_of_week = today - timedelta(days=today.weekday())
         end_of_week = start_of_week + timedelta(days=6)
-        create_meal_plan_for_user(user, start_of_week, end_of_week)
+        meal_plan = create_meal_plan_for_user(user, start_of_week, end_of_week)
+        if meal_plan and user.email_meal_plan_saved:
+            try:
+                send_meal_plan_approval_email(meal_plan.id)
+            except Exception as e:
+                logger.error(f"Error sending approval email for user {user.username}: {e}")
+                traceback.print_exc()
     except CustomUser.DoesNotExist:
         logger.error(f"User with id {user_id} does not exist.")
 
 @shared_task
 def create_meal_plan_for_all_users():
-    today = timezone.now().date()
+    # Get the current time in UTC
+    current_utc_time = timezone.now()
 
-    # If today is Sunday, we want to start the meal plan for the next day (Monday)
-    start_of_week = today + timedelta(days=1) if today.weekday() == 6 else today - timedelta(days=today.weekday()) + timedelta(days=7)
-    
-    # End of the week is 6 days after the start of the week
-    end_of_week = start_of_week + timedelta(days=6)
-
-    # Fetch all users
+    # Fetch all users who have confirmed their email
     users = CustomUser.objects.filter(email_confirmed=True)
 
     for user in users:
-        create_meal_plan_for_user(user, start_of_week, end_of_week)
+        # Convert current UTC time to the user's time zone
+        try:
+            user_timezone = pytz.timezone(user.timezone)
+        except pytz.UnknownTimeZoneError:
+            logger.error(f"Unknown timezone for user {user.username}: {user.timezone}")
+            continue  # Skip this user
+
+        user_time = current_utc_time.astimezone(user_timezone)
+
+        # Check if it's 6 AM on Saturday in the user's time zone
+        if user_time.weekday() == 5 and user_time.hour == 6:
+            # Proceed to create meal plan for this user
+            today = user_time.date()
+            # Calculate start and end of week based on user's local date
+            start_of_week = today - timedelta(days=today.weekday())  # Start of the week (Monday)
+            end_of_week = start_of_week + timedelta(days=6)  # End of the week (Sunday)
+
+            # Adjust start_of_week to next week if today is Saturday
+            if today.weekday() == 5:  # Saturday
+                start_of_week += timedelta(days=7)
+                end_of_week = start_of_week + timedelta(days=6)
+
+            create_meal_plan_for_user(user, start_of_week, end_of_week)
 
 def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None):
     existing_meals = MealPlanMeal.objects.filter(
@@ -475,6 +666,8 @@ def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None):
     logger.info(f"Meal plan created successfully for user {user.username} for the week {start_of_week} to {end_of_week}")
 
     analyze_and_replace_meals(user, meal_plan, meal_types)
+    
+    return meal_plan
 
 def analyze_and_replace_meals(user, meal_plan, meal_types):
     # Fetch previous meal plans
@@ -562,76 +755,79 @@ def analyze_and_replace_meals(user, meal_plan, meal_types):
             all_possible_replacements[meal_type] = possible_replacements
 
         for meal_info in meals_to_replace:
-            meal_type = meal_info.meal_type
-            day = meal_info.day
-            old_meal_id = meal_info.meal_id
+            meal_replacement_list = meal_info[1]  # This will be the list of MealToReplace objects
 
-            possible_replacements = all_possible_replacements.get(meal_type, [])
-            if not possible_replacements:
-                logger.warning(f"No possible replacements found for meal type {meal_type} on {day}")
-                # Delete the meal from the meal plan
-                result_remove = remove_meal_from_plan(
-                    request=SimpleNamespace(data={'user_id': user.id}),
-                    meal_plan_id=meal_plan.id,
-                    meal_id=old_meal_id,
-                    day=day,
-                    meal_type=meal_type
-                )
+            for meal_replacement in meal_replacement_list:
+                meal_type = meal_replacement.meal_type
+                day = meal_replacement.day
+                old_meal_id = meal_replacement.meal_id
 
-                if result_remove['status'] == 'success':
-                    logger.info(f"Removed meal {old_meal_id} from {day} ({meal_type})")  
-
-                    # Fallback: Create a new meal
-                    result = generate_and_create_meal(
-                        user=user,
-                        meal_plan=meal_plan,  # Pass the meal plan object
-                        meal_type=meal_type,
-                        existing_meal_names=set(),
-                        existing_meal_embeddings=[],
-                        user_id=user.id,
-                        day_name=day
-                    )
-                else:
-                    logger.error(f"Failed to create a fallback meal for {meal_type} on {day}: {result['message']}")
-                
-                continue  # Move to the next meal to replace
-
-            # Iterate over possible replacements until a suitable one is found
-            replacement_found = False
-            while possible_replacements and not replacement_found:
-                # Pop a meal from the shuffled list to ensure it's not reused
-                new_meal = possible_replacements.pop()
-                new_meal_id = new_meal.id
-
-                # Perform the sanity check
-                if perform_openai_sanity_check(new_meal, user):
-                    # Update existing meal IDs to prevent selecting the same meal again
-                    existing_meal_ids.append(new_meal_id)
-
-                    # Log the replacement details for debugging
-                    logger.info(f"Replacing meal ID {old_meal_id} with meal ID {new_meal_id} for {meal_type} on {day}")
-
-                    # Call replace_meal_in_plan
-                    result = replace_meal_in_plan(
+                possible_replacements = all_possible_replacements.get(meal_type, [])
+                if not possible_replacements:
+                    # Delete the meal from the meal plan
+                    result_remove = remove_meal_from_plan(
                         request=SimpleNamespace(data={'user_id': user.id}),
                         meal_plan_id=meal_plan.id,
-                        old_meal_id=old_meal_id,
-                        new_meal_id=new_meal_id,
+                        meal_id=old_meal_id,
                         day=day,
                         meal_type=meal_type
                     )
 
-                    if result['status'] == 'success':
-                        logger.info(f"Successfully replaced meal {old_meal_id} with {new_meal_id} on {day} ({meal_type})")
-                        replacement_found = True
-                    else:
-                        logger.error(f"Failed to replace meal {old_meal_id} on {day} ({meal_type}): {result['message']}")
-                        traceback.print_exc()
-                else:
-                    logger.warning(f"Meal '{new_meal.name}' failed sanity check. Trying next possible replacement.")
+                    if result_remove['status'] == 'success':
+                        logger.info(f"Removed meal {old_meal_id} from {day} ({meal_type})")  
 
-            if not replacement_found:
-                logger.error(f"Could not find a suitable replacement for meal ID {old_meal_id} on {day} ({meal_type}).")
+                        # Fallback: Create a new meal
+                        result = generate_and_create_meal(
+                            user=user,
+                            meal_plan=meal_plan,  # Pass the meal plan object
+                            meal_type=meal_type,
+                            existing_meal_names=set(),
+                            existing_meal_embeddings=[],
+                            user_id=user.id,
+                            day_name=day
+                        )
+                    else:
+                        logger.error(f"Failed to create a fallback meal for {meal_type} on {day}: {result['message']}")
+                    
+                    continue  # Move to the next meal to replace
+
+                # Iterate over possible replacements until a suitable one is found
+                replacement_found = False
+                while possible_replacements and not replacement_found:
+                    # Pop a meal from the shuffled list to ensure it's not reused
+                    new_meal = possible_replacements.pop()
+                    new_meal_id = new_meal.id
+
+                    # Perform the sanity check
+                    if perform_openai_sanity_check(new_meal, user):
+                        # Update existing meal IDs to prevent selecting the same meal again
+                        existing_meal_ids.append(new_meal_id)
+
+                        # Log the replacement details for debugging
+                        logger.info(f"Replacing meal ID {old_meal_id} with meal ID {new_meal_id} for {meal_type} on {day}")
+
+                        # Call replace_meal_in_plan
+                        result = replace_meal_in_plan(
+                            request=SimpleNamespace(data={'user_id': user.id}),
+                            meal_plan_id=meal_plan.id,
+                            old_meal_id=old_meal_id,
+                            new_meal_id=new_meal_id,
+                            day=day,
+                            meal_type=meal_type
+                        )
+
+                        if result['status'] == 'success':
+                            logger.info(f"Successfully replaced meal {old_meal_id} with {new_meal_id} on {day} ({meal_type})")
+                            replacement_found = True
+                        else:
+                            logger.error(f"Failed to replace meal {old_meal_id} on {day} ({meal_type}): {result['message']}")
+                            traceback.print_exc()
+                    else:
+                        logger.warning(f"Meal '{new_meal.name}' failed sanity check. Trying next possible replacement.")
+
+                if not replacement_found:
+                    logger.error(f"Could not find a suitable replacement for meal ID {old_meal_id} on {day} ({meal_type}).")
+
 
     except Exception as e:
         logger.error(f"Error during meal plan analysis and replacement: {e}")
@@ -781,29 +977,47 @@ def find_existing_meal(
     custom_dietary_prefs = list(user.custom_dietary_preferences.all())
     
     
-    # Build Q filters separately for regular and custom dietary preferences
-    regular_prefs_filter = Q()
-    for pref in regular_dietary_prefs:
-        regular_prefs_filter |= Q(dietary_preferences=pref)
+    # Handle the "Everything" dietary preference
+    everything_pref = next((pref for pref in regular_dietary_prefs if pref.name == "Everything"), None)
     
-    custom_prefs_filter = Q()
-    for custom_pref in custom_dietary_prefs:
-        custom_prefs_filter |= Q(custom_dietary_preferences=custom_pref)
-    
-    # Combine both filters using OR
-    combined_filter = regular_prefs_filter | custom_prefs_filter
-    
-    
-    # Query the database for potential meals that match the user's dietary preferences
-    potential_meals = Meal.objects.filter(
-        combined_filter,        # Combined dietary preferences
-        meal_type=meal_type,    # Desired meal type
-        creator_id=user.id      # Meals created by the user
-    ).exclude(
-        id__in=skipped_meal_ids  # Exclude skipped meals
-    ).exclude(
-        name__in=existing_meal_names_lower  # Exclude existing meal names
-    ).distinct()
+    # If "Everything" is the only preference, ignore the filter
+    if everything_pref and len(regular_dietary_prefs) == 1 and not custom_dietary_prefs:
+        print(f"Preference: {everything_pref}")
+        potential_meals = Meal.objects.filter(
+            meal_type=meal_type,    # Desired meal type
+            creator_id=user.id      # Meals created by the user
+        ).exclude(
+            id__in=skipped_meal_ids  # Exclude skipped meals
+        ).exclude(
+            name__in=existing_meal_names_lower  # Exclude existing meal names
+        ).distinct()
+    else:
+        # If "Everything" exists alongside other preferences, exclude it from the filter
+        if everything_pref:
+            regular_dietary_prefs.remove(everything_pref)
+        
+        # Build Q filters separately for regular and custom dietary preferences
+        regular_prefs_filter = Q()
+        for pref in regular_dietary_prefs:
+            regular_prefs_filter |= Q(dietary_preferences=pref)
+        
+        custom_prefs_filter = Q()
+        for custom_pref in custom_dietary_prefs:
+            custom_prefs_filter |= Q(custom_dietary_preferences=custom_pref)
+        
+        # Combine both filters using OR
+        combined_filter = regular_prefs_filter | custom_prefs_filter
+        print(f"Combined filter: {combined_filter}")
+        # Query the database for potential meals that match the user's dietary preferences
+        potential_meals = Meal.objects.filter(
+            combined_filter,        # Combined dietary preferences
+            meal_type=meal_type,    # Desired meal type
+            creator_id=user.id      # Meals created by the user
+        ).exclude(
+            id__in=skipped_meal_ids  # Exclude skipped meals
+        ).exclude(
+            name__in=existing_meal_names_lower  # Exclude existing meal names
+        ).distinct()
     
     potential_meal_count = potential_meals.count()
     
@@ -963,6 +1177,10 @@ def generate_meal_details(user, meal_type, existing_meal_names, existing_meal_em
     previous_week_start = timezone.now().date() - timedelta(days=timezone.now().weekday() + 7)
     previous_week_end = previous_week_start + timedelta(days=6)
 
+    # Get expiring pantry items for context
+    expiring_pantry_items = get_expiring_pantry_items(user)
+    expiring_items_str = ', '.join(expiring_pantry_items) if expiring_pantry_items else 'None'
+
     previous_meals = MealPlanMeal.objects.filter(
         meal_plan__user=user,
         meal_plan__week_start_date=previous_week_start,
@@ -976,6 +1194,14 @@ def generate_meal_details(user, meal_type, existing_meal_names, existing_meal_em
     # Combine the current and previous meals for duplication checks
     combined_meal_names = existing_meal_names.union(previous_meal_names)
 
+    # User goal information
+    try:
+        user_goal = user.goal.goal_description
+    except Exception as e:
+        logger.error(f"Error fetching user goal: {e}")
+        user_goal = "User has no goal set."
+
+    
     # Validate that each embedding is a valid flat list
     combined_meal_embeddings = []
     for emb in existing_meal_embeddings + previous_meal_embeddings:
@@ -1011,8 +1237,11 @@ def generate_meal_details(user, meal_type, existing_meal_names, existing_meal_em
                         "role": "user",
                         "content": (
                             f"The following meals have already been created: {', '.join(combined_meal_names)}. Try to create something different. "
-                            f"Create a meal that meets the user's goals and preferences {generate_user_context(user)}. "
+                            f"Create a meal that meets the user's goals of {user_goal}. "
                             f"It is meant to be served as a {meal_type} meal. "
+                            f"The user has the following pantry items that are expiring soon: {expiring_items_str}. "
+                            f"Please try to include these expiring items in the meal. "
+                            f"Align it with the user's preferences: {generate_user_context(user)}. "
                         )
                     }
                 ],
@@ -1093,7 +1322,6 @@ def generate_shopping_list(meal_plan_id):
     # Serialize the meal plan data
     serializer = MealPlanSerializer(meal_plan)
     meal_plan_data = serializer.data
-    print(f"Serialized Meal Plan Data: {meal_plan_data}")
     # Extract user information
     user_info = meal_plan_data.get('user', {})
     user_email = user_info.get('email')
@@ -1110,9 +1338,42 @@ def generate_shopping_list(meal_plan_id):
     except CustomUser.DoesNotExist:
         logger.error(f"User with ID {user_id} does not exist.")
         return
+    
+    try:
+        user_pantry_items = get_user_pantry_items(user)
+    except Exception as e:
+        logger.error(f"Error retrieving pantry items for user {user.id}: {e}")
+        user_pantry_items = []
 
-    # Generate the user context using the full CustomUser object
-    user_context = generate_user_context(user)
+    try:
+        expiring_pantry_items = get_expiring_pantry_items(user)
+        expiring_items_str = ', '.join(expiring_pantry_items) if expiring_pantry_items else 'None'
+    except Exception as e:
+        logger.error(f"Error retrieving expiring pantry items for user {user.id}: {e}")
+        expiring_pantry_items = []
+
+    try:
+        emergency_supply_goal = user.emergency_supply_goal
+    except Exception as e:
+        logger.error(f"Error retrieving emergency supply goal for user {user.id}: {e}")
+        emergency_supply_goal = 0
+
+    # Determine items needed to replenish emergency supplies
+    try:
+        items_to_replenish = determine_items_to_replenish(user)
+    except Exception as e:
+        logger.error(f"Error determining items to replenish for user {user.id}: {e}")
+        items_to_replenish = []
+
+    # Generate the user context safely
+    try:
+        user_context = generate_user_context(user) or 'No additional user context provided.'
+    except Exception as e:
+        logger.error(f"Error generating user context: {e}")
+        user_context = 'No additional user context provided.'
+
+    # Initialize shopping_list variable
+    shopping_list = None
 
     # Check if a shopping list already exists for this meal plan
     existing_shopping_list = ShoppingListModel.objects.filter(meal_plan=meal_plan).first()
@@ -1135,7 +1396,12 @@ def generate_shopping_list(meal_plan_id):
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a helpful assistant that generates shopping lists in JSON format."
+                        "content": (
+                            "You are a helpful assistant that generates shopping lists in JSON format according to the provided schema. "
+                            "Each item must include the following fields: 'meal_name', 'ingredient', 'quantity', 'unit', 'notes', and 'category'. "
+                            "The 'category' field must be one of the following: Produce, Dairy, Meat, Bakery, Beverages, Frozen, Grains, Snacks, Condiments, Miscellaneous. "
+                            "Ensure that each ingredient is placed in the most appropriate category."
+                        )
                     },
                     {
                         "role": "user",
@@ -1143,7 +1409,11 @@ def generate_shopping_list(meal_plan_id):
                             f"Answering in the user's preferred language: {user_info['preferred_language']},"
                             f"Generate a shopping list based on the following meals: {json.dumps(user_data_json)}. "
                             f"The user information is as follows: {user_context}."
-                            
+                            f"The user has the following items in their pantry: {', '.join(user_pantry_items)}."
+                            f"The user has the following pantry items expiring soon: {expiring_items_str}."
+                            f"Do not include these pantry items in the shopping list unless they need to be replenished. "
+                            f"The user aims to maintain an emergency food supply for {emergency_supply_goal} days of dry and canned foods. "
+                            f"Items needed to replenish the emergency supply: {', '.join(items_to_replenish)}. "                          
                         )
                     }
                 ],
@@ -1157,7 +1427,9 @@ def generate_shopping_list(meal_plan_id):
                     }
             )
 
-            shopping_list = response.choices[0].message.content  # Use the parsed response
+            # After receiving the assistant's response
+            shopping_list = response.choices[0].message.content
+            logger.debug(f"Assistant's raw response: {shopping_list}")
 
             if hasattr(meal_plan, 'shopping_list'):
                 meal_plan.shopping_list.update_items(shopping_list)
@@ -1276,10 +1548,10 @@ def generate_shopping_list(meal_plan_id):
     """
 
     # Add the footer with the button
-    formatted_shopping_list += """
+    formatted_shopping_list += f"""
         <div style="text-align: center; margin-top: 40px;">
             <p style="color: #777;">You are receiving this email because you opted in for shopping list emails.</p>
-            <a href="https://sautai.com/profile" style="
+            <a href="{config["STREAMLIT_URL"]}/profile" style="
                 display: inline-block;
                 background-color: #007BFF;
                 color: #fff;
@@ -1295,6 +1567,10 @@ def generate_shopping_list(meal_plan_id):
     """
     
     if not user.email_meal_plan_saved:
+        return
+    
+    if not shopping_list:
+        logger.error(f"Failed to generate shopping list for MealPlan ID {meal_plan_id}.")
         return
     
     # Prepare data for Zapier webhook
@@ -1374,12 +1650,21 @@ def generate_instructions(meal_plan_meal_ids):
     user_email = user.email
     user_name = user.username
 
-    # Retrieve the user's pantry items and expiring items
-    expiring_pantry_items = get_expiring_pantry_items(user)
-    expiring_items_str = ', '.join(expiring_pantry_items) if expiring_pantry_items else 'None'
+    try:
+        # Retrieve the user's pantry items and expiring items
+        expiring_pantry_items = get_expiring_pantry_items(user)
+        expiring_items_str = ', '.join(expiring_pantry_items) if expiring_pantry_items else 'None'
+    except Exception as e:
+        logger.error(f"Error retrieving pantry items for user {user.id}: {e}")
+        expiring_items_str = 'None'
+
 
     # Generate the user context
-    user_context = generate_user_context(user)
+    try:
+        user_context = generate_user_context(user)
+    except Exception as e:
+        logger.error(f"Error generating user context: {e}")
+        user_context = 'No additional user context provided.'
     user_preferred_language = user.preferred_language or 'English'
 
     # Map day names to day numbers

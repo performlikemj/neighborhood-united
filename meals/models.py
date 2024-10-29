@@ -18,6 +18,7 @@ from django.forms.models import model_to_dict
 import traceback
 import numpy as np
 import logging
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -153,11 +154,20 @@ class DietaryPreference(models.Model):
 class DietaryPreferenceManager(models.Manager):
     def for_user(self, user):
         if user.is_authenticated:
-            user_prefs = user.dietary_preferences.all() 
-            if user_prefs.filter(name='Everything').exists():
+            user_prefs = user.dietary_preferences.all()  # Assuming this is a many-to-many relationship
+
+            # If "Everything" is selected and there are no other preferences, return all meals
+            if user_prefs.filter(name='Everything').exists() and user_prefs.count() == 1:
                 return super().get_queryset()
-            else:
-                return super().get_queryset().filter(dietary_preferences__in=user_prefs)
+            
+            # If "Everything" is selected along with other preferences, ignore "Everything" and filter by other preferences
+            if user_prefs.filter(name='Everything').exists() and user_prefs.count() > 1:
+                user_prefs = user_prefs.exclude(name='Everything')
+            
+            # Otherwise, filter meals based on the remaining user's dietary preferences
+            return super().get_queryset().filter(dietary_preferences__in=user_prefs)
+        
+        # If no preferences are set, return all meals (or adjust according to your logic)
         return super().get_queryset()
 
 class CustomDietaryPreference(models.Model):
@@ -414,6 +424,7 @@ class MealPlan(models.Model):
     week_end_date = models.DateField()
     is_approved = models.BooleanField(default=False)  # Track if the meal plan is approved
     has_changes = models.BooleanField(default=False)  # Track if there are changes to the plan
+    approval_token = models.UUIDField(default=uuid.uuid4, unique=True)    
     order = models.OneToOneField(
         'Order',
         null=True,
@@ -617,5 +628,10 @@ class PantryItem(models.Model):
             return days_until_expiration <= 7  # Consider items expiring within 7 days
         return False  # If no expiration date, assume it's not expiring soon
 
+    def is_expired(self):
+        if self.expiration_date:
+            return self.expiration_date < timezone.now().date()
+        return False  # If no expiration date, assume it's not expired
+    
     def __str__(self):
         return f"{self.item_name} (x{self.quantity})"

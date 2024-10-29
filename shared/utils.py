@@ -39,6 +39,7 @@ import os
 import requests
 import logging
 import numpy as np 
+import uuid
 
 with open('/etc/config.json') as config_file:
     config = json.load(config_file)
@@ -104,6 +105,41 @@ def append_dietary_preference_to_json(preference_name, definition, allowed, excl
     except Exception as e:
         logger.error(f"Unexpected error while appending dietary preference: {e}")
 
+def append_custom_dietary_preference(request, preference_name):
+    """
+    Appends a new custom dietary preference to the user's preferences and triggers the Celery task for handling.
+    
+    Parameters:
+    - request: The request object, which contains the user information.
+    - preference_name: The name of the custom dietary preference as a string.
+
+    Returns:
+    - A message indicating success or failure.
+    """
+    try:
+        from meals.tasks import handle_custom_dietary_preference
+        # Retrieve the user from the request
+        user = CustomUser.objects.get(id=request.data.get('user_id'))
+
+        # Check if the preference already exists in the user's custom preferences
+        if user.custom_dietary_preferences.filter(name=preference_name).exists():
+            return {"status": "info", "message": f"Preference '{preference_name}' already exists in the user's preferences."}
+
+        # Trigger the Celery task to handle the custom dietary preference
+        handle_custom_dietary_preference.delay([preference_name])
+
+        # Add the custom preference to the user's preferences
+        user.custom_dietary_preferences.create(name=preference_name)
+        user.save()
+
+        return {"status": "success", "message": f"Custom preference '{preference_name}' added to the user's preferences and task has been triggered."}
+
+    except CustomUser.DoesNotExist:
+        return {"status": "error", "message": "User not found."}
+
+    except Exception as e:
+        return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}
+    
 def get_embedding(text, model="text-embedding-3-small"):
     text = text.replace("\n", " ")
     try:
@@ -1014,7 +1050,8 @@ def create_meal_plan(request, **kwargs):
             user=user,
             week_start_date=start_of_week,
             week_end_date=end_of_week,
-            created_date=timezone.now()
+            created_date=timezone.now(),
+            approval_token=uuid.uuid4()
         )
         return {'status': 'success', 'message': 'Created new meal plan. It is currently empty.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
@@ -1175,21 +1212,25 @@ def create_meal(request=None, user_id=None, name=None, dietary_preference=None, 
             if request:
                 try:
                     user = CustomUser.objects.get(id=request.data.get('user_id'))
-                    user_context = generate_user_context(user)
                 except CustomUser.DoesNotExist:
                     logger.error(f"User with id {request.data.get('user_id')} does not exist.")
                     return {'status': 'error', 'message': 'User does not exist'}
             elif user_id:
                 try:
                     user = CustomUser.objects.get(id=user_id)
-                    # Generate the user context here
-                    user_context = generate_user_context(user)
                 except CustomUser.DoesNotExist:
                     logger.error(f"User with id {user_id} does not exist.")
                     return {'status': 'error', 'message': 'User does not exist'}
             else:
                 logger.error("Either request or user_id must be provided.")
                 return {'status': 'error', 'message': 'User identification is missing'}
+
+            # Generate the user context safely
+            try:
+                user_context = generate_user_context(user) or 'No additional user context provided.'
+            except Exception as e:
+                logger.error(f"Error generating user context: {e}")
+                user_context = 'No additional user context provided.'
 
             with transaction.atomic():
                 # Step 2: Check for existing meal
@@ -1211,6 +1252,14 @@ def create_meal(request=None, user_id=None, name=None, dietary_preference=None, 
 
 
                 # Step 3: Generate meal details using GPT, including user context
+
+                # Handle potential None values
+                meal_name_input = name or 'Meal Placeholder'
+                meal_type_input = meal_type or 'Dinner'
+                goal_description = (
+                    user.goal.goal_description if hasattr(user, 'goal') and user.goal and user.goal.goal_description
+                    else 'No specific goals'
+                )
                 try:
                     response = client.chat.completions.create(
                         model="gpt-4o-mini",
@@ -1222,9 +1271,9 @@ def create_meal(request=None, user_id=None, name=None, dietary_preference=None, 
                             {
                                 "role": "user",
                                 "content": (
-                                    f"Create the meal {name}, that meets the user's goals of {user.goal.goal_description}. "
-                                    f"It is meant to be served as a {meal_type} meal. "
-                                    f"{user_context} "
+                                    f"Create the meal '{meal_name_input}', that meets the user's goals of '{goal_description}'. "
+                                    f"It is meant to be served as a {meal_type_input} meal. "
+                                    f"{user_context}"
                                 )
                             }
                         ],
@@ -1251,9 +1300,10 @@ def create_meal(request=None, user_id=None, name=None, dietary_preference=None, 
 
                 except Exception as e:
                     logger.error(f"Error generating meal content: {e}")
-                    meal_name = "Fallback Meal Name"
-                    description = "Fallback Description"
-                    generated_meal_type = 'Dinner'
+                    # Use the input values or placeholders as fallbacks
+                    meal_name = meal_name_input
+                    description = 'Fallback Description'
+                    generated_meal_type = meal_type_input
                     dietary_preference = "None"
 
                 # Step 4: Create the Meal instance without dietary preferences

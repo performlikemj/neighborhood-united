@@ -460,16 +460,15 @@ def register_api_view(request):
 
     try:
         custom_diet_prefs_input = user_data.pop('custom_dietary_preferences', None)  # Extract custom dietary preferences
-        custom_prefs = []
+        new_custom_prefs = []  # Initialize the list here
 
         # Handle custom dietary preferences: Create if they don't exist
         if custom_diet_prefs_input:
-            new_custom_prefs = []
             for custom_pref in custom_diet_prefs_input:  # Iterating over the list directly
                 custom_pref_obj, created = CustomDietaryPreference.objects.get_or_create(name=custom_pref.strip())
                 handle_custom_dietary_preference.delay([custom_pref])
                 new_custom_prefs.append(custom_pref_obj)  # Collect the created objects
-        
+
         # Create the user via serializer
         user_serializer = CustomUserSerializer(data=user_data)
         if not user_serializer.is_valid():
@@ -508,19 +507,8 @@ def register_api_view(request):
                     goal_description=goal_data.get('goal_description', '')
                 )
 
-            # Handle custom dietary preferences
-            custom_diet_prefs_input = request.data.get('custom_dietary_preferences')
-            if custom_diet_prefs_input:
-                custom_prefs = [cp.strip() for cp in custom_diet_prefs_input.split(',')]
-                new_custom_prefs = []
-                for custom_pref in custom_prefs:
-                    custom_pref_obj, created = CustomDietaryPreference.objects.get_or_create(name=custom_pref)
-                    if created:
-                        # Call the task to generate details using OpenAI API
-                        handle_custom_dietary_preference.delay([custom_pref])
-                        new_custom_prefs.append(custom_pref_obj)
-                    user.custom_dietary_preferences.add(custom_pref_obj)
-
+            # Handle custom dietary preferences (duplicate block was here before, now handled above)
+            # This block has been removed as it's redundant.
 
             # Prepare and send activation email
             mail_subject = 'Activate your account.'
@@ -581,7 +569,7 @@ def register_api_view(request):
     except Exception as e:
         logger.error(f"Exception Error during user registration: {str(e)}")
         return Response({'errors': str(e)}, status=500)
-    
+
 @api_view(['POST'])
 def activate_account_api_view(request):
     uidb64 = request.data.get('uid')

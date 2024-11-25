@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Approve This Weeks Meal Plan!</title>
+</head>
+<body style="font-family: Arial, sans-serif; color: #333333; margin: 0; padding: 0; width: 100% !important; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width: 600px; margin: auto; border-spacing: 0; border-collapse: collapse;">
+        <tr>
+            <td style="padding: 20px;">
+                <!-- Logo Section -->
+                <div style="text-align: center; margin-bottom: 20px;">
+                    <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" width="200" style="height: auto; margin-bottom: 20px;">
+                </div>
+
+                <!-- Greeting and Summary -->
+                <p style="font-size: 16px; line-height: 1.5;">We've crafted a delicious and nutritious meal plan just for you!</p>
+
+                <!-- Approval Button -->
+                <div style="text-align: center; margin: 20px 0;">
+                    <a href="{{ approval_link }}" style="display: inline-block; background-color: #5cb85c; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-size: 16px;">Click Here to Approve Your Meal Plan</a>
+                </div>
+
+                <!-- Summary Text -->
+                <p style="font-size: 16px; line-height: 1.5;">{{ summary_text }}</p>
+
+                <!-- Approval Button -->
+                <div style="text-align: center; margin: 20px 0;">
+                    <a href="{{ approval_link }}" style="display: inline-block; background-color: #5cb85c; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-size: 16px;">Click Here to Approve Your Meal Plan</a>
+                </div>
+                
+                <!-- Meal Plan Section -->
+                <h2 style="font-size: 20px; color: #5cb85c; border-bottom: 1px solid #dddddd; padding-bottom: 10px;">Your Weekly Meal Plan</h2>
+                {% for meal in meals_list %}
+                <div style="border-bottom: 1px solid #dddddd; padding: 10px 0;">
+                    <p style="margin: 0; font-size: 16px;"><strong>Day:</strong> {{ meal.day }}</p>
+                    <p style="margin: 0; font-size: 16px;"><strong>Meal Type:</strong> {{ meal.meal_type }}</p>
+                    <p style="margin: 0; font-size: 16px;"><strong>Meal Name:</strong> {{ meal.meal_name }}</p>
+                    <p style="margin: 0; font-size: 16px;"><strong>Description:</strong> {{ meal.description }}</p>
+                </div>
+                {% endfor %}
+
+                <!-- Approval Button -->
+                <div style="text-align: center; margin: 20px 0;">
+                    <a href="{{ approval_link }}" style="display: inline-block; background-color: #5cb85c; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-size: 16px;">Click Here to Approve Your Meal Plan</a>
+                </div>
+
+                <!-- Closing Message -->
+                <p style="text-align: center; font-size: 16px;">Bon Appétit!</p>
+
+                <!-- Footer -->
+                <div style="text-align: center; color: #777777; font-size: 12px; padding: 10px;">
+                    <p>You are receiving this email because you opted in for meal plan emails.</p>
+                    <p><a href="{{ profile_url }}" style="color: #007BFF; text-decoration: none;">Manage Your Email Preferences</a></p>
+                </div>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

@@ -32,7 +32,7 @@ from shared.utils import (get_user_info, post_review, update_review, delete_revi
                           recommend_follow_up, find_nearby_supermarkets,
                           search_healthy_meal_options, provide_healthy_meal_suggestions, 
                           understand_dietary_choices, is_question_relevant, create_meal, generate_summary_title, 
-                          analyze_nutritional_content, replace_meal_based_on_preferences)
+                          analyze_nutritional_content, replace_meal_based_on_preferences, append_custom_dietary_preference)
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
 from .serializers import ChatThreadSerializer, GoalTrackingSerializer, UserHealthMetricsSerializer, CalorieIntakeSerializer
@@ -663,6 +663,7 @@ functions = {
     "create_meal": create_meal,
     "analyze_nutritional_content": analyze_nutritional_content,
     "replace_meal_based_on_preferences": replace_meal_based_on_preferences,
+    "append_custom_dietary_preference": append_custom_dietary_preference,
     
 }
 

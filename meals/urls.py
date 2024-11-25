@@ -34,6 +34,7 @@ urlpatterns = [
     path('api/generate_cooking_instructions/', views.api_generate_cooking_instructions, name='api_generate_cooking_instructions'),
     path('api/fetch_instructions/', views.api_fetch_instructions, name='api_fetch_instructions'),
     path('api/approve_meal_plan/', views.api_approve_meal_plan, name='api_approve_meal_plan'),
+    path('api/email_approved_meal_plan/', views.api_email_approved_meal_plan, name='api_email_approved_meal_plan'),
     # Pantry API Endpoints
     path('api/pantry-items/', views.api_pantry_items, name='api_pantry_items'),
     path('api/pantry-items/<int:pk>/', views.api_pantry_item_detail, name='api_pantry_item_detail'),

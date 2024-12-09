@@ -432,6 +432,16 @@ class MealPlan(models.Model):
         on_delete=models.SET_NULL,
         related_name='associated_meal_plan'
     )
+    MEAL_PREP_CHOICES = [
+        ('daily', 'Daily Meal Instructions'),
+        ('one_day_prep', 'One-Day Meal Prep'),
+    ]
+    meal_prep_preference = models.CharField(
+        max_length=15,
+        choices=MEAL_PREP_CHOICES,
+        default='daily',
+        help_text='User preference for this week.',
+    )
 
     def clean(self):
         # Custom validation to ensure start_date is before end_date
@@ -453,15 +463,20 @@ class MealPlan(models.Model):
 
         super().save(*args, **kwargs)  # Save normally
 
-        # Only generate the shopping list if the meal plan was just approved
-        if self.is_approved and not was_approved:
-            self.generate_shopping_list()
-
     def generate_shopping_list(self):
         """Generate shopping list when the meal plan is approved."""
         from meals.tasks import generate_shopping_list
         generate_shopping_list.delay(self.id)
 
+class MealPlanInstruction(models.Model):
+    meal_plan = models.ForeignKey('MealPlan', on_delete=models.CASCADE)
+    instruction_text = models.TextField()
+    date = models.DateField()
+    is_bulk_prep = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"Instruction for {self.meal_plan.user.username} on {self.date}"
+    
 class MealPlanMeal(models.Model):
     DAYS_OF_WEEK = [
         ('Monday', 'Monday'),
@@ -493,14 +508,13 @@ class MealPlanMeal(models.Model):
         return f"{meal_name} on {self.day} ({self.meal_type}) for {self.meal_plan}"
 
     def save(self, *args, **kwargs):
-        # Call super().save() before making changes to update meal plan
         is_new = self.pk is None
         super().save(*args, **kwargs)
-        # If this is a new MealPlanMeal or an update, we should update the MealPlan
-        if is_new or self.meal_plan.has_changes:
+        # Only update MealPlan if it's a new MealPlanMeal
+        if is_new:
             self.meal_plan.is_approved = False
             self.meal_plan.has_changes = True
-            self.meal_plan.save()
+            self.meal_plan.save(update_fields=['is_approved', 'has_changes'])
 
     def delete(self, *args, **kwargs):
         # Update the meal plan's is_approved and has_changes flags on deletion

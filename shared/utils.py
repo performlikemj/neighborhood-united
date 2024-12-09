@@ -324,7 +324,6 @@ def generate_user_context(user):
                 meals_info.append(f"  - {day}: {meals_str_day}")
             
             meals_str = ''.join(meals_info)
-            print(f"User meals planned for the current week: {meals_str}")
         except MealPlan.DoesNotExist:
             meals_str = '\n- No meal plan found for the current week.'
     

@@ -11,7 +11,7 @@ from openai import OpenAI
 from typing_extensions import override
 from openai import AssistantEventHandler, OpenAI
 from django.conf import settings
-from meals.models import Meal, MealPlan, MealPlanMeal, Ingredient, MealPlanThread, DietaryPreference, CustomDietaryPreference
+from meals.models import Meal, MealPlan, MealPlanMeal, Ingredient, MealPlanThread, DietaryPreference, CustomDietaryPreference, MealPlanInstruction
 from custom_auth.models import CustomUser
 from customer_dashboard.models import GoalTracking, UserHealthMetrics, CalorieIntake, UserSummary, UserMessage, ChatThread
 from django.utils import timezone
@@ -43,7 +43,8 @@ from pydantic import BaseModel, Field, ValidationError
 from typing import List, Set, Optional, Tuple
 from meals.pydantic_models import (ShoppingList as ShoppingListSchema, Instructions as InstructionsSchema, 
                                    MealOutputSchema, SanitySchema, MealPlanSchema, MealsToReplaceSchema, 
-                                    DietaryPreferencesSchema, DietaryPreferenceDetail, ReplenishItemsSchema, MealPlanApprovalEmailSchema)
+                                    DietaryPreferencesSchema, DietaryPreferenceDetail, ReplenishItemsSchema, 
+                                    MealPlanApprovalEmailSchema, BulkPrepInstructions, BulkPrepStep, DailyTask, DailyTaskStep)
 from rest_framework.renderers import JSONRenderer
 from meals.serializers import MealPlanSerializer, MealPlanMealSerializer
 from django.utils.timezone import now
@@ -95,6 +96,7 @@ def get_expiring_pantry_items(user, days_threshold=7):
     )
     return [item.item_name.lower() for item in expiring_items]
 
+@shared_task
 def send_meal_plan_approval_email(meal_plan_id):
     from meals.models import MealPlan, MealPlanMeal
     from shared.utils import generate_user_context
@@ -103,6 +105,7 @@ def send_meal_plan_approval_email(meal_plan_id):
     import json
     from jinja2 import Environment, FileSystemLoader
     from django.conf import settings
+    from urllib.parse import urlencode
     import os
 
     try:
@@ -139,15 +142,46 @@ def send_meal_plan_approval_email(meal_plan_id):
             logger.error(f"Error fetching preferred language for user {user.username}: {e}")
             preferred_language = "English"
 
-        # Generate the approval link with query parameter
-        full_approval_url = f"{config['STREAMLIT_URL']}/meal_plans?approval_token={meal_plan.approval_token}"
+        # Generate the approval link with query parameters
+        approval_token = meal_plan.approval_token
+        base_approval_url = f"{config['STREAMLIT_URL']}/meal_plans"
 
-        # Serialize the meal plan data
+        # Create approval links with meal prep preferences
+        query_params_daily = urlencode({
+            'approval_token': approval_token,
+            'meal_prep_preference': 'daily'
+        })
+        query_params_one_day = urlencode({
+            'approval_token': approval_token,
+            'meal_prep_preference': 'one_day_prep'
+        })
+
+        approval_link_daily = f"{base_approval_url}?{query_params_daily}"
+        approval_link_one_day = f"{base_approval_url}?{query_params_one_day}"
+
+        # Serialize the meal plan data for the `meals` field
+        # Fetch the meals associated with the meal plan
         meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan).select_related('meal')
-        meals_list = [
-            f"{meal.meal.name} for {meal.meal_type} on {meal.day}" for meal in meal_plan_meals
-        ]
-        meal_plan_content = "\n".join(meals_list)
+
+        # Create the meals_list
+        meals_list = []
+        for meal in meal_plan_meals:
+            meals_list.append({
+                "meal_name": meal.meal.name,
+                "meal_type": meal.meal_type,
+                "day": meal.day,
+                "description": meal.meal.description or "A delicious meal prepared for you."
+            })
+
+        # Sort the meals_list by day and meal type
+        day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        meal_type_order = ['Breakfast', 'Lunch', 'Dinner']
+        day_order_map = {day: index for index, day in enumerate(day_order)}
+        meal_type_order_map = {meal_type: index for index, meal_type in enumerate(meal_type_order)}
+        meals_list.sort(key=lambda x: (
+            day_order_map.get(x['day'], 7),
+            meal_type_order_map.get(x['meal_type'], 3)
+        ))
 
         # Call OpenAI to generate the email content
         try:
@@ -164,9 +198,7 @@ def send_meal_plan_approval_email(meal_plan_id):
                             f"Generate an email in {preferred_language}, given what you know about the user: {user_context}, that includes the following:\n\n"
                             f"1. Greet the user by their name: {user_name}.\n"
                             f"2. Inform them that their meal plan for the week {meal_plan.week_start_date} to {meal_plan.week_end_date} has been created.\n"
-                            f"3. Include the approval link: {full_approval_url}.\n"
-                            f"4. Encourage them to click the link to approve their meal plan.\n"
-                            f"5. Include a summary of the following list of meals in their plan:\n{meal_plan_content}. Make the summary enticing and engaging."
+                            f"3. Include a well-formatted and high-level summary of the following list of meals in their plan:\n{meals_list}. Make the summary enticing and engaging with newlines where necessary to avoid a cramped description."
                         )
                     }
                 ],
@@ -182,6 +214,16 @@ def send_meal_plan_approval_email(meal_plan_id):
 
             response_content = response.choices[0].message.content
             email_data_dict = json.loads(response_content)
+
+            # Modify summary_text to support bold text and newlines
+            if 'summary_text' in email_data_dict:
+                summary_text = email_data_dict['summary_text']
+                # Replace **text** with <strong>text</strong>
+                summary_text = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', summary_text)
+                # Replace newlines with <br>
+                summary_text = summary_text.replace('\n', '<br>')
+                email_data_dict['summary_text'] = summary_text
+
             email_model = MealPlanApprovalEmailSchema(**email_data_dict)
 
             # Set up Jinja2 environment
@@ -197,29 +239,30 @@ def send_meal_plan_approval_email(meal_plan_id):
                 user_name=email_model.user_name,
                 meal_plan_week_start=email_model.meal_plan_week_start,
                 meal_plan_week_end=email_model.meal_plan_week_end,
-                approval_link=email_model.approval_link,
-                meals=email_model.meals,
+                approval_link_daily=approval_link_daily,
+                approval_link_one_day=approval_link_one_day,
+                meals_list=meals_list,
                 summary_text=email_model.summary_text,
                 profile_url=profile_url
             )
 
             email_data = {
-                'subject': f'Your Meal Plan for {meal_plan.week_start_date} - {meal_plan.week_end_date}',
+                'subject': f'Approve Your Meal Plan for {meal_plan.week_start_date} - {meal_plan.week_end_date}',
                 'html_message': email_body_html,
                 'to': user_email,
                 'from': 'support@sautai.com',
             }
 
-            # Send data to Zapier
             try:
-                logger.debug(f"Sending approval email to Zapier for: {user_email}")
-                zap_url = config["ZAP_GENERATE_APPROVAL_EMAIL_URL"] 
-                response = requests.post(zap_url, json=email_data)
-                response.raise_for_status()
+                logger.debug(f"Sending approval email to n8n for: {user_email}")
+                n8n_url = config["N8N_GENERATE_APPROVAL_EMAIL_URL"]
+                response = requests.post(n8n_url, json=email_data)
             except Exception as e:
-                logger.error(f"Error sending approval email to Zapier for: {user_email}, error: {str(e)}")
+                logger.error(f"Error sending approval email to n8n for: {user_email}, error: {str(e)}")
+                traceback.print_exc()
 
-            logger.info(f"Approval email sent to Zapier for: {user_email}")
+
+            logger.info(f"Approval email sent to n8n for: {user_email}")
 
         except Exception as e:
             logger.error(f"Error generating or sending approval email: {e}")
@@ -667,6 +710,12 @@ def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None):
 
     analyze_and_replace_meals(user, meal_plan, meal_types)
     
+    try:
+        send_meal_plan_approval_email(meal_plan.id)
+    except Exception as e:
+        logger.error(f"Error sending approval email for user {user.username}: {e}")
+        traceback.print_exc()
+
     return meal_plan
 
 def analyze_and_replace_meals(user, meal_plan, meal_types):
@@ -1304,9 +1353,7 @@ def generate_meal_details(user, meal_type, existing_meal_names, existing_meal_em
 def serialize_data(data):
     """ Helper function to serialize data into JSON-compatible format """
     try:
-        print(f"Attempting to serialize data: {data}")
         serialized_data = JSONRenderer().render(data)
-        print(f"Serialized Data: {serialized_data}")
         return json.loads(serialized_data)
     except Exception as e:
         logger.error(f"Error serializing data: {e}")
@@ -1573,7 +1620,7 @@ def generate_shopping_list(meal_plan_id):
         logger.error(f"Failed to generate shopping list for MealPlan ID {meal_plan_id}.")
         return
     
-    # Prepare data for Zapier webhook
+    # Prepare data for n8n webhook
     email_data = {
         'subject': f'Your Curated Shopping List for {meal_plan.week_start_date} - {meal_plan.week_end_date}',
         'message': formatted_shopping_list,
@@ -1581,54 +1628,841 @@ def generate_shopping_list(meal_plan_id):
         'from': 'support@sautai.com',
     }
 
-    # Send data to Zapier
+    # Send data to n8n
     try:
-        zap_url = config["ZAP_GENERATE_SHOPPING_LIST_URL"]
-        requests.post(zap_url, json=email_data)
-        logger.info(f"Shopping list sent to Zapier for: {user_email}")
+        n8n_url = config["N8N_GENERATE_SHOPPING_LIST_URL"]
+        requests.post(n8n_url, json=email_data)
+        logger.info(f"Shopping list sent to n8n for: {user_email}")
     except Exception as e:
-        logger.error(f"Error sending shopping list to Zapier for: {user_email}, error: {str(e)}")
+        logger.error(f"Error sending shopping list to n8n for: {user_email}, error: {str(e)}")
 
 @shared_task
 def send_daily_meal_instructions():
-    from meals.models import MealPlanMeal
+    from meals.models import MealPlanMeal, MealPlan, MealPlanInstruction
 
     # Get the current time in UTC
     current_utc_time = timezone.now()
 
     # Loop through all users who have email_daily_instructions enabled
     users = CustomUser.objects.filter(email_daily_instructions=True)
-    
+
     for user in users:
+        # Skip users who opted out of daily instructions
+        if not user.email_daily_instructions:
+            continue
         # Convert current UTC time to the user's time zone
-        user_timezone = pytz.timezone(user.timezone)
+        try:
+            user_timezone = pytz.timezone(user.timezone)
+        except pytz.UnknownTimeZoneError:
+            logger.error(f"Unknown timezone for user {user.email}: {user.timezone}")
+            continue
+
         user_time = current_utc_time.astimezone(user_timezone)
 
-        # Check if it's midnight in the user's time zone
-        if user_time.hour == 0:
-            # Get the current day in the user's time zone
-            current_day = user_time.strftime('%A')
-            
+        # # Check if it's 8 PM in the user's time zone
+        if user_time.hour == 20 and user_time.minute == 0:
+
+            # Get the next day's date in the user's time zone
+            next_day = user_time.date() + timedelta(days=1)
+            next_day_name = next_day.strftime('%A')
+
             # Get the current week start and end dates
-            week_start_date = user_time - timedelta(days=user_time.weekday())
+            week_start_date = next_day - timedelta(days=next_day.weekday())
             week_end_date = week_start_date + timedelta(days=6)
 
-            # Filter MealPlanMeal instances for this user, day, and week
-            meal_plan_meals_for_today = MealPlanMeal.objects.filter(
-                meal_plan__user=user,
-                day=current_day,
-                meal_plan__week_start_date=week_start_date.date(),
-                meal_plan__week_end_date=week_end_date.date(),
-                meal_plan__is_approved=True
-            )
 
-            if user.email_daily_instructions:
-                meal_plan_meal_ids = list(meal_plan_meals_for_today.values_list('id', flat=True))
-                logger.debug(f"MealPlanMeal IDs for user {user.email} on {current_day}: {meal_plan_meal_ids}")
-                if meal_plan_meal_ids:  # Ensure the list is not empty
+            # Filter MealPlanMeal instances for this user, day, and week
+            meal_plan_meals_for_next_day = MealPlanMeal.objects.filter(
+                meal_plan__user=user,
+                day=next_day_name,
+                meal_plan__week_start_date=week_start_date,
+                meal_plan__week_end_date=week_end_date,
+            )
+            
+            # Check one meal to see if meal plan is daily or bulk
+            meal_plan = meal_plan_meals_for_next_day.first().meal_plan if meal_plan_meals_for_next_day.exists() else None
+            
+            if meal_plan is None:
+                logger.info(f"No meal plan found for user {user.email} on {next_day_name}")
+                continue
+            if meal_plan.meal_prep_preference == 'daily':
+                print(f'Daily meal plan for user {user.email} on {next_day_name}')
+                if meal_plan_meals_for_next_day.exists():
+                    # Get the IDs of the MealPlanMeals for the next day
+                    meal_plan_meal_ids = list(meal_plan_meals_for_next_day.values_list('id', flat=True))
+                    logger.debug(f"MealPlanMeal IDs for user {user.email} on {next_day_name}: {meal_plan_meal_ids}")
                     generate_instructions.delay(meal_plan_meal_ids)
+            elif meal_plan.meal_prep_preference == 'one_day_prep':
+                print(f'One day prep meal plan for user {user.email} on {next_day_name}')
+                # Check for follow-up instructions scheduled for next_day
+                follow_up_instruction = MealPlanInstruction.objects.filter(
+                    meal_plan=meal_plan,
+                    date=next_day,
+                    is_bulk_prep=False
+                ).first()
+            
+                if follow_up_instruction:
+                    instruction_text = follow_up_instruction.instruction_text
+            
+                    # Deserialize and validate the instruction_text
+                    try:
+                        instruction_data = json.loads(instruction_text)
+                        
+                        # If instruction_data is a list, wrap it into a dictionary
+                        if isinstance(instruction_data, list):
+                            instruction_data = {
+                                "day": next_day_name,
+                                "tasks": instruction_data,
+                                "total_estimated_time": None  # Set this appropriately if available
+                            }
+                        
+                        daily_task = DailyTask.model_validate(instruction_data)
+                    except Exception as e:
+                        logger.error(f"Failed to parse follow-up instructions for user {user.email}: {e}")
+                        continue
+            
+                    formatted_instructions = format_follow_up_instructions(daily_task, user.username)
+            
+                    send_follow_up_email(user, formatted_instructions)
                 else:
-                    logger.info(f"No meals found for user {user.email} on {current_day}")
+                    logger.info(f"No follow-up instructions for user {user.email} on {next_day} for meal plan {meal_plan.id}")
+            else:
+                logger.info(f"No meals found for user {user.email} on {next_day_name}")
+
+@shared_task
+def generate_bulk_prep_instructions(meal_plan_id):
+    from meals.models import MealPlan, MealPlanInstruction
+    meal_plan = MealPlan.objects.get(id=meal_plan_id)
+
+    # Check if the meal plan preference is 'one_day_prep'
+    if meal_plan.meal_prep_preference != 'one_day_prep':
+        return  # No action needed
+
+    # Fetch the meals associated with the meal plan
+    meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan).select_related('meal')
+
+    # Create the meals_list
+    meals_list = []
+    for meal in meal_plan_meals:
+        meals_list.append({
+            "meal_name": meal.meal.name,
+            "meal_type": meal.meal_type,
+            "day": meal.day,
+            "description": meal.meal.description or "A delicious meal prepared for you."
+        })
+
+    user = meal_plan.user
+    user_context = generate_user_context(user) or 'No additional user context provided.'
+
+    # Prepare the assistant prompt
+    assistant_prompt = (
+        f"Given what you know about the user, {user_context}, "
+        f"generate a comprehensive weekly meal prep plan in {user.preferred_language} for the following list of meals: {json.dumps(meals_list)}.\n\n"
+
+        f"**Goal:** Create a single bulk preparation session on {meal_plan.week_start_date.strftime('%A')} that covers all the meals for the entire week, minimizing daily cooking time. "
+        f"Then, provide daily follow-up tasks for each day of the week (e.g., Monday, Tuesday, Wednesday) to finalize each meal with minimal effort.\n\n"
+
+        f"**Instructions Schema:**\n"
+        f"Please produce a JSON object matching the schema exactly:\n"
+        f"{{\n"
+        f"  \"bulk_prep_steps\": [\n"
+        f"    {{\n"
+        f"      \"step_number\": int,\n"
+        f"      \"meal_type\": \"Breakfast\"|\"Lunch\"|\"Dinner\",\n"
+        f"      \"description\": str,\n"
+        f"      \"duration\": str,\n"
+        f"      \"ingredients\": List[str],\n"
+        f"      \"cooking_temperature\": Optional[str],\n"
+        f"      \"cooking_time\": Optional[str],\n"
+        f"      \"notes\": Optional[str]\n"
+        f"    }},\n"
+        f"    ...\n"
+        f"  ],\n"
+        f"  \"daily_tasks\": [\n"
+        f"    {{\n"
+        f"      \"day\": str,\n"
+        f"      \"step_number\": int,\n"
+        f"      \"tasks\": [\n"
+        f"        {{\n"
+        f"          \"step_number\": int,\n"
+        f"          \"meal_type\": \"Breakfast\"|\"Lunch\"|\"Dinner\",\n"
+        f"          \"description\": str,\n"
+        f"          \"duration\": str,\n"
+        f"          \"ingredients\": List[str],\n"
+        f"          \"cooking_temperature\": Optional[str],\n"
+        f"          \"cooking_time\": Optional[str],\n"
+        f"          \"notes\": Optional[str]\n"
+        f"        }},\n"
+        f"        ... (multiple tasks per day are allowed)\n"
+        f"      ],\n"
+        f"      \"total_estimated_time\": Optional[str]\n"
+        f"    }},\n"
+        f"    ... (include multiple days, such as Monday, Tuesday, Wednesday, each with multiple tasks)\n"
+        f"  ]\n"
+        f"}}\n\n"
+
+        f"**Additional Requirements:**\n"
+        f"- Only return the JSON structure described above—no additional explanations.\n"
+        f"- Include cooking times, temperatures, and techniques.\n"
+        f"- Avoid user allergens and adhere to dietary preferences.\n"
+        f"- Bulk prep steps should be detailed and cover all meals for the entire week. Daily tasks should be minimal, relying on pre-prepped items.\n\n"
+
+        f"**Example (Abbreviated):**\n"
+        f"{{\n"
+        f"  \"bulk_prep_steps\": [\n"
+        f"    {{\n"
+        f"      \"step_number\": 1,\n"
+        f"      \"meal_type\": \"Breakfast\",\n"
+        f"      \"description\": \"Rinse and slice 2 cups of fresh strawberries...\",\n"
+        f"      \"duration\": \"15 minutes\",\n"
+        f"      \"ingredients\": [\"strawberries\"],\n"
+        f"      \"notes\": \"Store in an airtight container.\"\n"
+        f"    }},\n"
+        f"    ...\n"
+        f"  ],\n"
+        f"  \"daily_tasks\": [\n"
+        f"    {{\n"
+        f"      \"day\": \"Monday\",\n"
+        f"      \"step_number\": 1,\n"
+        f"      \"tasks\": [\n"
+        f"        {{\n"
+        f"          \"step_number\": 1,\n"
+        f"          \"meal_type\": \"Breakfast\",\n"
+        f"          \"description\": \"Top the pre-prepared quinoa with sliced strawberries...\",\n"
+        f"          \"duration\": \"5 minutes\",\n"
+        f"          \"ingredients\": [\"quinoa\", \"strawberries\"],\n"
+        f"          \"notes\": \"Serve immediately.\"\n"
+        f"        }},\n"
+        f"        {{\n"
+        f"          \"step_number\": 2,\n"
+        f"          \"meal_type\": \"Breakfast\",\n"
+        f"          \"description\": \"Drizzle honey on top...\",\n"
+        f"          \"duration\": \"2 minutes\",\n"
+        f"          \"ingredients\": [\"honey\"],\n"
+        f"          \"notes\": \"Adjust sweetness as desired.\"\n"
+        f"        }}\n"
+        f"      ],\n"
+        f"      \"total_estimated_time\": \"7 minutes\"\n"
+        f"    }},\n"
+        f"    {{\n"
+        f"      \"day\": \"Tuesday\",\n"
+        f"      \"step_number\": 1,\n"
+        f"      \"tasks\": [ ... multiple tasks for Tuesday ... ],\n"
+        f"      \"total_estimated_time\": \"...\"\n"
+        f"    }},\n"
+        f"    {{\n"
+        f"      \"day\": \"Wednesday\",\n"
+        f"      \"step_number\": 1,\n"
+        f"      \"tasks\": [ ... multiple tasks for Wednesday ... ],\n"
+        f"      \"total_estimated_time\": \"...\"\n"
+        f"    }}\n"
+        f"  ]\n"
+        f"}}\n\n"
+
+    )
+
+    # Call OpenAI API
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"You are a helpful assistant that generates comprehensive meal prep instructions. "
+                        f"The user prefers to minimize daily cooking time by preparing as much as possible in one day. "
+                        f"Ensure that all meals for the week are considered, and provide detailed instructions for both bulk prep and daily tasks. "
+                        f"For meals that typically require fresh preparation, include bulk prep steps to reduce day-of cooking."
+                    )
+                },
+                {"role": "user", "content": assistant_prompt}
+            ],
+            response_format={
+                'type': 'json_schema',
+                'json_schema': {
+                    "name": "BulkPrepInstructions",
+                    "schema": BulkPrepInstructions.model_json_schema()
+                }
+            }
+        )
+        instructions_content = response.choices[0].message.content
+        print(f"Instructions content: {instructions_content}")
+    except Exception as e:
+        logger.error(f"Error generating bulk prep instructions: {e}")
+        return
+
+    # Parse and validate the instructions_content
+    try:
+        validated_prep = BulkPrepInstructions.model_validate_json(instructions_content)
+    except ValidationError as e:
+        logger.error(f"Instructions content validation error: {e}")
+        return
+
+    # Serialize the validated_prep to JSON
+    instruction_text = validated_prep.model_dump_json()
+
+    # Save bulk prep instructions for the meal plan (e.g., on Sunday)
+    MealPlanInstruction.objects.update_or_create(
+        meal_plan=meal_plan,
+        date=meal_plan.week_start_date,  # Assuming bulk prep is done on the start date
+        is_bulk_prep=True,
+        defaults={'instruction_text': instruction_text}
+    )
+
+    # Save follow-up instructions for each day
+    day_name_to_number = {
+        'Monday': 0,
+        'Tuesday': 1,
+        'Wednesday': 2,
+        'Thursday': 3,
+        'Friday': 4,
+        'Saturday': 5,
+        'Sunday': 6,
+    }
+
+    for daily_task in validated_prep.daily_tasks:
+        day_name = daily_task.day
+        day_number = day_name_to_number.get(day_name)
+        if day_number is not None:
+            instruction_date = meal_plan.week_start_date + timedelta(days=day_number)
+        else:
+            logger.error(f"Invalid day name '{day_name}' in daily tasks.")
+            continue
+
+        instruction_text = json.dumps(daily_task.model_dump())
+
+        MealPlanInstruction.objects.update_or_create(
+            meal_plan=meal_plan,
+            date=instruction_date,
+            is_bulk_prep=False,
+            defaults={'instruction_text': instruction_text}
+        )
+
+    # Send bulk prep instructions to the user
+    try:
+        send_bulk_prep_instructions.delay(meal_plan_id)
+    except Exception as e:
+        logger.error(f"Error sending bulk prep instructions: {e}")
+
+@shared_task
+def send_bulk_prep_instructions(meal_plan_id):
+    from django.utils import timezone
+    from meals.models import MealPlanInstruction, MealPlan
+
+    today = timezone.now().date()
+
+    # Retrieve bulk prep instructions scheduled for today
+    meal_plan = MealPlan.objects.get(id=meal_plan_id)
+    instructions = MealPlanInstruction.objects.filter(meal_plan=meal_plan, is_bulk_prep=True)
+
+    for instruction in instructions:
+        meal_plan = instruction.meal_plan
+        user = meal_plan.user
+        instruction_text = instruction.instruction_text
+
+        # Deserialize the instruction_text
+        try:
+            validated_prep = BulkPrepInstructions.model_validate_json(instruction_text)
+        except Exception as e:
+            logger.error(f"Failed to parse bulk prep instructions for user {user.email}: {e}")
+            continue
+
+        # Access the bulk_prep_steps
+        bulk_prep_steps = validated_prep.bulk_prep_steps
+
+        # Format the steps into an email-friendly format
+        formatted_instructions = format_bulk_prep_instructions(bulk_prep_steps, user.username)
+
+        # Send email to the user
+        send_bulk_prep_email(user, formatted_instructions)
+
+def format_bulk_prep_instructions(bulk_prep_steps: list, user_name: str) -> str:
+    from collections import defaultdict
+
+    # Group steps by meal type
+    steps_by_meal_type = defaultdict(list)
+    for step in bulk_prep_steps:
+        steps_by_meal_type[step.meal_type].append(step)
+
+    # Define meal type order and colors (if desired)
+    meal_types_order = ['Breakfast', 'Lunch', 'Dinner', 'Snack']
+    meal_type_colors = {
+        'Breakfast': '#F7D9AE',  # soft orange
+        'Lunch': '#CDE4B9',      # soft green
+        'Dinner': '#B9D6E4',     # soft blue
+        'Snack': '#E4B9D3'       # soft pink
+    }
+
+    # Start building the HTML content
+    email_body = f"""
+    <html>
+    <head>
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                background-color: #f5f5f5;
+                margin: 0;
+                padding: 0;
+            }}
+            .container {{
+                max-width: 600px;
+                margin: 20px auto;
+                background-color: #ffffff;
+                padding: 20px;
+                border-radius: 8px;
+                box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            }}
+            .header-logo {{
+                text-align: center;
+                margin-bottom: 30px;
+            }}
+            .header-logo img {{
+                width: 180px;
+                height: auto;
+            }}
+            h2.title {{
+                color: #333;
+                text-align: center;
+                margin-bottom: 30px;
+            }}
+            p.greeting {{
+                font-size: 16px;
+                color: #333;
+            }}
+            .meal-type-section {{
+                margin-bottom: 40px;
+            }}
+            .meal-type-title {{
+                font-size: 22px;
+                font-weight: bold;
+                color: #333;
+                margin-bottom: 20px;
+            }}
+            .step-card {{
+                background-color: #ffffff;
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                margin-bottom: 20px;
+                padding: 15px;
+            }}
+            .step-card h3 {{
+                font-size: 18px;
+                color: #333;
+                margin-top: 0;
+                margin-bottom: 10px;
+            }}
+            .step-card table {{
+                width: 100%;
+                border-collapse: collapse;
+            }}
+            .step-card table td {{
+                vertical-align: top;
+                padding: 8px;
+                border-bottom: 1px solid #eee;
+                font-size: 14px;
+                color: #555;
+            }}
+            .step-card table td:first-child {{
+                width: 150px;
+                font-weight: bold;
+                color: #333;
+            }}
+            .notes {{
+                border-bottom: none !important;
+            }}
+            .footer {{
+                text-align: center;
+                margin-top: 30px;
+                font-size: 14px;
+                color: #777;
+            }}
+            .preferences-button {{
+                display: inline-block;
+                background-color: #007BFF;
+                color: #fff;
+                padding: 12px 24px;
+                text-decoration: none;
+                border-radius: 5px;
+                font-size: 16px;
+                margin-top: 10px;
+            }}
+            .meal-type-section-header {{
+                display: inline-block;
+                padding: 5px 10px;
+                border-radius: 4px;
+                background: #eaeaea;
+                margin-bottom: 15px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <!-- Logo -->
+            <div class="header-logo">
+                <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo">
+            </div>
+
+            <!-- Title -->
+            <h2 class="title">Your Bulk Meal Prep Instructions</h2>
+            <p class="greeting">Dear {user_name},</p>
+            <p class="greeting">Here are your bulk meal prep instructions to help you get ready for the week ahead:</p>
+    """
+
+    for meal_type in meal_types_order:
+        steps = steps_by_meal_type.get(meal_type)
+        if steps:
+            bg_color = meal_type_colors.get(meal_type, '#f0f0f0')
+            email_body += f"""
+            <div class="meal-type-section">
+                <div class="meal-type-section-header" style="background:{bg_color};">
+                    <span class="meal-type-title">{meal_type}</span>
+                </div>
+            """
+
+            for step in steps:
+                ingredients_str = ', '.join(step.ingredients) if step.ingredients else 'N/A'
+                equipment = getattr(step, 'equipment', None)
+                equipment_str = ', '.join(equipment) if equipment else 'N/A'
+                description = step.description
+                # Split on period followed by space or end of line
+                sentences = re.split(r'\.\s*', description.strip())
+                # Filter out empty strings
+                sentences = [s.strip() for s in sentences if s.strip()]
+
+                # Wrap each sentence in a paragraph tag
+                description_html = ''.join(f"<p>{sentence}.</p>" for sentence in sentences)
+                email_body += f"""
+                <div class="step-card">
+                    <h3>{description_html}</h3>
+                    <table>
+                        <tr>
+                            <td>Duration:</td>
+                            <td>{step.duration or 'N/A'}</td>
+                        </tr>
+                        <tr>
+                            <td>Ingredients:</td>
+                            <td>{ingredients_str}</td>
+                        </tr>
+                        <tr>
+                            <td>Cooking Temp:</td>
+                            <td>{step.cooking_temperature or 'N/A'}</td>
+                        </tr>
+                        <tr>
+                            <td>Cooking Time:</td>
+                            <td>{step.cooking_time or 'N/A'}</td>
+                        </tr>
+                        <tr>
+                            <td>Equipment Needed:</td>
+                            <td>{equipment_str}</td>
+                        </tr>
+                        <tr class="notes">
+                            <td>Notes:</td>
+                            <td>{step.notes or 'N/A'}</td>
+                        </tr>
+                    </table>
+                </div>
+                """
+
+            email_body += "</div>"  # close meal-type-section
+
+    email_body += """
+            <p style="color: #555; font-size: 16px;">We hope this makes your meal prep efficient and enjoyable. If you have any questions or need further assistance, we're here to help!</p>
+            <p style="color: #555; font-size: 16px;">Happy cooking!</p>
+            <p style="color: #555; font-size: 16px;">Warm regards,<br>Your Team</p>
+
+            <div class="footer">
+                <p>You are receiving this email because you opted in for bulk meal prep instructions.</p>
+                <a href="https://sautai.com/profile" class="preferences-button">Manage Your Email Preferences</a>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
+    return email_body
+
+def send_bulk_prep_email(user, instruction_text):
+    if not user.email_instruction_generation:
+        return
+    
+    email_subject = "Your Bulk Meal Prep Instructions for This Week"
+    email_content = instruction_text
+    recipient_email = user.email
+
+    email_data = {
+        'subject': email_subject,
+        'message': email_content,
+        'to': recipient_email,
+        'from': 'support@sautai.com',
+        'html': True  # Indicate that the message is in HTML format
+    }
+
+    try:
+        # Placeholder for n8n URL
+        n8n_url = config["N8N_SEND_BULK_PREP_EMAIL_URL"]
+        response = requests.post(n8n_url, json=email_data)
+        logger.info(f"Bulk prep instructions email sent to n8n for {user.email}")
+    except Exception as e:
+        logger.error(f"Error sending bulk prep instructions to n8n for {user.email}: {e}")
+
+@shared_task
+def send_follow_up_instructions(meal_plan_id):
+    from django.utils import timezone
+    from meals.models import MealPlanInstruction, MealPlan
+
+    today = timezone.now().date()
+
+    # Retrieve meal plan and instructions
+    meal_plan = MealPlan.objects.get(id=meal_plan_id)
+    instructions = MealPlanInstruction.objects.filter(meal_plan=meal_plan, is_bulk_prep=False)
+
+    user = meal_plan.user
+
+    for instruction in instructions:
+        instruction_text = instruction.instruction_text
+
+        # Deserialize the instruction_text
+        try:
+            # Parse the JSON string into a dictionary
+            instruction_data = json.loads(instruction_text)
+            # Validate and create DailyTask instance
+            daily_task = DailyTask.model_validate(instruction_data)
+        except Exception as e:
+            logger.error(f"Failed to parse follow-up instructions for user {user.email}: {e}")
+            continue
+
+        # Format the tasks into an email-friendly format
+        formatted_instructions = format_follow_up_instructions(daily_task, user.username)
+
+        # Send email to the user
+        send_follow_up_email(user, formatted_instructions)
+
+def format_follow_up_instructions(daily_task: DailyTask, user_name: str) -> str:
+    from collections import defaultdict
+
+    # Group tasks by meal type
+    tasks_by_meal_type = defaultdict(list)
+    for task in daily_task.tasks:
+        tasks_by_meal_type[task.meal_type].append(task)
+
+    # Define meal type order and colors to match the bulk prep format
+    meal_types_order = ['Breakfast', 'Lunch', 'Dinner', 'Snack']
+    meal_type_colors = {
+        'Breakfast': '#F7D9AE',  # soft orange
+        'Lunch': '#CDE4B9',      # soft green
+        'Dinner': '#B9D6E4',     # soft blue
+        'Snack': '#E4B9D3'       # soft pink
+    }
+
+    # Start building the HTML content
+    email_body = f"""
+    <html>
+    <head>
+        <style>
+            body {{
+                font-family: Arial, sans-serif;
+                background-color: #f5f5f5;
+                margin: 0;
+                padding: 0;
+            }}
+            .container {{
+                max-width: 600px;
+                margin: 20px auto;
+                background-color: #ffffff;
+                padding: 20px;
+                border-radius: 8px;
+                box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            }}
+            .header-logo {{
+                text-align: center;
+                margin-bottom: 30px;
+            }}
+            .header-logo img {{
+                width: 180px;
+                height: auto;
+            }}
+            h2.title {{
+                color: #333;
+                text-align: center;
+                margin-bottom: 30px;
+            }}
+            p.greeting {{
+                font-size: 16px;
+                color: #333;
+            }}
+            .meal-type-section {{
+                margin-bottom: 40px;
+            }}
+            .meal-type-title {{
+                font-size: 22px;
+                font-weight: bold;
+                color: #333;
+                margin-bottom: 20px;
+            }}
+            .step-card {{
+                background-color: #ffffff;
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                margin-bottom: 20px;
+                padding: 15px;
+            }}
+            .step-card h3 {{
+                font-size: 18px;
+                color: #333;
+                margin-top: 0;
+                margin-bottom: 10px;
+            }}
+            .step-card table {{
+                width: 100%;
+                border-collapse: collapse;
+            }}
+            .step-card table td {{
+                vertical-align: top;
+                padding: 8px;
+                border-bottom: 1px solid #eee;
+                font-size: 14px;
+                color: #555;
+            }}
+            .step-card table td:first-child {{
+                width: 150px;
+                font-weight: bold;
+                color: #333;
+            }}
+            .notes {{
+                border-bottom: none !important;
+            }}
+            .footer {{
+                text-align: center;
+                margin-top: 30px;
+                font-size: 14px;
+                color: #777;
+            }}
+            .preferences-button {{
+                display: inline-block;
+                background-color: #007BFF;
+                color: #fff;
+                padding: 12px 24px;
+                text-decoration: none;
+                border-radius: 5px;
+                font-size: 16px;
+                margin-top: 10px;
+            }}
+            .meal-type-section-header {{
+                display: inline-block;
+                padding: 5px 10px;
+                border-radius: 4px;
+                background: #eaeaea;
+                margin-bottom: 15px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <!-- Logo -->
+            <div class="header-logo">
+                <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo">
+            </div>
+
+            <!-- Title -->
+            <h2 class="title">Your Follow-Up Instructions for {daily_task.day}</h2>
+            <p class="greeting">Dear {user_name},</p>
+            <p class="greeting">Here are your follow-up tasks to help prepare your meals for {daily_task.day}.</p>
+    """
+
+    # Display total estimated time at the top if available
+    if daily_task.total_estimated_time:
+        email_body += f"""
+        <p style="font-size:16px; color:#333;"><strong>Total Estimated Time:</strong> {daily_task.total_estimated_time}</p>
+        """
+
+    for meal_type in meal_types_order:
+        tasks = tasks_by_meal_type.get(meal_type)
+        if tasks:
+            bg_color = meal_type_colors.get(meal_type, '#f0f0f0')
+            email_body += f"""
+            <div class="meal-type-section">
+                <div class="meal-type-section-header" style="background:{bg_color};">
+                    <span class="meal-type-title">{meal_type}</span>
+                </div>
+            """
+
+            for task in tasks:
+                ingredients_str = ', '.join(task.ingredients) if task.ingredients else 'N/A'
+                cooking_temp = task.cooking_temperature or 'N/A'
+                cooking_time = task.cooking_time or 'N/A'
+                notes = task.notes or 'N/A'
+
+                email_body += f"""
+                <div class="step-card">
+                    <h3>{task.description}</h3>
+                    <table>
+                        <tr>
+                            <td>Duration:</td>
+                            <td>{task.duration or 'N/A'}</td>
+                        </tr>
+                        <tr>
+                            <td>Ingredients:</td>
+                            <td>{ingredients_str}</td>
+                        </tr>
+                        <tr>
+                            <td>Cooking Temp:</td>
+                            <td>{cooking_temp}</td>
+                        </tr>
+                        <tr>
+                            <td>Cooking Time:</td>
+                            <td>{cooking_time}</td>
+                        </tr>
+                        <tr class="notes">
+                            <td>Notes:</td>
+                            <td>{notes}</td>
+                        </tr>
+                    </table>
+                </div>
+                """
+
+            email_body += "</div>"  # close meal-type-section
+
+    email_body += f"""
+            <p style="color: #555; font-size: 16px;">We hope these instructions make your day smoother and your meals more enjoyable. If you have any questions or need further assistance, we're here to help!</p>
+            <p style="color: #555; font-size: 16px;">Enjoy your meals!</p>
+            <p style="color: #555; font-size: 16px;">Warm regards,<br>Your Team</p>
+
+            <div class="footer">
+                <p>You are receiving this email because you opted in for follow-up instructions.</p>
+                <a href="https://sautai.com/profile" class="preferences-button">Manage Your Email Preferences</a>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
+    return email_body
+
+def send_follow_up_email(user, instruction_text):
+    import logging
+    logger = logging.getLogger(__name__)
+    import requests
+    import os
+
+    email_subject = "Today's Meal Prep Reminder"
+    email_content = instruction_text
+    recipient_email = user.email
+
+    email_data = {
+        'subject': email_subject,
+        'message': email_content,
+        'to': recipient_email,
+        'from': 'support@sautai.com',
+        'html': True  # Indicate that the message is in HTML format
+    }
+
+    try:
+        # Placeholder for n8n URL
+        n8n_url = config["N8N_SEND_FOLLOW_UP_EMAIL_URL"]
+        response = requests.post(n8n_url, json=email_data)
+        logger.info(f"Follow-up instructions email sent to n8n for {user.email}")
+    except Exception as e:
+        logger.error(f"Error sending follow-up instructions to n8n for {user.email}: {e}")
 
 @shared_task
 def generate_instructions(meal_plan_meal_ids):
@@ -1895,7 +2729,7 @@ def generate_instructions(meal_plan_meal_ids):
     """
 
 
-    # Prepare data for Zapier webhook
+    # Prepare data for n8n webhook
     email_data = {
         'subject': subject,
         'message': email_body,
@@ -1908,12 +2742,12 @@ def generate_instructions(meal_plan_meal_ids):
         logger.info(f"User {user_email} has disabled email instruction generation.")
         return
     
-    # Send data to Zapier
+    # Send data to n8n
     try:
-        zap_url = config["ZAP_GENERATE_INSTRUCTIONS_URL"]  
-        requests.post(zap_url, json=email_data)
+        n8n_url = config["N8N_GENERATE_INSTRUCTIONS_URL"]
+        requests.post(n8n_url, json=email_data)
     except Exception as e:
-        logger.error(f"Error sending cooking instructions to Zapier for: {user_email}, error: {str(e)}")
+        logger.error(f"Error sending cooking instructions to n8n for: {user_email}, error: {str(e)}")
 
 @shared_task
 def generate_user_summary(user_id):

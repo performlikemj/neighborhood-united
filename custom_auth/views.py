@@ -1,3 +1,4 @@
+import traceback
 from django.shortcuts import render, redirect
 from django.contrib.auth import login, authenticate, logout
 from django.contrib import messages
@@ -134,19 +135,19 @@ def password_reset_request(request):
         </body>
         </html>
         """
-        # Send data to Zapier
-        zapier_webhook_url = config['ZAP_PW_RESET_URL']
         email_data = {
             'subject': mail_subject,
             'message': message,
             'to': email,
             'from': 'support@sautai.com',
         }
+        # Send data to n8n
+        n8n_webhook_url = config['N8N_PW_RESET_URL']
         try:
-            requests.post(zapier_webhook_url, json=email_data)
-            logger.info(f"Password reset email data sent to Zapier for: {email}")
+            requests.post(n8n_webhook_url, json=email_data)
+            logger.info(f"Password reset email data sent to n8n for: {email}")
         except Exception as e:
-            logger.error(f"Error sending password reset email data to Zapier for: {email}, error: {str(e)}")
+            logger.error(f"Error sending password reset email data to n8n for: {email}, error: {str(e)}")
 
         return Response({'status': 'success', 'message': 'Password reset email sent.'})
     except CustomUser.DoesNotExist:
@@ -222,7 +223,7 @@ def update_profile_api(request):
             # Prepare data for Zapier webhook
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = account_activation_token.make_token(user)
-            activation_link = f"{config['STREAMLIT_URL']}/account?uid={uid}&token={token}"
+            activation_link = f"{config['STREAMLIT_URL']}/account?uid={uid}&token={token}&action=activate"
             # HTML email content
             email_content = f"""
             <html>
@@ -243,8 +244,8 @@ def update_profile_api(request):
             </html>
             """
 
-            zapier_data = {
-                'recipient_email': user_serializer.validated_data.get('email'),
+            n8n_data = {
+                'to': user_serializer.validated_data.get('email'),
                 'subject': 'Verify your email to resume access.',
                 'message': email_content,
                 'username': user.username,
@@ -252,8 +253,12 @@ def update_profile_api(request):
                 'html': True  # Indicate that the message is in HTML format
             }
 
-            # Send data to Zapier
-            requests.post(config["ZAP_UPDATE_PROFILE_URL"], json=zapier_data)
+            try:
+                requests.post(config["N8N_UPDATE_PROFILE_URL"], json=n8n_data)
+                logger.info(f"Activation email data sent to n8n for: {user_serializer.validated_data.get('email')}")
+            except Exception as e:
+                logger.error(f"Error sending activation email data to n8n for: {user_serializer.validated_data.get('email')}, error: {str(e)}")
+
 
         if 'username' in user_serializer.validated_data and user_serializer.validated_data['username'] != user.username:
             user.username = user_serializer.validated_data['username']
@@ -334,6 +339,7 @@ def update_profile_api(request):
     else:
         return Response({'status': 'success', 'message': 'Profile updated successfully without address data'})
 
+
 def get_country_code(country_name):
     # Search through the country dictionary and find the corresponding country code
     for code, name in countries:
@@ -367,7 +373,7 @@ def login_api_view(request):
         return JsonResponse({'status': 'error', 'message': 'Only POST method allowed'}, status=405)
 
     try:
-        data = json.loads(request.body)
+        data = request.data
     except json.JSONDecodeError as e:
         return JsonResponse({'status': 'error', 'message': 'Invalid JSON format'}, status=400)
 
@@ -532,11 +538,14 @@ def register_api_view(request):
                 'activation_link': activation_link,
                 'html': True  # Indicate that the message is in HTML format
             }
+            # Send data to n8n
+            n8n_webhook_url = config['N8N_REGISTER_URL']
             try:
-                requests.post(config['ZAP_REGISTER_URL'], json=email_data)
-                logger.info(f"Activation email data sent to Zapier for: {to_email}")
+                requests.post(n8n_webhook_url, json=email_data)
+                logger.info(f"Activation email data sent to n8n for: {to_email}")
             except Exception as e:
-                logger.error(f"Error sending activation email data to Zapier for: {to_email}, error: {str(e)}")
+                logger.error(f"Error sending activation email data to n8n for: {to_email}, error: {str(e)}")
+
         # After successful registration
         refresh = RefreshToken.for_user(user)  # Assuming you have RefreshToken defined or imported
         return Response({
@@ -624,11 +633,14 @@ def resend_activation_link(request):
             'activation_link': activation_link,
             'html': True  # Indicate that the message is in HTML format
         }
+        # Send data to n8n
+        n8n_webhook_url = config['N8N_RESEND_URL']
+        print(f"n8n_webhook_url: {n8n_webhook_url}")
         try:
-            requests.post(config['ZAP_RESEND_URL'], json=email_data)
-            logger.info(f"Activation email data sent to Zapier for: {to_email}")
+            requests.post(n8n_webhook_url, json=email_data)
+            logger.info(f"Activation email data sent to n8n for: {to_email}")
         except Exception as e:
-            logger.error(f"Error sending activation email data to Zapier for: {to_email}, error: {str(e)}")
+            logger.error(f"Error sending activation email data to n8n for: {to_email}, error: {str(e)}")
         
         return Response({'status': 'success', 'message': 'A new activation link has been sent to your email.'})
     

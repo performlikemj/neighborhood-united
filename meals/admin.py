@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import MealPlan, MealPlanMeal, Dish, Ingredient, Order, Cart, MealType, Meal, OrderMeal, ShoppingList, Instruction
+from .models import MealPlan, MealPlanMeal, Dish, Ingredient, Order, Cart, MealType, Meal, OrderMeal, ShoppingList, Instruction, MealPlanInstruction
 
 class MealTypeAdmin(admin.ModelAdmin):
     list_display = ('name',)
@@ -45,8 +45,8 @@ class MealPlanMealInline(admin.TabularInline):
     fields = ('meal', 'day', 'meal_type')  # Include the new field
 
 class MealPlanAdmin(admin.ModelAdmin):
-    list_display = ('user', 'week_start_date', 'week_end_date', 'get_meals_count')
-    list_filter = ('week_start_date', 'week_end_date')
+    list_display = ('id', 'user', 'week_start_date', 'week_end_date', 'get_meals_count', 'is_approved')
+    list_filter = ('week_start_date', 'week_end_date', 'is_approved')
     search_fields = ('user__username',)
     inlines = [MealPlanMealInline]
 
@@ -54,6 +54,11 @@ class MealPlanAdmin(admin.ModelAdmin):
         return obj.meal.count()
     get_meals_count.short_description = 'Meals Count'
 
+    def is_approved(self, obj):
+        return obj.is_approved
+    is_approved.boolean = True
+    is_approved.short_description = 'Approved'
+    
 class MealPlanMealAdmin(admin.ModelAdmin):
     list_display = ('meal_plan', 'meal', 'day', 'meal_type')
     list_filter = ('day', 'meal_type')
@@ -67,6 +72,13 @@ class InstructionAdmin(admin.ModelAdmin):
     list_display = ('meal_plan_meal', 'last_updated')
     search_fields = ('meal_plan_meal__meal__name', 'meal_plan_meal__meal_plan__user__username')
 
+class MealPlanInstructionAdmin(admin.ModelAdmin):
+    list_display = ('meal_plan_id', 'meal_plan', 'date', 'is_bulk_prep')
+
+    def meal_plan_id(self, obj):
+        return obj.meal_plan.id
+    meal_plan_id.short_description = 'Meal Plan ID'
+
 # Register your models here.
 admin.site.register(MealPlan, MealPlanAdmin)
 admin.site.register(Dish, DishAdmin)
@@ -79,3 +91,4 @@ admin.site.register(OrderMeal)  # For easier management of OrderMeal instances i
 admin.site.register(MealPlanMeal, MealPlanMealAdmin)
 admin.site.register(ShoppingList, ShoppingListAdmin)
 admin.site.register(Instruction, InstructionAdmin)
+admin.site.register(MealPlanInstruction, MealPlanInstructionAdmin)

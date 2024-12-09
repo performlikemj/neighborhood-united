@@ -103,7 +103,12 @@ class CustomUser(AbstractUser):
     email_meal_plan_saved = models.BooleanField(default=True)
     email_instruction_generation = models.BooleanField(default=True)
     emergency_supply_goal = models.PositiveIntegerField(default=0)  # Number of days of supplies the user wants
-
+    # Family size field
+    family_size = models.PositiveIntegerField(
+        default=1,
+        help_text="Number of people the user cooks for."
+    )
+    
     def save(self, *args, **kwargs):
         self.username = self.username.lower()
         super().save(*args, **kwargs)

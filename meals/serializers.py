@@ -26,7 +26,7 @@ class DishSerializer(serializers.ModelSerializer):
 class MealSerializer(serializers.ModelSerializer):
     class Meta:
         model = Meal
-        fields = ['id', 'name', 'description', 'dietary_preferences', 'price', 'start_date', 'chef']
+        fields = ['id', 'name', 'description', 'dietary_preferences', 'price', 'start_date', 'chef', 'servings']
 
 class MealPlanMealSerializer(serializers.ModelSerializer):
     meal_plan_meal_id = serializers.IntegerField(source='id', read_only=True)  # Add this line to include the ID
@@ -44,7 +44,7 @@ class MealPlanSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = MealPlan
-        fields = ['id', 'user', 'meals', 'created_date', 'week_start_date', 'week_end_date', 'order', 'is_approved']
+        fields = ['id', 'user', 'meals', 'created_date', 'week_start_date', 'week_end_date', 'order', 'is_approved', 'meal_prep_preference']
 
 class OrderSerializer(serializers.ModelSerializer):
     meals = MealSerializer(many=True)

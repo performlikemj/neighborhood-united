@@ -211,7 +211,11 @@ class Meal(models.Model):
     postal_objects = PostalCodeManager()  # Attach the custom manager
     dietary_objects = DietaryPreferenceManager()  # Attach the dietary preference manager
     meal_embedding = VectorField(dimensions=1536, null=True)
-    
+    servings = models.PositiveIntegerField(
+        default=1,
+        help_text="Number of servings the meal provides."
+    )
+
     class Meta:
         constraints = [
             # Your existing constraints here
@@ -368,6 +372,17 @@ class MealPlan(models.Model):
         related_name='associated_meal_plan'
     )
 
+    MEAL_PREP_CHOICES = [
+        ('daily', 'Daily Meal Instructions'),
+        ('one_day_prep', 'One-Day Meal Prep'),
+    ]
+    meal_prep_preference = models.CharField(
+        max_length=15,
+        choices=MEAL_PREP_CHOICES,
+        default='daily',
+        help_text='User preference for this week.',
+    )
+    
     def clean(self):
         # Custom validation to ensure start_date is before end_date
         if self.week_start_date and self.week_end_date:
@@ -388,16 +403,20 @@ class MealPlan(models.Model):
 
         super().save(*args, **kwargs)  # Save normally
 
-        # Only generate the shopping list if the meal plan was just approved
-        if self.is_approved and not was_approved:
-            self.generate_shopping_list()
-
     def generate_shopping_list(self):
         """Generate shopping list when the meal plan is approved."""
         from meals.tasks import generate_shopping_list
         generate_shopping_list.delay(self.id)
     
+class MealPlanInstruction(models.Model):
+    meal_plan = models.ForeignKey('MealPlan', on_delete=models.CASCADE)
+    instruction_text = models.TextField()
+    date = models.DateField()
+    is_bulk_prep = models.BooleanField(default=False)
 
+    def __str__(self):
+        return f"Instruction for {self.meal_plan.user.username} on {self.date}"
+    
 class MealPlanMeal(models.Model):
     DAYS_OF_WEEK = [
         ('Monday', 'Monday'),

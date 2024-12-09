@@ -1,5 +1,5 @@
 # meals/signals.py
-from django.db.models.signals import post_save, m2m_changed, post_delete
+from django.db.models.signals import post_save, m2m_changed, post_delete, pre_save
 from django.dispatch import receiver
 from django.urls import reverse
 from .models import Meal, MealPlan
@@ -12,7 +12,7 @@ from django.core.files.base import ContentFile
 from openai import OpenAI
 from django.conf import settings
 from rest_framework.test import APIRequestFactory
-from meals.tasks import generate_shopping_list, create_meal_plan_for_new_user, generate_user_summary
+from meals.tasks import generate_shopping_list, create_meal_plan_for_new_user, generate_user_summary, generate_bulk_prep_instructions
 
 @receiver(m2m_changed, sender=MealPlan.meal.through)
 def mealplan_meal_changed(sender, instance, action, **kwargs):
@@ -21,15 +21,31 @@ def mealplan_meal_changed(sender, instance, action, **kwargs):
         instance.is_approved = False  # Reset approval when changes are detected
         instance.save()
 
+@receiver(pre_save, sender=MealPlan)
+def pre_save_mealplan(sender, instance, **kwargs):
+    if instance.pk:
+        previous = MealPlan.objects.get(pk=instance.pk)
+        instance._previous_is_approved = previous.is_approved
+        instance._previous_has_changes = previous.has_changes
+    else:
+        instance._previous_is_approved = None
+        instance._previous_has_changes = None
+
 @receiver(post_save, sender=MealPlan)
-def send_meal_plan_email(sender, instance, created, **kwargs):
+def send_meal_plan_email(sender, instance, **kwargs):
     user = instance.user
     if not user.email_meal_plan_saved:
-        return  # Skip sending the email if the user has opted out
+        return
 
-    # Only trigger the shopping list generation if the meal plan is approved
-    if instance.is_approved:
+    # Check if approval status changed from unapproved to approved and has_changes from True to False
+    if (
+        instance.is_approved and not instance.has_changes and
+        (instance._previous_is_approved != instance.is_approved or
+         instance._previous_has_changes != instance.has_changes)
+    ):
         generate_shopping_list.delay(instance.id)
+        if instance.meal_prep_preference == 'one_day_prep':
+            generate_bulk_prep_instructions.delay(instance.id)
 
 @receiver(post_save, sender=GoalTracking)
 @receiver(post_save, sender=UserHealthMetrics)

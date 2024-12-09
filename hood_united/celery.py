@@ -26,8 +26,8 @@ app.conf.beat_schedule = {
         'task': 'meals.tasks.update_embeddings',
         'schedule': crontab(hour=0, minute=0),  # Runs every day at midnight
     },
-    'create-meal-plan-every-sunday': {
+    'create-meal-plan-every-hour': {
         'task': 'meals.tasks.create_meal_plan_for_all_users',
-        'schedule': crontab(hour=6, minute=0, day_of_week='sun'),  # Every Sunday at 6 AM
+        'schedule': crontab(minute=0),  # Runs every hour
     },
 }

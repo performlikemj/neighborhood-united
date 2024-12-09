@@ -67,6 +67,7 @@ class MealData(BaseModel):
     description: str
     dietary_preference: DietaryPreference = Field(default=DietaryPreference.EVERYTHING)
     meal_type: Optional[MealType] = None
+    servings: int = Field(..., description="Number of servings the meal provides.")
 
 class MealOutputSchema(BaseModel):
     meal: MealData
@@ -257,12 +258,12 @@ class MealItem(BaseModel):
     meal_type: str = Field(..., description="Type of the meal (e.g., Breakfast, Lunch, Dinner).")
     day: str = Field(..., description="Day of the week the meal is planned for.")
     description: str = Field(..., description="A tempting description of the meal.")
-
+    servings: int = Field(..., description="Number of servings the meal provides.")
+    
 class MealPlanApprovalEmailSchema(BaseModel):
     user_name: str = Field(..., description="Name of the user.")
     meal_plan_week_start: str = Field(..., description="Start date of the meal plan week.")
     meal_plan_week_end: str = Field(..., description="End date of the meal plan week.")
-    approval_link: str = Field(..., description="Link for the user to approve the meal plan.")
     meals: List[MealItem] = Field(..., description="List of a few meals included in the meal plan.")
     summary_text: str = Field(..., description="A tempting summary of the meal plan designed to entice the user to click the approval link.")
 
@@ -272,21 +273,238 @@ class MealPlanApprovalEmailSchema(BaseModel):
                 "user_name": "JohnDoe",
                 "meal_plan_week_start": "2024-10-22",
                 "meal_plan_week_end": "2024-10-28",
-                "approval_link": "https://example.com/meal-plan/approve/1234abcd",
                 "meals": [
                     {
                         "meal_name": "Oatmeal with Fresh Berries",
                         "meal_type": "Breakfast",
                         "day": "Monday",
-                        "description": "A warm bowl of hearty oatmeal topped with juicy, fresh berries to start your day off right."
+                        "description": "A warm bowl of hearty oatmeal topped with juicy, fresh berries to start your day off right.",
+                        "servings": 1,
                     },
                     {
                         "meal_name": "Grilled Chicken Salad",
                         "meal_type": "Lunch",
                         "day": "Monday",
-                        "description": "Tender grilled chicken over a bed of crisp greens with a zesty vinaigrette."
+                        "description": "Tender grilled chicken over a bed of crisp greens with a zesty vinaigrette.",
+                        "servings": 1,
                     }
                 ],
                 "summary_text": "We've put together a week of mouthwatering meals just for you, JohnDoe! Whether you're enjoying a hearty breakfast of Oatmeal with Fresh Berries or a refreshing Grilled Chicken Salad, your week is set to be delicious. Ready to approve your meal plan?"
+            }
+        }
+
+# Bulk Meal Plan Prepping
+class BulkPrepStep(BaseModel):
+    step_number: int = Field(..., description="Step number in the bulk preparation sequence.")
+    meal_type: str = Field(..., description="Type of meal for the step (e.g., Breakfast, Lunch, Dinner).")
+    description: str = Field(..., description="Detailed description of the step.")
+    duration: Optional[str] = Field(None, description="Estimated duration for the step.")
+    ingredients: Optional[List[str]] = Field(None, description="List of ingredients needed for this step.")
+    cooking_temperature: Optional[str] = Field(None, description="Cooking temperature if applicable.")
+    cooking_time: Optional[str] = Field(None, description="Cooking time if applicable.")
+    notes: Optional[str] = Field(None, description="Additional notes or tips.")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "step_number": 1,
+                "meal_type": "Lunch",
+                "description": "Chop all vegetables and store in airtight containers.",
+                "duration": "30 minutes",
+                "ingredients": ["bell peppers", "onions", "carrots"],
+                "cooking_temperature": "180C",
+                "cooking_time": "12 minutes",
+                "notes": "Store each vegetable in a separate container to maintain freshness."
+            }
+        }
+
+class DailyTaskStep(BaseModel):
+    step_number: int = Field(..., description="Step number in the daily task sequence.")
+    meal_type: str = Field(..., description="Type of meal for the step (e.g., Breakfast, Lunch, Dinner).")
+    description: str = Field(..., description="Detailed description of the step.")
+    duration: Optional[str] = Field(None, description="Estimated duration for the step.")
+    ingredients: Optional[List[str]] = Field(None, description="List of ingredients needed for this step.")
+    cooking_temperature: Optional[str] = Field(None, description="Cooking temperature if applicable.")
+    cooking_time: Optional[str] = Field(None, description="Cooking time if applicable.")
+    notes: Optional[str] = Field(None, description="Additional notes or tips.")
+
+    class Config:
+        json_schema_extra= {
+            "example": {
+                "step_number": 1,
+                "meal_type": "Breakfast",
+                "description": "Reheat the pre-cooked quinoa in a microwave for 2 minutes.",
+                "duration": "2 minutes",
+                "ingredients": ["quinoa"],
+                "cooking_temperature": "300W",
+                "cooking_time": "2 minutes",
+                "notes": "Cover the bowl with a damp paper towel to prevent drying out."
+            }
+        }
+
+class DailyTask(BaseModel):
+    step_number: int = Field(..., description="Step number in the daily task sequence.")
+    day: str = Field(..., description="Day of the week (e.g., 'Monday').")
+    tasks: List[DailyTaskStep] = Field(..., description="List of tasks for the day.")
+    total_estimated_time: Optional[str] = Field(None, description="Total estimated time to complete all tasks for the day.")
+
+    class Config:
+        json_schema_extra= {
+            "example": {
+                "day": "Monday",
+                "step_number": 1,
+                "tasks": [
+                    {
+                        "step_number": 1,
+                        "meal_type": "Breakfast",
+                        "description": "Reheat the marinated grilled chicken in the oven at 350°F for 10 minutes.",
+                        "duration": "10 minutes",
+                        "ingredients": ["grilled chicken"],
+                        "cooking_temperature": "350°F",
+                        "cooking_time": "10 minutes",
+                        "notes": "Ensure the chicken is heated thoroughly."
+                    },
+                    {
+                        "step_number": 2,
+                        "meal_type": "Breakfast",
+                        "description": "Assemble the salad with mixed greens, cherry tomatoes, cucumbers, and the reheated chicken.",
+                        "duration": "5 minutes",
+                        "ingredients": ["mixed greens", "cherry tomatoes", "cucumbers", "reheated chicken"],
+                        "notes": "Dress the salad just before serving."
+                    }
+                ],
+                "total_estimated_time": "15 minutes"
+            }
+        }
+
+
+class BulkPrepInstructions(BaseModel):
+    bulk_prep_steps: List[BulkPrepStep] = Field(..., description="List of steps for bulk preparation.")
+    daily_tasks: List[DailyTask] = Field(..., description="List of daily follow-up tasks, each representing a day of the week.")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "bulk_prep_steps": [
+                    {
+                        "step_number": 1,
+                        "meal_type": "Breakfast",
+                        "description": "Wash, hull, and slice 3 cups of strawberries. Store in an airtight container.",
+                        "duration": "15 minutes",
+                        "ingredients": ["strawberries"],
+                        "notes": "Keep refrigerated and use within 3 days."
+                    },
+                    {
+                        "step_number": 2,
+                        "meal_type": "Lunch",
+                        "description": "Marinate 4 chicken breasts in olive oil, lemon juice, garlic, and herbs. Refrigerate overnight.",
+                        "duration": "10 minutes",
+                        "ingredients": ["chicken breasts", "olive oil", "lemon juice", "garlic", "herbs"],
+                        "notes": "Use a sealed container. Marinate at least 8 hours."
+                    },
+                    {
+                        "step_number": 3,
+                        "meal_type": "Dinner",
+                        "description": "Peel and chop 2 cups of carrots and 1 cup of onions. Store in separate airtight containers.",
+                        "duration": "20 minutes",
+                        "ingredients": ["carrots", "onions"],
+                        "notes": "Label containers to avoid confusion."
+                    }
+                ],
+                "daily_tasks": [
+                    {
+                        "day": "Monday",
+                        "step_number": 1,
+                        "tasks": [
+                            {
+                                "step_number": 1,
+                                "meal_type": "Breakfast",
+                                "description": "Reheat the pre-cooked quinoa in the microwave for 2 minutes.",
+                                "duration": "2 minutes",
+                                "ingredients": ["pre-cooked quinoa"],
+                                "cooking_temperature": "300W",
+                                "cooking_time": "2 minutes",
+                                "notes": "Cover with a damp paper towel to retain moisture."
+                            },
+                            {
+                                "step_number": 2,
+                                "meal_type": "Breakfast",
+                                "description": "Top quinoa with sliced strawberries and a drizzle of honey.",
+                                "duration": "3 minutes",
+                                "ingredients": ["sliced strawberries", "honey"],
+                                "notes": "Serve immediately."
+                            }
+                        ],
+                        "total_estimated_time": "5 minutes"
+                    },
+                    {
+                        "day": "Tuesday",
+                        "step_number": 1,
+                        "tasks": [
+                            {
+                                "step_number": 1,
+                                "meal_type": "Lunch",
+                                "description": "Grill the marinated chicken breasts over medium heat until fully cooked (internal temp 165°F).",
+                                "duration": "15 minutes",
+                                "ingredients": ["marinated chicken"],
+                                "cooking_temperature": "375°F",
+                                "cooking_time": "15 minutes",
+                                "notes": "Flip halfway through cooking. Let rest 5 minutes before slicing."
+                            },
+                            {
+                                "step_number": 2,
+                                "meal_type": "Lunch",
+                                "description": "Assemble a salad with mixed greens, cherry tomatoes, and sliced grilled chicken.",
+                                "duration": "5 minutes",
+                                "ingredients": ["mixed greens", "cherry tomatoes", "grilled chicken"],
+                                "notes": "Dress just before serving."
+                            },
+                            {
+                                "step_number": 3,
+                                "meal_type": "Lunch",
+                                "description": "Drizzle salad with a light vinaigrette and toss gently.",
+                                "duration": "2 minutes",
+                                "ingredients": ["vinaigrette"],
+                                "notes": "Adjust seasoning to taste."
+                            }
+                        ],
+                        "total_estimated_time": "22 minutes"
+                    },
+                    {
+                        "day": "Wednesday",
+                        "step_number": 1,
+                        "tasks": [
+                            {
+                                "step_number": 1,
+                                "meal_type": "Dinner",
+                                "description": "Sauté chopped carrots and onions in a saucepan with a teaspoon of olive oil until softened.",
+                                "duration": "10 minutes",
+                                "ingredients": ["chopped carrots", "chopped onions", "olive oil"],
+                                "cooking_temperature": "medium",
+                                "cooking_time": "10 minutes",
+                                "notes": "Stir occasionally to prevent burning."
+                            },
+                            {
+                                "step_number": 2,
+                                "meal_type": "Dinner",
+                                "description": "Add pre-cooked lentils and vegetable broth to the saucepan and simmer for 5 minutes.",
+                                "duration": "5 minutes",
+                                "ingredients": ["pre-cooked lentils", "vegetable broth"],
+                                "cooking_temperature": "medium-low",
+                                "cooking_time": "5 minutes",
+                                "notes": "Season with salt and pepper to taste."
+                            },
+                            {
+                                "step_number": 3,
+                                "meal_type": "Dinner",
+                                "description": "Serve the lentil stew hot, garnished with fresh parsley.",
+                                "duration": "2 minutes",
+                                "ingredients": ["fresh parsley"],
+                                "notes": "Serve immediately for best flavor."
+                            }
+                        ],
+                        "total_estimated_time": "17 minutes"
+                    }
+                ]
             }
         }

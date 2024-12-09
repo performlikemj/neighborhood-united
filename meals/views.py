@@ -64,13 +64,47 @@ def api_search_ingredients(request):
     results = search_ingredients(query)
     return JsonResponse(results)
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def api_get_meal_plan_preference(request):
+    if request.method == 'GET':
+        # Retrieve the meal plans for the current user
+        meal_plans = MealPlan.objects.filter(user=request.user)
+        serializer = MealPlanSerializer(meal_plans, many=True)
+        return Response(serializer.data, status=200)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def api_post_meal_plan_preference(request):
+    if request.method == 'POST':
+        data = request.data.copy()
+        data['user'] = request.user.id  # Assign the current user
+
+        serializer = MealPlanSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=201)
+        else:
+            return Response(serializer.errors, status=400)
+        
 @api_view(['POST'])
 @permission_classes([AllowAny])  # Allow unauthenticated access
 def api_email_approved_meal_plan(request):
     approval_token = request.data.get('approval_token')
+    meal_prep_preference = request.data.get('meal_prep_preference')
+    valid_preferences = dict(MealPlan.MEAL_PREP_CHOICES).keys()
+
+    if not approval_token:
+        return Response({'error': 'Approval token is required.'}, status=400)
+    
+    if not meal_prep_preference or meal_prep_preference not in valid_preferences:
+        return Response({'error': 'Invalid meal prep preference.'}, status=400)
     try:
         meal_plan = MealPlan.objects.get(approval_token=approval_token)
         meal_plan.is_approved = True
+        meal_plan.has_changes = False
+        meal_plan.meal_prep_preference = meal_prep_preference
         meal_plan.save()
         return Response({'status': 'success', 'message': 'Meal plan approved successfully.'})
     except MealPlan.DoesNotExist:
@@ -742,36 +776,130 @@ def api_generate_cooking_instructions(request):
         logger.error(f"An error occurred while initiating cooking instructions generation: {str(e)}")
         return Response({"error": "An unexpected error occurred. Please try again later."}, status=500)
     
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def api_remove_meal_from_plan(request):
+    """
+    API endpoint to remove meals from a user's meal plan.
+    Expects a list of MealPlanMeal IDs in the request data.
+    """
+    user = request.user
+    meal_plan_meal_ids = request.data.get('meal_plan_meal_ids', [])
 
+    if not meal_plan_meal_ids:
+        return Response({"error": "No meal_plan_meal_ids provided."}, status=400)
+
+    # Ensure meal_plan_meal_ids is a list of integers
+    try:
+        meal_plan_meal_ids = [int(id) for id in meal_plan_meal_ids if id]
+    except ValueError:
+        return Response({"error": "Invalid meal_plan_meal_ids provided."}, status=400)
+
+    # Fetch MealPlanMeal instances that belong to the user
+    meal_plan_meals = MealPlanMeal.objects.filter(
+        id__in=meal_plan_meal_ids,
+        meal_plan__user=user
+    )
+
+    if not meal_plan_meals.exists():
+        return Response({"error": "No meal plan meals found to delete."}, status=404)
+
+    # Delete meal plan meals
+    for meal_plan_meal in meal_plan_meals:
+        meal_plan_meal.delete()
+
+    return Response({"message": "Selected meals removed from the plan."}, status=200)
+    
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def api_fetch_instructions(request):
-    meal_plan_meal_ids = request.query_params.getlist('meal_plan_meal_ids')
-    print(f'Meal plan meal ids: {meal_plan_meal_ids}')
-    if not meal_plan_meal_ids:
-        return Response({"error": "meal_plan_meal_ids are required"}, status=400)
-
+    from meals.models import MealPlanMeal, Instruction, MealPlan, MealPlanInstruction
+    meal_plan_meal_ids = request.query_params.get('meal_plan_meal_ids', '').split(',')
+    meal_plan_id = request.query_params.get('meal_plan_id', None)
+    
+    # Get the meal plan ID from the first meal plan meal if not provided
+    if not meal_plan_id and meal_plan_meal_ids:
+        print(f'Meal Plan Meal IDs: {meal_plan_meal_ids}')
+        try:
+            meal_plan_meal = MealPlanMeal.objects.filter(id=meal_plan_meal_ids[0]).first()
+            if meal_plan_meal:
+                meal_plan_id = meal_plan_meal.meal_plan.id
+                print(f'Meal Plan ID: {meal_plan_id}')
+            else:
+                return Response({"error": "Invalid meal plan meal ID"}, status=404)
+        except MealPlanMeal.DoesNotExist:
+            return Response({"error": "Invalid meal plan meal ID"}, status=404)
+    
+    meal_plan = get_object_or_404(MealPlan, id=meal_plan_id)
+    meal_prep_preference = meal_plan.meal_prep_preference
     instructions = []
 
-    meal_plan_meal_ids = [int(id) for id in meal_plan_meal_ids[0].split(',')]
+    if meal_prep_preference == 'daily':
+        if not meal_plan_meal_ids:
+            return Response({"error": "meal_plan_meal_ids are required for daily meal prep preference"}, status=400)
+        meal_plan_meal_ids = [int(id) for id in meal_plan_meal_ids if id]
 
-    for meal_plan_meal_id in meal_plan_meal_ids:
-        meal_plan_meal = get_object_or_404(MealPlanMeal, id=meal_plan_meal_id)
-        instruction = Instruction.objects.filter(meal_plan_meal=meal_plan_meal).first()
-        
-        if instruction:
-            print(f"Fetched instruction content: {instruction.content}")
-            instructions.append({
-                "meal_plan_meal_id": meal_plan_meal_id,
-                "instructions": instruction.content
-            })
-        else:
-            instructions.append({
-                "meal_plan_meal_id": meal_plan_meal_id,
-                "instructions": None
-            })
+        for meal_plan_meal_id in meal_plan_meal_ids:
+            meal_plan_meal = get_object_or_404(MealPlanMeal, id=meal_plan_meal_id)
+            instruction = Instruction.objects.filter(meal_plan_meal=meal_plan_meal).first()
+            print(f'Instruction: {instruction.content if instruction else None}')
+            # Calculate the date based on the meal plan's week start date and the meal's day
+            meal_plan = meal_plan_meal.meal_plan
+            day_of_week = meal_plan_meal.day  # e.g., 'Monday'
+            week_start_date = meal_plan.week_start_date
 
-    return Response({"instructions": instructions}, status=200)
+            # Map day names to offsets from the start date
+            day_offset = {
+                'Monday': 0,
+                'Tuesday': 1,
+                'Wednesday': 2,
+                'Thursday': 3,
+                'Friday': 4,
+                'Saturday': 5,
+                'Sunday': 6,
+            }
+            meal_date = week_start_date + timedelta(days=day_offset[day_of_week])
+
+            meal_name = meal_plan_meal.meal.name
+            if instruction:
+                instructions.append({
+                    "meal_plan_meal_id": meal_plan_meal_id,
+                    "instruction_type": "daily",
+                    "date": meal_date.isoformat(),
+                    "meal_name": meal_name,
+                    "instructions": instruction.content
+                })
+            else:
+                instructions.append({
+                    "meal_plan_meal_id": meal_plan_meal_id,
+                    "instruction_type": "daily",
+                    "date": meal_date.isoformat(),
+                    "meal_name": meal_name,
+                    "instructions": None
+                })
+
+    elif meal_prep_preference == 'one_day_prep':
+        # Fetch all instructions for the meal plan
+        meal_plan_instructions = MealPlanInstruction.objects.filter(
+            meal_plan=meal_plan
+        ).order_by('date')
+
+        for instruction in meal_plan_instructions:
+            instruction_data = {
+                "meal_plan_id": meal_plan.id,
+                "instruction_type": "bulk_prep" if instruction.is_bulk_prep else "follow_up",
+                "date": instruction.date.isoformat(),
+                "instructions": instruction.instruction_text
+            }
+            instructions.append(instruction_data)
+
+    else:
+        return Response({"error": f"Unknown meal_prep_preference '{meal_prep_preference}'"}, status=400)
+
+    return Response({
+        "meal_prep_preference": meal_prep_preference,
+        "instructions": instructions
+    }, status=200)
 
 
 @api_view(['POST'])

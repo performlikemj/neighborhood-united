@@ -19,6 +19,12 @@ class CustomUserSerializer(serializers.ModelSerializer):
         allow_empty=True,  # Allow for no allergies
     )
 
+    custom_allergies = serializers.ListField(
+        child=serializers.CharField(max_length=50),
+        allow_empty=True,
+        required=False
+    )
+    
     # Handle dietary_preferences as ManyToManyField
     dietary_preferences = serializers.SlugRelatedField(
         many=True,
@@ -41,7 +47,8 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'id', 'username', 'email', 'email_daily_instructions', 'email_meal_plan_saved',
             'email_instruction_generation', 'password', 'phone_number', 'dietary_preferences',
             'custom_dietary_preferences', 'allergies', 'custom_allergies', 'week_shift', 
-            'email_confirmed', 'preferred_language', 'timezone', 'emergency_supply_goal'  # Add this field
+            'email_confirmed', 'preferred_language', 'timezone', 'emergency_supply_goal',
+            'preferred_servings'
         ]
         extra_kwargs = {
             'password': {'write_only': True},
@@ -78,7 +85,8 @@ class CustomUserSerializer(serializers.ModelSerializer):
             timezone=validated_data.get('timezone', 'UTC'),
             allergies=validated_data.get('allergies', []),
             custom_allergies=validated_data.get('custom_allergies', ''),
-            emergency_supply_goal=validated_data.get('emergency_supply_goal', 0),  
+            emergency_supply_goal=validated_data.get('emergency_supply_goal', 0), 
+            preferred_servings=validated_data.get('preferred_servings', 1), 
         )
         user.set_password(validated_data['password'])
         user.save()
@@ -94,6 +102,14 @@ class CustomUserSerializer(serializers.ModelSerializer):
                 instance.set_password(value)
             elif attr == 'dietary_preferences':
                 instance.dietary_preferences.set(value)  # Update ManyToMany field
+            elif attr == 'allergies':
+                instance.allergies = value
+            elif attr == 'preferred_servings':
+                if value < 1:
+                    raise ValidationError("Preferred servings must be greater than 0.")
+                setattr(instance, attr, value)
+            elif attr == 'custom_allergies':
+                instance.custom_allergies = value
             else:
                 setattr(instance, attr, value)
         if custom_dietary_prefs is not None:

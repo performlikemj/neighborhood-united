@@ -1,7 +1,6 @@
 # meals/signals.py
 from django.db.models.signals import post_save, m2m_changed, post_delete, pre_save
 from django.dispatch import receiver
-from django.urls import reverse
 from .models import Meal, MealPlan
 from django.db import transaction
 from customer_dashboard.models import GoalTracking, UserHealthMetrics, CalorieIntake
@@ -12,7 +11,14 @@ from django.core.files.base import ContentFile
 from openai import OpenAI
 from django.conf import settings
 from rest_framework.test import APIRequestFactory
-from meals.tasks import generate_shopping_list, create_meal_plan_for_new_user, generate_user_summary, generate_bulk_prep_instructions
+from meals.email_service import generate_shopping_list, generate_user_summary, generate_emergency_supply_list
+from meals.meal_instructions import generate_bulk_prep_instructions
+from meals.meal_plan_service import create_meal_plan_for_new_user
+from meals.pantry_management import assign_pantry_tags
+
+def trigger_assign_pantry_tags(sender, instance, created, **kwargs):
+    if created:
+        assign_pantry_tags.delay(instance.id)
 
 @receiver(m2m_changed, sender=MealPlan.meal.through)
 def mealplan_meal_changed(sender, instance, action, **kwargs):
@@ -81,8 +87,6 @@ def handle_model_update(sender, instance, **kwargs):
         # You can trigger the task here if necessary
         transaction.on_commit(lambda: generate_user_summary.delay(user_id))
 
-
-
 @receiver(post_save, sender=CustomUser)
 def create_meal_plan_on_user_registration(sender, instance, created, **kwargs):
     if created and instance.email_confirmed:
@@ -90,26 +94,4 @@ def create_meal_plan_on_user_registration(sender, instance, created, **kwargs):
         def trigger_meal_plan_creation():
             create_meal_plan_for_new_user.delay(instance.id)  # Queue the task to create a meal plan
 
-        # Use transaction.on_commit to ensure this runs after the transaction has committed
         transaction.on_commit(trigger_meal_plan_creation)
-
-# @receiver(post_save, sender=Meal)
-# def create_meal_image(sender, instance, created, **kwargs):
-#     if created and not instance.image:
-#         # Generate image using DALL-E 3
-#         client = OpenAI(api_key=settings.OPENAI_KEY)
-#         prompt = f"A delicious meal: {instance.name}. {instance.description}"
-#         response = client.images.generate(
-#             model="dall-e-3",
-#             prompt=prompt,
-#             size="1024x1024",
-#             quality="standard",
-#             n=1,
-#         )
-#         image_url = response.data[0].url
-
-#         # Download the image
-#         response = requests.get(image_url)
-#         if response.status_code == 200:
-#             image_name = f'{instance.name}_meal_image.png'
-#             instance.image.save(image_name, ContentFile(response.content), save=True)

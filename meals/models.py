@@ -13,6 +13,7 @@ from pgvector.django import VectorExtension
 from pgvector.django import VectorField
 from openai import OpenAI, OpenAIError
 from meals.pydantic_models import ShoppingList as ShoppingListSchema, Instructions as InstructionsSchema, DietaryPreferencesSchema
+from reviews.models import Review
 from django.core.serializers.json import DjangoJSONEncoder
 from django.forms.models import model_to_dict
 import traceback
@@ -186,7 +187,6 @@ class Meal(models.Model):
         ('Lunch', 'Lunch'),
         ('Dinner', 'Dinner'),
     ]
-    PARTY_SIZE_CHOICES = [(i, i) for i in range(1, 51)]  # Replace 51 with your maximum party size + 1
     name = models.CharField(max_length=200, default='Meal Name')
     creator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_meals') 
     chef = models.ForeignKey(Chef, on_delete=models.CASCADE, related_name='meals', null=True, blank=True)
@@ -202,19 +202,11 @@ class Meal(models.Model):
     description = models.TextField(blank=True)  # Adding description field
     review_summary = models.TextField(blank=True, null=True)  # Adding summary field
     meal_type = models.CharField(max_length=10, choices=MEAL_TYPE_CHOICES, default='Dinner')
-    reviews = GenericRelation(
-        'reviews.Review',  # The model to use
-        'object_id',  # The foreign key on the related model (Review)
-        'content_type',  # The content type field on the related model (Review)
-    )
+    reviews = GenericRelation('reviews.Review', related_query_name='meal_reviews')
     objects = models.Manager()  # The default manager
     postal_objects = PostalCodeManager()  # Attach the custom manager
     dietary_objects = DietaryPreferenceManager()  # Attach the dietary preference manager
     meal_embedding = VectorField(dimensions=1536, null=True)
-    servings = models.PositiveIntegerField(
-        default=1,
-        help_text="Number of servings the meal provides."
-    )
 
     class Meta:
         constraints = [
@@ -295,16 +287,20 @@ class Meal(models.Model):
             logger.error(f"Response content: {response_content}")
             return []
 
+
+    def average_rating(self):
+        """Calculate the average rating of the meal from its reviews."""
+        qs = self.reviews.all()
+        if not qs.exists():
+            return None
+        return qs.aggregate(models.Avg('rating'))['rating__avg']
+    
     def __str__(self):
-        # Identify the creator
         creator_info = self.chef.user.username if self.chef else (self.creator.username if self.creator else 'No creator')
 
-        # Initialize dietary preferences and custom dietary preferences
         dietary_prefs = "No preferences"
         custom_dietary_prefs = "No custom preferences"
-
-        # Only access dietary preferences if the Meal instance has been saved
-        if self.pk:  # Ensure the meal has an ID before accessing ManyToMany fields
+        if self.pk:
             try:
                 dietary_prefs_list = [pref.name for pref in self.dietary_preferences.all()] or ["No preferences"]
                 dietary_prefs = ", ".join(dietary_prefs_list)
@@ -313,23 +309,18 @@ class Meal(models.Model):
                 logger.error(f"Error accessing dietary preferences for meal '{self.name}': {e}")
             
             try:
-                custom_dietary_prefs_list = [pref.name for pref in self.custom_dietary_preferences.all()] or ["No custom preferences"]
-                custom_dietary_prefs = ", ".join(custom_dietary_prefs_list)
+                cdp_list = [pref.name for pref in self.custom_dietary_preferences.all()] or ["No custom preferences"]
+                custom_dietary_prefs = ", ".join(cdp_list)
             except Exception as e:
                 custom_dietary_prefs = "Error retrieving custom preferences"
                 logger.error(f"Error accessing custom dietary preferences for meal '{self.name}': {e}")
 
-        # Description and review summary (if available)
-        description = f'Description: {self.description[:100]}...' if self.description else ''
-        review_summary = f'Review Summary: {self.review_summary[:100]}...' if self.review_summary else ''
-
-        # Combine all the elements
+        description_str = f'Description: {self.description[:100]}...' if self.description else ''
+        review_summary_str = f'Review Summary: {self.review_summary[:100]}...' if self.review_summary else ''
         return (
             f'{self.name} by {creator_info} (Preferences: {dietary_prefs}, Custom Preferences: {custom_dietary_prefs}). '
-            f'{description} {review_summary} Start Date: {self.start_date}, Price: {self.price}'
+            f'{description_str} {review_summary_str} Start Date: {self.start_date}, Price: {self.price}'
         )
-
-
 
     def trimmed_embedding(self, length=10):
         """Return a trimmed version of the meal embedding."""
@@ -358,6 +349,7 @@ class Meal(models.Model):
 class MealPlan(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
     meal = models.ManyToManyField(Meal, through='MealPlanMeal')
+    reviews = GenericRelation('reviews.Review', related_query_name='mealplan_reviews')
     created_date = models.DateTimeField(auto_now_add=True)
     week_start_date = models.DateField()
     week_end_date = models.DateField()
@@ -382,7 +374,10 @@ class MealPlan(models.Model):
         default='daily',
         help_text='User preference for this week.',
     )
-    
+
+    class Meta:
+        unique_together = ('user', 'week_start_date', 'week_end_date')
+
     def clean(self):
         # Custom validation to ensure start_date is before end_date
         if self.week_start_date and self.week_end_date:
@@ -392,9 +387,6 @@ class MealPlan(models.Model):
         # Call the parent class's clean method
         super().clean()
 
-    class Meta:
-        unique_together = ('user', 'week_start_date', 'week_end_date')
-
     def __str__(self):
         return f"{self.user.username}'s MealPlan for {self.week_start_date} to {self.week_end_date}"
 
@@ -403,11 +395,18 @@ class MealPlan(models.Model):
 
         super().save(*args, **kwargs)  # Save normally
 
-    def generate_shopping_list(self):
-        """Generate shopping list when the meal plan is approved."""
-        from meals.tasks import generate_shopping_list
-        generate_shopping_list.delay(self.id)
-    
+    def average_meal_rating(self):
+        """
+        Calculate the average rating of all meals in this meal plan.
+        """
+        meals = self.meal.all()
+        if not meals.exists():
+            return None
+        ratings = [m.average_rating() for m in meals if m.average_rating() is not None]
+        if not ratings:
+            return None
+        return sum(ratings) / len(ratings)
+        
 class MealPlanInstruction(models.Model):
     meal_plan = models.ForeignKey('MealPlan', on_delete=models.CASCADE)
     instruction_text = models.TextField()
@@ -436,6 +435,7 @@ class MealPlanMeal(models.Model):
 
     meal = models.ForeignKey(Meal, on_delete=models.CASCADE)
     meal_plan = models.ForeignKey(MealPlan, on_delete=models.CASCADE)
+    meal_date = models.DateField(null=True, blank=True)
     day = models.CharField(max_length=10, choices=DAYS_OF_WEEK)
     meal_type = models.CharField(max_length=10, choices=MEAL_TYPE_CHOICES, default='Dinner')
 
@@ -456,14 +456,6 @@ class MealPlanMeal(models.Model):
             self.meal_plan.is_approved = False
             self.meal_plan.has_changes = True
             self.meal_plan.save()
-
-    # def delete(self, *args, **kwargs):
-    #     # Update the meal plan's is_approved and has_changes flags on deletion
-    #     meal_plan = self.meal_plan
-    #     super().delete(*args, **kwargs)
-    #     meal_plan.is_approved = False
-    #     meal_plan.has_changes = True
-    #     meal_plan.save()
 
     def delete(self, *args, **kwargs):
         try:
@@ -516,6 +508,101 @@ class Instruction(models.Model):
         self.content = content
         self.save()
 
+class MealPlanThread(models.Model):
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
+    thread_id = models.CharField(max_length=255, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"MealPlanThread for {self.user.username} with thread_id {self.thread_id}"
+
+class Tag(models.Model):
+    name = models.CharField(max_length=50, unique=True)
+
+    def __str__(self):
+        return self.name
+    
+class PantryItem(models.Model):
+    ITEM_TYPE_CHOICES = [
+        ('Canned', 'Canned'),
+        ('Dry', 'Dry Goods'),
+    ]
+
+    UNIT_CHOICES = [
+        ('oz', 'Ounces'),
+        ('lb', 'Pounds'),
+        ('g', 'Grams'),
+        ('kg', 'Kilograms'),
+    ]
+
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='pantry_items')
+    item_name = models.CharField(max_length=100)
+    quantity = models.PositiveIntegerField(default=1)
+    used_count = models.PositiveIntegerField(default=0)  
+    marked_as_used = models.BooleanField(default=False)
+    tags = models.ManyToManyField(Tag, blank=True)
+    expiration_date = models.DateField(blank=True, null=True)
+    item_type = models.CharField(max_length=10, choices=ITEM_TYPE_CHOICES, default='Canned')
+    notes = models.TextField(blank=True, null=True)
+    weight_per_unit = models.DecimalField(
+        max_digits=6, 
+        decimal_places=2, 
+        blank=True, 
+        null=True,
+        help_text="How many ounces or grams per can/bag? (e.g. 14.5 for a 14.5 oz can.)"
+    )
+    weight_unit = models.CharField(
+        max_length=5,
+        choices=UNIT_CHOICES,
+        blank=True, 
+        null=True,
+        help_text="The unit for weight_per_unit, e.g. 'oz', 'lb', 'g', etc."
+    )
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['expiration_date']),
+        ]
+        unique_together = ('user', 'item_name', 'expiration_date')
+
+    def is_expiring_soon(self):
+        if self.expiration_date:
+            days_until_expiration = (self.expiration_date - timezone.now().date()).days
+            return days_until_expiration <= 7  # Consider items expiring within 7 days
+        return False  # If no expiration date, assume it's not expiring soon
+
+    def is_expired(self):
+        if self.expiration_date:
+            return self.expiration_date < timezone.now().date()
+        return False  # If no expiration date, assume it's not expired
+    
+    def available_quantity(self) -> int:
+        return self.quantity - self.used_count
+    
+    def is_fully_used(self) -> bool:
+        return self.available_quantity <= 0
+    
+    def __str__(self):
+        return f"{self.item_name} (total={self.quantity}, used={self.used_count})"
+    
+class MealPlanMealPantryUsage(models.Model):
+    """
+    Captures how much of a given pantry item is used by a particular MealPlanMeal.
+    """
+    meal_plan_meal = models.ForeignKey('MealPlanMeal', on_delete=models.CASCADE, related_name='pantry_usage')
+    pantry_item = models.ForeignKey('PantryItem', on_delete=models.CASCADE)
+    quantity_used = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    usage_unit = models.CharField(
+        max_length=5,
+        choices=PantryItem.UNIT_CHOICES,
+        blank=True, 
+        null=True,
+        help_text="Unit for quantity_used, e.g. 'oz', 'g', etc."
+    )
+
+    def __str__(self):
+        return f"{self.meal_plan_meal} uses {self.quantity_used} {self.usage_unit} of {self.pantry_item.item_name}"
+    
 class Cart(models.Model):
     customer = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
     meal = models.ManyToManyField(Meal)
@@ -578,38 +665,3 @@ class OrderMeal(models.Model):
 
     def __str__(self):
         return f'{self.meal} - {self.order} on {self.meal_plan_meal.day}'
-
-class MealPlanThread(models.Model):
-    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE)
-    thread_id = models.CharField(max_length=255, unique=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return f"MealPlanThread for {self.user.username} with thread_id {self.thread_id}"
-
-class PantryItem(models.Model):
-    ITEM_TYPE_CHOICES = [
-        ('Canned', 'Canned'),
-        ('Dry', 'Dry Goods'),
-    ]
-
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='pantry_items')
-    item_name = models.CharField(max_length=100)
-    quantity = models.PositiveIntegerField(default=1)
-    expiration_date = models.DateField(blank=True, null=True)
-    item_type = models.CharField(max_length=10, choices=ITEM_TYPE_CHOICES, default='Canned')
-    notes = models.TextField(blank=True, null=True)
-
-    def is_expiring_soon(self):
-        if self.expiration_date:
-            days_until_expiration = (self.expiration_date - timezone.now().date()).days
-            return days_until_expiration <= 7  # Consider items expiring within 7 days
-        return False  # If no expiration date, assume it's not expiring soon
-
-    def is_expired(self):
-        if self.expiration_date:
-            return self.expiration_date < timezone.now().date()
-        return False  # If no expiration date, assume it's not expired
-    
-    def __str__(self):
-        return f"{self.item_name} (x{self.quantity})"

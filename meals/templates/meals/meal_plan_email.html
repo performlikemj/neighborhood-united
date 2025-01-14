@@ -2,56 +2,250 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>Approve This Weeks Meal Plan!</title>
+    <!-- Ensures mobile responsiveness in most modern clients -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Your Weekly Meal Plan</title>
+    <style>
+        /* Basic reset & body styling */
+        body { 
+            margin: 0; 
+            padding: 0; 
+            width: 100% !important; 
+            background-color: #f8f8f8; /* Subtle background to distinguish content area */
+        }
+
+        /* Container for the "white card" look */
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #ffffff; /* White background inside the container */
+        }
+
+        /* Typography */
+        h1, h2, h3, p {
+            margin-top: 0;
+            font-family: Arial, sans-serif;
+            color: #333333;
+        }
+        h1 {
+            font-size: 24px; 
+            color: #4CAF50;
+        }
+        h2 {
+            font-size: 20px; 
+            color: #5cb85c; 
+            border-bottom: 1px solid #dddddd; 
+            padding-bottom: 10px;
+        }
+        h3 {
+            font-size: 18px; 
+        }
+        p {
+            font-size: 16px; 
+            line-height: 1.5; 
+            margin: 0 0 10px;
+        }
+
+        /* Card-like option sections */
+        .option {
+            border: 1px solid #dddddd; 
+            border-radius: 5px; 
+            padding: 15px; 
+            margin-bottom: 20px; 
+        }
+        .option h3 {
+            margin-bottom: 10px;
+        }
+
+        /* Bulletproof buttons: We’re using table-based code for broad compatibility */
+        .btn-table {
+            border-collapse: collapse;
+            margin: 0 auto;
+        }
+        .btn-table td {
+            border-radius: 5px;
+            text-align: center;
+        }
+        .btn-link {
+            display: inline-block;
+            font-size: 16px;
+            font-family: Arial, sans-serif;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            margin-top: 15px;
+            white-space: nowrap; /* Prevents text wrap in narrow clients */
+        }
+        /* Specific button variations */
+        .bulk-btn {
+            background-color: #4CAF50;
+            color: #ffffff;
+        }
+        .daily-btn {
+            background-color: #2196F3;
+            color: #ffffff;
+        }
+
+        /* Meal item styling */
+        .meal-item {
+            border-bottom: 1px solid #dddddd; 
+            padding: 10px 0; 
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center; 
+            color: #777777; 
+            font-size: 12px; 
+            padding: 10px; 
+            margin-top: 20px; 
+        }
+        .footer a { 
+            color: #007BFF; 
+            text-decoration: none; 
+        }
+
+        /* Logo */
+        .logo { 
+            text-align: center; 
+            margin-bottom: 20px; 
+        }
+        .logo img { 
+            max-width: 200px; 
+            height: auto; 
+        }
+    </style>
 </head>
-<body style="font-family: Arial, sans-serif; color: #333333; margin: 0; padding: 0; width: 100% !important; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
-    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width: 600px; margin: auto; border-spacing: 0; border-collapse: collapse;">
+<body>
+    <!-- Full-width "wrapper" table to accommodate background color in older email clients -->
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f8f8f8;">
         <tr>
-            <td style="padding: 20px;">
-                <!-- Logo Section -->
-                <div style="text-align: center; margin-bottom: 20px;">
-                    <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" width="200" style="height: auto; margin-bottom: 20px;">
-                </div>
+            <td align="center" valign="top">
+                <div class="container">
+                    <!-- Logo Section -->
+                    <div class="logo">
+                        <!-- Include descriptive alt text for accessibility -->
+                        <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" />
+                    </div>
 
-                <!-- Greeting and Summary -->
-                <p style="font-size: 16px; line-height: 1.5;">We've crafted a delicious and nutritious meal plan just for you!</p>
+                    <!-- Greeting and Personal Touch -->
+                    <p>
+                        We’ve created a delightful meal plan for you from
+                        {{ meal_plan_week_start }} to {{ meal_plan_week_end }}. 
+                        You can look forward to a balanced, fresh, and worry-free week of meals!
+                    </p>
 
-                <!-- Approval Button -->
-                <div style="text-align: center; margin: 20px 0;">
-                    <a href="{{ approval_link }}" style="display: inline-block; background-color: #5cb85c; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-size: 16px;">Click Here to Approve Your Meal Plan</a>
-                </div>
+                    <!-- Options Intro -->
+                    <p>How would you prefer to prepare your meals?</p>
 
-                <!-- Summary Text -->
-                <p style="font-size: 16px; line-height: 1.5;">{{ summary_text }}</p>
+                    <!-- Option 1: Bulk Prep -->
+                    <div class="option">
+                        <h3>📅 Option 1: One-day Bulk Prep</h3>
+                        <p>
+                            Get all your cooking done in one go. We’ll provide a 
+                            detailed one-day prep guide for Sunday, so you can enjoy 
+                            stress-free meals throughout the week.
+                        </p>
+                        <!-- Bulletproof button table -->
+                        <table role="presentation" class="btn-table">
+                            <tr>
+                                <td bgcolor="#4CAF50">
+                                    <a href="{{ approval_link_one_day }}" class="btn-link bulk-btn">
+                                        Choose Bulk Prep
+                                    </a>
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
 
-                <!-- Approval Button -->
-                <div style="text-align: center; margin: 20px 0;">
-                    <a href="{{ approval_link }}" style="display: inline-block; background-color: #5cb85c; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-size: 16px;">Click Here to Approve Your Meal Plan</a>
-                </div>
-                
-                <!-- Meal Plan Section -->
-                <h2 style="font-size: 20px; color: #5cb85c; border-bottom: 1px solid #dddddd; padding-bottom: 10px;">Your Weekly Meal Plan</h2>
-                {% for meal in meals_list %}
-                <div style="border-bottom: 1px solid #dddddd; padding: 10px 0;">
-                    <p style="margin: 0; font-size: 16px;"><strong>Day:</strong> {{ meal.day }}</p>
-                    <p style="margin: 0; font-size: 16px;"><strong>Meal Type:</strong> {{ meal.meal_type }}</p>
-                    <p style="margin: 0; font-size: 16px;"><strong>Meal Name:</strong> {{ meal.meal_name }}</p>
-                    <p style="margin: 0; font-size: 16px;"><strong>Description:</strong> {{ meal.description }}</p>
-                </div>
-                {% endfor %}
+                    <!-- Option 2: Daily Prep -->
+                    <div class="option">
+                        <h3>👩‍🍳 Option 2: Prepare Meals Daily</h3>
+                        <p>
+                            Prefer cooking fresh each day? Choose this option for daily 
+                            meal instructions to keep your kitchen routine dynamic and flexible.
+                        </p>
+                        <!-- Bulletproof button table -->
+                        <table role="presentation" class="btn-table">
+                            <tr>
+                                <td bgcolor="#2196F3">
+                                    <a href="{{ approval_link_daily }}" class="btn-link daily-btn">
+                                        Choose Daily Prep
+                                    </a>
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
 
-                <!-- Approval Button -->
-                <div style="text-align: center; margin: 20px 0;">
-                    <a href="{{ approval_link }}" style="display: inline-block; background-color: #5cb85c; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-size: 16px;">Click Here to Approve Your Meal Plan</a>
-                </div>
+                    <!-- Summary Text (Templated) -->
+                    <p>{{ summary_text }}</p>
 
-                <!-- Closing Message -->
-                <p style="text-align: center; font-size: 16px;">Bon Appétit!</p>
+                    <!-- Weekly Meal Plan Overview -->
+                    <h2>Detailed Weekly Meal Plan</h2>
+                    {% for meal in meals_list %}
+                    <div class="meal-item">
+                        <p><strong>Day:</strong> {{ meal.day }}</p>
+                        <p><strong>Meal Type:</strong> {{ meal.meal_type }}</p>
+                        <p><strong>Meal Name:</strong> {{ meal.meal_name }}</p>
+                        <p><strong>Description:</strong> {{ meal.description }}</p>
+                    </div>
+                    {% endfor %}
 
-                <!-- Footer -->
-                <div style="text-align: center; color: #777777; font-size: 12px; padding: 10px;">
-                    <p>You are receiving this email because you opted in for meal plan emails.</p>
-                    <p><a href="{{ profile_url }}" style="color: #007BFF; text-decoration: none;">Manage Your Email Preferences</a></p>
+                    <p style="text-align: center; margin-top: 20px;">Ready to get started?</p>
+
+                    <!-- Two-button block for final quick selection -->
+                    <div style="text-align: center; margin-bottom: 20px;">
+                      <table role="presentation" style="margin: 0 auto; border-collapse: collapse;">
+                        <tr>
+                          <!-- First Button -->
+                          <td>
+                            <table role="presentation" class="btn-table">
+                              <tr>
+                                <td bgcolor="#4CAF50" style="text-align: center;">
+                                  <a href="{{ approval_link_daily }}" class="btn-link bulk-btn">
+                                    Daily Meal Instructions
+                                  </a>
+                                </td>
+                              </tr>
+                            </table>
+                          </td>
+                    
+                          <!-- Spacer between buttons -->
+                          <td style="width: 20px;">&nbsp;</td>
+                    
+                          <!-- Second Button -->
+                          <td>
+                            <table role="presentation" class="btn-table">
+                              <tr>
+                                <td bgcolor="#2196F3" style="text-align: center;">
+                                  <a href="{{ approval_link_one_day }}" class="btn-link daily-btn">
+                                    One-Day Meal Prep
+                                  </a>
+                                </td>
+                              </tr>
+                            </table>
+                          </td>
+                        </tr>
+                      </table>
+                    </div>
+                    
+                    <p style="text-align: center;">Bon Appétit!</p>
+
+                    <!-- Footer -->
+                    <div class="footer">
+                        <p>You are receiving this email because you opted in for meal plan emails.</p>
+                        <p>
+                            <a href="{{ profile_url }}">
+                                Manage Your Email Preferences
+                            </a>
+                        </p>
+                    </div>
+                    <p style="color: #777; font-size: 12px; margin-top: 20px;">
+                        <strong>Disclaimer:</strong> SautAI uses generative AI for meal planning, 
+                        shopping list generation, and other suggestions, which may produce inaccuracies. 
+                        Always double-check crucial information.
+                    </p>
                 </div>
             </td>
         </tr>

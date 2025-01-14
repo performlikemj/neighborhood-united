@@ -4,7 +4,7 @@ import uuid
 from django.shortcuts import render, redirect
 from django.urls import reverse
 from qa_app.models import FoodQA
-from meals.models import CustomDietaryPreference, Dish, MealType, Meal, MealPlan, MealPlanMeal, Order, OrderMeal, Ingredient, DietaryPreference
+from meals.models import PantryItem, Dish, MealType, Meal, MealPlan, MealPlanMeal, Order, OrderMeal, Ingredient, DietaryPreference
 from django.db import transaction, IntegrityError
 from meals.pydantic_models import MealOutputSchema, RelevantSchema
 from local_chefs.models import ChefPostalCode, PostalCode
@@ -42,6 +42,14 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 client = OpenAI(api_key=settings.OPENAI_KEY)
+
+def day_to_offset(day_name: str) -> int:
+    """Convert 'Monday' -> 0, 'Tuesday' -> 1, etc."""
+    mapping = {
+        'Monday': 0, 'Tuesday': 1, 'Wednesday': 2,
+        'Thursday': 3, 'Friday': 4, 'Saturday': 5, 'Sunday': 6
+    }
+    return mapping.get(day_name, 0)
 
 def load_dietary_preferences():
     """Loads dietary preferences from a JSON file."""
@@ -109,7 +117,7 @@ def append_custom_dietary_preference(request, preference_name):
     """
     try:
         print("From append_custom_dietary_preference")
-        from meals.tasks import handle_custom_dietary_preference
+        from meals.dietary_preferences import handle_custom_dietary_preference
         # Retrieve the user from the request
         user = CustomUser.objects.get(id=request.data.get('user_id'))
 
@@ -143,9 +151,6 @@ def get_embedding(text, model="text-embedding-3-small"):
 
 
         embedding = response.data[0].embedding  # Access the embedding attribute
-
-        # Log the length and type of the embedding for debugging purposes
-        logger.info(f"Generated embedding type: {type(embedding)}, length: {len(embedding)}")
 
         if isinstance(embedding, np.ndarray):
             embedding = embedding.tolist()
@@ -238,16 +243,12 @@ def generate_user_context(user):
     allowed_foods_str = ', '.join(allowed_foods_list) if allowed_foods_list else "None"
     excluded_foods_str = ', '.join(excluded_foods_list) if excluded_foods_list else "None"
     
-    # Combine allergies and custom allergies into a comma-separated string
-    allergies = ', '.join(user.allergies) if user.allergies else "None"
-    custom_allergies = user.custom_allergies if user.custom_allergies else "None"
-    
-    # Combine allergies
-    combined_allergies = f"{allergies}" if custom_allergies == "None" else f"{allergies}, {custom_allergies}"
+    combined_allergies = set((user.allergies or []) + (user.custom_allergies or []))
+    allergies_str = ', '.join(combined_allergies) if combined_allergies else 'None'
     
     # Get user goals
     goals = user.goal.goal_description if hasattr(user, 'goal') and user.goal else "None"
-    
+
     # Get user location details from the Address model
     if hasattr(user, 'address') and user.address:
         address = user.address
@@ -272,7 +273,7 @@ def generate_user_context(user):
         f"- Custom Dietary Preferences: {custom_dietary_preference_str}\n"
         f"- Allowed Foods: {allowed_foods_str}\n"
         f"- Excluded Foods: {excluded_foods_str}\n"
-        f"- Allergies: {combined_allergies}\n"
+        f"- Allergies: {allergies_str}\n"
         f"- Goals: {goals}\n"
         f"- Meals Accessible in Location: {city}, {state}, {country}\n"
         f"- Timezone: {timezone}\n"
@@ -1036,10 +1037,14 @@ def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day, m
     try:
         with transaction.atomic():
             # Use update_or_create to atomically update or create the MealPlanMeal
+            offset = day_to_offset(day)
+            meal_date = meal_plan.week_start_date + timedelta(days=offset)
+
             meal_plan_meal, created = MealPlanMeal.objects.update_or_create(
                 meal_plan=meal_plan,
                 day=day,
                 meal_type=meal_type,
+                meal_date=meal_date,
                 defaults={'meal': new_meal}
             )
             
@@ -1142,8 +1147,8 @@ def is_valid_embedding(embedding, expected_length=1536):
         return False
     return True
 
-def create_meal(request=None, user_id=None, name=None, dietary_preference=None, description=None, meal_type=None, max_attempts=3):
-    from meals.tasks import assign_dietary_preferences
+def create_meal(request=None, user_id=None, name=None, dietary_preference=None, description=None, meal_type=None, used_pantry_items=None, max_attempts=3):
+    from meals.dietary_preferences import assign_dietary_preferences
     attempt = 0
 
     while attempt < max_attempts:
@@ -1171,6 +1176,8 @@ def create_meal(request=None, user_id=None, name=None, dietary_preference=None, 
             except Exception as e:
                 logger.error(f"Error generating user context: {e}")
                 user_context = 'No additional user context provided.'
+
+
 
             with transaction.atomic():
                 # Step 2: Check for existing meal
@@ -1213,7 +1220,8 @@ def create_meal(request=None, user_id=None, name=None, dietary_preference=None, 
                                 "content": (
                                     f"Create the meal '{meal_name_input}', that meets the user's goals of '{goal_description}'. "
                                     f"It is meant to be served as a {meal_type_input} meal. "
-                                    f"{user_context}"
+                                    f"If available, use pantry items: {used_pantry_items}."
+                                    f"Use additional information about the user to help with meal creation: {user_context}"
                                 )
                             }
                         ],
@@ -1230,7 +1238,7 @@ def create_meal(request=None, user_id=None, name=None, dietary_preference=None, 
                     # Parse GPT response
                     gpt_output = response.choices[0].message.content
                     meal_data = json.loads(gpt_output)
-                    logger.info(f"Generated meal data: {meal_data}")
+                    # logger.info(f"Generated meal data: {meal_data}")
 
                     # Extract meal details
                     meal_name = meal_data.get('meal', {}).get('name', 'Meal Placeholder')
@@ -1255,7 +1263,8 @@ def create_meal(request=None, user_id=None, name=None, dietary_preference=None, 
                     created_date=timezone.now(),
                 )
                 meal.save()
-                logger.info(f"Meal '{meal.name}' saved successfully with ID {meal.id}.")
+
+                # logger.info(f"Meal '{meal.name}' saved successfully with ID {meal.id}.")
 
                 # Step 5: Assign dietary preferences
                 # Fetch and assign the regular dietary preferences
@@ -1285,7 +1294,6 @@ def create_meal(request=None, user_id=None, name=None, dietary_preference=None, 
                     logger.error(f"Invalid embedding generated for meal '{meal.name}'. Expected list of length 1536.")
                     attempt += 1
                     continue  # Retry
-
 
                 # Step 8: Prepare the response
                 meal_dict = {
@@ -1368,7 +1376,10 @@ def add_meal_to_plan(request, meal_plan_id, meal_id, day, meal_type, allow_dupli
     if existing_meal:
         if allow_duplicates:
             # Create a new MealPlanMeal even if a meal is scheduled for that day since duplicates are allowed
-            MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day, meal_type=meal_type)
+            offset = day_to_offset(day)
+            meal_date = meal_plan.week_start_date + timedelta(days=offset)
+
+            MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day, meal_type=meal_type, meal_date=meal_date)
             return {'status': 'success', 'action': 'added_duplicate', 'new_meal': meal.name, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
         else:
             # If duplicates are not allowed and a meal is already scheduled, offer to replace it
@@ -1383,7 +1394,9 @@ def add_meal_to_plan(request, meal_plan_id, meal_id, day, meal_type, allow_dupli
             }
     else:
         # No existing meal for that day; go ahead and add the new meal
-        MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day, meal_type=meal_type)
+        offset = day_to_offset(day)
+        meal_date = meal_plan.week_start_date + timedelta(days=offset)
+        MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day, meal_type=meal_type, meal_date=meal_date)
         return {'status': 'success', 'action': 'added', 'new_meal': meal.name, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 
@@ -2118,7 +2131,6 @@ def guest_get_meal_plan(request):
         "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')
     }
 
-
 def approve_meal_plan(request, meal_plan_id):
     print("From approve_meal_plan")
     logger.info(f"Approving meal plan with ID: {meal_plan_id}")
@@ -2127,8 +2139,10 @@ def approve_meal_plan(request, meal_plan_id):
         user_role = UserRole.objects.get(user=user)
         
         if user_role.current_role == 'chef':
-            return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
-
+            return (
+                {'status': 'error', 
+                 'message': 'Chefs in their chef role are not allowed to use the assistant.'}
+            )
 
         # Step 1: Retrieve the MealPlan using the provided ID
         meal_plan = MealPlan.objects.get(id=meal_plan_id, user=user)
@@ -2137,13 +2151,20 @@ def approve_meal_plan(request, meal_plan_id):
         if meal_plan.order:
             if meal_plan.order.is_paid:
                 # If the order is paid, return a message
-                return {'status': 'info', 'message': 'This meal plan has already been paid for.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+                return {
+                    'status': 'info', 
+                    'message': 'This meal plan has already been paid for.', 
+                    'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
             else:
                 # If the order is not paid, return a message
-                return {'status': 'info', 'message': 'This meal plan has an unpaid order. Please complete the payment.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+                return {
+                    'status': 'info', 
+                    'message': 'This meal plan has an unpaid order. Please complete the payment.', 
+                    'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
 
-        # Handle meal plan approval
-        # Create an Order object only if there are paid meals
+        # Check if the meal plan requires payment
         paid_meals_exist = False
         for meal_plan_meal in meal_plan.mealplanmeal_set.all():
             meal = meal_plan_meal.meal
@@ -2151,38 +2172,90 @@ def approve_meal_plan(request, meal_plan_id):
                 paid_meals_exist = True
                 break
         
+        # If no paid meals, approve with no payment
         if not paid_meals_exist:
             meal_plan.is_approved = True
             meal_plan.has_changes = False
             meal_plan.save()
-            return {'status': 'success', 'message': 'Meal plan approved with no payment required.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
+            
+            # [1] DETECT IF EXPIRING PANTRY ITEMS WERE USED
+            detect_and_trigger_emergency_supply_if_needed(meal_plan, user)
 
+            return {
+                'status': 'success', 
+                'message': 'Meal plan approved with no payment required.', 
+                'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+
+        # Otherwise, create an order for paid meals
         order = Order(customer=user)
-        order.save()  # Save the order to generate an ID
+        order.save()  # Save to generate an ID
 
-        # Create OrderMeal objects for each meal in the meal plan
+        # Create OrderMeal objects for each meal in the plan
         for meal_plan_meal in meal_plan.mealplanmeal_set.all():
             meal = meal_plan_meal.meal
             if not meal.can_be_ordered():
-                continue  # Skip this meal if it can't be ordered
+                continue  # skip if can't be ordered
             if meal.price and meal.price > 0:
-                OrderMeal.objects.create(order=order, meal=meal, meal_plan_meal=meal_plan_meal, quantity=1)
+                OrderMeal.objects.create(
+                    order=order, 
+                    meal=meal, 
+                    meal_plan_meal=meal_plan_meal, 
+                    quantity=1
+                )
 
-        # Link the Order to the MealPlan
+        # Link the order to the MealPlan
         meal_plan.order = order
         meal_plan.is_approved = True
         meal_plan.has_changes = False
         meal_plan.save()
 
+        # [2] DETECT IF EXPIRING PANTRY ITEMS WERE USED
+        detect_and_trigger_emergency_supply_if_needed(meal_plan, user)
 
         return {
-            'status': 'success', 
+            'status': 'success',
             'message': 'Meal plan approved. Proceed to payment.',
-            'order_id': order.id, 
+            'order_id': order.id,
             'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
         }
+
     except Exception as e:
-        return {'status': 'error', 'message': f'An unexpected error occurred: {str(e)}'}
+        return {
+            'status': 'error', 
+            'message': f'An unexpected error occurred: {str(e)}'
+        }
+
+def detect_and_trigger_emergency_supply_if_needed(meal_plan, user):
+    """
+    Checks if any bridging usage from this MealPlan references 
+    'expiring soon' pantry items, and triggers an emergency supply 
+    check if yes.
+    """
+    from meals.models import MealPlanMealPantryUsage
+    from meals.email_service import generate_emergency_supply_list
+    
+    # Query bridging usage for this meal plan
+    bridging_qs = MealPlanMealPantryUsage.objects.filter(
+        meal_plan_meal__meal_plan=meal_plan
+    )
+
+    # Filter for pantry items that are expiring soon (or already expired).
+    # Your logic might vary: maybe you only consider items that are flagged as emergency, 
+    # or you also check item_type == 'Dry'/'Canned' etc.
+    expiring_usage = bridging_qs.filter(
+        pantry_item__expiration_date__isnull=False,
+        pantry_item__expiration_date__lte=timezone.now().date() + timedelta(days=7)
+    )
+
+    if expiring_usage.exists():
+        logger.info(f"[Emergency Supply] {expiring_usage.count()} usage items are from soon-to-expire pantry items!")
+        
+        # Now trigger your Celery task to re-check emergency supply
+        # e.g. generate_emergency_supply_list.delay(user.id)
+        generate_emergency_supply_list.delay(user.id)
+    else:
+        logger.info("[Emergency Supply] No expiring pantry items used. No action needed.")
 
 def analyze_nutritional_content(request, dish_id):
     try:

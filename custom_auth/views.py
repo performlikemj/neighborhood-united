@@ -42,7 +42,9 @@ import logging
 from django.contrib.auth.hashers import check_password
 from dotenv import load_dotenv
 from django.db import IntegrityError
-from meals.tasks import create_meal_plan_for_new_user, generate_user_summary, handle_custom_dietary_preference
+from meals.meal_plan_service import create_meal_plan_for_new_user
+from meals.email_service import generate_user_summary
+from meals.dietary_preferences import handle_custom_dietary_preference
 from meals.models import CustomDietaryPreference
 from django.core.mail import send_mail
 
@@ -327,6 +329,9 @@ def update_profile_api(request):
         if 'emergency_supply_goal' in user_serializer.validated_data:
             user.emergency_supply_goal = user_serializer.validated_data['emergency_supply_goal']
 
+        if 'preferred_servings' in user_serializer.validated_data:
+            user.preferred_servings = user_serializer.validated_data['preferred_servings']
+
         user_serializer.save()
 
     else:
@@ -421,6 +426,8 @@ def login_api_view(request):
             'custom_allergies': user.custom_allergies,
             'dietary_preferences': list(user.dietary_preferences.values_list('name', flat=True)),
             'custom_dietary_preferences': list(user.custom_dietary_preferences.values_list('name', flat=True)),
+            'preferred_servings': user.preferred_servings,
+            'emergency_supply_goal': user.emergency_supply_goal,
             'is_chef': user_role.is_chef,
             'current_role': user_role.current_role,
             'goal_name': goal_name,
@@ -488,6 +495,11 @@ def register_api_view(request):
                 user.emergency_supply_goal = user_serializer.validated_data['emergency_supply_goal']
                 user.save()
 
+            # Handle the preferred_servings during user creation
+            if 'preferred_servings' in user_serializer.validated_data:
+                user.preferred_servings = user_serializer.validated_data['preferred_servings']
+                user.save() 
+
             address_data = request.data.get('address')
             # Check if any significant address data is provided
             if address_data and any(value.strip() for value in address_data.values()):
@@ -546,11 +558,11 @@ def register_api_view(request):
                 'html': True  # Indicate that the message is in HTML format
             }
             try:
-                # requests.post(os.getenv('ZAP_REGISTER_URL'), json=email_data)
-                logger.info(f"Activation email data sent to Zapier for: {to_email}")
+                requests.post(os.getenv('N8N_REGISTER_URL'), json=email_data)
+                logger.info(f"Activation email data sent to n8n for: {to_email}")
                 print(f"Email data: {email_data}")
             except Exception as e:
-                logger.error(f"Error sending activation email data to Zapier for: {to_email}, error: {str(e)}")
+                logger.error(f"Error sending activation email data to n8n for: {to_email}, error: {str(e)}")
                 raise 
         # After successful registration
         refresh = RefreshToken.for_user(user)  # Assuming you have RefreshToken defined or imported
@@ -642,10 +654,10 @@ def resend_activation_link(request):
             'html': True  # Indicate that the message is in HTML format
         }
         try:
-            requests.post(os.getenv('ZAP_RESEND_URL'), json=email_data)
-            logger.info(f"Activation email data sent to Zapier for: {to_email}")
+            requests.post(os.getenv('N8N_RESEND_URL'), json=email_data)
+            logger.info(f"Activation email data sent to n8n for: {to_email}")
         except Exception as e:
-            logger.error(f"Error sending activation email data to Zapier for: {to_email}, error: {str(e)}")
+            logger.error(f"Error sending activation email data to n8n for: {to_email}, error: {str(e)}")
         
         return Response({'status': 'success', 'message': 'A new activation link has been sent to your email.'})
     

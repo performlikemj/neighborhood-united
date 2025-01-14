@@ -1,0 +1,115 @@
+<!-- meals/templates/meals/shopping_list_email.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Your Shopping List</title>
+    <style>
+        /* Some example styling; adapt to your liking */
+        body {
+            font-family: Arial, sans-serif;
+            color: #333333;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 600px; 
+            margin: 0 auto; 
+            padding: 20px;
+        }
+        .logo img {
+            max-width: 200px; 
+            height: auto;
+        }
+        h2 {
+            color: #555;
+            border-bottom: 1px solid #dddddd;
+            padding-bottom: 5px;
+        }
+        table {
+            width: 100%; 
+            border-collapse: collapse;
+        }
+        th, td {
+            text-align: left; 
+            padding: 8px; 
+            border-bottom: 1px solid #f2f2f2;
+        }
+        .footer {
+            text-align: center; 
+            color: #777;
+            font-size: 12px; 
+            margin-top: 20px;
+        }
+        .footer a {
+            color: #007BFF; 
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header / Logo -->
+        <div class="logo" style="text-align: center; margin-bottom: 20px;">
+            <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo">
+        </div>
+
+        <h2>Your Personalized Shopping List</h2>
+        <p>Dear {{ user_name }},</p>
+        <p>
+            We’re excited to help you prepare for the week of {{ meal_plan_week_start }} 
+            to {{ meal_plan_week_end }}! Below is your personalized shopping list, 
+            thoughtfully curated to complement the delicious meals you've planned.
+        </p>
+
+        {# Loop through your categorized items #}
+        {% for category, items in categorized_items.items() %}
+            <h3>{{ category }}</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Ingredient</th>
+                        <th>Quantity</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for ingredient, details in items.items() %}
+                    <tr>
+                        <td>{{ ingredient }}</td>
+                        <td>
+                            {% if details.quantity is not none %}
+                                {{ details.quantity }} {{ details.unit }}
+                            {% else %}
+                                {{ details.quantity }}  <!-- If 'to taste' or something else -->
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if details.notes %}
+                                {{ details.notes|join('; ') }}
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            <br>
+        {% endfor %}
+
+        <p style="margin-top: 20px;">
+            If you have any questions or need further assistance, please reach out. 
+            Happy cooking!
+        </p>
+        <div class="footer">
+            <p>You are receiving this email because you opted in for shopping list emails.</p>
+            <p><a href="{{ profile_url }}">Manage Your Email Preferences</a></p>
+        </div>
+
+        <p style="color: #777; font-size: 12px; margin-top: 20px;">
+            <strong>Disclaimer:</strong> SautAI uses generative AI for meal planning, 
+            shopping list generation, and other suggestions, which may produce inaccuracies. 
+            Always double-check crucial information.
+        </p>
+    </div>
+</body>
+</html>

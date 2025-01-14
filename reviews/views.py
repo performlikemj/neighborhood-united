@@ -3,12 +3,17 @@ from django.views.generic import CreateView, ListView
 from django.http import HttpResponseForbidden
 from django.urls import reverse_lazy
 from django.contrib.contenttypes.models import ContentType
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 from .models import Review
+from .serializers import ReviewSerializer
 from chefs.models import Chef
-from meals.models import Meal, Order
+from meals.models import Meal, Order, MealPlan
 from events.models import Event
 from custom_auth.models import UserRole
 from django.views.generic.edit import UpdateView, DeleteView
+from django.db import IntegrityError
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from qa_app.views import generate_review_summary
@@ -107,7 +112,95 @@ class ReviewDeleteView(DeleteView):
     def get_success_url(self):
         return reverse_lazy('reviews:review_list')
     
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_meal_review(request, meal_id):
+    user = request.user
+    rating = request.data.get('rating')
+    comment = request.data.get('comment', '')
+    meal_plan_id = request.data.get('meal_plan_id')
 
-@receiver(post_save, sender=Review)
-def update_review_summary(sender, instance, **kwargs):
-    generate_review_summary(instance.object_id, instance.content_type.model)
+    if not meal_plan_id:
+        return Response({"error": "meal_plan_id is required to review a meal."}, status=400)
+
+    meal = get_object_or_404(Meal, id=meal_id)
+    meal_plan = get_object_or_404(MealPlan, id=meal_plan_id, user=user)
+
+    if not meal_plan.mealplanmeal_set.filter(meal=meal).exists():
+        return Response({"error": "This meal is not part of the specified meal plan."}, status=400)
+
+    if not meal_plan.is_approved:
+        return Response({"error": "Cannot review a meal from an unapproved meal plan."}, status=403)
+
+    # Try fetching an existing review
+    existing_review = Review.objects.filter(
+        user=user,
+        content_type=ContentType.objects.get_for_model(Meal),
+        object_id=meal.id
+    ).first()
+
+    if existing_review:
+        # Update the existing review
+        existing_review.rating = rating
+        existing_review.comment = comment
+        existing_review.save()
+        serializer = ReviewSerializer(existing_review)
+        return Response(serializer.data, status=200)  # or 202 Accepted
+    else:
+        # Create a new review
+        review = Review.objects.create(
+            user=user,
+            content_type=ContentType.objects.get_for_model(Meal),
+            object_id=meal.id,
+            rating=rating,
+            comment=comment
+        )
+        serializer = ReviewSerializer(review)
+        return Response(serializer.data, status=201)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_meal_plan_review(request, meal_plan_id):
+    user = request.user
+    rating = request.data.get('rating')
+    comment = request.data.get('comment', '')
+
+    meal_plan = get_object_or_404(MealPlan, id=meal_plan_id, user=user)
+
+    # Check if the meal plan is approved
+    if not meal_plan.is_approved:
+        return Response({"error": "Meal plan is not approved. Reviews can only be submitted for approved meal plans."}, status=403)
+
+    review = Review.objects.create(
+        user=user,
+        content_object=meal_plan,
+        rating=rating,
+        comment=comment
+    )
+    serializer = ReviewSerializer(review)
+    return Response(serializer.data, status=201)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def list_meal_plan_reviews(request, meal_plan_id):
+    user = request.user
+    meal_plan = get_object_or_404(MealPlan, id=meal_plan_id, user=user)
+    reviews = meal_plan.reviews.all().order_by('-created_at')
+    serializer = ReviewSerializer(reviews, many=True)
+    return Response(serializer.data, status=200)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def list_meal_reviews(request, meal_id):
+    # Make sure the meal exists
+    meal = get_object_or_404(Meal, id=meal_id)
+
+    # Filter reviews for this meal
+    reviews = Review.objects.filter(
+        content_type=ContentType.objects.get_for_model(Meal),
+        object_id=meal.id
+    ).order_by('-created_at')
+
+    serializer = ReviewSerializer(reviews, many=True)
+    return Response(serializer.data, status=200)

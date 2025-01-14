@@ -1,6 +1,6 @@
 # chefs/management/commands/update_chef_embeddings.py
 from django.core.management.base import BaseCommand
-from meals.tasks import update_chef_embeddings  # Ensure this is the correct path to your task
+from meals.meal_embedding import update_chef_embeddings  # Ensure this is the correct path to your task
 
 class Command(BaseCommand):
     help = 'Triggers asynchronous update of embeddings for all chefs.'

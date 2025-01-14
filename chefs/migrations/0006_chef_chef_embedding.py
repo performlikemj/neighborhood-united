@@ -7,7 +7,8 @@ import pgvector.django
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('chefs', '0005_alter_chef_profile_pic'),
+        ('chefs', '0005_install_pgvector'),
+
     ]
 
     operations = [

@@ -1,7 +1,6 @@
 # meals/pydantic_models.py
 from pydantic import BaseModel, Field, RootModel
 from typing import List, Optional, Dict
-from datetime import date
 from enum import Enum
 
 class DietaryPreference(str, Enum):
@@ -43,8 +42,20 @@ class MealType(str, Enum):
     LUNCH = "Lunch"
     DINNER = "Dinner"
 
+class PantryUsageItem(BaseModel):
+    pantry_item_name: str = Field(..., description="Exact name of the pantry item used.")
+    quantity_used: Optional[str] = Field(
+        default=None, 
+        description="Amount of this pantry item used, e.g. '2', '1.5', '0.5', 'To taste', etc."
+    )
+    unit: Optional[str] = Field(
+        default=None,
+        description="Unit of measure for the used quantity, e.g. 'cup', 'teaspoon', 'each', etc."
+    )
+    notes: Optional[str] = Field(default=None, description="Any special notes about usage.")
+
 class ShoppingListItem(BaseModel):
-    meal_name: Optional[str] = None
+    meal_name: str
     ingredient: str
     quantity: str
     unit: str
@@ -57,7 +68,7 @@ class ShoppingList(BaseModel):
 class InstructionStep(BaseModel):
     step_number: int
     description: str
-    duration: Optional[str] = None
+    duration: Optional[str] = Field(default="N/A", description="Estimated duration. If not provided, defaults to 'N/A'.")
 
 class Instructions(BaseModel):
     steps: List[InstructionStep]
@@ -66,8 +77,11 @@ class MealData(BaseModel):
     name: str
     description: str
     dietary_preference: DietaryPreference = Field(default=DietaryPreference.EVERYTHING)
-    meal_type: Optional[MealType] = None
-    servings: int = Field(..., description="Number of servings the meal provides.")
+    meal_type: Optional[str] = Field(..., description="Type of meal (e.g., 'Breakfast', 'Lunch', 'Dinner')")
+    used_pantry_items: List[str] = Field(
+        default=[],
+        description="List of the user's expiring pantry items (in string form) actually used in this meal."
+    )
 
 class MealOutputSchema(BaseModel):
     meal: MealData
@@ -80,6 +94,10 @@ class MealPlanMeal(BaseModel):
     meal_type: str  # e.g., "Breakfast"
     meal_name: str
     meal_description: Optional[str] = None
+    servings: int = Field(
+        default=None, 
+        description="Number of servings for this meal (e.g., the meal’s base or intended portion after cooking)."
+    )
 
 class MealPlanSchema(BaseModel):
     meals: List[MealPlanMeal]
@@ -153,95 +171,6 @@ class DietaryPreferenceDetail(BaseModel):
     allowed: List[str] = Field(..., description="A list of allowed foods for this dietary preference.")
     excluded: List[str] = Field(..., description="A list of excluded foods for this dietary preference.")
 
-
-# New Pydantic Model for User Summary
-class GoalTrackingSchema(BaseModel):
-    goal_name: str
-    goal_description: str
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "goal_name": "Lose Weight",
-                "goal_description": "Aim to lose 5kg over the next two months."
-            }
-        }
-
-
-class UserHealthMetricSchema(BaseModel):
-    date_recorded: date
-    weight_kg: float
-    weight_lbs: float
-    mood: str
-    energy_level: int
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "date_recorded": "2024-09-01",
-                "weight_kg": 70.0,
-                "weight_lbs": 154.32,
-                "mood": "Happy",
-                "energy_level": 7
-            }
-        }
-
-
-class CalorieIntakeSchema(BaseModel):
-    meal_name: str
-    meal_description: str
-    portion_size: str
-    date_recorded: date
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "meal_name": "Breakfast",
-                "meal_description": "Oatmeal with fruits",
-                "portion_size": "1 bowl",
-                "date_recorded": "2024-09-01"
-            }
-        }
-
-
-class UserSummarySchema(BaseModel):
-    user_information: str
-    goal_tracking: List[GoalTrackingSchema]
-    user_health_metrics: List[UserHealthMetricSchema]
-    calorie_intake: List[CalorieIntakeSchema]
-    meal_plan_approval_status: str
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "user_information": "User Preferences:\n- Predefined Dietary Preferences: Vegan, Gluten-Free\n- ...",
-                "goal_tracking": [
-                    {
-                        "goal_name": "Lose Weight",
-                        "goal_description": "Aim to lose 5kg over the next two months."
-                    }
-                ],
-                "user_health_metrics": [
-                    {
-                        "date_recorded": "2024-09-01",
-                        "weight_kg": 70.0,
-                        "weight_lbs": 154.32,
-                        "mood": "Happy",
-                        "energy_level": 7
-                    }
-                ],
-                "calorie_intake": [
-                    {
-                        "meal_name": "Breakfast",
-                        "meal_description": "Oatmeal with fruits",
-                        "portion_size": "1 bowl",
-                        "date_recorded": "2024-09-01"
-                    }
-                ],
-                "meal_plan_approval_status": "not approved"
-            }
-        }
-
 # New Pydantic Models for Pantry Items
 class ReplenishItem(BaseModel):
     item_name: str = Field(..., description="Name of the item to replenish")
@@ -251,20 +180,18 @@ class ReplenishItem(BaseModel):
 class ReplenishItemsSchema(BaseModel):
     items_to_replenish: List[ReplenishItem] = Field(..., description="List of items to replenish")
 
-
 # New Pydantic Models for Approving Meal Plans
 class MealItem(BaseModel):
     meal_name: str = Field(..., description="Name of the meal.")
     meal_type: str = Field(..., description="Type of the meal (e.g., Breakfast, Lunch, Dinner).")
     day: str = Field(..., description="Day of the week the meal is planned for.")
     description: str = Field(..., description="A tempting description of the meal.")
-    servings: int = Field(..., description="Number of servings the meal provides.")
-    
+
 class MealPlanApprovalEmailSchema(BaseModel):
     user_name: str = Field(..., description="Name of the user.")
     meal_plan_week_start: str = Field(..., description="Start date of the meal plan week.")
     meal_plan_week_end: str = Field(..., description="End date of the meal plan week.")
-    meals: List[MealItem] = Field(..., description="List of a few meals included in the meal plan.")
+    meals: List[MealItem] = Field(..., description="The full list of the meals included in the meal plan, ordered by day and meal type.")
     summary_text: str = Field(..., description="A tempting summary of the meal plan designed to entice the user to click the approval link.")
 
     class Config:
@@ -278,15 +205,13 @@ class MealPlanApprovalEmailSchema(BaseModel):
                         "meal_name": "Oatmeal with Fresh Berries",
                         "meal_type": "Breakfast",
                         "day": "Monday",
-                        "description": "A warm bowl of hearty oatmeal topped with juicy, fresh berries to start your day off right.",
-                        "servings": 1,
+                        "description": "A warm bowl of hearty oatmeal topped with juicy, fresh berries to start your day off right."
                     },
                     {
                         "meal_name": "Grilled Chicken Salad",
                         "meal_type": "Lunch",
                         "day": "Monday",
-                        "description": "Tender grilled chicken over a bed of crisp greens with a zesty vinaigrette.",
-                        "servings": 1,
+                        "description": "Tender grilled chicken over a bed of crisp greens with a zesty vinaigrette."
                     }
                 ],
                 "summary_text": "We've put together a week of mouthwatering meals just for you, JohnDoe! Whether you're enjoying a hearty breakfast of Oatmeal with Fresh Berries or a refreshing Grilled Chicken Salad, your week is set to be delicious. Ready to approve your meal plan?"
@@ -298,7 +223,7 @@ class BulkPrepStep(BaseModel):
     step_number: int = Field(..., description="Step number in the bulk preparation sequence.")
     meal_type: str = Field(..., description="Type of meal for the step (e.g., Breakfast, Lunch, Dinner).")
     description: str = Field(..., description="Detailed description of the step.")
-    duration: Optional[str] = Field(None, description="Estimated duration for the step.")
+    duration: Optional[str] = Field(None, description="Estimated duration for the step. If not provided, defaults to None.")
     ingredients: Optional[List[str]] = Field(None, description="List of ingredients needed for this step.")
     cooking_temperature: Optional[str] = Field(None, description="Cooking temperature if applicable.")
     cooking_time: Optional[str] = Field(None, description="Cooking time if applicable.")
@@ -322,7 +247,7 @@ class DailyTaskStep(BaseModel):
     step_number: int = Field(..., description="Step number in the daily task sequence.")
     meal_type: str = Field(..., description="Type of meal for the step (e.g., Breakfast, Lunch, Dinner).")
     description: str = Field(..., description="Detailed description of the step.")
-    duration: Optional[str] = Field(None, description="Estimated duration for the step.")
+    duration: Optional[str] = Field(None, description="Estimated duration for the step. If not provided, defaults to None.")
     ingredients: Optional[List[str]] = Field(None, description="List of ingredients needed for this step.")
     cooking_temperature: Optional[str] = Field(None, description="Cooking temperature if applicable.")
     cooking_time: Optional[str] = Field(None, description="Cooking time if applicable.")
@@ -507,4 +432,51 @@ class BulkPrepInstructions(BaseModel):
                     }
                 ]
             }
+        }
+
+# Pantry Management
+class PantryTagsSchema(BaseModel):
+    tags: List[str] = Field(
+        ...,
+        description="A list of tags describing the pantry item."
+    )
+
+class UsageItem(BaseModel):
+    item_name: str = Field(..., description="Exact name of the pantry item to use.")
+    quantity_used: float = Field(..., description="How many units the recipe calls for.")
+    unit: str = Field(..., description="Unit of measure, e.g. 'cups', 'pieces', 'grams'")
+
+class UsageList(BaseModel):
+    """
+    A top-level object containing an array of usage items. 
+    This structure satisfies OpenAI's JSON Schema requirement 
+    that the top-level is 'type: object'.
+    """
+    usage_items: List[UsageItem] = Field(
+        ...,
+        description="An array of items indicating how much of each pantry item to use."
+    )
+
+    class Config:
+        # In Pydantic v2, you can still define extra behaviors or examples like this:
+        title = "UsageList"
+        extra = "forbid"  # Forbid unknown fields
+
+        json_schema_extra = {
+            "examples": [
+                {
+                    "usage_items": [
+                        {
+                            "item_name": "milk",
+                            "quantity_used": 2.0,
+                            "unit": "cups"
+                        },
+                        {
+                            "item_name": "eggs",
+                            "quantity_used": 3,
+                            "unit": "pieces"
+                        }
+                    ]
+                }
+            ]
         }

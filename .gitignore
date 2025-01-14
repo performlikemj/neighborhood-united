@@ -40,3 +40,9 @@ index_*.py
 media/
 *.sql
 convert.py
+*.rdb
+dump.rdb
+dump.rdb
+celerybeat-schedule.db
+dump.rdb
+celerybeat-schedule.db

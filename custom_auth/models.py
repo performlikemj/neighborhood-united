@@ -96,7 +96,12 @@ class CustomUser(AbstractUser):
         default=list,
         blank=True,
     )
-    custom_allergies = models.CharField(max_length=200, blank=True, null=True)
+    # custom_allergies = models.CharField(max_length=200, blank=True, null=True)
+    custom_allergies = ArrayField(
+        models.CharField(max_length=50),
+        default=list,
+        blank=True,
+    )
     timezone = models.CharField(max_length=100, default='UTC')
     # Email preferences fields
     email_daily_instructions = models.BooleanField(default=True)
@@ -104,7 +109,11 @@ class CustomUser(AbstractUser):
     email_instruction_generation = models.BooleanField(default=True)
     # Emergency supply goal
     emergency_supply_goal = models.PositiveIntegerField(default=0)  # Number of days of supplies the user wants
-    
+    preferred_servings = models.PositiveIntegerField(
+        default=1,
+        help_text="Number of servings the user wants meals scaled to."
+    )
+        
     def save(self, *args, **kwargs):
         self.username = self.username.lower()
         super().save(*args, **kwargs)

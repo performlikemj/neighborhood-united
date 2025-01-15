@@ -2,7 +2,7 @@ from django.core.management.base import BaseCommand
 from meals.models import Meal, Dish, Ingredient
 from openai import OpenAI
 from django.conf import settings
-from meals.tasks import update_embeddings
+from meals.meal_embedding import update_embeddings
 
 class Command(BaseCommand):
     help = 'Triggers asynchronous update of embeddings for all meals, dishes, and ingredients.'

@@ -43,7 +43,9 @@ import requests
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.contrib.auth.hashers import check_password
 from django.db import IntegrityError
-from meals.tasks import create_meal_plan_for_new_user, generate_user_summary, handle_custom_dietary_preference
+from meals.meal_plan_service import create_meal_plan_for_new_user
+from meals.email_service import generate_user_summary
+from meals.dietary_preferences import handle_custom_dietary_preference
 from meals.models import CustomDietaryPreference
 
 
@@ -304,6 +306,9 @@ def update_profile_api(request):
         if 'emergency_supply_goal' in user_serializer.validated_data:
             user.emergency_supply_goal = user_serializer.validated_data['emergency_supply_goal']
 
+        if 'preferred_servings' in user_serializer.validated_data:
+            user.preferred_servings = user_serializer.validated_data['preferred_servings']
+
         user_serializer.save()
 
     else:
@@ -412,6 +417,8 @@ def login_api_view(request):
             'custom_allergies': user.custom_allergies,
             'dietary_preferences': list(user.dietary_preferences.values_list('name', flat=True)),
             'custom_dietary_preferences': list(user.custom_dietary_preferences.values_list('name', flat=True)),
+            'preferred_servings': user.preferred_servings,
+            'emergency_supply_goal': user.emergency_supply_goal,
             'is_chef': user_role.is_chef,
             'current_role': user_role.current_role,
             'goal_name': goal_name,
@@ -481,6 +488,11 @@ def register_api_view(request):
                 user.emergency_supply_goal = user_serializer.validated_data['emergency_supply_goal']
                 user.save()
 
+            # Handle the preferred_servings during user creation
+            if 'preferred_servings' in user_serializer.validated_data:
+                user.preferred_servings = user_serializer.validated_data['preferred_servings']
+                user.save() 
+                
             address_data = request.data.get('address')
             # Check if any significant address data is provided
             if address_data and any(value.strip() for value in address_data.values()):

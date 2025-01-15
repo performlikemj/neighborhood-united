@@ -1,6 +1,6 @@
 # meals/serializers.py
 from rest_framework import serializers
-from .models import MealPlan, Meal, MealPlanMeal, CustomUser, Order, Ingredient, Dish, PantryItem
+from .models import MealPlan, Meal, MealPlanMeal, CustomUser, Order, Ingredient, Dish, PantryItem, Tag
 from custom_auth.models import CustomUser
 
 class UserSerializer(serializers.ModelSerializer):
@@ -58,9 +58,15 @@ class OrderSerializer(serializers.ModelSerializer):
         return obj.total_price()
 
 class PantryItemSerializer(serializers.ModelSerializer):
+    tags = serializers.SlugRelatedField(
+        many=True,
+        slug_field='name',
+        queryset=Tag.objects.all(),
+        required=False
+    )
     class Meta:
         model = PantryItem
-        fields = ['id', 'item_name', 'quantity', 'expiration_date', 'item_type', 'notes']
+        fields = ['id', 'item_name', 'quantity', 'expiration_date', 'item_type', 'notes', 'tags', 'weight_per_unit', 'weight_unit']
         extra_kwargs = {
             'item_name': {'required': True},
             'quantity': {'required': True},
@@ -74,12 +80,29 @@ class PantryItemSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Quantity cannot be negative.")
         return value
 
-    # Optionally override update method if you need custom behavior during updates
+    def validate_weight_per_unit(self, value):
+        """
+        Example validation if you want to ensure weight_per_unit >= 0.
+        """
+        if value is not None and value < 0:
+            raise serializers.ValidationError("Weight per unit cannot be negative.")
+        return value
+
     def update(self, instance, validated_data):
+        # Only update fields that appear in validated_data
         instance.item_name = validated_data.get('item_name', instance.item_name)
         instance.quantity = validated_data.get('quantity', instance.quantity)
+        instance.used_count = validated_data.get('used_count', instance.used_count)
         instance.expiration_date = validated_data.get('expiration_date', instance.expiration_date)
         instance.item_type = validated_data.get('item_type', instance.item_type)
         instance.notes = validated_data.get('notes', instance.notes)
+        instance.weight_per_unit = validated_data.get('weight_per_unit', instance.weight_per_unit)
+        instance.weight_unit = validated_data.get('weight_unit', instance.weight_unit)
+        
+        # handle tags if needed
+        if 'tags' in validated_data:
+            tags = validated_data['tags']
+            instance.tags.set(tags)
+        
         instance.save()
         return instance

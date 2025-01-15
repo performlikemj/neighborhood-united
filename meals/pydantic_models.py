@@ -42,8 +42,20 @@ class MealType(str, Enum):
     LUNCH = "Lunch"
     DINNER = "Dinner"
 
+class PantryUsageItem(BaseModel):
+    pantry_item_name: str = Field(..., description="Exact name of the pantry item used.")
+    quantity_used: Optional[str] = Field(
+        default=None, 
+        description="Amount of this pantry item used, e.g. '2', '1.5', '0.5', 'To taste', etc."
+    )
+    unit: Optional[str] = Field(
+        default=None,
+        description="Unit of measure for the used quantity, e.g. 'cup', 'teaspoon', 'each', etc."
+    )
+    notes: Optional[str] = Field(default=None, description="Any special notes about usage.")
+
 class ShoppingListItem(BaseModel):
-    meal_name: Optional[str] = None
+    meal_name: str
     ingredient: str
     quantity: str
     unit: str
@@ -56,7 +68,7 @@ class ShoppingList(BaseModel):
 class InstructionStep(BaseModel):
     step_number: int
     description: str
-    duration: Optional[str] = None
+    duration: Optional[str] = Field(default="N/A", description="Estimated duration. If not provided, defaults to 'N/A'.")
 
 class Instructions(BaseModel):
     steps: List[InstructionStep]
@@ -65,7 +77,11 @@ class MealData(BaseModel):
     name: str
     description: str
     dietary_preference: DietaryPreference = Field(default=DietaryPreference.EVERYTHING)
-    meal_type: Optional[MealType] = None
+    meal_type: Optional[str] = Field(..., description="Type of meal (e.g., 'Breakfast', 'Lunch', 'Dinner')")
+    used_pantry_items: List[str] = Field(
+        default=[],
+        description="List of the user's expiring pantry items (in string form) actually used in this meal."
+    )
 
 class MealOutputSchema(BaseModel):
     meal: MealData
@@ -78,6 +94,10 @@ class MealPlanMeal(BaseModel):
     meal_type: str  # e.g., "Breakfast"
     meal_name: str
     meal_description: Optional[str] = None
+    servings: int = Field(
+        default=None, 
+        description="Number of servings for this meal (e.g., the meal’s base or intended portion after cooking)."
+    )
 
 class MealPlanSchema(BaseModel):
     meals: List[MealPlanMeal]
@@ -203,7 +223,7 @@ class BulkPrepStep(BaseModel):
     step_number: int = Field(..., description="Step number in the bulk preparation sequence.")
     meal_type: str = Field(..., description="Type of meal for the step (e.g., Breakfast, Lunch, Dinner).")
     description: str = Field(..., description="Detailed description of the step.")
-    duration: Optional[str] = Field(None, description="Estimated duration for the step.")
+    duration: Optional[str] = Field(None, description="Estimated duration for the step. If not provided, defaults to None.")
     ingredients: Optional[List[str]] = Field(None, description="List of ingredients needed for this step.")
     cooking_temperature: Optional[str] = Field(None, description="Cooking temperature if applicable.")
     cooking_time: Optional[str] = Field(None, description="Cooking time if applicable.")
@@ -227,7 +247,7 @@ class DailyTaskStep(BaseModel):
     step_number: int = Field(..., description="Step number in the daily task sequence.")
     meal_type: str = Field(..., description="Type of meal for the step (e.g., Breakfast, Lunch, Dinner).")
     description: str = Field(..., description="Detailed description of the step.")
-    duration: Optional[str] = Field(None, description="Estimated duration for the step.")
+    duration: Optional[str] = Field(None, description="Estimated duration for the step. If not provided, defaults to None.")
     ingredients: Optional[List[str]] = Field(None, description="List of ingredients needed for this step.")
     cooking_temperature: Optional[str] = Field(None, description="Cooking temperature if applicable.")
     cooking_time: Optional[str] = Field(None, description="Cooking time if applicable.")
@@ -412,4 +432,51 @@ class BulkPrepInstructions(BaseModel):
                     }
                 ]
             }
+        }
+
+# Pantry Management
+class PantryTagsSchema(BaseModel):
+    tags: List[str] = Field(
+        ...,
+        description="A list of tags describing the pantry item."
+    )
+
+class UsageItem(BaseModel):
+    item_name: str = Field(..., description="Exact name of the pantry item to use.")
+    quantity_used: float = Field(..., description="How many units the recipe calls for.")
+    unit: str = Field(..., description="Unit of measure, e.g. 'cups', 'pieces', 'grams'")
+
+class UsageList(BaseModel):
+    """
+    A top-level object containing an array of usage items. 
+    This structure satisfies OpenAI's JSON Schema requirement 
+    that the top-level is 'type: object'.
+    """
+    usage_items: List[UsageItem] = Field(
+        ...,
+        description="An array of items indicating how much of each pantry item to use."
+    )
+
+    class Config:
+        # In Pydantic v2, you can still define extra behaviors or examples like this:
+        title = "UsageList"
+        extra = "forbid"  # Forbid unknown fields
+
+        json_schema_extra = {
+            "examples": [
+                {
+                    "usage_items": [
+                        {
+                            "item_name": "milk",
+                            "quantity_used": 2.0,
+                            "unit": "cups"
+                        },
+                        {
+                            "item_name": "eggs",
+                            "quantity_used": 3,
+                            "unit": "pieces"
+                        }
+                    ]
+                }
+            ]
         }

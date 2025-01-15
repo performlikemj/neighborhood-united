@@ -14,7 +14,8 @@ dist/
 build/
 *.egg-info
 *.egg
-*.log
+*.log*
+*.log.*
 *.swp
 *.swo
 *.DS_Store
@@ -40,3 +41,9 @@ index_*.py
 media/
 logs/
 .hood/
+celerybeat-schedule
+celerybeat.pid
+celeryd.pid
+celery-celery.service.pid
+*django_warnings.log.*
+

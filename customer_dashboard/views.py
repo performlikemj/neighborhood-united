@@ -104,7 +104,7 @@ def api_recommend_follow_up(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_user_summary_status(request):
-    from meals.tasks import generate_user_summary
+    from meals.email_service import generate_user_summary
     if not request.user.is_authenticated:
         return Response({"status": "error", "message": "User is not authenticated"}, status=401)
     
@@ -139,7 +139,7 @@ def api_user_summary_status(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_user_summary(request):
-    from meals.tasks import generate_user_summary
+    from meals.email_service import generate_user_summary
     user_id = request.user.id  # Use request.user.id to get the authenticated user's ID
     user = get_object_or_404(CustomUser, id=user_id)
 
@@ -155,9 +155,14 @@ def api_user_summary(request):
         generate_user_summary.delay(user_id)
         return Response({"status": "pending", "message": "Summary generation started."}, status=202)
 
+    combined_allergies = set((user.allergies or []) + (user.custom_allergies or []))
+    allergies_str = ', '.join(combined_allergies) if combined_allergies else 'None'
     # Provide a fallback template if the user has no summary data
     if user_summary.strip() == "No summary available.":
-        fallback_template = "Create a meal plan for the week including breakfast, lunch, and dinner for a {person/family of 3, etc.}, {that want to lower their sugar intake/that want to eat healthy while saving money}. {The meals should also take into account that one of us fasts breakfast and starts eating at 11am}."
+        fallback_template = (
+            f"Create a meal plan for the week including breakfast, lunch, and dinner for a person with: allergies of {allergies_str}, "
+            f"Dietary preference of {user.dietary_preferences.all()} and/or {user.custom_dietary_preferences.all()}, and goals of {user.goals}."
+        )
         recommend_prompt = fallback_template
     else:
         # Generate a recommended prompt based on the user's summary and context

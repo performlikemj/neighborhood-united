@@ -14,9 +14,9 @@ urlpatterns = [
     path('create_dish/', views.create_dish, name='create_dish'),
     path('update_dish/<int:dish_id>/', views.update_dish, name='update_dish'),
     path('create_ingredient/', views.create_ingredient, name='create_ingredient'),
-    path('create_meal/', views.create_meal, name='create_meal'),
     path('meal_detail/<int:meal_id>/', views.meal_detail, name='meal_detail'),
     path('meal_list/', views.meal_list, name='meal_list'),
+    path('embeddings/', views.embeddings_list, name='meal_list'),
     path('approve_meal_plan/', views.meal_plan_approval, name='approve_meal_plan'),
     path('payment/<int:order_id>/', views.process_payment, name='process_payment'),
     path('meal_plan_confirmation/', views.meal_plan_confirmed, name='meal_plan_confirmed'),
@@ -30,6 +30,7 @@ urlpatterns = [
     path('api/get_alternative_meals/', views.get_alternative_meals, name='get_alternative_meals'),
     path('view_past_orders/', views.view_past_orders, name='view_past_orders'),
     path('api/meal_plans/', views.api_get_meal_plans, name='api_get_meal_plans'),
+    path('api/meal_plans/<int:meal_plan_id>/', views.api_get_meal_plan_by_id, name='api_get_meal_plan_by_id'),
     path('api/generate_cooking_instructions/', views.api_generate_cooking_instructions, name='api_generate_cooking_instructions'),
     path('api/fetch_instructions/', views.api_fetch_instructions, name='api_fetch_instructions'),
     path('api/approve_meal_plan/', views.api_approve_meal_plan, name='api_approve_meal_plan'),
@@ -38,4 +39,7 @@ urlpatterns = [
     # Pantry API Endpoints
     path('api/pantry-items/', views.api_pantry_items, name='api_pantry_items'),
     path('api/pantry-items/<int:pk>/', views.api_pantry_item_detail, name='api_pantry_item_detail'),
+    path('api/generate_emergency_supply/', views.api_generate_emergency_plan, name='api_generate_emergency_supply_list'),
 ]
+
+

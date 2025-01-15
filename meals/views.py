@@ -9,6 +9,7 @@ from .models import Meal, Cart, Dish, Ingredient, Order, OrderMeal, MealPlan, Me
 from django.http import JsonResponse, HttpResponseBadRequest
 from .serializers import MealPlanSerializer, PantryItemSerializer
 from chefs.models import Chef
+from shared.utils import day_to_offset
 from django.conf import settings
 import requests
 from django.http import JsonResponse
@@ -120,6 +121,10 @@ def search_ingredients(query, number=20, apiKey=settings.SPOONACULAR_API_KEY):
     response = requests.get(search_url, params=search_params)
     response.raise_for_status()  # Raises an HTTPError if the response status isn't 200
     return response.json()
+
+def embeddings_list(request):
+    meals = Meal.objects.all()  # Fetch all meals, or filter as needed
+    return render(request, 'meals/embeddings_list.html', {'meals': meals})
 
 def get_ingredient_info(id, apiKey=settings.SPOONACULAR_API_KEY):
     info_url = f"https://api.spoonacular.com/food/ingredients/{id}/information"
@@ -383,36 +388,6 @@ def create_ingredient(request):
     context = {'form': form, 'ingredients': ingredients}
     return render(request, 'meals/create_ingredient.html', context)
 
-
-@login_required
-@user_passes_test(is_chef, login_url='custom_auth:login')
-def create_meal(request):
-    if request.method == 'POST':
-        form = MealForm(request.POST)
-        if form.is_valid():
-            meal = form.save(commit=False)
-            meal.chef = request.user.chef
-            
-            # Check for existing meals by this chef that have the same date range
-            existing_meal = Meal.objects.filter(
-                chef=meal.chef,
-                start_date=meal.start_date,
-            ).first()
-            
-            if existing_meal:
-                # Handle the logic for adding different party sizes to the existing meal
-                # You might redirect to an 'update meal' view or something similar
-                pass
-            else:
-                meal.save()
-                form.save_m2m()
-                return redirect('meals:meal_detail', meal_id=meal.id)
-    else:
-        form = MealForm()
-    context = {'form': form}
-    return render(request, 'meals/create_meal.html', context)
-
-
 def chef_weekly_meal(request, chef_id):
     chef = get_object_or_404(Chef, id=chef_id)
     # Calculate the current week's date range
@@ -534,7 +509,9 @@ def api_customize_meal_plan(request, meal_plan_id):
             elif action == 'add':
                 new_meal_id = data.get('new_meal_id')
                 new_meal = get_object_or_404(Meal, id=new_meal_id)
-                MealPlanMeal.objects.create(meal_plan=meal_plan, meal=new_meal, day=day)
+                offset = day_to_offset(day)
+                meal_date = meal_plan.week_start_date + timedelta(days=offset)
+                MealPlanMeal.objects.create(meal_plan=meal_plan, meal=new_meal, day=day, meal_date=meal_date)
                 return JsonResponse({'status': 'success', 'action': 'added', 'new_meal': new_meal.name})
 
             return JsonResponse({'status': 'error', 'message': 'Invalid action'}, status=400)
@@ -616,11 +593,18 @@ def submit_meal_plan_updates(request):
         MealPlanMeal.objects.filter(meal_plan=meal_plan).delete()
 
         # Create new MealPlanMeal entries based on the updated meal plan
+        offset = day_to_offset(day)
+        meal_date = meal_plan.week_start_date + timedelta(days=offset)
+
         for meal in updated_meals:
+            day=meal['day']
+            offset = day_to_offset(day)
+            meal_date = meal_plan.week_start_date + timedelta(days=offset)
             MealPlanMeal.objects.create(
                 meal_plan=meal_plan,
                 meal_id=meal['meal_id'],
-                day=meal['day']
+                day=day,
+                meal_date=meal_date
             )
 
         return JsonResponse({'status': 'success', 'message': 'Meal plan updated successfully.'})
@@ -730,9 +714,15 @@ def api_get_meal_plans(request):
     try:
         user = request.user
         week_start_date_str = request.query_params.get('week_start_date')
+        
         if week_start_date_str:
             week_start_date = datetime.strptime(week_start_date_str, '%Y-%m-%d').date()
-            meal_plans = MealPlan.objects.filter(user=user, week_start_date=week_start_date)
+            week_end_date = week_start_date + timedelta(days=6)
+            meal_plans = MealPlan.objects.filter(
+                user=user,
+                week_start_date__lte=week_end_date,   # starts on or before the last day
+                week_end_date__gte=week_start_date    # ends on or after the first day
+            )
         else:
             meal_plans = MealPlan.objects.filter(user=user)
 
@@ -740,7 +730,23 @@ def api_get_meal_plans(request):
         return Response(serializer.data, status=200)
     
     except Exception as e:
+        traceback.print_exc()
         return Response({"error": str(e)}, status=500)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def api_get_meal_plan_by_id(request, meal_plan_id):
+    try:
+        user = request.user
+        meal_plan = MealPlan.objects.get(id=meal_plan_id, user=user)
+        serializer = MealPlanSerializer(meal_plan)
+        return Response(serializer.data, status=200)
+    except MealPlan.DoesNotExist:
+        return Response({"error": "Meal plan not found."}, status=404)
+    except Exception as e:
+        traceback.print_exc()
+        return Response({"error": str(e)}, status=500)
+
     
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -998,4 +1004,29 @@ def api_pantry_item_detail(request, pk):
         pantry_item.delete()
         return Response(status=204)
 
+# Emergency pantry item API
+@api_view(['POST'])
+def api_generate_emergency_plan(request):
+    approval_token = request.data.get('approval_token')
 
+    if not approval_token:
+        return Response({"error": "Approval token is required."}, status=400)
+
+    try:
+        # Retrieve the MealPlan or user associated with that token
+        # or store the token on the user object—whatever logic fits your design.
+        # For example, maybe you store the token on the `User` or `MealPlan`:
+
+        meal_plan = MealPlan.objects.get(approval_token=approval_token)
+        user = meal_plan.user  # The associated user
+    except MealPlan.DoesNotExist:
+        return Response({"error": "Invalid or expired approval token."}, status=400)
+
+    # Great, we found a valid user from the token. Now let's generate the plan:
+    from meals.email_service import generate_emergency_supply_list
+
+    try:
+        generate_emergency_supply_list(user.id)
+        return Response({"message": "Emergency supply list generated successfully."}, status=200)
+    except Exception as e:
+        return Response({"error": str(e)}, status=400)

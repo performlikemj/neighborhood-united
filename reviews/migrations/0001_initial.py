@@ -25,8 +25,7 @@ class Migration(migrations.Migration):
                 ('rating', models.PositiveSmallIntegerField(choices=[(1, '1 - Poor'), (2, '2 - Fair'), (3, '3 - Good'), (4, '4 - Very Good'), (5, '5 - Excellent')], default=5, validators=[django.core.validators.MinValueValidator(1), django.core.validators.MaxValueValidator(5)])),
                 ('date_posted', models.DateTimeField(auto_now_add=True, null=True)),
                 ('object_id', models.PositiveIntegerField(null=True)),
-                ('content_type', models.ForeignKey(limit_choices_to=reviews.models.Review.limit_content_type_choices, null=True, on_delete=django.db.models.deletion.CASCADE, to='contenttypes.contenttype')),
-                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='reviews', to=settings.AUTH_USER_MODEL)),
+                ('content_type', models.ForeignKey(null=True, on_delete=django.db.models.deletion.CASCADE, to='contenttypes.contenttype')),                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='reviews', to=settings.AUTH_USER_MODEL)),
             ],
         ),
     ]

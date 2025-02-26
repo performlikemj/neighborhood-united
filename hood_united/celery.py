@@ -30,4 +30,8 @@ app.conf.beat_schedule = {
         'task': 'meals.meal_plan_service.create_meal_plan_for_all_users',
         'schedule': crontab(minute=0),  # Runs every hour
     },
+    'send-meal-plan-reminders': {
+        'task': 'meals.email_service.send_meal_plan_reminder_email',
+        'schedule': crontab(hour=10, minute=0)  # Runs daily at 10 AM
+    },
 }

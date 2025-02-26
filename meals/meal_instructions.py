@@ -127,8 +127,8 @@ def send_daily_meal_instructions():
         #     else:
         #         logger.info(f"No meals found for user {user.email} on {next_day_name}")
 
-        if user.username == 'kiho':
-            print('User kiho')
+        if user.username == 'ferris':
+            print('User ferris')
             # Get the next day's date in the user's time zone
             next_day = user_time.date() + timedelta(days=1)
             next_day_name = next_day.strftime('%A')   # e.g. "Saturday"
@@ -393,12 +393,20 @@ def generate_instructions(meal_plan_meal_ids):
         meals = grouped_instructions.get(mt, [])
         ordered_meals.append((mt, meals))
 
+    # Get current meal plan
+    meal_plan = first_meal.meal_plan
+    # Get approval token
+    approval_token = meal_plan.approval_token
     # Build context for the template
+    streamlit_url = os.getenv("STREAMLIT_URL") 
     context = {
         'subject': subject,
         'user_name': user_name,
         'ordered_meals': ordered_meals,
-        'profile_url': "https://sautai.com/profile"
+        'profile_url': f"{streamlit_url}/profile",
+        'streamlit_url': streamlit_url,
+        'user_id': user.id,
+        'approval_token': approval_token,
     }
 
     # Render the template
@@ -652,7 +660,8 @@ def send_bulk_prep_instructions(meal_plan_id):
 
     meal_plan = MealPlan.objects.get(id=meal_plan_id)
     instructions = MealPlanInstruction.objects.filter(meal_plan=meal_plan, is_bulk_prep=True)
-
+    approval_token = meal_plan.approval_token
+    streamlit_url = os.getenv("STREAMLIT_URL")
     for instruction in instructions:
         user = meal_plan.user
         instruction_text = instruction.instruction_text
@@ -692,7 +701,10 @@ def send_bulk_prep_instructions(meal_plan_id):
         context = {
             'user_name': user.username,
             'meal_types': meal_types,
-            'meal_plan_id': meal_plan.id
+            'meal_plan_id': meal_plan.id,
+            'user_id': user.id,
+            'approval_token': approval_token,
+            'streamlit_url': streamlit_url,
         }
 
         # Render the template

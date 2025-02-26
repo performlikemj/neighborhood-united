@@ -854,8 +854,12 @@ def chat_with_gpt(request):
     # Set up OpenAI
     client = OpenAI(api_key=settings.OPENAI_KEY)    
     # Check if the assistant ID is already stored in a file
-
-    user = CustomUser.objects.get(id=request.data.get('user_id'))
+    print(f"Request data: {request.data}")
+    try:
+        user = CustomUser.objects.get(id=request.data.get('user_id'))
+    except CustomUser.DoesNotExist:
+        traceback.print_exc()
+        return Response({'error': 'User not found'}, status=404)
             
     if os.path.exists(assistant_id_file):
         with open(assistant_id_file, 'r') as f:

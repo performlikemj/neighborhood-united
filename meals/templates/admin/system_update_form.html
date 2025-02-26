@@ -1,0 +1,38 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block content %}
+<div id="content-main">
+    <form method="post" action="{% url 'admin:send_system_update' %}">
+        {% csrf_token %}
+        <fieldset class="module aligned">
+            <div class="form-row">
+                <label for="subject">Email Subject:</label>
+                <input type="text" name="subject" id="subject" required>
+            </div>
+            <div class="form-row">
+                <label for="message">Message (HTML supported):</label>
+                <textarea name="message" id="message" rows="10" required></textarea>
+            </div>
+            <div class="form-row">
+                <label for="test_mode">Test Mode:</label>
+                <input type="checkbox" name="test_mode" id="test_mode">
+                <span class="help">Send only to admin email first</span>
+            </div>
+        </fieldset>
+        <div class="submit-row">
+            <input type="submit" value="Send Update" class="default">
+        </div>
+    </form>
+</div>
+
+<style>
+    .form-row { margin-bottom: 20px; }
+    .form-row label { display: block; font-weight: bold; margin-bottom: 5px; }
+    .form-row input[type="text"], .form-row textarea {
+        width: 90%;
+        padding: 8px;
+    }
+    .help { color: #666; margin-left: 10px; }
+</style>
+{% endblock %} 

@@ -9,6 +9,7 @@ import traceback
 from datetime import timedelta
 from urllib.parse import urlencode
 from collections import defaultdict
+import pytz
 import requests
 from celery import shared_task
 from django.conf import settings
@@ -274,9 +275,11 @@ def generate_shopping_list(meal_plan_id):
     # Retrieve expiring items
     try:
         expiring_pantry_items = get_expiring_pantry_items(user)
-        expiring_items_str = ', '.join(expiring_pantry_items) if expiring_pantry_items else 'None'
+        # Assuming each item in expiring_pantry_items is a dict with a 'name' field
+        expiring_items_str = ', '.join(item['name'] for item in expiring_pantry_items) if expiring_pantry_items else 'None'
     except Exception as e:
         logger.error(f"Error retrieving expiring pantry items for user {user.id}: {e}")
+        traceback.print_exc()
         expiring_pantry_items = []
         expiring_items_str = 'None'
 
@@ -569,7 +572,7 @@ def generate_emergency_supply_list(user_id):
         else:
             logger.debug(f"Excluding {pi.item_name} from {user.username}'s emergency supply (potential allergen).")
 
-    # 3) Summarize the user’s safe pantry items
+    # 3) Summarize the user's safe pantry items
     user_emergency_pantry_summary = []
     for pi in safe_pantry_items:
         weight_each = float(pi.weight_per_unit or 1.0)
@@ -703,3 +706,161 @@ def generate_emergency_supply_list(user_id):
 
     except Exception as e:
         logger.error(f"Error generating emergency supply list for {user.username}: {str(e)}")
+
+@shared_task
+def send_system_update_email(subject, message, user_ids=None):
+    """
+    Send system updates or apology emails to users.
+    Args:
+        subject: Email subject
+        message: HTML message content
+        user_ids: Optional list of specific user IDs to send to. If None, sends to all active users.
+    """
+    from custom_auth.models import CustomUser
+    
+    try:
+        # Get users to send to
+        if user_ids:
+            users = CustomUser.objects.filter(id__in=user_ids, is_active=True)
+        else:
+            users = CustomUser.objects.filter(is_active=True)
+
+        # Load the system update email template
+        project_dir = settings.BASE_DIR
+        env = Environment(loader=FileSystemLoader(os.path.join(project_dir, 'meals', 'templates')))
+        template = env.get_template('meals/system_update_email.html')
+        
+        for user in users:
+            context = {
+                'user_name': user.username,
+                'message': message,
+                'profile_url': f"{os.getenv('STREAMLIT_URL')}/profile"
+            }
+
+            email_body_html = template.render(context)
+
+            email_data = {
+                'subject': subject,
+                'html_message': email_body_html,
+                'to': user.email,
+                'from': 'support@sautai.com'
+            }
+
+            try:
+                n8n_url = os.getenv("N8N_SEND_SYSTEM_UPDATE_EMAIL_URL")
+                response = requests.post(n8n_url, json=email_data)
+                logger.info(f"System update email sent to n8n for: {user.email}")
+            except Exception as e:
+                logger.error(f"Error sending system update email to n8n for: {user.email}, error: {str(e)}")
+
+    except Exception as e:
+        logger.error(f"Error in send_system_update_email: {str(e)}")
+        raise
+
+@shared_task
+def send_meal_plan_reminder_email():
+    """
+    Send reminders for unapproved meal plans on Monday for the current week's meal plan
+    (which was sent on Saturday night).
+    """
+    from meals.models import MealPlan
+    from customer_dashboard.models import GoalTracking
+    
+    # Get current time once
+    current_utc_time = timezone.now()
+    today = current_utc_time.date()
+    
+    # Get the date range for this week's meal plan
+    this_week_start = today - timedelta(days=today.weekday())  # Monday
+    this_week_end = this_week_start + timedelta(days=6)  # Sunday
+    
+    # Get meal plans that were created on Saturday (2 days ago) and are still unapproved
+    two_days_ago = today - timedelta(days=2)
+    pending_meal_plans = MealPlan.objects.filter(
+        is_approved=False,
+        created_date__date=two_days_ago,
+        week_start_date=this_week_start,
+        week_end_date=this_week_end,
+        reminder_sent=False
+    )
+
+    for meal_plan in pending_meal_plans:
+        user = meal_plan.user
+        
+        # Skip if not user's Monday
+        try:
+            user_timezone = pytz.timezone(user.timezone)
+            user_time = current_utc_time.astimezone(user_timezone)
+        except pytz.UnknownTimeZoneError:
+            logger.error(f"Unknown timezone for user {user.email}: {user.timezone}")
+            continue
+
+        # Check if it's a Monday in the user's time zone
+        if user_time.weekday() != 0:
+            continue
+         
+        # Skip if user has opted out
+        if not user.email_meal_plan_saved:
+            continue
+
+        try:
+            # Get user's goals for motivation
+            goals = GoalTracking.objects.get(user=user)
+            goal_description = goals.goal_description
+            
+            # Create approval links with meal prep preferences
+            approval_token = meal_plan.approval_token
+            base_approval_url = f"{os.getenv('STREAMLIT_URL')}/meal_plans"
+            
+            query_params_daily = urlencode({
+                'approval_token': approval_token,
+                'meal_prep_preference': 'daily'
+            })
+            query_params_bulk = urlencode({
+                'approval_token': approval_token,
+                'meal_prep_preference': 'one_day_prep'
+            })
+
+            # Get meal plan details
+            meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan).select_related('meal')
+            meals_by_day = defaultdict(list)
+            for mpm in meal_plan_meals:
+                meals_by_day[mpm.day].append({
+                    'name': mpm.meal.name,
+                    'type': mpm.meal_type
+                })
+
+            context = {
+                'user_name': user.username,
+                'meal_plan_week_start': this_week_start,
+                'meal_plan_week_end': this_week_end,
+                'approval_link_daily': f"{base_approval_url}?{query_params_daily}",
+                'approval_link_bulk': f"{base_approval_url}?{query_params_bulk}",
+                'profile_url': f"{os.getenv('STREAMLIT_URL')}/profile",
+                'goals': goal_description,
+                'meals_by_day': dict(meals_by_day)
+            }
+
+            project_dir = settings.BASE_DIR
+            env = Environment(loader=FileSystemLoader(os.path.join(project_dir, 'meals', 'templates'))) 
+            template = env.get_template('meals/meal_plan_reminder_email.html')
+            email_body_html = template.render(context)
+
+            email_data = {
+                'subject': "Start Your Week Right - Your Meal Plan is Waiting!",
+                'html_message': email_body_html,
+                'to': user.email,
+                'from': 'support@sautai.com'
+            }
+
+            n8n_url = os.getenv("N8N_SEND_REMINDER_EMAIL_URL")
+            response = requests.post(n8n_url, json=email_data)
+            
+            # Mark reminder as sent
+            meal_plan.reminder_sent = True
+            meal_plan.save()
+            
+            logger.info(f"Monday reminder email sent to n8n for: {user.email}")
+
+        except Exception as e:
+            logger.error(f"Error sending reminder email for user {user.email}: {e}")

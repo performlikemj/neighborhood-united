@@ -57,6 +57,8 @@ INSTALLED_APPS = [
     'stripe',
     'storages',
     'pgvector',
+    'shared',
+    'gamification',
 ]
 
 MIDDLEWARE = [

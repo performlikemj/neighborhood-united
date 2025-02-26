@@ -30,6 +30,7 @@ urlpatterns = [
     path('reviews/', include('reviews.urls')),
     path('events/', include('events.urls')),
     path('local_chefs/', include('local_chefs.urls')),
+    path('gamification/', include('gamification.urls')),
 ]
 
 if settings.DEBUG:

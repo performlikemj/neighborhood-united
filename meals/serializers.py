@@ -1,12 +1,8 @@
 # meals/serializers.py
 from rest_framework import serializers
-from .models import MealPlan, Meal, MealPlanMeal, CustomUser, Order, Ingredient, Dish, PantryItem, Tag
+from .models import MealPlan, Meal, MealPlanMeal, CustomUser, Order, Ingredient, Dish, PantryItem, Tag, DietaryPreference
 from custom_auth.models import CustomUser
 
-class UserSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = CustomUser
-        fields = ['id', 'username', 'email', 'dietary_preferences', 'allergies', 'custom_allergies', 'custom_dietary_preferences', 'preferred_language']
 
 
 class IngredientSerializer(serializers.ModelSerializer):
@@ -23,7 +19,22 @@ class DishSerializer(serializers.ModelSerializer):
 
 
 
+class DietaryPreferenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DietaryPreference
+        fields = ['id', 'name']
+
+class UserSerializer(serializers.ModelSerializer):
+    dietary_preferences = DietaryPreferenceSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = CustomUser
+        fields = ['id', 'username', 'email', 'dietary_preferences', 'allergies', 'custom_allergies', 'custom_dietary_preferences', 'preferred_language']
+
+
 class MealSerializer(serializers.ModelSerializer):
+    dietary_preferences = DietaryPreferenceSerializer(many=True, read_only=True)
+    
     class Meta:
         model = Meal
         fields = ['id', 'name', 'description', 'dietary_preferences', 'price', 'start_date', 'chef']

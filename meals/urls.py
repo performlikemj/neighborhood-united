@@ -36,8 +36,15 @@ urlpatterns = [
     path('api/approve_meal_plan/', views.api_approve_meal_plan, name='api_approve_meal_plan'),
     path('api/email_approved_meal_plan/', views.api_email_approved_meal_plan, name='api_email_approved_meal_plan'),
     path('api/remove_meal_from_plan/', views.api_remove_meal_from_plan, name='api_remove_meal_from_plan'),
+    path('api/update_meals_with_prompt/', views.api_update_meals_with_prompt, name='api_update_meals_with_prompt'),
+    path('api/generate_meal_plan/', views.api_generate_meal_plan, name='api_generate_meal_plan'),
     # Pantry API Endpoints
     path('api/pantry-items/', views.api_pantry_items, name='api_pantry_items'),
     path('api/pantry-items/<int:pk>/', views.api_pantry_item_detail, name='api_pantry_item_detail'),
+    path('api/generate_emergency_supply/', views.api_generate_emergency_plan, name='api_generate_emergency_supply_list'),
+    # User Profile API Endpoint
+    path('api/user-profile/', views.api_get_user_profile, name='api_get_user_profile'),
+    # Individual Meal API Endpoint
+    path('api/meals/<int:meal_id>/', views.api_get_meal_by_id, name='api_get_meal_by_id'),
 ]
 

@@ -26,6 +26,9 @@ from meals.tasks import MAX_ATTEMPTS
 from meals.pydantic_models import (MealsToReplaceSchema, MealPlanApprovalEmailSchema, BulkPrepInstructions)
 from shared.utils import (generate_user_context, get_embedding, cosine_similarity, replace_meal_in_plan,
                           remove_meal_from_plan)
+from django.db.transaction import TransactionManagementError
+from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
+from django.db import transaction
 
 logger = logging.getLogger(__name__)
 client = OpenAI(api_key=settings.OPENAI_KEY)
@@ -37,11 +40,11 @@ def create_meal_plan_for_new_user(user_id):
         today = timezone.now().date()
         # 1) The actual sign-up day:
         start_of_week = today
-        # 2) “end_of_week” is “through Sunday” or user-specific logic:
+        # 2) "end_of_week" is "through Sunday" or user-specific logic:
         end_of_week = today + timedelta(days=(6 - today.weekday()))
 
         # 3) Also compute the canonical Monday for that same calendar week
-        #    If you want a “strict Monday,” do:
+        #    If you want a "strict Monday," do:
         monday_of_week = today - timedelta(days=today.weekday())  # always a Monday
 
         # Pass all three to create_meal_plan_for_user
@@ -97,38 +100,72 @@ def day_to_offset(day_name: str) -> int:
     }
     return mapping.get(day_name, 0)
 
-def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None, monday_date=None):
+def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None, monday_date=None, request_id=None):
+    """
+    Create a meal plan for a user for a specific week.
+    
+    Parameters:
+    - user: The user to create the meal plan for
+    - start_of_week: The start date of the week
+    - end_of_week: The end date of the week
+    - monday_date: The Monday date of the week (optional)
+    - request_id: Optional request ID for logging correlation
+    
+    Returns:
+    - The created meal plan or None if creation failed
+    """
     from meals.pantry_management import get_expiring_pantry_items
-    existing_meals = MealPlanMeal.objects.filter(
-        meal_plan__user=user,
-        meal_plan__week_start_date=start_of_week,
-        meal_plan__week_end_date=end_of_week,
-    )
+    
+    # Generate a request ID if not provided
+    if request_id is None:
+        request_id = str(uuid.uuid4())
+    
+    logger.info(f"[{request_id}] Creating meal plan for user {user.username} from {start_of_week} to {end_of_week}")
+    
+    # Use a transaction to prevent race conditions
+    with transaction.atomic():
+        # Check for existing meal plan with select_for_update to lock the rows
+        existing_meal_plan = MealPlan.objects.select_for_update().filter(
+            user=user,
+            week_start_date=start_of_week if monday_date is None else monday_date,
+            week_end_date=end_of_week
+        ).first()
+        
+        if existing_meal_plan:
+            # Check if the plan has meals
+            existing_meals = MealPlanMeal.objects.filter(meal_plan=existing_meal_plan)
+            
+            if existing_meals.exists():
+                logger.info(f"[{request_id}] User {user.username} already has meals for the week. Returning existing plan.")
+                return existing_meal_plan
+            else:
+                # Empty meal plan - delete it and create a new one
+                logger.warning(f"[{request_id}] Found empty meal plan (ID: {existing_meal_plan.id}) for user {user.username}. Deleting it.")
+                existing_meal_plan.delete()
+                logger.info(f"[{request_id}] Deleted empty meal plan (ID: {existing_meal_plan.id})")
+
+        # Create a new meal plan
+        try:
+            if monday_date is None:
+                meal_plan = MealPlan.objects.create(
+                    user=user,
+                    week_start_date=start_of_week,
+                    week_end_date=end_of_week,
+                )
+            else:
+                meal_plan = MealPlan.objects.create(
+                    user=user,
+                    week_start_date=monday_date,
+                    week_end_date=end_of_week,
+                )
+            logger.info(f"[{request_id}] Created new meal plan (ID: {meal_plan.id}) for user {user.username}")
+        except Exception as e:
+            logger.error(f"[{request_id}] Error creating meal plan for user {user.username}: {str(e)}")
+            return None
 
     user_id = user.id
-    if existing_meals.exists():
-        logger.info(f"User {user.username} already has meals for the week. Skipping.")
-        return
-
-
-    # Create a new meal plan if none exists
-    if monday_date is None:
-        meal_plan, created = MealPlan.objects.get_or_create(
-            user=user,
-            week_start_date=start_of_week,
-            week_end_date=end_of_week,
-        )
-    else:
-        meal_plan, created = MealPlan.objects.get_or_create(
-            user=user,
-            week_start_date=monday_date,
-            week_end_date=end_of_week,
-        )
-    if created:
-        logger.info(f"Created new meal plan for user {user.username} for {start_of_week} to {end_of_week}")
-    else:
-        logger.info(f"Meal plan already exists for user {user.username} for {start_of_week} to {end_of_week}")
-
+    
+    # These operations can be outside the transaction since we now have a valid meal plan
     meal_types = ['Breakfast', 'Lunch', 'Dinner']
     existing_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan).select_related('meal')
     existing_meal_names = set(existing_meals.values_list('meal__name', flat=True))
@@ -138,18 +175,22 @@ def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None, monday
     used_pantry_item = False  # ADDED
 
     day_count = (end_of_week - start_of_week).days + 1
-    print(f"Create Meal Plan for Use Day count: {day_count}")
+    logger.info(f"[{request_id}] Creating meal plan for {day_count} days")
+    
     for day_offset in range(day_count):
         meal_date = start_of_week + timedelta(days=day_offset)
-        print(f"Create Meal Plan for Use Day: {meal_date}")
         day_name = meal_date.strftime('%A')
+        logger.debug(f"[{request_id}] Processing day: {day_name} ({meal_date})")
+        
         for meal_type in meal_types:
+            # Check if a meal already exists for this day and meal type
             if MealPlanMeal.objects.filter(
                 meal_plan=meal_plan,
                 meal_date=meal_date,
                 day=day_name,
                 meal_type=meal_type
             ).exists():
+                logger.debug(f"[{request_id}] Meal already exists for {day_name} {meal_type}. Skipping.")
                 continue
 
             attempt = 0
@@ -157,11 +198,13 @@ def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None, monday
 
             while attempt < MAX_ATTEMPTS and not meal_added:
                 attempt += 1
+                logger.debug(f"[{request_id}] Attempt {attempt} to add meal for {day_name} {meal_type}")
 
                 # If we have soon-to-expire items, prefer generating new meal 
                 # rather than reusing an existing one
                 expiring_items = get_expiring_pantry_items(user, days_threshold=7)
                 if expiring_items:
+                    logger.info(f"[{request_id}] Found {len(expiring_items)} expiring pantry items. Will generate new meal.")
                     meal_found = None
                 else:
                     meal_found = find_existing_meal(
@@ -174,6 +217,7 @@ def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None, monday
 
                 if meal_found is None:
                     # Create new meal
+                    logger.info(f"[{request_id}] No suitable existing meal found. Generating new meal for {day_name} {meal_type}.")
                     result = generate_and_create_meal(
                         user=user,
                         meal_plan=meal_plan,
@@ -181,19 +225,23 @@ def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None, monday
                         existing_meal_names=existing_meal_names,
                         existing_meal_embeddings=existing_meal_embeddings,
                         user_id=user_id,
-                        day_name=day_name
+                        day_name=day_name,
+                        request_id=request_id
                     )
                     if result['status'] == 'success':
                         meal = result['meal']
                         meal_added = True
-                        # CHANGED: If that meal used pantry items, keep track of it
+                        logger.info(f"[{request_id}] Successfully generated new meal '{meal.name}' for {day_name} {meal_type}")
+                        # If that meal used pantry items, keep track of it
                         if result.get('used_pantry_item'):
                             used_pantry_item = True
+                            logger.info(f"[{request_id}] Meal '{meal.name}' used pantry items")
                     else:
-                        logger.warning(f"Attempt {attempt}: {result['message']}")
+                        logger.warning(f"[{request_id}] Attempt {attempt}: {result['message']}")
                         continue
                 else:
                     # existing meal found, do a sanity check
+                    logger.info(f"[{request_id}] Found existing meal '{meal_found.name}' for {day_name} {meal_type}. Performing sanity check.")
                     if perform_openai_sanity_check(meal_found, user):
                         try:
                             offset = day_to_offset(day_name)
@@ -207,30 +255,54 @@ def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None, monday
                             )
                             existing_meal_names.add(meal_found.name)
                             existing_meal_embeddings.append(meal_found.meal_embedding)
-                            logger.info(f"Added existing meal '{meal_found.name}' for {day_name} {meal_type}.")
+                            logger.info(f"[{request_id}] Added existing meal '{meal_found.name}' for {day_name} {meal_type}.")
                             meal_added = True
                         except Exception as e:
-                            logger.error(f"Error adding meal '{meal_found.name}' to meal plan: {e}")
+                            logger.error(f"[{request_id}] Error adding meal '{meal_found.name}' to meal plan: {e}")
                             skipped_meal_ids.add(meal_found.id)
                     else:
-                        logger.warning(f"Meal '{meal_found.name}' fails sanity check. Skipping.")
+                        logger.warning(f"[{request_id}] Meal '{meal_found.name}' fails sanity check. Skipping.")
                         skipped_meal_ids.add(meal_found.id)
                         meal_found = None  # Retry
 
                 if attempt >= MAX_ATTEMPTS and not meal_added:
-                    logger.error(f"Failed to add meal for {day_name} {meal_type} after {MAX_ATTEMPTS} attempts.")
+                    logger.error(f"[{request_id}] Failed to add meal for {day_name} {meal_type} after {MAX_ATTEMPTS} attempts.")
 
-    logger.info(f"Meal plan created successfully for {user.username} for {start_of_week} to {end_of_week}")
+    # Check if we added any meals
+    meal_count = MealPlanMeal.objects.filter(meal_plan=meal_plan).count()
+    if meal_count == 0:
+        logger.error(f"[{request_id}] No meals were added to meal plan (ID: {meal_plan.id}). Deleting it.")
+        meal_plan.delete()
+        return None
 
-    # CHANGED: If any meal used pantry items, skip replacements
+    logger.info(f"[{request_id}] Meal plan created successfully for {user.username} with {meal_count} meals")
+
+    # If any meal used pantry items, skip replacements
     if used_pantry_item:
-        logger.info("At least one meal used soon-to-expire pantry items; skipping replacements.")
+        logger.info(f"[{request_id}] At least one meal used soon-to-expire pantry items; skipping replacements.")
     else:
-        analyze_and_replace_meals(user, meal_plan, meal_types)
+        logger.info(f"[{request_id}] Analyzing and replacing meals if needed.")
+        analyze_and_replace_meals(user, meal_plan, meal_types, request_id)
 
     return meal_plan
 
-def analyze_and_replace_meals(user, meal_plan, meal_types):
+def analyze_and_replace_meals(user, meal_plan, meal_types, request_id=None):
+    """
+    Analyze the meal plan and replace meals that are too similar to previous weeks.
+    
+    Parameters:
+    - user: The user whose meal plan is being analyzed
+    - meal_plan: The MealPlan object to analyze
+    - meal_types: List of meal types (e.g., 'Breakfast', 'Lunch', 'Dinner')
+    - request_id: Optional request ID for logging correlation
+    
+    Returns:
+    - None
+    """
+    # Generate a request ID if not provided
+    if request_id is None:
+        request_id = str(uuid.uuid4())
+
     # Fetch previous meal plans
     last_week_meal_plan = MealPlan.objects.filter(user=user, week_start_date=meal_plan.week_start_date - timedelta(days=7)).first()
     two_weeks_ago_meal_plan = MealPlan.objects.filter(user=user, week_start_date=meal_plan.week_start_date - timedelta(days=14)).first()
@@ -338,7 +410,7 @@ def analyze_and_replace_meals(user, meal_plan, meal_types):
                     )
 
                     if result_remove['status'] == 'success':
-                        logger.info(f"Removed meal {old_meal_id} from {day} ({meal_type})")  
+                        logger.info(f"[{request_id}] Removed meal {old_meal_id} from {day} ({meal_type})")  
 
                         # Fallback: Create a new meal
                         result = generate_and_create_meal(
@@ -348,10 +420,11 @@ def analyze_and_replace_meals(user, meal_plan, meal_types):
                             existing_meal_names=set(),
                             existing_meal_embeddings=[],
                             user_id=user.id,
-                            day_name=day
+                            day_name=day,
+                            request_id=request_id
                         )
                     else:
-                        logger.error(f"Failed to create a fallback meal for {meal_type} on {day}: {result['message']}")
+                        logger.error(f"[{request_id}] Failed to create a fallback meal for {meal_type} on {day}: {result['message']}")
                     
                     continue  # Move to the next meal to replace
 
@@ -368,7 +441,7 @@ def analyze_and_replace_meals(user, meal_plan, meal_types):
                         existing_meal_ids.append(new_meal_id)
 
                         # Log the replacement details for debugging
-                        logger.info(f"Replacing meal ID {old_meal_id} with meal ID {new_meal_id} for {meal_type} on {day}")
+                        logger.info(f"[{request_id}] Replacing meal ID {old_meal_id} with meal ID {new_meal_id} for {meal_type} on {day}")
 
                         # Call replace_meal_in_plan
                         result = replace_meal_in_plan(
@@ -381,16 +454,16 @@ def analyze_and_replace_meals(user, meal_plan, meal_types):
                         )
 
                         if result['status'] == 'success':
-                            logger.info(f"Successfully replaced meal {old_meal_id} with {new_meal_id} on {day} ({meal_type})")
+                            logger.info(f"[{request_id}] Successfully replaced meal {old_meal_id} with {new_meal_id} on {day} ({meal_type})")
                             replacement_found = True
                         else:
-                            logger.error(f"Failed to replace meal {old_meal_id} on {day} ({meal_type}): {result['message']}")
+                            logger.error(f"[{request_id}] Failed to replace meal {old_meal_id} on {day} ({meal_type}): {result['message']}")
                             traceback.print_exc()
                     else:
-                        logger.warning(f"Meal '{new_meal.name}' failed sanity check. Trying next possible replacement.")
+                        logger.warning(f"[{request_id}] Meal '{new_meal.name}' failed sanity check. Trying next possible replacement.")
 
                 if not replacement_found:
-                    logger.error(f"Could not find a suitable replacement for meal ID {old_meal_id} on {day} ({meal_type}).")
+                    logger.error(f"[{request_id}] Could not find a suitable replacement for meal ID {old_meal_id} on {day} ({meal_type}).")
 
     except Exception as e:
         logger.error(f"Error during meal plan analysis and replacement: {e}")
@@ -464,7 +537,7 @@ def find_existing_meal(
             rating__lt=min_rating_threshold,
             content_type=meal_ct
         )
-        # "object_id" holds the actual Meal’s primary key
+        # "object_id" holds the actual Meal's primary key
         .values_list('object_id', flat=True)
     )
 
@@ -486,7 +559,7 @@ def find_existing_meal(
         .distinct()
     )
 
-    # (2) Build your base Q filter for user’s dietary prefs
+    # (2) Build your base Q filter for user's dietary prefs
     everything_pref = next((pref for pref in regular_dietary_prefs if pref.name == "Everything"), None)
 
     if everything_pref and len(regular_dietary_prefs) == 1 and not custom_dietary_prefs:
@@ -495,7 +568,7 @@ def find_existing_meal(
             creator_id=user.id
         )
     else:
-        # build Q filter for the user’s dietary prefs
+        # build Q filter for the user's dietary prefs
         regular_prefs_filter = Q()
         for pref in regular_dietary_prefs:
             regular_prefs_filter |= Q(dietary_preferences=pref)

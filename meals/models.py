@@ -1,6 +1,7 @@
 from django.db import models
 from pydantic import ValidationError
 from chefs.models import Chef
+from local_chefs.models import PostalCode, ChefPostalCode
 import requests
 import json
 from django.conf import settings
@@ -138,12 +139,17 @@ class PostalCodeManager(models.Manager):
     def for_user(self, user):
         if user.is_authenticated:
             try:
-                user_postal_code = user.address.postalcode.code
-                return super().get_queryset().filter(chef__serving_postalcodes__code=user_postal_code)
-            except AttributeError:
-                # Handle the case where the user doesn't have an associated postal code
-                pass
-        return super().get_queryset()
+                user_postal_code = user.address.input_postalcode
+                if user_postal_code:
+                    # Get all chefs that serve this postal code
+                    chef_postal_codes = ChefPostalCode.objects.filter(
+                        postal_code__code=user_postal_code
+                    ).values_list('chef', flat=True)
+                    return self.filter(chef__in=chef_postal_codes)
+                return self.none()
+            except (Address.DoesNotExist, AttributeError):
+                return self.none()
+        return self.none()
 
 class DietaryPreference(models.Model):
     name = models.CharField(max_length=100, unique=True)
@@ -355,7 +361,8 @@ class MealPlan(models.Model):
     week_end_date = models.DateField()
     is_approved = models.BooleanField(default=False)  # Track if the meal plan is approved
     has_changes = models.BooleanField(default=False)  # Track if there are changes to the plan
-    approval_token = models.UUIDField(default=uuid.uuid4, unique=True)    
+    approval_token = models.UUIDField(default=uuid.uuid4, unique=True)   
+    reminder_sent = models.BooleanField(default=False)
     order = models.OneToOneField(
         'Order',
         null=True,
@@ -665,3 +672,12 @@ class OrderMeal(models.Model):
 
     def __str__(self):
         return f'{self.meal} - {self.order} on {self.meal_plan_meal.day}'
+
+class SystemUpdate(models.Model):
+    subject = models.CharField(max_length=200)
+    message = models.TextField()
+    sent_at = models.DateTimeField(auto_now_add=True)
+    sent_by = models.ForeignKey('custom_auth.CustomUser', on_delete=models.SET_NULL, null=True)
+    
+    class Meta:
+        ordering = ['-sent_at']

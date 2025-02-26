@@ -2,9 +2,14 @@ from django.contrib import admin
 from django.contrib.contenttypes.admin import GenericTabularInline
 from .models import (
     MealPlan, MealPlanMeal, Dish, Ingredient, Order, Cart, MealType, Meal, OrderMeal, 
-    ShoppingList, Instruction, MealPlanInstruction, PantryItem, MealPlanMealPantryUsage
+    ShoppingList, Instruction, MealPlanInstruction, PantryItem, MealPlanMealPantryUsage, SystemUpdate
 )
 from reviews.models import Review
+from django.template.response import TemplateResponse
+from django.urls import path
+from .email_service import send_system_update_email
+from django.contrib import messages
+from .tasks import queue_system_update_email
 
 class ReviewInline(GenericTabularInline):
     model = Review
@@ -75,9 +80,15 @@ class CartAdmin(admin.ModelAdmin):
 class MealPlanMealInline(admin.TabularInline):
     model = MealPlanMeal
     extra = 1
-    fields = ('id', 'meal', 'day', 'meal_type')
-    readonly_fields = ('id',)
+    fields = ('id', 'meal', 'meal_id_display', 'day', 'meal_type')
+    readonly_fields = ('id', 'meal_id_display')
     autocomplete_fields = ['meal']
+
+    def meal_id_display(self, obj):
+        if obj.meal:
+            return obj.meal.id
+        return None
+    meal_id_display.short_description = 'Meal ID'
 
 class MealPlanAdmin(admin.ModelAdmin):
     list_display = ('id', 'user', 'week_start_date', 'week_end_date', 'is_approved', 'has_changes', 'get_meals_count', 'average_rating_display')
@@ -124,6 +135,61 @@ class MealPlanMealPantryUsageAdmin(admin.ModelAdmin):
     search_fields = ('meal_plan_meal__meal__name', 'pantry_item__item_name')
     list_filter = ('meal_plan_meal__meal__meal_type',)
 
+class SystemUpdateAdmin(admin.ModelAdmin):
+    change_list_template = "admin/system_update_form.html"
+    list_display = ['subject', 'sent_at', 'sent_by']
+    
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path('send_update/', self.send_update_view, name='send_system_update'),
+        ]
+        return custom_urls + urls
+
+    def changelist_view(self, request, extra_context=None):
+        if request.method == 'GET':
+            return self.send_update_view(request)
+        return super().changelist_view(request, extra_context)
+
+    def send_update_view(self, request):
+        print(f"Sending update view with method: {request.method}")
+        print(f"POST data: {request.POST if request.method == 'POST' else 'No POST data'}")
+        
+        if request.method == 'POST':
+            subject = request.POST.get('subject')
+            message = request.POST.get('message')
+            test_mode = request.POST.get('test_mode') == 'on'
+            
+            print(f"Received form data - Subject: {subject}, Test Mode: {test_mode}")
+            
+            try:
+                # Create SystemUpdate record
+                system_update = SystemUpdate.objects.create(
+                    subject=subject,
+                    message=message,
+                    sent_by=request.user
+                )
+                
+                if test_mode:
+                    queue_system_update_email.delay(
+                        system_update.id,
+                        test_mode=True,
+                        admin_id=request.user.id
+                    )
+                    messages.success(request, "Test email has been queued!")
+                else:
+                    queue_system_update_email.delay(
+                        system_update.id,
+                        test_mode=False
+                    )
+                    messages.success(request, "System update email has been queued for all users!")
+            except Exception as e:
+                print(f"Error in send_update_view: {str(e)}")
+                messages.error(request, f"Error queueing email: {str(e)}")
+                if 'system_update' in locals():
+                    system_update.delete()
+                
+        return TemplateResponse(request, "admin/system_update_form.html", {})
 
 admin.site.register(MealPlan, MealPlanAdmin)
 admin.site.register(Dish, DishAdmin)
@@ -139,3 +205,4 @@ admin.site.register(Instruction, InstructionAdmin)
 admin.site.register(MealPlanInstruction, MealPlanInstructionAdmin)
 admin.site.register(PantryItem, PantryItemAdmin)
 admin.site.register(MealPlanMealPantryUsage, MealPlanMealPantryUsageAdmin)
+admin.site.register(SystemUpdate, SystemUpdateAdmin)

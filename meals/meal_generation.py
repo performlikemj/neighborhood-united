@@ -9,6 +9,7 @@ from celery import shared_task
 from django.db.models import Q
 from django.utils import timezone
 from openai import OpenAI
+import uuid
 
 from custom_auth.models import CustomUser
 from meals.models import Meal, MealPlan, MealPlanMeal, PantryItem, MealPlanMealPantryUsage
@@ -56,12 +57,36 @@ def generate_and_create_meal(
     existing_meal_embeddings, 
     user_id, 
     day_name, 
-    max_attempts=3
+    max_attempts=3,
+    user_prompt=None,
+    request_id=None
 ):
+    """
+    Generate and create a meal for a specific day and meal type.
+    
+    Parameters:
+    - user: The user to create the meal for
+    - meal_plan: The MealPlan object to add the meal to
+    - meal_type: The type of meal (e.g., 'Breakfast', 'Lunch', 'Dinner')
+    - existing_meal_names: Set of existing meal names to avoid duplicates
+    - existing_meal_embeddings: List of existing meal embeddings for similarity checks
+    - user_id: The ID of the user
+    - day_name: The day of the week (e.g., 'Monday', 'Tuesday')
+    - max_attempts: Maximum number of attempts to generate a valid meal
+    - user_prompt: Optional user prompt to guide meal generation
+    - request_id: Optional request ID for logging correlation
+    
+    Returns:
+    - Dictionary with status, message, meal, and used_pantry_item
+    """
+    # Generate a request ID if not provided
+    if request_id is None:
+        request_id = str(uuid.uuid4())
+        
     attempt = 0
     while attempt < max_attempts:
         attempt += 1
-        logger.info(f"Attempt {attempt} to generate and create meal for {meal_type} on {day_name}.")
+        logger.info(f"[{request_id}] Attempt {attempt} to generate and create meal for {meal_type} on {day_name}.")
 
         # Step A: Generate meal details
         meal_details = generate_meal_details(
@@ -70,13 +95,15 @@ def generate_and_create_meal(
             existing_meal_names,
             existing_meal_embeddings,
             meal_plan=meal_plan,
+            user_prompt=user_prompt,
+            request_id=request_id
         )
         if not meal_details:
-            logger.error(f"Attempt {attempt}: Failed to generate meal details for {meal_type} on {day_name}.")
+            logger.error(f"[{request_id}] Attempt {attempt}: Failed to generate meal details for {meal_type} on {day_name}.")
             continue  # Retry
 
         used_pantry_items = meal_details.get('used_pantry_items', [])
-        logger.info(f"[DEBUG] GPT used_pantry_items: {used_pantry_items}")
+        logger.info(f"[{request_id}] Used pantry items: {used_pantry_items}")
 
         # Step B: Create the meal record
         meal_data = create_meal(
@@ -95,7 +122,7 @@ def generate_and_create_meal(
                 meal = Meal.objects.get(id=similar_meal_id)
                 offset = day_to_offset(day_name)
                 meal_date = meal_plan.week_start_date + timedelta(days=offset)
-                logger.info(f"Similar meal '{meal.name}' already exists. Adding to meal plan.")
+                logger.info(f"[{request_id}] Similar meal '{meal.name}' already exists. Adding to meal plan.")
                 MealPlanMeal.objects.create(
                     meal_plan=meal_plan,
                     meal=meal,
@@ -109,15 +136,15 @@ def generate_and_create_meal(
                     'status': 'success',
                     'message': f'Similar meal found and added: {meal.name}.',
                     'meal': meal,
-                    'used_pantry_item': False,  # CHANGED: No pantry items in a "similar meal" scenario
+                    'used_pantry_item': False,  # No pantry items in a "similar meal" scenario
                 }
             except Meal.DoesNotExist:
-                logger.error(f"Similar meal with ID {similar_meal_id} does not exist.")
+                logger.error(f"[{request_id}] Similar meal with ID {similar_meal_id} does not exist.")
                 continue  # Retry
 
         # If meal creation failed for other reasons
         if meal_data['status'] != 'success':
-            logger.error(f"Attempt {attempt}: Failed to create meal: {meal_data.get('message')}")
+            logger.error(f"[{request_id}] Attempt {attempt}: Failed to create meal: {meal_data.get('message')}")
             continue  # Retry
 
         # Step C: Verify the newly-created meal
@@ -125,13 +152,13 @@ def generate_and_create_meal(
             meal_id = meal_data['meal']['id']
             meal = Meal.objects.get(id=meal_id)
         except Meal.DoesNotExist:
-            logger.error(f"Meal with ID {meal_id} does not exist after creation.")
+            logger.error(f"[{request_id}] Meal with ID {meal_id} does not exist after creation.")
             continue  # Retry
 
         # Step D: Perform an optional sanity check
         sanity_ok = perform_openai_sanity_check(meal, user)
         if not sanity_ok:
-            logger.warning(f"Attempt {attempt}: Generated meal '{meal.name}' failed sanity check.")
+            logger.warning(f"[{request_id}] Attempt {attempt}: Generated meal '{meal.name}' failed sanity check.")
             continue  # Retry
 
         # Step E: Actually attach the meal to the meal plan
@@ -147,9 +174,10 @@ def generate_and_create_meal(
         )
 
         # Step F: If GPT used pantry items, create bridging usage records
-        used_any_pantry = False  # ADDED
+        used_any_pantry = False
         if len(used_pantry_items) > 0:
-            used_any_pantry = True  # ADDED
+            used_any_pantry = True
+            logger.info(f"[{request_id}] Processing {len(used_pantry_items)} pantry items for meal '{meal.name}'")
             for item_name in used_pantry_items:
                 pantry_item_obj = PantryItem.objects.filter(user=user, item_name=item_name).first()
                 if pantry_item_obj:
@@ -172,23 +200,27 @@ def generate_and_create_meal(
                         meal_name=meal.name,
                         meal_description=meal.description,
                         used_pantry_info=usage_data,
-                        serving_size=user.preferred_servings
+                        serving_size=user.preferred_servings,
+                        request_id=request_id
                     )
+                    logger.info(f"[{request_id}] Scheduled usage determination for pantry item '{item_name}'")
+                else:
+                    logger.warning(f"[{request_id}] Pantry item '{item_name}' not found for user {user.username}")
 
         # Step G: Update context for subsequent calls
         existing_meal_names.add(meal.name)
         existing_meal_embeddings.append(meal.meal_embedding)
-        logger.info(f"Added new meal '{meal.name}' for {day_name} {meal_type}.")
+        logger.info(f"[{request_id}] Added new meal '{meal.name}' for {day_name} {meal_type}.")
 
         # Step H: Return success, letting caller know if pantry was used
         return {
             'status': 'success',
             'message': 'Meal created and added successfully.',
             'meal': meal,
-            'used_pantry_item': used_any_pantry,  # CHANGED
+            'used_pantry_item': used_any_pantry,
         }
 
-    logger.error(f"Failed to generate and create meal for {meal_type} on {day_name} after {max_attempts} attempts.")
+    logger.error(f"[{request_id}] Failed to generate and create meal for {meal_type} on {day_name} after {max_attempts} attempts.")
     return {
         'status': 'error',
         'message': f'Failed to create meal after {max_attempts} attempts.',
@@ -246,26 +278,31 @@ def generate_meal_details(
     existing_meal_embeddings,
     meal_plan,
     min_similarity=0.1,
-    max_attempts=5
+    max_attempts=5,
+    user_prompt=None,
+    request_id=None
 ):
     """
-    Generate a new meal idea by calling GPT, factoring in:
-      - The user's expiring pantry items (with effective leftover amounts),
-      - Existing meals (to avoid duplicates),
-      - User allergies, goals, and dietary preferences,
-      - The specified meal type (Breakfast, Lunch, etc.).
-
+    Generate meal details using OpenAI.
+    
+    Parameters:
+    - user: The user to generate the meal for
+    - meal_type: The type of meal (e.g., 'Breakfast', 'Lunch', 'Dinner')
+    - existing_meal_names: Set of existing meal names to avoid duplicates
+    - existing_meal_embeddings: List of existing meal embeddings for similarity checks
+    - meal_plan: The MealPlan object
+    - min_similarity: Minimum similarity threshold for duplicate detection
+    - max_attempts: Maximum number of attempts to generate a valid meal
+    - user_prompt: Optional user prompt to guide meal generation
+    - request_id: Optional request ID for logging correlation
+    
     Returns:
-      A dict with the structure:
-      {
-        'name': <Meal Name>,
-        'description': <Meal Description>,
-        'dietary_preference': <Diet Pref>,
-        'meal_embedding': <Vector of length 1536>,
-        'used_pantry_items': [<item_name1>, <item_name2>, ...]
-      }
-      or None if GPT generation fails after `max_attempts`.
+    - Dictionary with meal details or None if generation fails
     """
+    # Generate a request ID if not provided
+    if request_id is None:
+        request_id = str(uuid.uuid4())
+
     previous_week_start = timezone.now().date() - timedelta(days=timezone.now().weekday() + 7)
     previous_week_end = previous_week_start + timedelta(days=6)
 
@@ -325,7 +362,7 @@ def generate_meal_details(
     user_goals = getattr(user.goal, 'goal_description', 'None')
 
     # 5) Build the GPT prompt
-    prompt_content = f"""
+    base_prompt = f"""
     You are a helpful meal-planning assistant.
     The user has expiring pantry items with these *effective* quantities:
     {expiring_items_str}.
@@ -337,7 +374,19 @@ def generate_meal_details(
     4. The meal must be realistic—avoid bizarre flavor combos.
     5. Return JSON with the MealOutputSchema format, including "used_pantry_items".
     6. Use at most 2 expiring items to avoid wild combos.
+    """
 
+    if user_prompt:
+        base_prompt += f"""
+        
+        The user has specifically requested:
+        {user_prompt}
+
+        Make sure the generated meal satisfies these requirements while still meeting
+        all dietary restrictions and preferences.
+        """
+
+    base_prompt += f"""
     Example JSON structure:
     {{
       "status": "success",
@@ -369,7 +418,7 @@ def generate_meal_details(
                 model="gpt-4o",
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant that generates a single meal JSON."},
-                    {"role": "user", "content": prompt_content}
+                    {"role": "user", "content": base_prompt}
                 ],
                 store=True,
                 metadata={'tag': 'meal_details'},
@@ -393,7 +442,7 @@ def generate_meal_details(
 
             # Basic checks
             if not meal_name or not description or not dietary_preference:
-                logger.error(f"[Attempt {attempt+1}] Meal data incomplete: {meal_data}. Skipping.")
+                logger.error(f"[{request_id}] [Attempt {attempt+1}] Meal data incomplete: {meal_data}. Skipping.")
                 continue
 
             meal_representation = (
@@ -412,7 +461,7 @@ def generate_meal_details(
                     break
 
             if similar_meal_found:
-                logger.debug(f"[Attempt {attempt+1}] Found a similar meal. Retrying.")
+                logger.debug(f"[{request_id}] [Attempt {attempt+1}] Found a similar meal. Retrying.")
                 continue
 
             # If no similarity found, we return the new meal data
@@ -425,10 +474,10 @@ def generate_meal_details(
             }
 
         except Exception as e:
-            logger.error(f"[Attempt {attempt+1}] Error generating meal: {e}")
+            logger.error(f"[{request_id}] [Attempt {attempt+1}] Error generating meal: {e}")
             return None
 
-    logger.error(f"Failed to generate a unique meal after {max_attempts} attempts.")
+    logger.error(f"[{request_id}] Failed to generate a unique meal after {max_attempts} attempts.")
     return None
 
 
@@ -438,20 +487,27 @@ def determine_usage_for_meal(
     meal_name: str,
     meal_description: str,
     used_pantry_info: list,
-    serving_size: int
+    serving_size: int,
+    request_id=None
 ):
     """
-    For a given meal (MealPlanMeal), calls GPT to refine how much of each 
-    used pantry item is needed, factoring in the user's serving size. 
-    Updates bridging usage with the quantity and usage_unit.
-
-    GPT should return a JSON array like:
-    [
-      {"item_name": "Tomato Paste", "quantity_used": 2.0, "unit": "cans"},
-      ...
-    ]
-    which we store in MealPlanMealPantryUsage (quantity_used and usage_unit).
+    Determine the usage of pantry items for a meal.
+    
+    Parameters:
+    - meal_plan_meal_id: The ID of the MealPlanMeal
+    - meal_name: The name of the meal
+    - meal_description: The description of the meal
+    - used_pantry_info: List of pantry items used in the meal
+    - serving_size: The serving size of the meal
+    - request_id: Optional request ID for logging correlation
+    
+    Returns:
+    - None
     """
+    # Generate a request ID if not provided
+    if request_id is None:
+        request_id = str(uuid.uuid4())
+
     logger = logging.getLogger(__name__)
 
     meal_plan_meal = get_object_or_404(MealPlanMeal, id=meal_plan_meal_id)
@@ -502,7 +558,7 @@ def determine_usage_for_meal(
         logger.error(f"Error calling GPT for usage (MealPlanMeal {meal_plan_meal_id}): {e}")
         return
 
-    # Parse GPT’s JSON
+    # Parse GPT's JSON
     try:
         usage_data = UsageList.model_validate_json(usage_json)
     except Exception as e:
@@ -552,7 +608,7 @@ def determine_usage_for_meal(
 
     leftover_dict = compute_effective_available_items(user, meal_plan_meal.meal_plan)
 
-    # 2) Log each item’s new leftover
+    # 2) Log each item's new leftover
     for item_id, leftover_data in leftover_dict.items():
         # If your function returns just a float, leftover_data is a float
         # If it returns (leftover_amount, unit), unpack it:
@@ -562,7 +618,7 @@ def determine_usage_for_meal(
             leftover_val = leftover_data
             leftover_unit = ""
 
-        # Find the item’s name
+        # Find the item's name
         try:
             pantry_item = PantryItem.objects.get(id=item_id)
             item_name = pantry_item.item_name
@@ -570,5 +626,5 @@ def determine_usage_for_meal(
             item_name = f"Unknown(ID={item_id})"
 
         logger.info(
-            f"[DEBUG] After bridging usage, leftover for '{item_name}' = {leftover_val} {leftover_unit}"
+            f"[{request_id}] [DEBUG] After bridging usage, leftover for '{item_name}' = {leftover_val} {leftover_unit}"
     )

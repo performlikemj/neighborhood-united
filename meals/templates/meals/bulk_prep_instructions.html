@@ -154,13 +154,28 @@
         <p style="color: #555; font-size: 16px;">Happy cooking!</p>
         <p style="color: #555; font-size: 16px;">Warm regards,<br>Your Team</p>
         <p>
-            <a href="https://sautai.com/meal_plans?action=review_meal&amp;meal_plan_id={{ meal_plan_id }}">
+            <a href="{{ streamlit_url }}/meal_plans?action=review_meal&amp;meal_plan_id={{ meal_plan_id }}">
             Review Your Meal Plan
             </a>
         </p>        
+
+        <div style="text-align: center; margin: 20px 0;">
+            <p>Be prepared for the unexpected. Generate an emergency pantry plan:</p>
+            <a href="{{ streamlit_url }}/meal_plans?action=generate_emergency_plan&approval_token={{ approval_token }}&user_id={{ user_id }}"
+               style="
+                  display: inline-block; 
+                  background-color: #ff4c4c;
+                  color: #ffffff; 
+                  padding: 10px 20px; 
+                  border-radius: 5px; 
+                  text-decoration: none;
+               ">
+              Generate Emergency Pantry Plan
+            </a>
+          </div>
         <div class="footer">
             <p>You are receiving this email because you opted in for bulk meal prep instructions.</p>
-            <a href="https://sautai.com/profile" class="preferences-button">Manage Your Email Preferences</a>
+            <a href="{{ streamlit_url }}/profile" class="preferences-button">Manage Your Email Preferences</a>
         </div>
     </div>
 </body>

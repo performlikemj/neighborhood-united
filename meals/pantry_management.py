@@ -90,9 +90,10 @@ def get_expiring_pantry_items(user, days_threshold=7):
     """
     today = timezone.now().date()
     threshold_date = today + timedelta(days=days_threshold)
-    # First, filter by expiration date
+    # Filter by expiration date: must be between today and threshold_date
     filted_pantry_items = user.pantry_items.filter(
-        expiration_date__lte=threshold_date
+        expiration_date__gte=today,  # Must not be expired
+        expiration_date__lte=threshold_date  # Must expire within threshold
     ).order_by('expiration_date')
     
     # Then check if there's any available quantity
@@ -147,7 +148,7 @@ def compute_effective_available_items(user, meal_plan, days_threshold=7):
     # Build a set of item IDs for quick membership checks
     expiring_ids = {d["item_id"] for d in expiring_list}
 
-    # 2) Build a map of (item_id -> total capacity in the item’s unit) AND store PantryItem
+    # 2) Build a map of (item_id -> total capacity in the item's unit) AND store PantryItem
     #    This way, we can retrieve each PantryItem's weight_unit later.
     real_availability = {}
     item_map = {}
@@ -180,7 +181,7 @@ def compute_effective_available_items(user, meal_plan, days_threshold=7):
     }
 
     # 4) Compute leftover for each expiring item
-    #    leftover is in the item’s declared weight_unit
+    #    leftover is in the item's declared weight_unit
     effective_availability = {}
     for item_id, total_capacity in real_availability.items():
         bridging_used = usage_dict.get(item_id, 0.0)

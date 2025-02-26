@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 from .forms import DishForm, IngredientForm, MealForm
 from .models import Meal, Cart, Dish, Ingredient, Order, OrderMeal, MealPlan, MealPlanMeal, Instruction, PantryItem
 from django.http import JsonResponse, HttpResponseBadRequest
-from .serializers import MealPlanSerializer, PantryItemSerializer
+from .serializers import MealPlanSerializer, MealSerializer, PantryItemSerializer, UserSerializer
 from chefs.models import Chef
 from shared.utils import day_to_offset
 from django.conf import settings
@@ -34,6 +34,10 @@ from rest_framework.pagination import PageNumberPagination
 from customer_dashboard.permissions import IsCustomer
 from django.http import JsonResponse
 from django.http import HttpResponseForbidden
+from django.db.models import Q
+from django.db import transaction
+import uuid
+from django.core.cache import cache
 
 
 logger = logging.getLogger(__name__)
@@ -633,9 +637,12 @@ def meal_plan_approval(request):
     if request.method == 'POST':
         # Step 3: Handle meal plan approval
         # Create an Order object
-        order = Order(customer=request.user)
-        order.save()  # Save the order to generate an ID
-        
+        order = Order.objects.create(
+            customer=request.user,
+            status='Placed',
+            meal_plan=meal_plan
+        )
+
         # Step 5: Create OrderMeal objects for each meal in the meal plan
         for meal in meal_plan.meal.all():
             OrderMeal.objects.create(order=order, meal=meal, quantity=1)
@@ -749,7 +756,7 @@ def api_get_meal_plan_by_id(request, meal_plan_id):
 @permission_classes([IsAuthenticated])
 def api_generate_cooking_instructions(request):
     try:
-        from .tasks import generate_instructions
+        from .meal_instructions import generate_instructions
         # Extract meal_plan_meal_ids from request data
         meal_plan_meal_ids = request.data.get('meal_plan_meal_ids', [])
         if not meal_plan_meal_ids:
@@ -784,9 +791,11 @@ def api_remove_meal_from_plan(request):
     API endpoint to remove meals from a user's meal plan.
     Expects a list of MealPlanMeal IDs in the request data.
     """
+    logger.info("Starting api_remove_meal_from_plan")
     user = request.user
     meal_plan_meal_ids = request.data.get('meal_plan_meal_ids', [])
-
+    logger.info(f"Removing meals from meal plan: {meal_plan_meal_ids}") 
+    logger.info(f"User: {user}")
     if not meal_plan_meal_ids:
         return Response({"error": "No meal_plan_meal_ids provided."}, status=400)
 
@@ -906,19 +915,67 @@ def api_fetch_instructions(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def api_approve_meal_plan(request):
-    from shared.utils import approve_meal_plan
-    # Extract the user_id and meal_plan_id from the request data
-    user_id = request.data.get('user_id')
+    """
+    Endpoint to approve a meal plan with specified meal prep preference.
+    Expects meal_plan_id and meal_prep_preference in request data.
+    """
     meal_plan_id = request.data.get('meal_plan_id')
+    meal_prep_preference = request.data.get('meal_prep_preference')
+    user_id = request.data.get('user_id')
     
-    if not user_id or not meal_plan_id:
-        return Response({"status": "error", "message": "user_id and meal_plan_id are required."}, status=400)
+    if not user_id:
+        return Response({"status": "error", "message": "User ID is required."}, status=400)
+        
+    if not meal_plan_id:
+        return Response({'error': 'Meal plan ID is required.'}, status=400)
+    
+    valid_preferences = dict(MealPlan.MEAL_PREP_CHOICES).keys()
+    if not meal_prep_preference or meal_prep_preference not in valid_preferences:
+        return Response({'error': 'Invalid meal prep preference.'}, status=400)
 
-    # Call the approve_meal_plan function with the extracted IDs
-    result = approve_meal_plan(request, meal_plan_id)
+    try:
+        meal_plan = get_object_or_404(MealPlan, id=meal_plan_id, user=request.user)
+        
+        # Update meal plan preferences
+        meal_plan.is_approved = True
+        meal_plan.has_changes = False
+        meal_plan.meal_prep_preference = meal_prep_preference
+        meal_plan.save()
 
-    # Return the result of the approval process
-    return Response(result)
+        # Create an Order for the approved meal plan
+        order = Order.objects.create(
+            customer=request.user,
+            status='Placed',
+            meal_plan=meal_plan
+        )
+
+        # Add meals from meal plan to order with their corresponding MealPlanMeal
+        for meal_plan_meal in meal_plan.mealplanmeal_set.all():
+            OrderMeal.objects.create(
+                order=order,
+                meal=meal_plan_meal.meal,
+                meal_plan_meal=meal_plan_meal,
+                quantity=1
+            )
+        print(f'Successfully created order with ID: {order.id}')
+        print(f'Order Meals: {order.ordermeal_set.all()}')
+        return Response({
+            'status': 'success',
+            'message': 'Meal plan approved successfully.',
+            'order_id': order.id
+        })
+
+    except MealPlan.DoesNotExist:
+        return Response({
+            'status': 'error',
+            'message': 'Meal plan not found.'
+        }, status=404)
+    except Exception as e:
+        logger.error(f"Error approving meal plan: {str(e)}")
+        return Response({
+            'status': 'error',
+            'message': 'An error occurred while approving the meal plan.'
+        }, status=500)
 
 class PantryItemPagination(PageNumberPagination):
     page_size = 10  # Adjust as needed
@@ -1003,3 +1060,724 @@ def api_pantry_item_detail(request, pk):
         return Response(status=204)
 
 
+# Emergency pantry item API
+@api_view(['POST'])
+def api_generate_emergency_plan(request):
+    approval_token = request.data.get('approval_token')
+
+    if not approval_token:
+        return Response({"error": "Approval token is required."}, status=400)
+
+    try:
+        # Retrieve the MealPlan or user associated with that token
+        # or store the token on the user object—whatever logic fits your design.
+        # For example, maybe you store the token on the `User` or `MealPlan`:
+
+        meal_plan = MealPlan.objects.get(approval_token=approval_token)
+        user = meal_plan.user  # The associated user
+    except MealPlan.DoesNotExist:
+        return Response({"error": "Invalid or expired approval token."}, status=400)
+
+    # Great, we found a valid user from the token. Now let's generate the plan:
+    from meals.email_service import generate_emergency_supply_list
+
+    try:
+        generate_emergency_supply_list(user.id)
+        return Response({"message": "Emergency supply list generated successfully."}, status=200)
+    except Exception as e:
+        return Response({"error": str(e)}, status=400)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_update_meals_with_prompt(request):
+    """
+    API endpoint to update meals in a meal plan based on a text prompt.
+    Requires meal_plan_meal_ids and their corresponding dates to ensure correct meal updates.
+    """
+    logger.info("Starting api_update_meals_with_prompt")
+    from meals.meal_generation import generate_and_create_meal
+    try:
+        meal_plan_meal_ids = request.data.get('meal_plan_meal_ids', [])
+        meal_dates = request.data.get('meal_dates', [])
+        prompt = request.data.get('prompt', '').strip()
+        logger.info(f"Received meal_plan_meal_ids: {meal_plan_meal_ids}, dates: {meal_dates}, prompt: {prompt}")
+
+        if not meal_plan_meal_ids or not meal_dates:
+            logger.warning("Missing required data: meal_plan_meal_ids or meal_dates")
+            return Response({
+                "error": "Both meal_plan_meal_ids and meal_dates are required."
+            }, status=400)
+
+        if len(meal_plan_meal_ids) != len(meal_dates):
+            logger.warning("Mismatched lengths: meal_plan_meal_ids and meal_dates")
+            return Response({
+                "error": "Number of meal IDs must match number of dates."
+            }, status=400)
+
+        # Get current date for comparisons
+        today = timezone.now().date()
+        logger.info(f"Current date: {today}")
+
+        # Convert string dates to date objects and create ID-to-date mapping
+        try:
+            id_date_pairs = []
+            for meal_id, date_str in zip(meal_plan_meal_ids, meal_dates):
+                meal_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                # Check if date is in the past
+                if meal_date < today:
+                    logger.info(f"Skipping past date: {date_str} for meal_id: {meal_id}")
+                    continue  # Skip past dates
+                id_date_pairs.append((meal_id, meal_date))
+                logger.info(f"Added valid date pair: meal_id={meal_id}, date={date_str}")
+        except ValueError as e:
+            logger.error(f"Date parsing error: {e}")
+            return Response({
+                "error": "Invalid date format. Use YYYY-MM-DD."
+            }, status=400)
+
+        if not id_date_pairs:
+            logger.warning("No valid future dates found in request")
+            return Response({
+                "error": "No valid future dates provided for meal updates."
+            }, status=400)
+
+        updates = []
+        logger.info("Starting meal updates process")
+        total_meals = len(id_date_pairs)
+        processed_meals = 0
+
+        # Process each meal plan meal directly from ID-date pairs
+        for meal_plan_meal_id, meal_date in id_date_pairs:
+            try:
+                meal_plan_meal = MealPlanMeal.objects.select_related('meal_plan', 'meal').get(
+                    id=meal_plan_meal_id,
+                    meal_plan__user=request.user
+                )
+                logger.info(f"Processing meal: ID={meal_plan_meal.id}, Name={meal_plan_meal.meal.name}, Date={meal_date}")
+
+                # Add day verification
+                expected_day = meal_date.strftime("%A")
+                if meal_plan_meal.day != expected_day:
+                    error_message = (
+                        f"Day mismatch for MealPlanMeal ID {meal_plan_meal.id}: "
+                        f"expected day '{expected_day}' (from provided date {meal_date}), "
+                        f"but found day '{meal_plan_meal.day}' with meal type '{meal_plan_meal.meal_type}'."
+                    )
+                    logger.error(error_message)
+                    return Response({
+                        "error": error_message,
+                        "meal_plan_meal": {
+                            "id": meal_plan_meal.id,
+                            "name": meal_plan_meal.meal.name,
+                            "day": meal_plan_meal.day,
+                            "meal_type": meal_plan_meal.meal_type,
+                            "provided_date": meal_date.strftime("%Y-%m-%d")
+                        }
+                    }, status=400)
+
+            except MealPlanMeal.DoesNotExist:
+                error_message = f"Meal plan meal with ID {meal_plan_meal_id} not found or unauthorized"
+                logger.warning(error_message)
+                return Response({
+                    "error": error_message,
+                    "details": {
+                        "meal_plan_meal_id": meal_plan_meal_id,
+                        "provided_date": meal_date.strftime("%Y-%m-%d")
+                    }
+                }, status=404)
+
+        # Get the meal plan from the first valid meal
+        meal_plan = None
+        for meal_plan_meal_id, _ in id_date_pairs:
+            try:
+                meal_plan_meal = MealPlanMeal.objects.select_related('meal_plan').get(
+                    id=meal_plan_meal_id,
+                    meal_plan__user=request.user
+                )
+                meal_plan = meal_plan_meal.meal_plan
+                break
+            except MealPlanMeal.DoesNotExist:
+                continue
+
+        if not meal_plan:
+            logger.warning("No valid meal plan found")
+            return Response({
+                "error": "No valid meal plan found for the specified meals."
+            }, status=404)
+
+        logger.info(f"Retrieved meal plan with ID: {meal_plan.id}")
+
+        # Create a mapping of meal dates
+        meal_dates_map = {meal_id: date for meal_id, date in id_date_pairs}
+
+        # If no prompt is provided, try suggest_alternative_meals first
+        if not prompt:
+            logger.info("No prompt provided, attempting to find alternative meals")
+            # Get the days and meal types for each meal to be replaced
+            days_of_week = []
+            meal_types = []
+            old_meal_ids = []
+            
+            # First, remove all the old meal plan meals
+            for meal_plan_meal_id, _ in id_date_pairs:
+                try:
+                    meal_plan_meal = MealPlanMeal.objects.get(id=meal_plan_meal_id, meal_plan__user=request.user)
+                    logger.info(f"Removing meal plan meal: {meal_plan_meal.meal.name} from {meal_plan_meal.day} {meal_plan_meal.meal_type}")
+                    days_of_week.append(meal_plan_meal.day)
+                    meal_types.append(meal_plan_meal.meal_type)
+                    old_meal_ids.append(meal_plan_meal.meal.id)
+                    meal_plan_meal.delete()
+                    logger.info(f"Preparing to update: Day={meal_plan_meal.day}, Type={meal_plan_meal.meal_type}, Old Meal ID={meal_plan_meal.meal.id}")
+                except MealPlanMeal.DoesNotExist:
+                    logger.warning(f"Meal plan meal with ID {meal_plan_meal_id} not found or unauthorized")
+                    continue
+
+            # Use the existing suggest_alternative_meals function to get alternatives
+            from shared.utils import suggest_alternative_meals
+            alternatives_response = suggest_alternative_meals(
+                request=request,
+                meal_ids=old_meal_ids,
+                days_of_week=days_of_week,
+                meal_types=meal_types
+            )
+            logger.info(f"Alternatives response: {alternatives_response}")
+
+            # Get the alternative meals
+            alternative_meals = alternatives_response.get('alternative_meals', [])
+
+            if alternative_meals:
+                logger.info(f"Found {len(alternative_meals)} alternative meals")
+                # Use the alternative meals to update the meal plan
+                for idx, alternative in enumerate(alternative_meals):
+                    day = days_of_week[idx]
+                    meal_type = meal_types[idx]
+                    new_meal_id = alternative['meal_id']
+                    logger.info(f"Processing alternative meal: Day={day}, Type={meal_type}, New ID={new_meal_id}")
+                    
+                    # Use replace_meal_in_plan instead of direct update
+                    from shared.utils import replace_meal_in_plan
+                    result = replace_meal_in_plan(
+                        request=request,
+                        meal_plan_id=meal_plan.id,
+                        old_meal_id=old_meal_ids[idx],
+                        new_meal_id=new_meal_id,
+                        day=day,
+                        meal_type=meal_type
+                    )
+
+                    if result['status'] == 'success':
+                        updates.append({
+                            "old_meal": {
+                                "id": old_meal_ids[idx],
+                                "name": result['replaced_meal']['old_meal']
+                            },
+                            "new_meal": {
+                                "id": new_meal_id,
+                                "name": result['replaced_meal']['new_meal'],
+                                "was_generated": False
+                            }
+                        })
+                        processed_meals += 1
+                        logger.info(f"Successfully replaced meal {processed_meals}/{total_meals}")
+                    else:
+                        logger.error(f"Failed to replace meal: {result['message']}")
+
+            else:
+                logger.info("No alternatives found, proceeding to generate new meals")
+                # If no alternatives found, fall back to generating new meals
+                
+                for idx, (day, meal_type) in enumerate(zip(days_of_week, meal_types)):
+                    # Get existing meal names and embeddings for remaining meals
+                    existing_meal_names = set(meal_plan.mealplanmeal_set.values_list('meal__name', flat=True))
+                    existing_meal_embeddings = list(meal_plan.mealplanmeal_set.values_list('meal__meal_embedding', flat=True))
+
+                    # Generate and create a new meal
+                    result = generate_and_create_meal(
+                        user=request.user,
+                        meal_plan=meal_plan,
+                        meal_type=meal_type,
+                        existing_meal_names=existing_meal_names,
+                        existing_meal_embeddings=existing_meal_embeddings,
+                        user_id=request.user.id,
+                        day_name=day,
+                        user_prompt=None
+                    )
+
+                    if result['status'] == 'success':
+                        new_meal = result['meal']
+                        logger.info(f"Creating new MealPlanMeal association for meal '{new_meal.name}' in meal plan {meal_plan.id}")
+                        # No need to create MealPlanMeal here - it's already created by generate_and_create_meal
+                        logger.info(f"Successfully created MealPlanMeal for {new_meal.name} on {day}")
+                        updates.append({
+                            "old_meal": {
+                                "id": old_meal_ids[idx],
+                                "name": result['replaced_meal']['old_meal'] if 'replaced_meal' in result else "Unknown"
+                            },
+                            "new_meal": {
+                                "id": new_meal.id,
+                                "name": new_meal.name,
+                                "was_generated": True,
+                                "used_pantry_items": result.get('used_pantry_items', [])
+                            }
+                        })
+                        processed_meals += 1
+                        logger.info(f"Successfully generated new meal {processed_meals}/{total_meals}")
+
+        elif prompt:
+            logger.info(f"Prompt provided: '{prompt}', proceeding to update {total_meals} meals")
+            
+            # Store meal info before deletion
+            meal_info = []
+            for meal_plan_meal_id, meal_date in id_date_pairs:
+                try:
+                    meal_plan_meal = MealPlanMeal.objects.get(id=meal_plan_meal_id, meal_plan__user=request.user)
+                    meal_info.append({
+                        'id': meal_plan_meal_id,
+                        'day': meal_plan_meal.day,
+                        'meal_type': meal_plan_meal.meal_type,
+                        'old_meal': meal_plan_meal.meal,
+                        'meal_date': meal_date
+                    })
+                    logger.info(f"Removing meal plan meal: {meal_plan_meal.meal.name} from {meal_plan_meal.day} {meal_plan_meal.meal_type}")
+                    
+                    # Delete only the specific meal plan meal
+                    try:
+                        with transaction.atomic():
+                            # Verify no existing meal plan meal before deletion
+                            existing = MealPlanMeal.objects.filter(
+                                meal_plan=meal_plan,
+                                day=meal_plan_meal.day,
+                                meal_type=meal_plan_meal.meal_type
+                            ).exclude(id=meal_plan_meal_id).exists()
+                            
+                            if existing:
+                                raise Exception(f"Found existing meal plan meal for {meal_plan_meal.day} {meal_plan_meal.meal_type}")
+                            
+                            # Delete only this specific meal plan meal
+                            meal_plan_meal.delete()
+                            logger.info(f"Deleted meal plan meal ID {meal_plan_meal_id}")
+                            
+                            # Verify the deletion
+                            if MealPlanMeal.objects.filter(id=meal_plan_meal_id).exists():
+                                raise Exception(f"Failed to delete meal plan meal ID {meal_plan_meal_id}")
+                    except Exception as e:
+                        logger.error(f"Error during meal deletion: {str(e)}")
+                        return Response({
+                            "error": f"Failed to delete meal plan meal: {str(e)}"
+                        }, status=500)
+                except MealPlanMeal.DoesNotExist:
+                    logger.warning(f"Meal plan meal with ID {meal_plan_meal_id} not found or unauthorized")
+                    continue
+
+            # Get existing meal names and embeddings once before the loop
+            existing_meal_names = set(meal_plan.mealplanmeal_set.values_list('meal__name', flat=True))
+            existing_meal_embeddings = list(meal_plan.mealplanmeal_set.values_list('meal__meal_embedding', flat=True))
+            
+            # Now create new meals for each removed meal
+            for info in meal_info:
+                logger.info(f"Generating new meal for {info['day']} {info['meal_type']}")
+                result = generate_and_create_meal(
+                    user=request.user,
+                    meal_plan=meal_plan,
+                    meal_type=info['meal_type'],
+                    existing_meal_names=existing_meal_names,
+                    existing_meal_embeddings=existing_meal_embeddings,
+                    user_id=request.user.id,
+                    day_name=info['day'],
+                    user_prompt=prompt
+                )
+
+                if result['status'] == 'success':
+                    new_meal = result['meal']
+                    logger.info(f"Successfully generated meal '{new_meal.name}' for {info['day']} {info['meal_type']}")
+                    
+                    # Add to updates list - no need to create MealPlanMeal as it's already created by generate_and_create_meal
+                    updates.append({
+                        "old_meal": {
+                            "id": info['old_meal'].id,
+                            "name": info['old_meal'].name
+                        },
+                        "new_meal": {
+                            "id": new_meal.id,
+                            "name": new_meal.name,
+                            "was_generated": True,
+                            "used_pantry_items": result.get('used_pantry_items', [])
+                        }
+                    })
+                    processed_meals += 1
+                    logger.info(f"Successfully processed meal {processed_meals}/{total_meals}")
+
+        # Mark the meal plan as having changes
+        if updates:
+            logger.info(f"Updates completed: {len(updates)} meals updated out of {total_meals} selected")
+            meal_plan.has_changes = True
+            meal_plan.save()
+        
+        logger.info("Successfully completed meal updates")
+        return Response({
+            "message": f"Successfully updated {len(updates)} meals",
+            "updates": updates
+        }, status=200)
+
+    except Exception as e:
+        logger.error(f"Error in api_update_meals_with_prompt: {str(e)}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        return Response({
+            "error": f"An error occurred: {str(e)}"
+        }, status=500)
+
+def get_user_dietary_preferences(user_id):
+    """
+    Get a user's dietary preferences with caching to improve performance.
+    
+    Parameters:
+    - user_id: The ID of the user
+    
+    Returns:
+    - A list of dietary preference names
+    """
+    cache_key = f"user_dietary_prefs_{user_id}"
+    prefs = cache.get(cache_key)
+    
+    if prefs is None:
+        try:
+            user = CustomUser.objects.get(id=user_id)
+            prefs = list(user.dietary_preferences.values_list('name', flat=True))
+            # Cache for 1 hour (3600 seconds)
+            cache.set(cache_key, prefs, 3600)
+            logger.debug(f"Cached dietary preferences for user {user_id}")
+        except Exception as e:
+            logger.error(f"Error fetching dietary preferences for user {user_id}: {str(e)}")
+            prefs = []
+    
+    return prefs
+
+def get_available_meals_count(user_id):
+    """
+    Get the count of available meals for a user with caching to improve performance.
+    
+    Parameters:
+    - user_id: The ID of the user
+    
+    Returns:
+    - The count of available meals
+    """
+    cache_key = f"available_meals_count_{user_id}"
+    count = cache.get(cache_key)
+    
+    if count is None:
+        try:
+            count = Meal.objects.filter(creator_id=user_id).count()
+            # Cache for 15 minutes (900 seconds) as this might change more frequently
+            cache.set(cache_key, count, 900)
+            logger.debug(f"Cached available meals count for user {user_id}")
+        except Exception as e:
+            logger.error(f"Error counting available meals for user {user_id}: {str(e)}")
+            count = 0
+    
+    return count
+
+def get_user_postal_code(user):
+    """
+    Get a user's postal code with caching to improve performance.
+    
+    Parameters:
+    - user: The user object
+    
+    Returns:
+    - The user's postal code or None if not available
+    """
+    cache_key = f"user_postal_code_{user.id}"
+    postal_code = cache.get(cache_key)
+    
+    if postal_code is None:
+        try:
+            if hasattr(user, 'address'):
+                postal_code = user.address.input_postalcode
+                # Cache for 1 day (86400 seconds) as this rarely changes
+                cache.set(cache_key, postal_code, 86400)
+                logger.debug(f"Cached postal code for user {user.id}")
+        except Exception as e:
+            logger.error(f"Error fetching postal code for user {user.id}: {str(e)}")
+            postal_code = None
+    
+    return postal_code
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_generate_meal_plan(request):
+    """
+    Generate a meal plan for a specific week. The week_start_date should be provided
+    in the request parameters in YYYY-MM-DD format.
+    """
+    # Generate a unique request ID for tracking this request through logs
+    request_id = str(uuid.uuid4())
+    logger.info(f"[{request_id}] Received meal plan generation request for user {request.user.username}")
+    logger.debug(f"[{request_id}] Request data: {request.data}")
+    logger.debug(f"[{request_id}] Query params: {request.query_params}")
+
+    try:
+        # Get week_start_date from request parameters
+        week_start_date_str = request.data.get('week_start_date') or request.query_params.get('week_start_date')
+        if not week_start_date_str:
+            logger.warning(f"[{request_id}] Missing week_start_date parameter in request from user {request.user.username}")
+            return standardize_response(
+                status="error",
+                message="week_start_date parameter is required in YYYY-MM-DD format",
+                details="The parameter was not found in either request body or query parameters",
+                status_code=400
+            )
+
+        # Parse the date
+        try:
+            week_start_date = datetime.strptime(week_start_date_str, '%Y-%m-%d').date()
+            week_end_date = week_start_date + timedelta(days=6)
+            logger.info(f"[{request_id}] Parsed dates - Start: {week_start_date}, End: {week_end_date}")
+        except ValueError as e:
+            logger.warning(f"[{request_id}] Invalid date format provided: {week_start_date_str}")
+            return standardize_response(
+                status="error",
+                message="Invalid date format. Please use YYYY-MM-DD",
+                details={
+                    "provided_date": week_start_date_str,
+                    "example": "2024-03-25",
+                    "error": str(e)
+                },
+                status_code=400
+            )
+
+        # Check if the date is in the past
+        today = timezone.now().date()
+        if week_start_date < today:
+            logger.warning(f"[{request_id}] Past date provided: {week_start_date}")
+            return standardize_response(
+                status="error",
+                message="Cannot generate meal plans for past weeks",
+                details={
+                    "current_date": today.strftime('%Y-%m-%d'),
+                    "earliest_allowed": today.strftime('%Y-%m-%d'),
+                    "provided_date": week_start_date.strftime('%Y-%m-%d'),
+                    "message": "Meal plans can only be generated for current or future weeks."
+                },
+                status_code=400
+            )
+
+        # Use a transaction to prevent race conditions
+        with transaction.atomic():
+            # Check if any meal plan already exists for this week (approved or not)
+            existing_plan = MealPlan.objects.select_for_update().filter(
+                user=request.user,
+                week_start_date=week_start_date,
+                week_end_date=week_end_date
+            ).first()
+
+            if existing_plan:
+                # Check if the plan has meals
+                meal_count = MealPlanMeal.objects.filter(meal_plan=existing_plan).count()
+                
+                if meal_count > 0:
+                    logger.info(f"[{request_id}] Found existing meal plan (ID: {existing_plan.id}) with {meal_count} meals")
+                    status_message = "approved" if existing_plan.is_approved else "pending approval"
+                    
+                    return standardize_response(
+                        status="existing_plan",
+                        message=f"A meal plan already exists for this week ({status_message})",
+                        details={
+                            "meal_plan_id": existing_plan.id,
+                            "is_approved": existing_plan.is_approved,
+                            "has_changes": existing_plan.has_changes,
+                            "meal_count": meal_count,
+                            "week_start_date": existing_plan.week_start_date.strftime('%Y-%m-%d'),
+                            "week_end_date": existing_plan.week_end_date.strftime('%Y-%m-%d'),
+                            "action_required": "To make changes, please modify individual meals in the existing plan"
+                        },
+                        meal_plan=existing_plan
+                    )
+                else:
+                    # We found an empty meal plan - log and delete it
+                    logger.warning(f"[{request_id}] Found empty meal plan (ID: {existing_plan.id}) for user {request.user.username}")
+                    existing_plan_id = existing_plan.id
+                    existing_plan.delete()
+                    logger.info(f"[{request_id}] Deleted empty meal plan (ID: {existing_plan_id})")
+                    # Continue to meal plan creation
+
+            # Use the existing create_meal_plan_for_user function
+            from meals.meal_plan_service import create_meal_plan_for_user
+            
+            logger.info(f"[{request_id}] Calling create_meal_plan_for_user for user {request.user.username}")
+            
+            # Wrap the meal plan creation in a try-except block to catch specific errors
+            try:
+                meal_plan = create_meal_plan_for_user(
+                    user=request.user,
+                    start_of_week=week_start_date,
+                    end_of_week=week_end_date,
+                    monday_date=week_start_date,
+                    request_id=request_id
+                )
+            except Exception as e:
+                logger.error(f"[{request_id}] Error in create_meal_plan_for_user: {str(e)}")
+                logger.error(f"[{request_id}] Full traceback: {traceback.format_exc()}")
+                
+                return standardize_response(
+                    status="error",
+                    message="Error creating meal plan",
+                    details={
+                        "error_details": str(e),
+                        "error_type": e.__class__.__name__,
+                        "suggestion": "Please try again later or contact support"
+                    },
+                    status_code=500
+                )
+
+            # Check if meal_plan is None (shouldn't happen with our updated function, but just in case)
+            if not meal_plan:
+                logger.error(f"[{request_id}] Failed to generate meal plan for user {request.user.username}")
+                
+                # Get user's postal code safely
+                user_postal_code = get_user_postal_code(request.user)
+                
+                # Get user's dietary preferences safely
+                dietary_preferences = get_user_dietary_preferences(request.user.id)
+                
+                # Get count of available meals for better context
+                available_meals_count = get_available_meals_count(request.user.id)
+
+                return standardize_response(
+                    status="error",
+                    message="Could not generate meal plan. No suitable meals available.",
+                    details={
+                        "user_postal_code": user_postal_code,
+                        "dietary_preferences": dietary_preferences,
+                        "available_meals_count": available_meals_count,
+                        "possible_reasons": [
+                            "No chefs are currently serving your area",
+                            "No meals match your dietary preferences",
+                            "No meals are available for the selected dates"
+                        ],
+                        "suggestion": "Try adjusting your dietary preferences or choosing a different week"
+                    },
+                    status_code=400
+                )
+
+            # Get the meal plan meals
+            meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan).select_related('meal')
+            meals_added = meal_plan_meals.count()
+            
+            # Check if we actually added any meals
+            if meals_added == 0:
+                logger.warning(f"[{request_id}] Created meal plan (ID: {meal_plan.id}) but no meals were added")
+                meal_plan.delete()
+                return standardize_response(
+                    status="error",
+                    message="Could not generate meal plan. No suitable meals available.",
+                    details={
+                        "reason": "Failed to add any meals to the plan",
+                        "suggestion": "Try again later or contact support"
+                    },
+                    status_code=400
+                )
+
+            # Verify day names match dates for each meal
+            day_mismatches = []
+            for mpm in meal_plan_meals:
+                expected_day = mpm.meal_date.strftime("%A")
+                if mpm.day != expected_day:
+                    day_mismatches.append({
+                        "meal_id": mpm.meal.id,
+                        "meal_name": mpm.meal.name,
+                        "stored_day": mpm.day,
+                        "expected_day": expected_day,
+                        "date": mpm.meal_date.strftime("%Y-%m-%d")
+                    })
+            
+            if day_mismatches:
+                logger.warning(f"[{request_id}] Found {len(day_mismatches)} day mismatches in meal plan {meal_plan.id}")
+                for mismatch in day_mismatches:
+                    logger.warning(f"[{request_id}] Day mismatch: {mismatch}")
+            
+            logger.info(f"[{request_id}] Successfully generated meal plan (ID: {meal_plan.id}) with {meals_added} meals")
+            
+            # Return the generated meal plan
+            return standardize_response(
+                status="success",
+                message="Meal plan generated successfully",
+                details={
+                    "meals_added": meals_added,
+                    "week_start_date": meal_plan.week_start_date.strftime('%Y-%m-%d'),
+                    "week_end_date": meal_plan.week_end_date.strftime('%Y-%m-%d'),
+                    "used_pantry_items": any(hasattr(mpm, 'pantry_usage') and mpm.pantry_usage.exists() for mpm in meal_plan_meals),
+                    "day_mismatches": day_mismatches if day_mismatches else None
+                },
+                meal_plan=meal_plan,
+                status_code=201
+            )
+
+    except Exception as e:
+        logger.error(f"[{request_id}] Error generating meal plan: {str(e)}")
+        logger.error(f"[{request_id}] Full traceback: {traceback.format_exc()}")
+        return standardize_response(
+            status="error",
+            message="An error occurred while generating the meal plan",
+            details={
+                "error_details": str(e),
+                "error_type": e.__class__.__name__,
+                "suggestion": "Please try again later or contact support"
+            },
+            status_code=500
+        )
+
+def standardize_response(status, message, details=None, status_code=200, meal_plan=None):
+    """
+    Helper function to standardize API responses
+    
+    Parameters:
+    - status: A string indicating the status of the operation (e.g., "success", "error", "existing_plan")
+    - message: A user-friendly message describing the result
+    - details: Optional dictionary with additional context about the operation
+    - status_code: HTTP status code to return
+    - meal_plan: Optional MealPlan object to serialize and include in the response
+    
+    Returns:
+    - A Response object with a standardized structure
+    """
+    response = {
+        "status": status,
+        "message": message
+    }
+    
+    if details:
+        response["details"] = details
+        
+    if meal_plan:
+        serializer = MealPlanSerializer(meal_plan)
+        response["meal_plan"] = serializer.data
+        
+    return Response(response, status=status_code)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def api_get_user_profile(request):
+    """
+    API endpoint to retrieve the authenticated user's profile information
+    including properly serialized dietary preferences.
+    """
+    if request.method == 'GET':
+        # Serialize the current user with the UserSerializer
+        serializer = UserSerializer(request.user)
+        return Response(serializer.data, status=200)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def api_get_meal_by_id(request, meal_id):
+    """
+    API endpoint to retrieve details for a specific meal,
+    including properly serialized dietary preferences.
+    """
+    try:
+        meal = get_object_or_404(Meal, id=meal_id)
+        serializer = MealSerializer(meal)
+        return Response(serializer.data, status=200)
+    except Exception as e:
+        logger.error(f"Error fetching meal details: {str(e)}")
+        return Response({"error": str(e)}, status=500)

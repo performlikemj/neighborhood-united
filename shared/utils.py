@@ -2306,3 +2306,4 @@ def get_date(request):
 def sanitize_query(query):
     # Remove delimiters from the user input before executing the query
     return query.replace("####", "")
+

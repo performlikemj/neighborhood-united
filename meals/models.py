@@ -9,6 +9,7 @@ from datetime import date, timedelta
 from django.utils import timezone
 from custom_auth.models import CustomUser, Address
 from django.contrib.contenttypes.fields import GenericRelation
+from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import migrations
 from pgvector.django import VectorExtension
 from pgvector.django import VectorField
@@ -681,3 +682,267 @@ class SystemUpdate(models.Model):
     
     class Meta:
         ordering = ['-sent_at']
+
+class ChefMealEvent(models.Model):
+    """
+    Represents a meal offering by a chef on a specific date and time.
+    Supports dynamic pricing based on the number of orders.
+    """
+    STATUS_CHOICES = [
+        ('scheduled', 'Scheduled'),
+        ('open', 'Open for Orders'),
+        ('closed', 'Closed for Orders'),
+        ('in_progress', 'In Progress'),
+        ('completed', 'Completed'),
+        ('cancelled', 'Cancelled'),
+    ]
+    
+    chef = models.ForeignKey(Chef, on_delete=models.CASCADE, related_name='meal_events')
+    meal = models.ForeignKey(Meal, on_delete=models.CASCADE, related_name='events')
+    event_date = models.DateField()
+    event_time = models.TimeField()
+    order_cutoff_time = models.DateTimeField(help_text="Deadline for placing orders")
+    
+    max_orders = models.PositiveIntegerField(help_text="Maximum number of orders the chef can fulfill")
+    min_orders = models.PositiveIntegerField(default=1, help_text="Minimum number of orders needed to proceed")
+    
+    base_price = models.DecimalField(max_digits=6, decimal_places=2, 
+                                   help_text="Starting price per order")
+    current_price = models.DecimalField(max_digits=6, decimal_places=2, 
+                                      help_text="Current price based on number of orders")
+    min_price = models.DecimalField(max_digits=6, decimal_places=2, 
+                                  help_text="Minimum price per order")
+    
+    orders_count = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='scheduled')
+    
+    description = models.TextField(blank=True)
+    special_instructions = models.TextField(blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['event_date', 'event_time']
+        unique_together = ('chef', 'meal', 'event_date', 'event_time')
+    
+    def __str__(self):
+        return f"{self.meal.name} by {self.chef.user.username} on {self.event_date} at {self.event_time}"
+    
+    def save(self, *args, **kwargs):
+        # If this is a new event, set the current price to the base price
+        if not self.pk:
+            self.current_price = self.base_price
+        super().save(*args, **kwargs)
+    
+    def update_price(self):
+        """
+        Update the price based on the number of orders.
+        As more orders come in, the price decreases until it reaches min_price.
+        """
+        if self.orders_count <= 1:
+            return
+        
+        # Simple pricing algorithm:
+        # For each order after the first one, reduce price by 5% of the difference 
+        # between base_price and min_price, until min_price is reached
+        price_range = float(self.base_price) - float(self.min_price)
+        discount_per_order = price_range * 0.05  # 5% of the range
+        
+        # Calculate the discount based on number of orders
+        total_discount = discount_per_order * (self.orders_count - 1)
+        
+        # Don't go below min_price
+        new_price = max(float(self.base_price) - total_discount, float(self.min_price))
+        
+        # Save the new price
+        self.current_price = new_price
+        self.save(update_fields=['current_price'])
+        
+        # Update pricing for all existing orders
+        from decimal import Decimal
+        ChefMealOrder.objects.filter(meal_event=self, status__in=['placed', 'confirmed']).update(
+            price_paid=Decimal(new_price)
+        )
+    
+    def is_available_for_orders(self):
+        """Check if the event is open for new orders"""
+        now = timezone.now()
+        return (
+            self.status in ['scheduled', 'open'] and 
+            now < self.order_cutoff_time and
+            self.orders_count < self.max_orders
+        )
+    
+    def cancel(self):
+        """Cancel the event and all associated orders"""
+        self.status = 'cancelled'
+        self.save()
+        # Cancel all orders and initiate refunds
+        self.orders.filter(status__in=['placed', 'confirmed']).update(status='cancelled')
+        # Refund logic would be implemented separately
+
+class ChefMealOrder(models.Model):
+    """
+    Represents a customer's order for a specific ChefMealEvent.
+    Linked to the main Order model for unified order history.
+    """
+    STATUS_CHOICES = [
+        ('placed', 'Placed'),
+        ('confirmed', 'Confirmed'),
+        ('cancelled', 'Cancelled'),
+        ('refunded', 'Refunded'),
+        ('completed', 'Completed')
+    ]
+    
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='chef_meal_orders')
+    meal_event = models.ForeignKey(ChefMealEvent, on_delete=models.CASCADE, related_name='orders')
+    customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    
+    quantity = models.PositiveIntegerField(default=1)
+    price_paid = models.DecimalField(max_digits=6, decimal_places=2)
+    
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='placed')
+    
+    # Stripe payment details
+    stripe_payment_intent_id = models.CharField(max_length=255, blank=True, null=True)
+    stripe_refund_id = models.CharField(max_length=255, blank=True, null=True)
+    
+    special_requests = models.TextField(blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"Order #{self.id} - {self.meal_event.meal.name} by {self.customer.username}"
+    
+    def save(self, *args, **kwargs):
+        # If this is a new order, set the price to the event's current price
+        if not self.pk:
+            self.price_paid = self.meal_event.current_price
+            
+            # Increment the orders count on the event
+            self.meal_event.orders_count += self.quantity
+            self.meal_event.save()
+            
+            # Update the price for all orders
+            self.meal_event.update_price()
+            
+        super().save(*args, **kwargs)
+    
+    def cancel(self):
+        """Cancel the order and update the event's orders count"""
+        if self.status in ['placed', 'confirmed']:
+            previous_status = self.status
+            self.status = 'cancelled'
+            self.save()
+            
+            # Decrement the orders count on the event
+            self.meal_event.orders_count -= self.quantity
+            self.meal_event.save()
+            
+            # Update pricing only if this wasn't a brand new order
+            if previous_status == 'confirmed':
+                self.meal_event.update_price()
+            
+            # Refund logic would be implemented separately
+            return True
+        return False
+
+class ChefMealReview(models.Model):
+    """Reviews for chef meals with ratings and comments"""
+    chef_meal_order = models.OneToOneField(ChefMealOrder, on_delete=models.CASCADE, related_name='review')
+    customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    chef = models.ForeignKey(Chef, on_delete=models.CASCADE, related_name='meal_reviews')
+    meal_event = models.ForeignKey(ChefMealEvent, on_delete=models.CASCADE, related_name='reviews')
+    
+    rating = models.PositiveSmallIntegerField(
+        validators=[
+            MinValueValidator(1),
+            MaxValueValidator(5)
+        ]
+    )
+    comment = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = ('customer', 'meal_event')
+    
+    def __str__(self):
+        return f"Review by {self.customer.username} for {self.meal_event.meal.name}"
+
+# StripeConnect model to store chef's Stripe connection information
+class StripeConnectAccount(models.Model):
+    chef = models.OneToOneField(Chef, on_delete=models.CASCADE, related_name='stripe_account')
+    stripe_account_id = models.CharField(max_length=255)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"Stripe account for {self.chef.user.username}"
+
+# Add platform fee configuration
+class PlatformFeeConfig(models.Model):
+    """Configures the platform fee percentage for chef meal orders"""
+    fee_percentage = models.DecimalField(
+        max_digits=5, 
+        decimal_places=2,
+        validators=[
+            MinValueValidator(0),
+            MaxValueValidator(100)
+        ],
+        help_text="Platform fee percentage (0-100)"
+    )
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    def __str__(self):
+        return f"Platform Fee: {self.fee_percentage}%"
+    
+    def save(self, *args, **kwargs):
+        # Ensure only one active config exists
+        if self.active:
+            PlatformFeeConfig.objects.filter(active=True).exclude(pk=self.pk).update(active=False)
+        super().save(*args, **kwargs)
+    
+    @classmethod
+    def get_active_fee(cls):
+        """Get the currently active fee percentage"""
+        try:
+            return cls.objects.filter(active=True).first().fee_percentage
+        except AttributeError:
+            # Return a default value if no active fee config exists
+            return 10  # 10% default
+
+# Payment audit log
+class PaymentLog(models.Model):
+    """Logs all payment-related actions for auditing"""
+    ACTION_CHOICES = [
+        ('charge', 'Charge'),
+        ('refund', 'Refund'),
+        ('payout', 'Payout to Chef'),
+        ('adjustment', 'Manual Adjustment'),
+    ]
+    
+    order = models.ForeignKey(Order, null=True, blank=True, on_delete=models.SET_NULL, related_name='payment_logs')
+    chef_meal_order = models.ForeignKey(ChefMealOrder, null=True, blank=True, on_delete=models.SET_NULL, related_name='payment_logs')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    chef = models.ForeignKey(Chef, null=True, blank=True, on_delete=models.SET_NULL)
+    
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    stripe_id = models.CharField(max_length=255, blank=True)
+    
+    status = models.CharField(max_length=50)
+    details = models.JSONField(default=dict, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    def __str__(self):
+        action_entity = f"Order #{self.order.id}" if self.order else f"ChefMealOrder #{self.chef_meal_order.id}" if self.chef_meal_order else "Unknown"
+        return f"{self.action} - {action_entity} - {self.amount}"

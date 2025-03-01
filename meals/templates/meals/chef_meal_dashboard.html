@@ -1,0 +1,149 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Chef Meal Dashboard{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row mb-4">
+        <div class="col-md-8">
+            <h1>Chef Meal Dashboard</h1>
+            <p class="lead">Manage your scheduled meal events and track your orders</p>
+        </div>
+        <div class="col-md-4 text-right">
+            <a href="{% url 'meals:create_chef_meal_event' %}" class="btn btn-primary">
+                <i class="fas fa-plus"></i> Create New Meal Event
+            </a>
+        </div>
+    </div>
+
+    {% if messages %}
+    <div class="row">
+        <div class="col-12">
+            {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Upcoming Events Section -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h3 class="card-title mb-0">Upcoming Meal Events</h3>
+                </div>
+                <div class="card-body">
+                    {% if upcoming_events %}
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Meal</th>
+                                    <th>Date & Time</th>
+                                    <th>Price</th>
+                                    <th>Orders</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for event in upcoming_events %}
+                                <tr>
+                                    <td>{{ event.meal.name }}</td>
+                                    <td>{{ event.event_date|date:"M d, Y" }} at {{ event.event_time|time:"g:i A" }}</td>
+                                    <td>
+                                        ${{ event.current_price }} 
+                                        {% if event.current_price < event.base_price %}
+                                        <span class="badge badge-success">Reduced</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ event.orders_count }} / {{ event.max_orders }}</td>
+                                    <td><span class="badge badge-{{ event.status|lower }}">{{ event.get_status_display }}</span></td>
+                                    <td>
+                                        <div class="btn-group" role="group">
+                                            <a href="{% url 'meals:edit_chef_meal_event' event.id %}" class="btn btn-sm btn-outline-primary">
+                                                <i class="fas fa-edit"></i> Edit
+                                            </a>
+                                            {% if event.status != 'cancelled' and event.event_date >= today %}
+                                            <a href="{% url 'meals:cancel_chef_meal_event' event.id %}" class="btn btn-sm btn-outline-danger"
+                                               onclick="return confirm('Are you sure you want to cancel this event? All customers will be notified and refunded.')">
+                                                <i class="fas fa-times"></i> Cancel
+                                            </a>
+                                            {% endif %}
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="alert alert-info">
+                        You don't have any upcoming meal events. 
+                        <a href="{% url 'meals:create_chef_meal_event' %}">Create your first meal event</a> to get started.
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Past Events Section -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-secondary text-white">
+                    <h3 class="card-title mb-0">Past Meal Events</h3>
+                </div>
+                <div class="card-body">
+                    {% if past_events %}
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Meal</th>
+                                    <th>Date & Time</th>
+                                    <th>Price</th>
+                                    <th>Orders</th>
+                                    <th>Status</th>
+                                    <th>Revenue</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for event in past_events %}
+                                <tr>
+                                    <td>{{ event.meal.name }}</td>
+                                    <td>{{ event.event_date|date:"M d, Y" }} at {{ event.event_time|time:"g:i A" }}</td>
+                                    <td>${{ event.current_price }}</td>
+                                    <td>{{ event.orders_count }} / {{ event.max_orders }}</td>
+                                    <td><span class="badge badge-{{ event.status|lower }}">{{ event.get_status_display }}</span></td>
+                                    <td>${{ event.revenue }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="alert alert-info">
+                        You don't have any past meal events.
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Add any JavaScript functionality here
+</script>
+{% endblock %} 

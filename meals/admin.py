@@ -2,7 +2,8 @@ from django.contrib import admin
 from django.contrib.contenttypes.admin import GenericTabularInline
 from .models import (
     MealPlan, MealPlanMeal, Dish, Ingredient, Order, Cart, MealType, Meal, OrderMeal, 
-    ShoppingList, Instruction, MealPlanInstruction, PantryItem, MealPlanMealPantryUsage, SystemUpdate
+    ShoppingList, Instruction, MealPlanInstruction, PantryItem, MealPlanMealPantryUsage, SystemUpdate,
+    ChefMealEvent, ChefMealOrder, ChefMealReview, StripeConnectAccount, PlatformFeeConfig, PaymentLog
 )
 from reviews.models import Review
 from django.template.response import TemplateResponse
@@ -191,6 +192,104 @@ class SystemUpdateAdmin(admin.ModelAdmin):
                 
         return TemplateResponse(request, "admin/system_update_form.html", {})
 
+class ChefMealOrderInline(admin.TabularInline):
+    model = ChefMealOrder
+    extra = 0
+    fields = ('customer', 'quantity', 'price_paid', 'status', 'created_at')
+    readonly_fields = ('customer', 'price_paid', 'created_at')
+    can_delete = False
+    show_change_link = True
+
+class ChefMealReviewInline(admin.TabularInline):
+    model = ChefMealReview
+    extra = 0
+    fields = ('customer', 'rating', 'comment', 'created_at')
+    readonly_fields = ('created_at',)
+    show_change_link = True
+    can_delete = False
+
+class ChefMealEventAdmin(admin.ModelAdmin):
+    list_display = ('meal', 'chef', 'event_date', 'event_time', 'status', 'current_price', 'base_price', 'orders_count', 'max_orders')
+    list_filter = ('status', 'event_date', 'chef')
+    search_fields = ('meal__name', 'chef__user__username', 'description')
+    readonly_fields = ('orders_count', 'current_price', 'created_at', 'updated_at')
+    inlines = [ChefMealOrderInline]
+    date_hierarchy = 'event_date'
+    
+    fieldsets = (
+        (None, {
+            'fields': ('chef', 'meal', 'status', 'description')
+        }),
+        ('Scheduling', {
+            'fields': ('event_date', 'event_time', 'order_cutoff_time')
+        }),
+        ('Pricing', {
+            'fields': ('base_price', 'current_price', 'min_price')
+        }),
+        ('Capacity', {
+            'fields': ('max_orders', 'min_orders', 'orders_count')
+        }),
+        ('Additional Information', {
+            'fields': ('special_instructions', 'created_at', 'updated_at')
+        })
+    )
+
+class ChefMealOrderAdmin(admin.ModelAdmin):
+    list_display = ('id', 'customer', 'meal_event', 'quantity', 'price_paid', 'status', 'created_at')
+    list_filter = ('status', 'created_at', 'meal_event__chef')
+    search_fields = ('customer__username', 'meal_event__meal__name', 'meal_event__chef__user__username')
+    readonly_fields = ('created_at', 'updated_at', 'stripe_payment_intent_id', 'stripe_refund_id')
+    
+    fieldsets = (
+        (None, {
+            'fields': ('order', 'meal_event', 'customer', 'quantity', 'price_paid', 'status')
+        }),
+        ('Payment Information', {
+            'fields': ('stripe_payment_intent_id', 'stripe_refund_id')
+        }),
+        ('Additional Information', {
+            'fields': ('special_requests', 'created_at', 'updated_at')
+        })
+    )
+
+class ChefMealReviewAdmin(admin.ModelAdmin):
+    list_display = ('customer', 'chef', 'meal_event', 'rating', 'created_at')
+    list_filter = ('rating', 'created_at', 'chef')
+    search_fields = ('customer__username', 'chef__user__username', 'meal_event__meal__name', 'comment')
+    readonly_fields = ('created_at',)
+
+class StripeConnectAccountAdmin(admin.ModelAdmin):
+    list_display = ('chef', 'stripe_account_id', 'is_active', 'created_at')
+    list_filter = ('is_active', 'created_at')
+    search_fields = ('chef__user__username', 'stripe_account_id')
+    readonly_fields = ('created_at', 'updated_at')
+
+class PlatformFeeConfigAdmin(admin.ModelAdmin):
+    list_display = ('fee_percentage', 'active', 'created_at')
+    list_filter = ('active', 'created_at')
+    readonly_fields = ('created_at', 'updated_at')
+
+class PaymentLogAdmin(admin.ModelAdmin):
+    list_display = ('action', 'order', 'chef_meal_order', 'amount', 'status', 'created_at')
+    list_filter = ('action', 'status', 'created_at')
+    search_fields = ('order__id', 'chef_meal_order__id', 'user__username', 'chef__user__username', 'stripe_id')
+    readonly_fields = ('created_at',)
+    
+    fieldsets = (
+        (None, {
+            'fields': ('action', 'amount', 'status')
+        }),
+        ('Related Entities', {
+            'fields': ('order', 'chef_meal_order', 'user', 'chef')
+        }),
+        ('Payment Details', {
+            'fields': ('stripe_id', 'details')
+        }),
+        ('Timestamp', {
+            'fields': ('created_at',)
+        })
+    )
+
 admin.site.register(MealPlan, MealPlanAdmin)
 admin.site.register(Dish, DishAdmin)
 admin.site.register(Ingredient, IngredientAdmin)
@@ -206,3 +305,9 @@ admin.site.register(MealPlanInstruction, MealPlanInstructionAdmin)
 admin.site.register(PantryItem, PantryItemAdmin)
 admin.site.register(MealPlanMealPantryUsage, MealPlanMealPantryUsageAdmin)
 admin.site.register(SystemUpdate, SystemUpdateAdmin)
+admin.site.register(ChefMealEvent, ChefMealEventAdmin)
+admin.site.register(ChefMealOrder, ChefMealOrderAdmin)
+admin.site.register(ChefMealReview, ChefMealReviewAdmin)
+admin.site.register(StripeConnectAccount, StripeConnectAccountAdmin)
+admin.site.register(PlatformFeeConfig, PlatformFeeConfigAdmin)
+admin.site.register(PaymentLog, PaymentLogAdmin)

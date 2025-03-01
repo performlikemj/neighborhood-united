@@ -5,9 +5,17 @@ from django.shortcuts import get_object_or_404, render, redirect
 from django.contrib.auth.decorators import login_required, user_passes_test
 from datetime import date, datetime, timedelta
 from .forms import DishForm, IngredientForm, MealForm
-from .models import Meal, Cart, Dish, Ingredient, Order, OrderMeal, MealPlan, MealPlanMeal, Instruction, PantryItem
+from .models import (
+    Meal, Cart, Dish, Ingredient, Order, OrderMeal, MealPlan, MealPlanMeal, Instruction, PantryItem, 
+    ChefMealEvent, ChefMealOrder, ChefMealReview, PostalCode, ChefPostalCode, StripeConnectAccount, 
+    PlatformFeeConfig, PaymentLog
+)
 from django.http import JsonResponse, HttpResponseBadRequest
-from .serializers import MealPlanSerializer, MealSerializer, PantryItemSerializer, UserSerializer
+from .serializers import (
+    MealPlanSerializer, MealSerializer, PantryItemSerializer, UserSerializer, ChefMealEventSerializer, 
+    ChefMealEventCreateSerializer, ChefMealOrderSerializer, ChefMealOrderCreateSerializer, 
+    ChefMealReviewSerializer, StripeConnectAccountSerializer
+)
 from chefs.models import Chef
 from shared.utils import day_to_offset
 from django.conf import settings
@@ -24,20 +32,22 @@ from custom_auth.models import UserRole
 import json
 from django.utils import timezone
 from django.contrib import messages
-import stripe
-from openai import OpenAI
 from django.views.decorators.http import require_http_methods
-from customer_dashboard.models import GoalTracking, ChatThread, UserHealthMetrics, CalorieIntake
-from rest_framework.decorators import api_view, permission_classes
+from django.db.models import Q, F, Sum, Avg
+from django.core.paginator import Paginator
+from django.utils import timezone
+from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework import status, viewsets
 from rest_framework.pagination import PageNumberPagination
-from customer_dashboard.permissions import IsCustomer
-from django.http import JsonResponse
-from django.http import HttpResponseForbidden
-from django.db.models import Q
+from rest_framework.views import APIView
+import stripe
+import json
+import decimal
+from openai import OpenAI
+from gptcache import cache
 from django.db import transaction
 import uuid
-from django.core.cache import cache
 
 
 logger = logging.getLogger(__name__)
@@ -182,304 +192,7 @@ def api_create_ingredient(request):
             'message': "Ingredient created successfully"
         })
 
-@login_required
-def add_to_cart(request, meal_id):
-    meal = get_object_or_404(Meal, pk=meal_id)
-    user_home_postal_code = request.user.address.postalcode
 
-    if meal.chef.address.postalcode != user_home_postal_code:
-        return HttpResponseBadRequest('Chef does not serve your area.')
-
-    if not request.user.email_confirmed:
-        return redirect('shared:verify_email')
-    
-    if not meal.is_available():
-        return HttpResponseBadRequest('This meal is no longer available.')
-
-    cart, created = Cart.objects.get_or_create(customer=request.user)
-    cart_item, created = CartItem.objects.get_or_create(cart=cart, meal=meal, defaults={'quantity': 1})
-    if not created:
-        cart_item.save()
-    cart.save()
-
-    return redirect('meals:cart_view')
-
-
-
-@login_required
-def cart_view(request):
-    cart = get_object_or_404(Cart, customer=request.user)
-    total_price = sum(meal.price for meal in cart.meals.all())
-
-    breadcrumbs = [
-        {'url': reverse('meals:cart_view'), 'name': 'Cart'},
-    ]
-
-    context = {
-        'cart': cart,
-        'total_price': total_price,
-        'breadcrumbs': breadcrumbs,
-    }
-
-    return render(request, 'meals/cart_view.html', context)
-
-@login_required
-def checkout_view(request):
-    cart = get_object_or_404(Cart, customer=request.user)
-    if request.method == 'POST':
-        delivery_method = request.POST.get('delivery_method')
-        default_address = Address.objects.filter(user=request.user).first()
-
-        # Create the Order instance and set the status and delivery_method
-        order = Order.objects.create(
-            customer=request.user,
-            status='Placed',
-            delivery_method=delivery_method,
-            address=default_address if delivery_method == 'Delivery' else None,
-            meal_plan=cart.meal_plan  # associate the MealPlan with the Order
-        )
-        # Transfer items from cart to the order
-        for meal in cart.meals.all():
-            # Optional: Update inventory, decrement the available quantity
-            # meal.available_quantity -= 1
-            # meal.save()
-            OrderMeal.objects.create(order=order, meal=meal, quantity=1)
-
-        # Empty the cart
-        cart.meals.clear()
-        cart.save()
-
-        return redirect('meals:order_confirmation')
-
-    return render(request, 'meals/checkout.html', {'cart': cart})
-
-
-@login_required
-def order_confirmation(request):
-    # Fetch the latest order placed by the user
-    latest_order = Order.objects.filter(customer=request.user).latest('id')
-    
-    context = {
-        'order': latest_order,
-    }
-    
-    return render(request, 'meals/order_confirmation.html', context)
-
-
-
-@login_required
-def order_details(request, order_id):
-    order = get_object_or_404(Order, id=order_id, customer=request.user)
-
-    # Ensure the order belongs to the requesting user
-    if order.customer != request.user:
-        return HttpResponseForbidden("You do not have permission to view this order.")
-
-    # Get the related MealPlanMeals if the order has an associated MealPlan
-    meal_plan_meals = None
-    if order.meal_plan:
-        meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=order.meal_plan).order_by('day', 'meal')
-
-    context = {
-        'order': order,
-        'meal_plan_meals': meal_plan_meals,
-    }
-
-    return render(request, 'meals/order_details.html', context)
-
-
-def dish_list(request):
-    chefs = Chef.objects.all()
-    # Here you are getting all the dishes, not just the ones associated with the chefs
-    dishes = Dish.objects.all()
-    breadcrumbs = [
-        {'url': reverse('meals:dish_list'), 'name': 'Dishes'},
-    ]
-
-    context = {
-        'chefs': chefs,
-        'dishes': dishes,
-        'breadcrumbs': breadcrumbs,
-    }
-    return render(request, 'meals/dish_list.html', context)
-
-
-def dish_detail(request, dish_id):
-    dish = get_object_or_404(Dish, id=dish_id)
-
-    breadcrumbs = [
-        {'url': reverse('meals:dish_list'), 'name': 'Dishes'},
-        {'url': reverse('meals:dish_detail', args=[dish_id]), 'name': dish.name},
-    ]
-
-    context = {
-        'dish': dish,
-        'chef': dish.chef,  
-        'breadcrumbs': breadcrumbs,
-    }
-    return render(request, 'meals/dish_detail.html', context)
-
-
-@user_passes_test(is_chef, login_url='custom_auth:login')
-def create_dish(request):
-    if request.method == 'POST':
-        form = DishForm(request.POST)
-        if form.is_valid():
-            dish = form.save(commit=False)
-            dish.chef = request.user.chef
-            dish.save()
-            form.save_m2m()
-            return redirect('meals:dish_detail', dish_id=dish.id)
-
-    else:
-        form = DishForm()
-    context = {'form': form}
-    return render(request, 'meals/create_dish.html', context)
-
-@user_passes_test(is_chef, login_url='custom_auth:login')
-def update_dish(request, dish_id):
-    dish = get_object_or_404(Dish, id=dish_id)
-
-    # Ensure the dish belongs to the authenticated chef
-    if dish.chef != request.user.chef:
-        return redirect('error_page')
-
-    if request.method == 'POST':
-        form = DishForm(request.POST, instance=dish)
-        if form.is_valid():
-            form.save()
-            return redirect('meals:dish_detail', dish_id=dish.id)
-    else:
-        form = DishForm(instance=dish)
-
-    context = {'form': form, 'dish': dish}
-    return render(request, 'meals/update_dish.html', context)
-
-
-@user_passes_test(is_chef, login_url='custom_auth:login')
-def create_ingredient(request):
-    if request.method == 'POST':
-        # I don't believe this does anything except add to template, because functionality is in api_create_ingredient
-        form = IngredientForm(request.POST)
-        if form.is_valid():
-            ingredient = form.save(commit=False)
-            spoonacular_id = form.cleaned_data.get('spoonacular_id')
-            if spoonacular_id:
-                # Check if ingredient already exists for this chef
-                chef = request.user.chef
-                if chef.ingredients.filter(spoonacular_id=spoonacular_id).exists():
-                    # Ingredient already exists, no need to add it again
-                    return JsonResponse({"message": "Ingredient already added"}, status=400)
-
-                ingredient.spoonacular_id = spoonacular_id
-                ingredient.chef = chef
-                try:
-                    ingredient.save()
-                except Exception as e:
-                    return JsonResponse({"message": str(e)}, status=400)
-                return JsonResponse({"message": "Ingredient created successfully"}, status=200)
-            else:
-                return JsonResponse({"message": "No Spoonacular ID found"}, status=400)
-    else:
-        form = IngredientForm()
-    ingredients = Ingredient.objects.filter(chef=request.user.chef)
-    context = {'form': form, 'ingredients': ingredients}
-    return render(request, 'meals/create_ingredient.html', context)
-
-
-def chef_weekly_meal(request, chef_id):
-    chef = get_object_or_404(Chef, id=chef_id)
-    # Calculate the current week's date range
-    week_shift = max(int(request.user.week_shift), 0)
-    today = timezone.now().date() + timedelta(weeks=week_shift)
-    meals = chef.meals.filter(start_date__gte=today).order_by('start_date')
-
-    context = {
-        'chef': chef,
-        'meals': meals,
-    }
-    return render(request, 'meals/chef_weekly_meal.html', context)
-
-def meal_detail(request, meal_id):
-    meal = get_object_or_404(Meal, id=meal_id)
-    summary = meal.review_summary
-
-    context = {
-        'meal': meal,
-        'summary': summary,
-    }
-    return render(request, 'meals/meal_detail.html', context)
-
-
-def get_meal_details(request):
-    meal_id = request.GET.get('meal_id')
-    if not meal_id:
-        return JsonResponse({"error": "Meal ID is required."}, status=400)
-
-    meal = get_object_or_404(Meal, id=meal_id)
-
-    meal_details = {
-        "meal_id": meal.id,
-        "name": meal.name,
-        "chef": meal.chef.user.username,
-        "start_date": meal.start_date.strftime('%Y-%m-%d'),
-        "is_available": meal.is_available(request.user.week_shift), 
-        "dishes": [dish.name for dish in meal.dishes.all()]
-    }
-
-    # Optional: Find the day of the meal in the meal plan, if needed
-    meal_plan_meal = MealPlanMeal.objects.filter(meal=meal).first()
-    if meal_plan_meal:
-        meal_details["day"] = meal_plan_meal.day
-
-    return JsonResponse(meal_details)
-
-def meal_list(request):
-    meals = Meal.objects.all()
-
-    context = {
-        'meals': meals,
-    }
-    return render(request, 'meals/meal_list.html', context)
-
-
-def meals_with_dish(request, dish_id):
-    meals = Meal.objects.filter(dishes__id=dish_id)
-
-    context = {
-        'meals': meals,
-    }
-    return render(request, 'meals/meals_with_dish.html', context)
-
-
-@login_required
-def view_past_orders(request):
-    past_orders = Order.objects.filter(customer=request.user).order_by('-order_date')
-    
-    return render(request, 'meals/view_past_orders.html', {'past_orders': past_orders})
-
-
-@login_required
-def create_meal_plan(request):
-    pass
-    # if request.method == 'POST':
-    #     user = request.user
-    #     week_start_date = request.POST.get('week_start_date')
-    #     week_end_date = request.POST.get('week_end_date')
-    #     selected_meals = request.POST.getlist('selected_meals')  # Assuming this is a list of meal ids
-
-    #     # Create MealPlan
-    #     meal_plan, created = MealPlan.objects.get_or_create(user=user, week_start_date=week_start_date, week_end_date=week_end_date)
-
-    #     # Add Meals to MealPlan
-    #     for meal_id in selected_meals:
-    #         meal = get_object_or_404(Meal, id=meal_id)
-    #         day = request.POST.get(f'day_for_meal_{meal_id}')  # Assuming you pass the day for each meal
-    #         MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day)
-
-    #     return redirect('meal_plan_confirmation_view')  # Replace with your confirmation view
-
-    # return HttpResponseBadRequest('Invalid Method')
 
 
 @login_required
@@ -658,60 +371,7 @@ def meal_plan_approval(request):
     # Render the meal plan approval page
     return render(request, 'meals/approve_meal_plan.html', {'meal_plan': meal_plan})
 
-@login_required
-def process_payment(request, order_id):
-    # Get the order object
-    order = get_object_or_404(Order, id=order_id, customer=request.user)
 
-    if request.method == 'POST':
-        try:
-            charge = stripe.Charge.create(
-                amount=int(order.total_price() * 100),  # amount in cents
-                currency='usd',
-                description=f'Order {order.id}',
-                source=request.POST['stripeToken']
-            )
-            if charge.paid:
-                order.is_paid = True
-                order.status = 'Completed'
-                order.save()
-
-            # After the order is marked as completed, process each meal in the order
-            for order_meal in order.ordermeal_set.all():
-                meal = order_meal.meal
-                # Assuming meal_name, meal_description, and portion_size are attributes of Meal
-                CalorieIntake.objects.create(
-                    user=request.user,
-                    meal_name=meal.name,  # Replace with actual attribute names
-                    meal_description=meal.description,
-                    portion_size="1",  # Ensure this info is available
-                    date_recorded=timezone.now()
-                )
-                messages.success(request, 'Your payment was successful.')
-                return redirect('meals:meal_plan_confirmed')
-            else:
-                messages.error(request, 'Your payment was unsuccessful. Please try again.')
-                return redirect('meals:process_payment', order_id=order.id)
-
-        except stripe.error.CardError as e:
-            # The card has been declined
-            body = e.json_body
-            err = body.get('error', {})
-            messages.error(request, f"An error occurred: {err.get('message')}")
-            return redirect('meals:process_payment', order_id=order.id)
-
-    # Render the payment page
-    return render(request, 'meals/payment.html', {'order': order, 'stripe_public_key': settings.STRIPE_PUBLIC_KEY})
-
-
-
-@login_required
-def meal_plan_confirmed(request):
-    # Get the most recent paid order for the user
-    order = Order.objects.filter(customer=request.user, is_paid=True).latest('order_date')
-
-    # Render a confirmation page after the meal plan has been paid for
-    return render(request, 'meals/meal_plan_confirmed.html', {'order': order})
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -719,7 +379,7 @@ def api_get_meal_plans(request):
     try:
         user = request.user
         week_start_date_str = request.query_params.get('week_start_date')
-        
+        print(f'Week Start Date: {week_start_date_str}')
         if week_start_date_str:
             week_start_date = datetime.strptime(week_start_date_str, '%Y-%m-%d').date()
             week_end_date = week_start_date + timedelta(days=6)
@@ -1548,7 +1208,7 @@ def api_generate_meal_plan(request):
 
         # Check if the date is in the past
         today = timezone.now().date()
-        if week_start_date < today:
+        if week_end_date < today:
             logger.warning(f"[{request_id}] Past date provided: {week_start_date}")
             return standardize_response(
                 status="error",
@@ -1581,7 +1241,8 @@ def api_generate_meal_plan(request):
                     
                     return standardize_response(
                         status="existing_plan",
-                        message=f"A meal plan already exists for this week ({status_message})",
+                        message=f"A meal plan already exists for this week ({status_message}). "
+                                "If you want a new plan, please delete all meals in the existing plan and generate a new one.",
                         details={
                             "meal_plan_id": existing_plan.id,
                             "is_approved": existing_plan.is_approved,
@@ -1781,3 +1442,1097 @@ def api_get_meal_by_id(request, meal_id):
     except Exception as e:
         logger.error(f"Error fetching meal details: {str(e)}")
         return Response({"error": str(e)}, status=500)
+
+# Chef Meal Event Views
+@login_required
+def chef_meal_dashboard(request):
+    """Dashboard for chefs to manage their meal events"""
+    try:
+        chef = Chef.objects.get(user=request.user)
+    except Chef.DoesNotExist:
+        messages.error(request, "You do not have a chef profile.")
+        return redirect('home')
+    
+    # Get all chef's meal events
+    upcoming_events = ChefMealEvent.objects.filter(
+        chef=chef,
+        event_date__gte=timezone.now().date()
+    ).order_by('event_date', 'event_time')
+    
+    past_events = ChefMealEvent.objects.filter(
+        chef=chef,
+        event_date__lt=timezone.now().date()
+    ).order_by('-event_date', '-event_time')[:10]  # Show only 10 past events
+    
+    context = {
+        'chef': chef,
+        'upcoming_events': upcoming_events,
+        'past_events': past_events,
+    }
+    return render(request, 'meals/chef_meal_dashboard.html', context)
+
+@login_required
+def create_chef_meal_event(request):
+    """Create a new meal event as a chef"""
+    try:
+        chef = Chef.objects.get(user=request.user)
+    except Chef.DoesNotExist:
+        messages.error(request, "You do not have a chef profile.")
+        return redirect('home')
+    
+    # Get meals that belong to this chef
+    chef_meals = Meal.objects.filter(chef=chef)
+    
+    if request.method == 'POST':
+        # Get form data
+        meal_id = request.POST.get('meal')
+        event_date = request.POST.get('event_date')
+        event_time = request.POST.get('event_time')
+        cutoff_time = request.POST.get('order_cutoff_time')
+        base_price = request.POST.get('base_price')
+        min_price = request.POST.get('min_price')
+        max_orders = request.POST.get('max_orders')
+        min_orders = request.POST.get('min_orders')
+        description = request.POST.get('description')
+        special_instructions = request.POST.get('special_instructions')
+        
+        try:
+            # Validate form data
+            meal = Meal.objects.get(id=meal_id, chef=chef)
+            
+            # Convert cutoff time string to datetime
+            cutoff_datetime = timezone.datetime.strptime(
+                f"{event_date} {cutoff_time}", 
+                "%Y-%m-%d %H:%M"
+            )
+            
+            # Create the ChefMealEvent
+            event = ChefMealEvent.objects.create(
+                chef=chef,
+                meal=meal,
+                event_date=event_date,
+                event_time=event_time,
+                order_cutoff_time=cutoff_datetime,
+                base_price=base_price,
+                current_price=base_price,  # Initially same as base price
+                min_price=min_price,
+                max_orders=max_orders,
+                min_orders=min_orders,
+                description=description,
+                special_instructions=special_instructions,
+                status='scheduled'
+            )
+            
+            messages.success(request, f"Meal event '{meal.name}' scheduled successfully for {event_date}.")
+            return redirect('chef_meal_dashboard')
+            
+        except (Meal.DoesNotExist, ValueError) as e:
+            messages.error(request, f"Error creating meal event: {str(e)}")
+    
+    context = {
+        'chef': chef,
+        'chef_meals': chef_meals,
+    }
+    return render(request, 'meals/create_chef_meal_event.html', context)
+
+@login_required
+def edit_chef_meal_event(request, event_id):
+    """Edit an existing meal event"""
+    try:
+        chef = Chef.objects.get(user=request.user)
+        event = ChefMealEvent.objects.get(id=event_id, chef=chef)
+    except Chef.DoesNotExist:
+        messages.error(request, "You do not have a chef profile.")
+        return redirect('home')
+    except ChefMealEvent.DoesNotExist:
+        messages.error(request, "Meal event not found.")
+        return redirect('chef_meal_dashboard')
+    
+    # Check if event can be edited (not too close to event date or has orders)
+    now = timezone.now()
+    cutoff = timezone.datetime.combine(event.event_date, event.event_time, tzinfo=timezone.get_current_timezone()) - timezone.timedelta(hours=24)
+    
+    if now > cutoff:
+        messages.error(request, "This event is too close to its scheduled date and cannot be edited.")
+        return redirect('chef_meal_dashboard')
+    
+    if event.orders_count > 0:
+        messages.warning(request, "This event has orders. Some fields cannot be modified.")
+    
+    if request.method == 'POST':
+        # Get form data
+        event_date = request.POST.get('event_date')
+        event_time = request.POST.get('event_time')
+        cutoff_time = request.POST.get('order_cutoff_time')
+        description = request.POST.get('description')
+        special_instructions = request.POST.get('special_instructions')
+        
+        # Fields that can only be edited if no orders exist
+        if event.orders_count == 0:
+            base_price = request.POST.get('base_price')
+            min_price = request.POST.get('min_price')
+            max_orders = request.POST.get('max_orders')
+            min_orders = request.POST.get('min_orders')
+            
+            event.base_price = base_price
+            event.min_price = min_price
+            event.max_orders = max_orders
+            event.min_orders = min_orders
+            
+            # If price is changing, update current price too
+            if float(base_price) != float(event.base_price):
+                event.current_price = base_price
+        
+        # Convert cutoff time string to datetime
+        cutoff_datetime = timezone.datetime.strptime(
+            f"{event_date} {cutoff_time}", 
+            "%Y-%m-%d %H:%M"
+        )
+        
+        # Update the event
+        event.event_date = event_date
+        event.event_time = event_time
+        event.order_cutoff_time = cutoff_datetime
+        event.description = description
+        event.special_instructions = special_instructions
+        event.save()
+        
+        messages.success(request, f"Meal event updated successfully.")
+        return redirect('chef_meal_dashboard')
+    
+    # Pre-populate the form
+    context = {
+        'chef': chef,
+        'event': event,
+        'has_orders': event.orders_count > 0,
+    }
+    return render(request, 'meals/edit_chef_meal_event.html', context)
+
+@login_required
+def cancel_chef_meal_event(request, event_id):
+    """Cancel a meal event and notify customers"""
+    try:
+        chef = Chef.objects.get(user=request.user)
+        event = ChefMealEvent.objects.get(id=event_id, chef=chef)
+    except Chef.DoesNotExist:
+        messages.error(request, "You do not have a chef profile.")
+        return redirect('home')
+    except ChefMealEvent.DoesNotExist:
+        messages.error(request, "Meal event not found.")
+        return redirect('chef_meal_dashboard')
+    
+    # Process cancellation
+    if request.method == 'POST':
+        reason = request.POST.get('cancellation_reason', '')
+        
+        # Cancel the event
+        event.status = 'cancelled'
+        event.save()
+        
+        # Cancel all orders and prepare for refunds
+        orders = ChefMealOrder.objects.filter(meal_event=event, status__in=['placed', 'confirmed'])
+        
+        # For now, just mark orders as cancelled
+        # In a real implementation, we would trigger Stripe refunds here
+        orders.update(status='cancelled')
+        
+        # Create payment logs for all cancelled orders
+        for order in orders:
+            PaymentLog.objects.create(
+                chef_meal_order=order,
+                user=order.customer,
+                chef=chef,
+                action='refund',
+                amount=order.price_paid * order.quantity,
+                status='pending',
+                details={
+                    'cancellation_reason': reason,
+                    'cancelled_by': 'chef',
+                    'event_id': event.id,
+                    'event_name': event.meal.name
+                }
+            )
+        
+        # TODO: Send email notifications to customers
+        
+        messages.success(request, f"Meal event '{event.meal.name}' has been cancelled.")
+        return redirect('chef_meal_dashboard')
+    
+    context = {
+        'chef': chef,
+        'event': event,
+    }
+    return render(request, 'meals/cancel_chef_meal_event.html', context)
+
+# Customer-facing views for chef meals
+@login_required
+def browse_chef_meals(request):
+    """Browse available chef meal events"""
+    # Get the user's location/postal code to filter by service area
+    user_address = None
+    if hasattr(request.user, 'addresses'):
+        user_address = request.user.addresses.filter(is_default=True).first()
+    
+    # Get all upcoming meal events
+    now = timezone.now()
+    upcoming_events = ChefMealEvent.objects.filter(
+        event_date__gte=now.date(),
+        status__in=['scheduled', 'open'],
+        order_cutoff_time__gt=now
+    ).select_related('chef', 'meal').order_by('event_date', 'event_time')
+    
+    # Filter by postal code if the user has an address
+    if user_address and hasattr(user_address, 'postal_code'):
+        # Get all chefs serving this postal code
+        postal_code_obj = PostalCode.objects.filter(code=user_address.postal_code).first()
+        if postal_code_obj:
+            chef_ids = ChefPostalCode.objects.filter(
+                postal_code=postal_code_obj
+            ).values_list('chef_id', flat=True)
+            
+            upcoming_events = upcoming_events.filter(chef_id__in=chef_ids)
+    
+    # Group by date for display
+    events_by_date = {}
+    for event in upcoming_events:
+        date_str = event.event_date.strftime('%Y-%m-%d')
+        if date_str not in events_by_date:
+            events_by_date[date_str] = []
+        events_by_date[date_str].append(event)
+    
+    context = {
+        'events_by_date': events_by_date,
+        'user_address': user_address,
+    }
+    return render(request, 'meals/browse_chef_meals.html', context)
+
+@login_required
+def chef_meal_detail(request, event_id):
+    """View details for a specific chef meal event"""
+    try:
+        event = ChefMealEvent.objects.select_related('chef', 'meal').get(id=event_id)
+    except ChefMealEvent.DoesNotExist:
+        messages.error(request, "Meal event not found.")
+        return redirect('browse_chef_meals')
+    
+    # Check if user is in chef's service area
+    user_can_order = True
+    user_address = None
+    if hasattr(request.user, 'addresses'):
+        user_address = request.user.addresses.filter(is_default=True).first()
+        
+        if user_address and hasattr(user_address, 'postal_code'):
+            postal_code_obj = PostalCode.objects.filter(code=user_address.postal_code).first()
+            if postal_code_obj:
+                chef_serves_area = ChefPostalCode.objects.filter(
+                    chef=event.chef,
+                    postal_code=postal_code_obj
+                ).exists()
+                
+                user_can_order = chef_serves_area
+    
+    # Check if user already has an order for this event
+    user_order = None
+    if request.user.is_authenticated:
+        user_order = ChefMealOrder.objects.filter(
+            customer=request.user,
+            meal_event=event
+        ).first()
+    
+    # Get chef's other upcoming events
+    other_events = ChefMealEvent.objects.filter(
+        chef=event.chef,
+        event_date__gte=timezone.now().date(),
+        status__in=['scheduled', 'open']
+    ).exclude(id=event.id).order_by('event_date', 'event_time')[:5]
+    
+    context = {
+        'event': event,
+        'user_can_order': user_can_order and event.is_available_for_orders(),
+        'user_address': user_address,
+        'user_order': user_order,
+        'other_events': other_events,
+    }
+    return render(request, 'meals/chef_meal_detail.html', context)
+
+@login_required
+def place_chef_meal_order(request, event_id):
+    """Place an order for a chef meal event"""
+    try:
+        event = ChefMealEvent.objects.select_related('chef', 'meal').get(id=event_id)
+    except ChefMealEvent.DoesNotExist:
+        messages.error(request, "Meal event not found.")
+        return redirect('browse_chef_meals')
+    
+    # Check if the event is available for orders
+    if not event.is_available_for_orders():
+        messages.error(request, "This meal is no longer available for orders.")
+        return redirect('chef_meal_detail', event_id=event.id)
+    
+    # Check if user is in chef's service area
+    user_address = None
+    if hasattr(request.user, 'addresses'):
+        user_address = request.user.addresses.filter(is_default=True).first()
+        
+        if user_address and hasattr(user_address, 'postal_code'):
+            postal_code_obj = PostalCode.objects.filter(code=user_address.postal_code).first()
+            if postal_code_obj:
+                chef_serves_area = ChefPostalCode.objects.filter(
+                    chef=event.chef,
+                    postal_code=postal_code_obj
+                ).exists()
+                
+                if not chef_serves_area:
+                    messages.error(request, "This chef does not deliver to your area.")
+                    return redirect('chef_meal_detail', event_id=event.id)
+    
+    # Handle form submission
+    if request.method == 'POST':
+        quantity = int(request.POST.get('quantity', 1))
+        special_requests = request.POST.get('special_requests', '')
+        
+        # Create/get the main order
+        order, created = Order.objects.get_or_create(
+            customer=request.user,
+            status='Placed',
+            is_paid=False,
+            defaults={
+                'address': user_address,
+                'delivery_method': 'Delivery' if user_address else 'Pickup',
+            }
+        )
+        
+        # Create the chef meal order
+        chef_meal_order = ChefMealOrder.objects.create(
+            order=order,
+            meal_event=event,
+            customer=request.user,
+            quantity=quantity,
+            price_paid=event.current_price,
+            special_requests=special_requests,
+            status='placed'
+        )
+        
+        # Here, we would typically redirect to a payment page
+        # For now, just redirect to the order confirmation
+        messages.success(request, f"Your order for {event.meal.name} has been placed. Please complete payment.")
+        return redirect('view_chef_meal_order', order_id=chef_meal_order.id)
+    
+    context = {
+        'event': event,
+        'user_address': user_address,
+    }
+    return render(request, 'meals/place_chef_meal_order.html', context)
+
+@login_required
+def view_chef_meal_order(request, order_id):
+    """View a specific chef meal order"""
+    try:
+        order = ChefMealOrder.objects.select_related('meal_event', 'meal_event__chef', 'meal_event__meal').get(
+            id=order_id,
+            customer=request.user
+        )
+    except ChefMealOrder.DoesNotExist:
+        messages.error(request, "Order not found.")
+        return redirect('user_orders')
+    
+    context = {
+        'order': order,
+        'event': order.meal_event,
+    }
+    return render(request, 'meals/view_chef_meal_order.html', context)
+
+@login_required
+def user_chef_meal_orders(request):
+    """View all chef meal orders for a user"""
+    # Get upcoming and past orders
+    upcoming_orders = ChefMealOrder.objects.filter(
+        customer=request.user,
+        meal_event__event_date__gte=timezone.now().date(),
+        status__in=['placed', 'confirmed']
+    ).select_related('meal_event', 'meal_event__meal', 'meal_event__chef').order_by('meal_event__event_date', 'meal_event__event_time')
+    
+    past_orders = ChefMealOrder.objects.filter(
+        customer=request.user,
+        meal_event__event_date__lt=timezone.now().date()
+    ).select_related('meal_event', 'meal_event__meal', 'meal_event__chef').order_by('-meal_event__event_date', '-meal_event__event_time')
+    
+    # Get cancelled orders
+    cancelled_orders = ChefMealOrder.objects.filter(
+        customer=request.user,
+        status__in=['cancelled', 'refunded']
+    ).select_related('meal_event', 'meal_event__meal', 'meal_event__chef').order_by('-created_at')
+    
+    context = {
+        'upcoming_orders': upcoming_orders,
+        'past_orders': past_orders,
+        'cancelled_orders': cancelled_orders,
+    }
+    return render(request, 'meals/user_chef_meal_orders.html', context)
+
+@login_required
+def cancel_chef_meal_order(request, order_id):
+    """Cancel a chef meal order"""
+    try:
+        order = ChefMealOrder.objects.select_related('meal_event').get(
+            id=order_id,
+            customer=request.user
+        )
+    except ChefMealOrder.DoesNotExist:
+        messages.error(request, "Order not found.")
+        return redirect('user_chef_meal_orders')
+    
+    # Check if order can be cancelled
+    now = timezone.now()
+    cutoff = timezone.datetime.combine(order.meal_event.event_date, order.meal_event.event_time, tzinfo=timezone.get_current_timezone()) - timezone.timedelta(hours=24)
+    
+    if now > cutoff:
+        messages.error(request, "This order is too close to its scheduled date and cannot be cancelled.")
+        return redirect('user_chef_meal_orders')
+    
+    if order.status not in ['placed', 'confirmed']:
+        messages.error(request, "This order cannot be cancelled.")
+        return redirect('user_chef_meal_orders')
+    
+    if request.method == 'POST':
+        reason = request.POST.get('cancellation_reason', '')
+        
+        # Process cancellation
+        success = order.cancel()
+        
+        if success:
+            # Create payment log for refund
+            PaymentLog.objects.create(
+                chef_meal_order=order,
+                user=request.user,
+                chef=order.meal_event.chef,
+                action='refund',
+                amount=order.price_paid * order.quantity,
+                status='pending',
+                details={
+                    'cancellation_reason': reason,
+                    'cancelled_by': 'customer',
+                    'order_id': order.id
+                }
+            )
+            
+            messages.success(request, "Your order has been cancelled. If you made a payment, you will receive a refund.")
+        else:
+            messages.error(request, "Could not cancel your order.")
+        
+        return redirect('user_chef_meal_orders')
+    
+    context = {
+        'order': order,
+        'event': order.meal_event,
+    }
+    return render(request, 'meals/cancel_chef_meal_order.html', context)
+
+@login_required
+def review_chef_meal(request, order_id):
+    """Leave a review for a completed chef meal"""
+    try:
+        order = ChefMealOrder.objects.select_related('meal_event', 'meal_event__chef', 'meal_event__meal').get(
+            id=order_id,
+            customer=request.user,
+            status='completed'
+        )
+    except ChefMealOrder.DoesNotExist:
+        messages.error(request, "Order not found or not eligible for review.")
+        return redirect('user_chef_meal_orders')
+    
+    # Check if review already exists
+    existing_review = ChefMealReview.objects.filter(chef_meal_order=order).first()
+    
+    if existing_review:
+        messages.info(request, "You have already reviewed this meal.")
+        return redirect('user_chef_meal_orders')
+    
+    if request.method == 'POST':
+        rating = int(request.POST.get('rating', 5))
+        comment = request.POST.get('comment', '')
+        
+        # Create the review
+        review = ChefMealReview.objects.create(
+            chef_meal_order=order,
+            customer=request.user,
+            chef=order.meal_event.chef,
+            meal_event=order.meal_event,
+            rating=rating,
+            comment=comment
+        )
+        
+        messages.success(request, "Thank you for your review!")
+        return redirect('user_chef_meal_orders')
+    
+    context = {
+        'order': order,
+        'event': order.meal_event,
+    }
+    return render(request, 'meals/review_chef_meal.html', context)
+
+# API Endpoints for Chef Meal functionality
+
+class ChefMealEventPagination(PageNumberPagination):
+    page_size = 12
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+class ChefMealEventViewSet(viewsets.ModelViewSet):
+    pagination_class = ChefMealEventPagination
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        user = self.request.user
+        
+        # Filter by chef if we're looking at chef's own events
+        if self.action in ['list', 'retrieve'] and self.request.query_params.get('my_events') == 'true':
+            try:
+                chef = Chef.objects.get(user=user)
+                return ChefMealEvent.objects.filter(chef=chef).order_by('event_date', 'event_time')
+            except Chef.DoesNotExist:
+                return ChefMealEvent.objects.none()
+                
+        # Filter by postal code if provided
+        postal_code = self.request.query_params.get('postal_code')
+        if postal_code:
+            # Find all chefs that serve this postal code
+            chef_ids = ChefPostalCode.objects.filter(
+                postal_code__code=postal_code
+            ).values_list('chef_id', flat=True)
+            
+            # Filter events by these chefs and availability
+            now = timezone.now()
+            return ChefMealEvent.objects.filter(
+                chef_id__in=chef_ids,
+                status__in=['scheduled', 'open'],
+                order_cutoff_time__gt=now,
+                orders_count__lt=F('max_orders')
+            ).order_by('event_date', 'event_time')
+        
+        # Default: show available events
+        now = timezone.now()
+        return ChefMealEvent.objects.filter(
+            status__in=['scheduled', 'open'],
+            order_cutoff_time__gt=now,
+            orders_count__lt=F('max_orders')
+        ).order_by('event_date', 'event_time')
+    
+    def get_serializer_class(self):
+        if self.action in ['create', 'update', 'partial_update']:
+            return ChefMealEventCreateSerializer
+        return ChefMealEventSerializer
+    
+    def perform_create(self, serializer):
+        try:
+            chef = Chef.objects.get(user=self.request.user)
+        except Chef.DoesNotExist:
+            return Response(
+                {"error": "You must be a registered chef to create meal events"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        serializer.save(chef=chef)
+    
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        event = self.get_object()
+        
+        # Check if the user is the owner of this event
+        if event.chef.user != request.user:
+            return Response(
+                {"error": "You don't have permission to cancel this event"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Check if the event can be cancelled
+        if event.status == 'cancelled':
+            return Response(
+                {"error": "This event is already cancelled"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if event.event_date < timezone.now().date():
+            return Response(
+                {"error": "You cannot cancel past events"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Cancel the event and issue refunds
+        try:
+            event.cancel()
+            return Response({"status": "Event cancelled successfully"})
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to cancel event: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+class ChefMealOrderViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        user = self.request.user
+        
+        # Chef viewing their received orders
+        if self.request.query_params.get('as_chef') == 'true':
+            try:
+                chef = Chef.objects.get(user=user)
+                return ChefMealOrder.objects.filter(meal_event__chef=chef).order_by('-created_at')
+            except Chef.DoesNotExist:
+                return ChefMealOrder.objects.none()
+        
+        # Default: customer viewing their own orders
+        return ChefMealOrder.objects.filter(customer=user).order_by('-created_at')
+    
+    def get_serializer_class(self):
+        if self.action in ['create']:
+            return ChefMealOrderCreateSerializer
+        return ChefMealOrderSerializer
+    
+    def perform_create(self, serializer):
+        serializer.save(customer=self.request.user)
+    
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        order = self.get_object()
+        
+        # Check if the user is the owner of this order
+        if order.customer != request.user:
+            return Response(
+                {"error": "You don't have permission to cancel this order"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Check if the order can be cancelled
+        if order.status not in ['placed', 'confirmed']:
+            return Response(
+                {"error": "This order cannot be cancelled in its current state"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Check if we're past the deadline
+        event = order.meal_event
+        now = timezone.now()
+        if now > event.order_cutoff_time:
+            return Response(
+                {"error": "The cancellation period has passed"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Cancel the order
+        try:
+            order.cancel()
+            return Response({"status": "Order cancelled successfully"})
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to cancel order: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+class ChefMealReviewViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated]
+    serializer_class = ChefMealReviewSerializer
+    
+    def get_queryset(self):
+        user = self.request.user
+        
+        # Filter by chef if requested
+        chef_id = self.request.query_params.get('chef_id')
+        if chef_id:
+            return ChefMealReview.objects.filter(chef_id=chef_id).order_by('-created_at')
+        
+        # Filter by meal event if requested
+        event_id = self.request.query_params.get('event_id')
+        if event_id:
+            return ChefMealReview.objects.filter(meal_event_id=event_id).order_by('-created_at')
+        
+        # Default: return reviews left by this user
+        return ChefMealReview.objects.filter(customer=user).order_by('-created_at')
+    
+    def perform_create(self, serializer):
+        order = serializer.validated_data['chef_meal_order']
+        
+        # Ensure the user is the owner of this order
+        if order.customer != self.request.user:
+            raise PermissionDenied("You don't have permission to review this order")
+        
+        serializer.save(
+            customer=self.request.user,
+            chef=order.meal_event.chef,
+            meal_event=order.meal_event
+        )
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def api_chef_dashboard_stats(request):
+    """Get statistics for the chef dashboard"""
+    try:
+        chef = Chef.objects.get(user=request.user)
+    except Chef.DoesNotExist:
+        return Response(
+            {"error": "You must be a registered chef to access dashboard stats"},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    # Get counts
+    now = timezone.now()
+    upcoming_events_count = ChefMealEvent.objects.filter(
+        chef=chef,
+        event_date__gte=now.date(),
+        status__in=['scheduled', 'open']
+    ).count()
+    
+    active_orders_count = ChefMealOrder.objects.filter(
+        meal_event__chef=chef,
+        status__in=['placed', 'confirmed']
+    ).count()
+    
+    past_events_count = ChefMealEvent.objects.filter(
+        chef=chef,
+        event_date__lt=now.date()
+    ).count()
+    
+    # Get revenue stats
+    revenue_this_month = ChefMealOrder.objects.filter(
+        meal_event__chef=chef,
+        status__in=['completed'],
+        created_at__year=now.year,
+        created_at__month=now.month
+    ).aggregate(total=Sum(F('price_paid') * F('quantity')))['total'] or 0
+    
+    # Get rating and reviews
+    review_count = ChefMealReview.objects.filter(chef=chef).count()
+    avg_rating = ChefMealReview.objects.filter(chef=chef).aggregate(
+        avg=Avg('rating')
+    )['avg'] or 0
+    
+    return Response({
+        'upcoming_events_count': upcoming_events_count,
+        'active_orders_count': active_orders_count,
+        'past_events_count': past_events_count,
+        'revenue_this_month': str(revenue_this_month),
+        'review_count': review_count,
+        'avg_rating': avg_rating
+    })
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def api_stripe_account_status(request):
+    """Check if the chef has a Stripe Connect account"""
+    try:
+        chef = Chef.objects.get(user=request.user)
+    except Chef.DoesNotExist:
+        return Response(
+            {"error": "You must be a registered chef to access Stripe account information"},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    try:
+        stripe_account = StripeConnectAccount.objects.get(chef=chef)
+        return Response({
+            'has_account': True,
+            'is_active': stripe_account.is_active,
+            'account_id': stripe_account.stripe_account_id
+        })
+    except StripeConnectAccount.DoesNotExist:
+        return Response({'has_account': False})
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_create_stripe_account_link(request):
+    """Create a Stripe Connect onboarding link for the chef"""
+    try:
+        chef = Chef.objects.get(user=request.user)
+    except Chef.DoesNotExist:
+        return Response(
+            {"error": "You must be a registered chef to create a Stripe account"},
+            status=status.HTTP_403_FORBIDDEN
+        )
+    
+    # Check if we already have a Stripe account
+    try:
+        stripe_account = StripeConnectAccount.objects.get(chef=chef)
+        account_id = stripe_account.stripe_account_id
+    except StripeConnectAccount.DoesNotExist:
+        # Create a new Stripe account
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        
+        try:
+            account = stripe.Account.create(
+                type="express",
+                country="US",
+                email=request.user.email,
+                capabilities={
+                    "card_payments": {"requested": True},
+                    "transfers": {"requested": True},
+                },
+                business_type="individual",
+                business_profile={
+                    "name": f"{request.user.first_name} {request.user.last_name}",
+                    "product_description": "Chef prepared meals"
+                }
+            )
+            
+            # Save the account to our database
+            stripe_account = StripeConnectAccount.objects.create(
+                chef=chef,
+                stripe_account_id=account.id,
+                is_active=False
+            )
+            account_id = account.id
+        except stripe.error.StripeError as e:
+            return Response(
+                {"error": f"Failed to create Stripe account: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    # Create an account link for onboarding
+    try:
+        account_link = stripe.AccountLink.create(
+            account=account_id,
+            refresh_url=request.build_absolute_uri(reverse('meals:api_stripe_account_status')),
+            return_url=request.build_absolute_uri(reverse('meals:api_stripe_account_status')),
+            type="account_onboarding",
+        )
+        
+        return Response({
+            'url': account_link.url
+        })
+    except stripe.error.StripeError as e:
+        return Response(
+            {"error": f"Failed to create account link: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_process_chef_meal_payment(request, order_id):
+    """Process payment for a chef meal order"""
+    # Get the order
+    order = get_object_or_404(ChefMealOrder, id=order_id, customer=request.user)
+    
+    # Check if the order can be paid for
+    if order.status != 'placed':
+        return Response(
+            {"error": "This order cannot be paid for in its current state"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Initialize Stripe
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    
+    # Get the payment token from the request
+    token = request.data.get('token')
+    if not token:
+        return Response(
+            {"error": "Payment token is required"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Get the platform fee percentage
+    platform_fee_percentage = PlatformFeeConfig.get_active_fee()
+    
+    # Calculate the amount to charge
+    amount = int(float(order.price_paid) * 100)  # Convert to cents
+    platform_fee = int(amount * float(platform_fee_percentage) / 100)
+    
+    try:
+        # Create a payment intent
+        payment_intent = stripe.PaymentIntent.create(
+            amount=amount,
+            currency="usd",
+            payment_method=token,
+            confirm=True,
+            application_fee_amount=platform_fee,
+            transfer_data={
+                "destination": order.meal_event.chef.stripe_account.stripe_account_id,
+            },
+            metadata={
+                "order_id": order.id,
+                "customer_id": request.user.id,
+                "chef_id": order.meal_event.chef.id,
+                "event_id": order.meal_event.id
+            }
+        )
+        
+        # Update the order
+        order.stripe_payment_intent_id = payment_intent.id
+        order.status = 'confirmed'
+        order.save()
+        
+        # Log the payment
+        PaymentLog.objects.create(
+            order=order.order,
+            chef_meal_order=order,
+            user=request.user,
+            chef=order.meal_event.chef,
+            action='charge',
+            amount=order.price_paid,
+            stripe_id=payment_intent.id,
+            status='succeeded',
+            details={
+                'payment_intent_id': payment_intent.id,
+                'platform_fee': platform_fee / 100  # Convert back to dollars
+            }
+        )
+        
+        return Response({
+            'success': True,
+            'order_id': order.id,
+            'status': order.status,
+            'payment_intent_id': payment_intent.id
+        })
+    except stripe.error.StripeError as e:
+        return Response(
+            {"error": f"Payment failed: {str(e)}"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_process_meal_payment(request, order_id):
+    """
+    API endpoint for processing payments for regular meal orders.
+    This is similar to the template-based process_payment view but adapted for API use.
+    """
+    # Get the order object
+    order = get_object_or_404(Order, id=order_id, customer=request.user)
+
+    try:
+        # Get payment token from request data instead of POST
+        payment_token = request.data.get('payment_token')
+        if not payment_token:
+            return Response(
+                {"error": "Payment token is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        charge = stripe.Charge.create(
+            amount=int(order.total_price() * 100),  # amount in cents
+            currency='usd',
+            description=f'Order {order.id}',
+            source=payment_token
+        )
+        
+        if charge.paid:
+            order.is_paid = True
+            order.status = 'Completed'
+            order.save()
+
+            # After the order is marked as completed, process each meal in the order
+            for order_meal in order.ordermeal_set.all():
+                meal = order_meal.meal
+                # Create calorie intake record if this model exists
+                try:
+                    from .models import CalorieIntake
+                    CalorieIntake.objects.create(
+                        user=request.user,
+                        meal_name=meal.name,
+                        meal_description=meal.description,
+                        portion_size="1", 
+                        date_recorded=timezone.now()
+                    )
+                except ImportError:
+                    # CalorieIntake model might not exist, so we'll skip this
+                    pass
+            
+            return Response({
+                "status": "success",
+                "message": "Payment processed successfully",
+                "order_id": order.id
+            })
+        else:
+            return Response(
+                {"error": "Payment unsuccessful"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    except stripe.error.CardError as e:
+        # The card has been declined
+        body = e.json_body
+        err = body.get('error', {})
+        return Response(
+            {"error": f"Card error: {err.get('message')}"}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    except Exception as e:
+        return Response(
+            {"error": f"An unexpected error occurred: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_stripe_webhook(request):
+    """
+    Handles Stripe webhook events for both regular meal orders and chef meal orders.
+    """
+    payload = request.body
+    sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
+    
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
+        )
+    except ValueError as e:
+        # Invalid payload
+        return Response({"error": "Invalid payload"}, status=status.HTTP_400_BAD_REQUEST)
+    except stripe.error.SignatureVerificationError as e:
+        # Invalid signature
+        return Response({"error": "Invalid signature"}, status=status.HTTP_400_BAD_REQUEST)
+        
+    # Handle the event
+    if event.type == 'payment_intent.succeeded':
+        payment_intent = event.data.object
+        
+        # Look for chef meal orders with this payment intent
+        try:
+            chef_meal_order = ChefMealOrder.objects.get(stripe_payment_intent_id=payment_intent.id)
+            chef_meal_order.status = 'confirmed'
+            chef_meal_order.save()
+            
+            # Log the payment
+            PaymentLog.objects.create(
+                chef_meal_order=chef_meal_order,
+                user=chef_meal_order.customer,
+                chef=chef_meal_order.meal_event.chef,
+                action='charge',
+                amount=chef_meal_order.price_paid,
+                stripe_id=payment_intent.id,
+                status='succeeded',
+                details={'payment_intent': payment_intent}
+            )
+        except ChefMealOrder.DoesNotExist:
+            # Not a chef meal order, check if it's a regular order
+            # Regular orders would need to have the stripe payment intent ID stored as well
+            pass
+            
+    elif event.type == 'charge.refunded':
+        refund = event.data.object
+        payment_intent_id = refund.payment_intent
+        
+        # Look for chef meal orders with this payment intent
+        try:
+            chef_meal_order = ChefMealOrder.objects.get(stripe_payment_intent_id=payment_intent_id)
+            chef_meal_order.status = 'refunded'
+            chef_meal_order.stripe_refund_id = refund.id
+            chef_meal_order.save()
+            
+            # Log the refund
+            PaymentLog.objects.create(
+                chef_meal_order=chef_meal_order,
+                user=chef_meal_order.customer,
+                chef=chef_meal_order.meal_event.chef,
+                action='refund',
+                amount=refund.amount / 100,  # Convert cents to dollars
+                stripe_id=refund.id,
+                status='succeeded',
+                details={'refund': refund}
+            )
+        except ChefMealOrder.DoesNotExist:
+            # Not a chef meal order, check if it's a regular order
+            pass
+    
+    # Return a 200 response to acknowledge receipt of the event
+    return Response({"status": "success"})

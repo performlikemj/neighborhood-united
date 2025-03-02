@@ -48,6 +48,7 @@ from openai import OpenAI
 from gptcache import cache
 from django.db import transaction
 import uuid
+from .audio_utils import process_audio_for_pantry_item
 
 
 logger = logging.getLogger(__name__)
@@ -2536,3 +2537,79 @@ def api_stripe_webhook(request):
     
     # Return a 200 response to acknowledge receipt of the event
     return Response({"status": "success"})
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_pantry_item_from_audio(request):
+    """
+    Process an audio recording to create a new pantry item.
+    
+    The audio file should be sent as a multipart/form-data request.
+    The API will:
+    1. Transcribe the audio using OpenAI's Whisper API
+    2. Extract pantry item information from the transcription
+    3. Create a new pantry item based on the extracted information
+    
+    Returns:
+        The created pantry item data and the original transcription.
+    """
+    print(f'Request data: {request.FILES}')
+    
+    # Check if there's an audio file in the request
+    if not request.FILES.get('audio_file'):
+        return Response({
+            "error": "No audio file provided.",
+            "details": "Please provide an audio file in the 'audio_file' field."
+        }, status=status.HTTP_400_BAD_REQUEST)
+        
+    # Get the uploaded file
+    uploaded_file = request.FILES['audio_file']
+    
+    try:
+        # Process the audio file to extract pantry item information
+        # The OpenAI API expects a file-like object opened in binary mode
+        pantry_item_info = process_audio_for_pantry_item(uploaded_file)
+        
+        # Log what we got from the processing
+        print(f"Extracted info: {pantry_item_info}")
+        
+        # Create a new pantry item using the extracted information
+        serializer = PantryItemSerializer(data={
+            'item_name': pantry_item_info['item_name'],
+            'quantity': pantry_item_info['quantity'],
+            'expiration_date': pantry_item_info['expiration_date'],
+            'item_type': pantry_item_info['item_type'],
+            'notes': pantry_item_info['notes'],
+            'weight_per_unit': pantry_item_info.get('weight_per_unit'),
+            'weight_unit': pantry_item_info.get('weight_unit')
+        })
+        
+        if serializer.is_valid():
+            # Save the pantry item
+            serializer.save(user=request.user)
+            
+            # Return the pantry item data and transcription
+            return Response({
+                'pantry_item': serializer.data,
+                'transcription': pantry_item_info['transcription']
+            }, status=status.HTTP_201_CREATED)
+        else:
+            # Return validation errors
+            print(f"Serializer errors: {serializer.errors}")
+            return Response({
+                'error': 'Could not create pantry item with extracted information',
+                'details': serializer.errors,
+                'transcription': pantry_item_info['transcription'],
+                'extracted_info': pantry_item_info
+            }, status=status.HTTP_400_BAD_REQUEST)
+            
+    except Exception as e:
+        # Log the error
+        logger.error(f"Error processing audio file: {str(e)}")
+        logger.error(traceback.format_exc())
+        
+        # Return an error response
+        return Response({
+            'error': 'Error processing audio file',
+            'details': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -112,7 +112,7 @@ class PantryItemSerializer(serializers.ModelSerializer):
             'item_name': {'required': True},
             'quantity': {'required': True},
             'item_type': {'required': True},
-            'expiration_date': {'required': True},
+            'expiration_date': {'required': False},
         }
 
     # Example of adding validation for quantity

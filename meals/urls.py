@@ -58,6 +58,7 @@ urlpatterns = [
     # Pantry API Endpoints
     path('api/pantry-items/', views.api_pantry_items, name='api_pantry_items'),
     path('api/pantry-items/<int:pk>/', views.api_pantry_item_detail, name='api_pantry_item_detail'),
+    path('api/pantry-items/from-audio/', views.api_pantry_item_from_audio, name='api_pantry_item_from_audio'),
     path('api/generate_emergency_supply/', views.api_generate_emergency_plan, name='api_generate_emergency_supply_list'),
     
     # User Profile API Endpoint

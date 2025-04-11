@@ -27,9 +27,11 @@ from meals.meal_embedding import serialize_data
 from meals.serializers import MealPlanSerializer
 from customer_dashboard.models import GoalTracking, UserHealthMetrics, CalorieIntake, UserSummary
 from shared.utils import generate_user_context
+from meals.meal_plan_service import is_chef_meal
 
 logger = logging.getLogger(__name__)
-client = OpenAI(api_key=settings.OPENAI_KEY)
+OPENAI_API_KEY = settings.OPENAI_KEY
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 @shared_task
 def send_meal_plan_approval_email(meal_plan_id):
@@ -119,9 +121,9 @@ def send_meal_plan_approval_email(meal_plan_id):
 
         # Call OpenAI to generate the email content
         try:
-            response = client.chat.completions.create(
+            response = client.responses.create(
                 model="gpt-4o-mini",
-                messages=[
+                input=[
                     {
                         "role": "system",
                         "content": "You are a helpful assistant that generates meal plan approval emails."
@@ -136,19 +138,18 @@ def send_meal_plan_approval_email(meal_plan_id):
                         )
                     }
                 ],
-                store=True,
-                metadata={'tag': 'meal_plan_approval_email'},
-                response_format={
-                    'type': 'json_schema',
-                    'json_schema': 
-                        {
-                            "name": "ApprovalEmail",
-                            "schema": MealPlanApprovalEmailSchema.model_json_schema()
-                        }
+                #store=True,
+                #metadata={'tag': 'meal_plan_approval_email'},
+                text={
+                    "format": {
+                        'type': 'json_schema',
+                        'name': 'approval_email',
+                        'schema': MealPlanApprovalEmailSchema.model_json_schema()
                     }
+                }
             )
 
-            response_content = response.choices[0].message.content
+            response_content = response.output_text
             email_data_dict = json.loads(response_content)
 
             # Modify summary_text to support bold text and newlines
@@ -212,7 +213,10 @@ def send_meal_plan_approval_email(meal_plan_id):
 @shared_task
 def generate_shopping_list(meal_plan_id):
     from django.db.models import Sum
-    from meals.models import MealPlan, ShoppingList as ShoppingListModel, MealPlanMealPantryUsage, PantryItem
+    from meals.models import MealPlan, ShoppingList as ShoppingListModel, MealPlanMealPantryUsage, PantryItem, MealAllergenSafety
+    # Import is_chef_meal locally to avoid circular imports
+    from meals.meal_plan_service import is_chef_meal
+    
     meal_plan = get_object_or_404(MealPlan, id=meal_plan_id)
 
     # Serialize the meal plan data
@@ -238,6 +242,74 @@ def generate_shopping_list(meal_plan_id):
     except Exception as e:
         logger.error(f"Error retrieving preferred serving size for user {user.id}: {e}")
         preferred_serving_size = 1
+
+    # Collect all ingredient substitution information from the meal plan
+    substitution_info = []
+    chef_meals_present = False
+    meal_plan_meals = meal_plan.meal.all()
+    
+    for meal in meal_plan_meals:
+        # Check if this is a chef meal
+        is_chef = is_chef_meal(meal)
+        if is_chef:
+            chef_meals_present = True
+            logger.info(f"Meal '{meal.name}' is chef-created, not providing substitutions in shopping list")
+            continue
+            
+        # Get allergen safety checks that include substitution information
+        allergen_checks = MealAllergenSafety.objects.filter(
+            meal=meal, 
+            user=user,
+            is_safe=False,  # We only need substitutions for unsafe meals
+        ).exclude(substitutions__isnull=True).exclude(substitutions={})
+        
+        for check in allergen_checks:
+            if check.substitutions:
+                for original_ingredient, substitutes in check.substitutions.items():
+                    if substitutes:  # Make sure there are actual substitutions
+                        sub_info = {
+                            "meal_name": meal.name,
+                            "original_ingredient": original_ingredient,
+                            "substitutes": substitutes,
+                            "notes": f"For {meal.name}, replace {original_ingredient} with {', '.join(substitutes)}"
+                        }
+                        substitution_info.append(sub_info)
+    
+    # Also check for meals that are substitution variants
+    substitution_variants = meal_plan_meals.filter(is_substitution_variant=True)
+    for variant in substitution_variants:
+        # Skip chef meals
+        if is_chef_meal(variant):
+            continue
+            
+        if variant.base_meal:
+            # Check for original ingredients that were replaced
+            variant_ingredients = []
+            original_ingredients = []
+            
+            for dish in variant.dishes.all():
+                variant_ingredients.extend([
+                    {
+                        "name": ing.name,
+                        "is_substitution": getattr(ing, 'is_substitution', False),
+                        "original_ingredient": getattr(ing, 'original_ingredient', None)
+                    }
+                    for ing in dish.ingredients.all()
+                ])
+            
+            for dish in variant.base_meal.dishes.all():
+                original_ingredients.extend([ing.name for ing in dish.ingredients.all()])
+            
+            # Find substitutions by comparing ingredients
+            for ing in variant_ingredients:
+                if ing.get("is_substitution") and ing.get("original_ingredient"):
+                    sub_info = {
+                        "meal_name": variant.name,
+                        "original_ingredient": ing.get("original_ingredient"),
+                        "substitutes": [ing.get("name")],
+                        "notes": f"For {variant.name}, using {ing.get('name')} instead of {ing.get('original_ingredient')}"
+                    }
+                    substitution_info.append(sub_info)
 
     # Retrieve bridging usage for leftover logic
     bridging_qs = (
@@ -299,7 +371,7 @@ def generate_shopping_list(meal_plan_id):
 
     # Generate user context
     try:
-        user_context = generate_user_context(user) or 'No additional user context provided.'
+        user_context = generate_user_context(user)
     except Exception as e:
         logger.error(f"Error generating user context: {e}")
         user_context = 'No additional user context provided.'
@@ -322,9 +394,24 @@ def generate_shopping_list(meal_plan_id):
         try:
             # NOTE: We assume `client` is already available in your environment.
             # No need to import it here as requested.
-            response = client.chat.completions.create(
+            from meals.pydantic_models import ShoppingCategory
+            shopping_category_list = [item.value for item in ShoppingCategory]
+            
+            # Format substitution information for prompt
+            substitution_str = ""
+            if substitution_info:
+                substitution_str = "Ingredient substitution information:\n"
+                for sub in substitution_info:
+                    substitution_str += f"- In {sub['meal_name']}, replace {sub['original_ingredient']} with {', '.join(sub['substitutes'])}\n"
+            
+            # Add chef meal note if needed
+            chef_note = ""
+            if chef_meals_present:
+                chef_note = "IMPORTANT: Some meals in this plan are chef-created and must be prepared exactly as specified. Do not suggest substitutions for chef-created meals. Include all ingredients for chef meals without alternatives."
+            
+            response = client.responses.create(
                 model="gpt-4o-mini",
-                messages=[
+                input=[
                     {
                         "role": "system",
                         "content": "You are a helpful assistant that generates shopping lists in JSON format."
@@ -342,21 +429,27 @@ def generate_shopping_list(meal_plan_id):
                             f"The user has to serve {preferred_serving_size} people per meal. Please adjust the quantities accordingly. "
                             f"Please ensure the quantities are as realistic as possible to grocery store quantities. "
                             f"The user has these pantry items expiring soon: {expiring_items_str}. "
-                            f"Do not include these expiring items in the shopping list unless they truly need to be replenished for the sake of the meals. "                        
-                            )
+                            f"Available shopping categories: {shopping_category_list}. "
+                            f"Do not include these expiring items in the shopping list unless they truly need to be replenished for the sake of the meals. "
+                            f"\n\n{substitution_str}\n"
+                            f"{chef_note}\n"
+                            f"IMPORTANT: For ingredients in non-chef meals that have substitution options, please include BOTH the original ingredient AND its substitutes in the shopping list, "
+                            f"clearly marking them as alternatives to each other so the user can choose which one to buy. "
+                            f"Format alternatives as separate items with a note like 'Alternative to X for [meal name]'."
+                        )
                     }
                 ],
-                store=True,
-                metadata={'tag': 'shopping_list'},
-                response_format={
-                    'type': 'json_schema',
-                    'json_schema': {
-                        "name": "ShoppingList",
-                        "schema": ShoppingListSchema.model_json_schema()
+                #store=True,
+                #metadata={'tag': 'shopping_list'},
+                text={
+                    "format": {
+                        'type': 'json_schema',
+                        'name': 'shopping_list',
+                        'schema': ShoppingListSchema.model_json_schema()
                     }
                 }
             )
-            shopping_list = response.choices[0].message.content
+            shopping_list = response.output_text
 
             if hasattr(meal_plan, 'shopping_list'):
                 meal_plan.shopping_list.update_items(shopping_list)
@@ -461,7 +554,6 @@ def generate_shopping_list(meal_plan_id):
 
 @shared_task
 def generate_user_summary(user_id):
-    print(f'Generating summary for user {user_id}')
     from shared.utils import generate_user_context
     user = get_object_or_404(CustomUser, id=user_id)
     user_context = generate_user_context(user)
@@ -495,7 +587,8 @@ def generate_user_summary(user_id):
     message = "No data found for the past month."
 
     # Initialize OpenAI client
-    client = OpenAI(api_key=settings.OPENAI_KEY)
+    OPENAI_API_KEY = settings.OPENAI_KEY
+    client = OpenAI(api_key=OPENAI_API_KEY)
     
     # Define the language prompt based on user's preferred language
     language_prompt = {
@@ -505,20 +598,18 @@ def generate_user_summary(user_id):
         'fr': 'French',
     }
     preferred_language = language_prompt.get(user.preferred_language, 'English')
-    print(f'Preferred language: {preferred_language}')
-    print(f'User\'s preferred language: {user.preferred_language}')
     try:
-        response = client.chat.completions.create(
+        response = client.responses.create(
             model="gpt-4o-mini",
-            messages=[
+            input=[
                 {"role": "system", 
                  "content": f"Answering in {preferred_language}, Generate a detailed summary based on the following data that gives the user a high-level view of their goals, health data, and how their caloric intake relates to those goals. Start the response off with a friendly welcoming tone. If there is no data, please respond with the following message: {message}\n\n{formatted_data}"
                  },
             ],
-            store=True,
-            metadata={'tag': 'user_summary'},
+            #store=True,
+            #metadata={'tag': 'user_summary'},
         )
-        summary_text = response.choices[0].message.content
+        summary_text = response.output_text
         user_summary_obj.summary = summary_text
         user_summary_obj.status = 'completed'
     except Exception as e:
@@ -592,9 +683,10 @@ def generate_emergency_supply_list(user_id):
     pantry_summary_json = json.dumps(user_emergency_pantry_summary)
 
     try:
-        response = client.chat.completions.create(
+        from meals.pydantic_models import EmergencySupplyList
+        response = client.responses.create(
             model="gpt-4o-mini",
-            messages=[
+            input=[
                 {
                     "role": "system",
                     "content": "You are a helpful assistant that generates an EMERGENCY SUPPLY list in JSON format."
@@ -609,49 +701,22 @@ def generate_emergency_supply_list(user_id):
                         f"Current safe items in their pantry:\n{pantry_summary_json}\n\n"
                         "Generate a JSON response specifying which additional items they should buy (approx. quantity/units) "
                         "to meet the user's emergency supply goal, ensuring no allergens are included. "
-                        "Focus on dry/canned staples. Return JSON in the form:\n"
-                        "{\n"
-                        "  'emergency_list': [\n"
-                        "    { 'item_name': '', 'quantity_to_buy': '', 'unit': '', 'notes': '' },\n"
-                        "    ...\n"
-                        "  ],\n"
-                        "  'notes': ''\n"
-                        "}"
+                        "Focus on dry/canned staples."
                     )
                 }
             ],
-            store=True,
-            metadata={'tag': 'emergency-supply-list'},
-            response_format={
-                'type': 'json_schema',
-                'json_schema': {
-                    "name": "EmergencySupplyList",
-                    "schema": {
-                        "title": "EmergencySupplyList",
-                        "type": "object",
-                        "properties": {
-                            "emergency_list": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "item_name": {"type": "string"},
-                                        "quantity_to_buy": {"type": "string"},
-                                        "unit": {"type": "string"},
-                                        "notes": {"type": "string"}
-                                    },
-                                    "required": ["item_name", "quantity_to_buy"]
-                                }
-                            },
-                            "notes": {"type": "string"}
-                        },
-                        "required": ["emergency_list"]
-                    }
+            #store=True,
+            #metadata={'tag': 'emergency-supply-list'},
+            text={
+                "format": {
+                    'type': 'json_schema',
+                    'name': 'emergency_supply_list',
+                    "schema": EmergencySupplyList.model_json_schema()
                 }
             }
         )
 
-        gpt_output_str = response.choices[0].message.content
+        gpt_output_str = response.output_text
         try:
             emergency_supply_data = json.loads(gpt_output_str)
             emergency_list = emergency_supply_data.get("emergency_list", [])
@@ -864,3 +929,194 @@ def send_meal_plan_reminder_email():
 
         except Exception as e:
             logger.error(f"Error sending reminder email for user {user.email}: {e}")
+
+# TODO: Set up configuration in n8n
+@shared_task
+def send_payment_confirmation_email(payment_data):
+    """
+    Send payment confirmation email to Stripe Connect workers (chefs).
+    
+    Args:
+        payment_data (dict): Dictionary containing payment information:
+            - amount (int): Amount in cents
+            - currency (str): Currency code (e.g., 'usd')
+            - chef_email (str): Email of the chef/worker
+            - chef_name (str): Name of the chef/worker
+            - order_id (str): Order ID or reference
+            - customer_name (str): Name of the customer
+            - service_fee (int): Stripe service fee in cents
+            - platform_fee (int): Platform fee in cents
+            - net_amount (int): Net amount after fees in cents
+            - payment_date (str): Payment date
+    """
+    try:
+        # Set up Jinja2 environment
+        project_dir = settings.BASE_DIR
+        env = Environment(loader=FileSystemLoader(os.path.join(project_dir, 'meals', 'templates')))
+        template = env.get_template('meals/payment_confirmation_email.html')
+
+        # Format monetary values
+        amount = payment_data['amount'] / 100  # Convert cents to dollars
+        service_fee = payment_data['service_fee'] / 100
+        platform_fee = payment_data['platform_fee'] / 100
+        net_amount = payment_data['net_amount'] / 100
+
+        # Render the email template
+        email_body_html = template.render(
+            chef_name=payment_data['chef_name'],
+            amount=amount,
+            currency=payment_data['currency'].upper(),
+            order_id=payment_data['order_id'],
+            customer_name=payment_data['customer_name'],
+            service_fee=service_fee,
+            platform_fee=platform_fee,
+            net_amount=net_amount,
+            payment_date=payment_data['payment_date']
+        )
+
+        email_data = {
+            'subject': f'Payment Confirmation - Order #{payment_data["order_id"]}',
+            'html_message': email_body_html,
+            'to': payment_data['chef_email'],
+            'from': 'payments@sautai.com',
+        }
+
+        try:
+            logger.debug(f"Sending payment confirmation email to n8n for: {payment_data['chef_email']}")
+            n8n_url = os.getenv("N8N_PAYMENT_CONFIRMATION_EMAIL_URL")
+            response = requests.post(n8n_url, json=email_data)
+            response.raise_for_status()
+            logger.info(f"Payment confirmation email sent to n8n for: {payment_data['chef_email']}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error sending payment confirmation email to n8n for: {payment_data['chef_email']}, error: {str(e)}")
+            raise
+
+    except Exception as e:
+        logger.error(f"Error generating or sending payment confirmation email: {e}")
+        logger.error(traceback.format_exc())
+        raise
+
+@shared_task
+def send_refund_notification_email(order_id):
+    """
+    Send a refund notification email to a customer when their order is refunded.
+    
+    Args:
+        order_id (int): ID of the ChefMealOrder that has been refunded
+    """
+    from meals.models import ChefMealOrder
+    
+    try:
+        # Get the order
+        order = get_object_or_404(ChefMealOrder, id=order_id)
+        user = order.customer
+        event = order.meal_event
+        
+        # Set up Jinja2 environment
+        project_dir = settings.BASE_DIR
+        env = Environment(loader=FileSystemLoader(os.path.join(project_dir, 'meals', 'templates')))
+        template = env.get_template('meals/refund_notification_email.html')
+        
+        # Format the amount for display
+        refund_amount = float(order.price_paid)
+        
+        # Get formatted date for the refund
+        refund_date = timezone.now().strftime("%B %d, %Y")
+        
+        # Render the email template
+        email_body_html = template.render(
+            user_name=user.get_full_name() or user.username,
+            order_id=order.id,
+            meal_name=event.meal.name,
+            chef_name=event.chef.user.get_full_name(),
+            refund_amount=refund_amount,
+            refund_date=refund_date,
+            cancellation_reason=order.cancellation_reason,
+            event_date=event.date.strftime("%B %d, %Y"),
+            event_time=event.time.strftime("%I:%M %p")
+        )
+        
+        email_data = {
+            'subject': f'Your Refund for Order #{order.id} Has Been Processed',
+            'html_message': email_body_html,
+            'to': user.email,
+            'from': 'payments@sautai.com',
+        }
+        
+        try:
+            logger.debug(f"Sending refund notification email to n8n for: {user.email}")
+            n8n_url = os.getenv("N8N_REFUND_NOTIFICATION_EMAIL_URL")
+            response = requests.post(n8n_url, json=email_data)
+            response.raise_for_status()
+            logger.info(f"Refund notification email sent to n8n for: {user.email}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error sending refund notification email to n8n for: {user.email}, error: {str(e)}")
+            raise
+            
+    except Exception as e:
+        logger.error(f"Error generating or sending refund notification email for order {order_id}: {e}")
+
+@shared_task
+def send_order_cancellation_email(order_id):
+    """
+    Send an order cancellation notification email to a customer.
+    
+    Args:
+        order_id (int): ID of the ChefMealOrder that has been cancelled
+    """
+    from meals.models import ChefMealOrder
+    
+    try:
+        # Get the order
+        order = get_object_or_404(ChefMealOrder, id=order_id)
+        user = order.customer
+        event = order.meal_event
+        
+        # Set up Jinja2 environment
+        project_dir = settings.BASE_DIR
+        env = Environment(loader=FileSystemLoader(os.path.join(project_dir, 'meals', 'templates')))
+        template = env.get_template('meals/order_cancellation_email.html')
+        
+        # Format the amount for display if refunded
+        order_amount = float(order.price_paid)
+        
+        # Get formatted dates
+        cancellation_date = timezone.now().strftime("%B %d, %Y")
+        
+        # Determine if this was canceled by the chef or the customer
+        canceled_by_chef = 'Event canceled by chef' in order.cancellation_reason if order.cancellation_reason else False
+        
+        # Render the email template
+        email_body_html = template.render(
+            user_name=user.get_full_name() or user.username,
+            order_id=order.id,
+            meal_name=event.meal.name,
+            chef_name=event.chef.user.get_full_name(),
+            order_amount=order_amount,
+            cancellation_date=cancellation_date,
+            cancellation_reason=order.cancellation_reason,
+            event_date=event.date.strftime("%B %d, %Y"),
+            event_time=event.time.strftime("%I:%M %p"),
+            refund_status=order.refund_status if hasattr(order, 'refund_status') else None,
+            canceled_by_chef=canceled_by_chef
+        )
+        
+        email_data = {
+            'subject': f'Your Order #{order.id} Has Been Cancelled',
+            'html_message': email_body_html,
+            'to': user.email,
+            'from': 'orders@sautai.com',
+        }
+        
+        try:
+            logger.debug(f"Sending order cancellation email to n8n for: {user.email}")
+            n8n_url = os.getenv("N8N_CANCELLATION_EMAIL_URL")
+            response = requests.post(n8n_url, json=email_data)
+            response.raise_for_status()
+            logger.info(f"Order cancellation email sent to n8n for: {user.email}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error sending order cancellation email to n8n for: {user.email}, error: {str(e)}")
+            raise
+            
+    except Exception as e:
+        logger.error(f"Error generating or sending order cancellation email for order {order_id}: {e}")

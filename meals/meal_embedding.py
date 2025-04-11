@@ -13,7 +13,8 @@ import json
 
 logger = logging.getLogger(__name__)
 
-client = OpenAI(api_key=settings.OPENAI_KEY)
+OPENAI_API_KEY = settings.OPENAI_KEY
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 def prepare_meal_representation(meal: Meal) -> str:
     attributes = [meal.name, meal.description]

@@ -27,23 +27,20 @@ class Command(BaseCommand):
             messages = self.generate_messages(meal)
 
             try:
-                response = client.chat.completions.create(
+                response = client.responses.create(
                     model="gpt-4o-mini",
-                    messages=messages,
-                    response_format={
-                        'type': 'json_schema',
-                        'json_schema': 
-                            {
-                                "name": "Preferences",
-                                "schema": DietaryPreferencesSchema.model_json_schema()
-                            }
+                    input=messages,
+                    text={
+                        "format": {
+                            'type': 'json_schema',
+                            'name': 'dietary_preferences',
+                            'schema': DietaryPreferencesSchema.model_json_schema()
                         }
+                    }
                 )
 
-                dietary_prefs_text = response.choices[0].message.content.strip()
-                print(f'Dietary preferences for {meal.name}: {dietary_prefs_text}')
+                dietary_prefs_text = response.output_text
                 dietary_prefs = self.parse_dietary_preferences(dietary_prefs_text)
-                print(f'Parsed dietary preferences: {dietary_prefs}')
                 # Clear existing dietary preferences
                 meal.dietary_preferences.clear()
 

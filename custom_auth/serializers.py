@@ -148,7 +148,6 @@ class AddressSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
-        print(f'country: {validated_data.get("country")}')
         instance.street = validated_data.get('street', instance.street)
         instance.city = validated_data.get('city', instance.city)
         instance.state = validated_data.get('state', instance.state)

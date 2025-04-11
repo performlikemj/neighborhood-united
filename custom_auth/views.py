@@ -341,7 +341,6 @@ def update_profile_api(request):
     # Update or create address data
     address_data = request.data.get('address')
     if address_data:
-        print(f'Address data: {address_data}')  # Debug print
         
         # Convert full country name to country code
         country_name = address_data.get('country')
@@ -382,7 +381,6 @@ def get_country_code(country_name):
 @api_view(['POST'])
 def login_api_view(request):
     # Ensure method is POST
-    print(f'Login request: {request}')
     if request.method != 'POST':
         return JsonResponse({'status': 'error', 'message': 'Only POST method allowed'}, status=405)
 

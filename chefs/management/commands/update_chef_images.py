@@ -30,7 +30,8 @@ class Command(BaseCommand):
 
     def generate_chef_image(self):
         # Your logic to call DALL-E API and get the image URL
-        client = OpenAI(api_key=settings.OPENAI_KEY)
+        OPENAI_API_KEY = settings.OPENAI_KEY
+        client = OpenAI(api_key=OPENAI_API_KEY)
         prompt = "A cartoon-like gender-neutral chef in a professional kitchen with their back to the camera as if they're preparing a dish."
         response = client.images.generate(
             model="dall-e-3",

@@ -5,6 +5,7 @@ import os
 import json
 import logging
 import re
+from django.shortcuts import get_object_or_404
 import requests
 import pytz
 import textwrap
@@ -24,10 +25,12 @@ from meals.pantry_management import get_expiring_pantry_items
 from meals.pydantic_models import BulkPrepInstructions, DailyTask
 from django.template.loader import render_to_string
 from collections import defaultdict
+from meals.models import MealAllergenSafety, Ingredient
 
 logger = logging.getLogger(__name__)
 
-client = OpenAI(api_key=settings.OPENAI_KEY)
+OPENAI_API_KEY = settings.OPENAI_KEY
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 @shared_task
@@ -150,14 +153,12 @@ def send_daily_meal_instructions():
                 logger.info(f"Meal plan for user {user.email} on {next_day_name} is not approved")
                 continue
             if meal_plan.meal_prep_preference == 'daily':
-                print(f'Daily meal plan for user {user.email} on {next_day_name}')
                 if meal_plan_meals_for_next_day.exists():
                     # Get the IDs of the MealPlanMeals for the next day
                     meal_plan_meal_ids = list(meal_plan_meals_for_next_day.values_list('id', flat=True))
                     logger.debug(f"MealPlanMeal IDs for user {user.email} on {next_day_name}: {meal_plan_meal_ids}")
                     generate_instructions.delay(meal_plan_meal_ids)
             elif meal_plan.meal_prep_preference == 'one_day_prep':
-                print(f'One day prep meal plan for user {user.email} on {next_day_name}')
                 # Check for follow-up instructions scheduled for next_day
                 follow_up_instruction = MealPlanInstruction.objects.filter(
                     meal_plan=meal_plan,
@@ -214,6 +215,9 @@ def generate_instructions(meal_plan_meal_ids):
     user_email = user.email
     user_name = user.username
 
+    # Import is_chef_meal function here to avoid circular imports
+    from meals.meal_plan_service import is_chef_meal
+
     # Retrieve the user's preferred serving size
     try:
         preferred_servings = user.preferred_servings
@@ -244,6 +248,45 @@ def generate_instructions(meal_plan_meal_ids):
         # Serialize meal plan meal data
         serializer = MealPlanMealSerializer(meal_plan_meal)
         meal_plan_meal_data = serializer.data
+        
+        # Check if this meal has ingredient substitutions
+        substitution_info = []
+        meal = meal_plan_meal.meal
+        
+        # Check if it's a chef meal - if so, no substitutions are allowed
+        is_chef = is_chef_meal(meal)
+        if is_chef:
+            logger.info(f"Meal '{meal.name}' is chef-created, not applying substitutions to instructions")
+            
+        # Check if it's a substitution variant and NOT a chef meal
+        is_substitution_variant = getattr(meal, 'is_substitution_variant', False)
+        
+        if not is_chef and is_substitution_variant and meal.base_meal:
+            # It's a modified meal with substitutions
+            for dish in meal.dishes.all():
+                for ingredient in dish.ingredients.all():
+                    if getattr(ingredient, 'is_substitution', False) and getattr(ingredient, 'original_ingredient', None):
+                        substitution_info.append({
+                            'original': ingredient.original_ingredient,
+                            'substitute': ingredient.name,
+                            'notes': f"Using {ingredient.name} instead of {ingredient.original_ingredient}"
+                        })
+        elif not is_chef:
+            # Not a chef meal, check for potential substitutions from allergen safety checks
+            allergen_checks = MealAllergenSafety.objects.filter(
+                meal=meal, 
+                user=user
+            ).exclude(substitutions__isnull=True).exclude(substitutions={})
+            
+            for check in allergen_checks:
+                if check.substitutions:
+                    for original_ingredient, substitutes in check.substitutions.items():
+                        if substitutes:  # Make sure there are actual substitutions
+                            substitution_info.append({
+                                'original': original_ingredient,
+                                'substitute': substitutes[0] if substitutes else "",  # Use the first substitute
+                                'notes': f"Replace {original_ingredient} with {', '.join(substitutes)}"
+                            })
 
         # Check if instructions already exist for this meal plan meal
         existing_instruction = InstructionModel.objects.filter(meal_plan_meal=meal_plan_meal).first()
@@ -260,9 +303,21 @@ def generate_instructions(meal_plan_meal_ids):
                 continue  # Skip this meal
 
             try:
-                response = client.chat.completions.create(
+                # Format substitution information for prompt
+                substitution_str = ""
+                if substitution_info and not is_chef:
+                    substitution_str = "Ingredient substitution information:\n"
+                    for sub in substitution_info:
+                        substitution_str += f"- Replace {sub['original']} with {sub['substitute']}\n"
+                
+                # For chef meals, add special instructions
+                chef_note = ""
+                if is_chef:
+                    chef_note = "IMPORTANT: This is a chef-created meal and must be prepared exactly as specified. No ingredient substitutions are allowed."
+                
+                response = client.responses.create(
                     model="gpt-4o-mini",
-                    messages=[
+                    input=[
                         {
                             "role": "system",
                             "content": f"You are a helpful assistant that generates cooking instructions in {user_preferred_language}."
@@ -279,22 +334,24 @@ def generate_instructions(meal_plan_meal_ids):
                                 f"but understand that using an item decreases its quantity for other meals. "
                                 f"The meal is described as follows: '{meal_plan_meal_data['meal']['description']}' and "
                                 f"it adheres to the user's information: {user_context}."
+                                f"\n\n{substitution_str}\n"
+                                f"{chef_note}\n"
+                                f"{'IMPORTANT: If substitutions are provided, clearly incorporate them into the cooking instructions, explaining how to use the substitute ingredient in place of the original one, including any cooking time or method adjustments needed.' if not is_chef else ''}"
                             )
                         }
                     ],
-                    store=True,
-                    metadata={'tag': 'meal_instructions'},
-                    response_format={
+                    #store=True,
+                    #metadata={'tag': 'meal_instructions'},
+                    text={
+                        "format": {
                         'type': 'json_schema',
-                        'json_schema': 
-                            {
-                                "name": "Instructions", 
-                                "schema": InstructionsSchema.model_json_schema()
-                            }
+                        'name': 'instructions',
+                        'schema': InstructionsSchema.model_json_schema()
                         }
+                    }
                 )
 
-                instructions_content = response.choices[0].message.content  # Use the parsed response
+                instructions_content = response.output_text  # Use the parsed response
 
                 # Save the instructions
                 if hasattr(meal_plan_meal, 'instructions'):
@@ -340,7 +397,6 @@ def generate_instructions(meal_plan_meal_ids):
         # Compute meal date
 
         meal_date = meal_plan_meal.meal_date
-        print(f'Generated instructions for MealPlanMeal ID {meal_plan_meal.id} on {meal_date}')
         # if day_number is not None:
         #     meal_date = meal_plan_meal.meal_plan.week_start_date + timedelta(days=day_number)
         # else:
@@ -363,13 +419,11 @@ def generate_instructions(meal_plan_meal_ids):
 
 
     meal_dates = set(item['meal_date'] for item in instructions_list if item['meal_date'] is not None)
-    print(f'Meal Dates: {meal_dates}')
     # Determine the subject line based on the dates of the meals
     if len(meal_dates) == 1:
         # All meals are on the same date
         meal_date = meal_dates.pop()
         meal_day_of_week = meal_date.strftime('%A')  # e.g., 'Sunday'
-        print(f'Meal Day of Week: {meal_day_of_week}')
         subject = f"Your Cooking Instructions for {meal_day_of_week}'s Meals"
     else:
         # Meals are on different dates
@@ -433,225 +487,171 @@ def generate_instructions(meal_plan_meal_ids):
 
 @shared_task
 def generate_bulk_prep_instructions(meal_plan_id):
-    from meals.models import MealPlan, MealPlanInstruction
-    meal_plan = MealPlan.objects.get(id=meal_plan_id)
+    from meals.models import MealPlan, MealPlanInstruction, MealAllergenSafety, Ingredient
+    from meals.serializers import MealPlanSerializer
+    # Import is_chef_meal function here to avoid circular imports
+    from meals.meal_plan_service import is_chef_meal
 
-    # Check if the meal plan preference is 'one_day_prep'
-    if meal_plan.meal_prep_preference != 'one_day_prep':
-        return  # No action needed
-
-    # Fetch the meals associated with the meal plan
-    meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan).select_related('meal')
-
-    # Create the meals_list
-    meals_list = []
-    for meal in meal_plan_meals:
-        meals_list.append({
-            "meal_name": meal.meal.name,
-            "meal_type": meal.meal_type,
-            "day": meal.day,
-            "description": meal.meal.description or "A delicious meal prepared for you.",
-        })
+    
+    meal_plan = get_object_or_404(MealPlan, id=meal_plan_id)
     user = meal_plan.user
-    user_context = generate_user_context(user) or 'No additional user context provided.'
-
-    # Preferred serving size
+    
+    # Check if instructions already exist
+    existing_instructions = MealPlanInstruction.objects.filter(
+        meal_plan=meal_plan,
+        is_bulk_prep=True
+    ).first()
+    
+    if existing_instructions:
+        logger.info(f"Bulk prep instructions already exist for meal plan {meal_plan_id}. Skipping generation.")
+        return
+    
+    # Get all meals for this meal plan
+    meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan).select_related('meal')
+    
+    # Get full serialized data
+    serializer = MealPlanSerializer(meal_plan)
+    meal_plan_data = serializer.data
+    
+    # Get the user's preferred serving size and timezone
+    preferred_servings = user.preferred_servings if hasattr(user, 'preferred_servings') else 1
+    
+    # Get user's preferred language
+    user_preferred_language = user.preferred_language or 'English'
+    
+    # Collect ingredient substitution information from all meals
+    substitution_info = []
+    chef_meals_present = False
+    
+    for meal_plan_meal in meal_plan_meals:
+        meal = meal_plan_meal.meal
+        
+        # Check if it's a chef meal
+        is_chef = is_chef_meal(meal)
+        if is_chef:
+            chef_meals_present = True
+            logger.info(f"Meal '{meal.name}' is chef-created, not applying substitutions")
+            continue
+        
+        # Check if it's a substitution variant and NOT a chef meal
+        is_substitution_variant = getattr(meal, 'is_substitution_variant', False)
+        
+        if is_substitution_variant and meal.base_meal:
+            # It's a modified meal with substitutions
+            for dish in meal.dishes.all():
+                for ingredient in dish.ingredients.all():
+                    if getattr(ingredient, 'is_substitution', False) and getattr(ingredient, 'original_ingredient', None):
+                        substitution_info.append({
+                            'meal_name': meal.name,
+                            'original': ingredient.original_ingredient,
+                            'substitute': ingredient.name,
+                            'notes': f"For {meal.name}, use {ingredient.name} instead of {ingredient.original_ingredient}"
+                        })
+        else:
+            # Check for potential substitutions from allergen safety checks
+            allergen_checks = MealAllergenSafety.objects.filter(
+                meal=meal, 
+                user=user
+            ).exclude(substitutions__isnull=True).exclude(substitutions={})
+            
+            for check in allergen_checks:
+                if check.substitutions:
+                    for original_ingredient, substitutes in check.substitutions.items():
+                        if substitutes:  # Make sure there are actual substitutions
+                            substitution_info.append({
+                                'meal_name': meal.name,
+                                'original': original_ingredient,
+                                'substitute': substitutes[0] if substitutes else "",  # Use the first substitute
+                                'notes': f"For {meal.name}, replace {original_ingredient} with {', '.join(substitutes)}"
+                            })
+    
+    # Get expiring pantry items
     try:
-        preferred_servings = user.preferred_servings
-    except AttributeError:
-        logger.error(f"User {user.email} does not have a preferred serving size set.")
-        preferred_servings = 1
-
-    # Prepare the assistant prompt
-    assistant_prompt = (
-        f"Given what you know about the user, {user_context}, "
-        f"generate a comprehensive weekly meal prep plan in {user.preferred_language} for the following list of meals: {json.dumps(meals_list)}.\n\n"
-        f"It is import to ensure the user's preferred serving size of {preferred_servings} is considered for each meal. "
-        f"**Goal:** Create a single bulk preparation session on {meal_plan.week_start_date.strftime('%A')} that covers all the meals for the entire week, minimizing daily cooking time. "
-        f"Then, provide daily follow-up tasks for each day of the week (e.g., Monday, Tuesday, Wednesday) to finalize each meal with minimal effort.\n\n"
-
-        f"**Instructions Schema:**\n"
-        f"Please produce a JSON object matching the schema exactly:\n"
-        f"{{\n"
-        f"  \"bulk_prep_steps\": [\n"
-        f"    {{\n"
-        f"      \"step_number\": int,\n"
-        f"      \"meal_type\": \"Breakfast\"|\"Lunch\"|\"Dinner\",\n"
-        f"      \"description\": str,\n"
-        f"      \"duration\": str,\n"
-        f"      \"ingredients\": List[str],\n"
-        f"      \"cooking_temperature\": Optional[str],\n"
-        f"      \"cooking_time\": Optional[str],\n"
-        f"      \"notes\": Optional[str]\n"
-        f"    }},\n"
-        f"    ...\n"
-        f"  ],\n"
-        f"  \"daily_tasks\": [\n"
-        f"    {{\n"
-        f"      \"day\": str,\n"
-        f"      \"step_number\": int,\n"
-        f"      \"tasks\": [\n"
-        f"        {{\n"
-        f"          \"step_number\": int,\n"
-        f"          \"meal_type\": \"Breakfast\"|\"Lunch\"|\"Dinner\",\n"
-        f"          \"description\": str,\n"
-        f"          \"duration\": str,\n"
-        f"          \"ingredients\": List[str],\n"
-        f"          \"cooking_temperature\": Optional[str],\n"
-        f"          \"cooking_time\": Optional[str],\n"
-        f"          \"notes\": Optional[str]\n"
-        f"        }},\n"
-        f"        ... (multiple tasks per day are allowed)\n"
-        f"      ],\n"
-        f"      \"total_estimated_time\": Optional[str]\n"
-        f"    }},\n"
-        f"    ... (include multiple days, such as Monday, Tuesday, Wednesday, each with multiple tasks)\n"
-        f"  ]\n"
-        f"}}\n\n"
-
-        f"**Additional Requirements:**\n"
-        f"- Only return the JSON structure described above—no additional explanations.\n"
-        f"- Include cooking times, temperatures, and techniques.\n"
-        f"- Avoid user allergens and adhere to dietary preferences.\n"
-        f"- Bulk prep steps should be detailed and cover all meals for the entire week. Daily tasks should be minimal, relying on pre-prepped items.\n\n"
-
-        f"**Example (Abbreviated):**\n"
-        f"{{\n"
-        f"  \"bulk_prep_steps\": [\n"
-        f"    {{\n"
-        f"      \"step_number\": 1,\n"
-        f"      \"meal_type\": \"Breakfast\",\n"
-        f"      \"description\": \"Rinse and slice 2 cups of fresh strawberries...\",\n"
-        f"      \"duration\": \"15 minutes\",\n"
-        f"      \"ingredients\": [\"strawberries\"],\n"
-        f"      \"notes\": \"Store in an airtight container.\"\n"
-        f"    }},\n"
-        f"    ...\n"
-        f"  ],\n"
-        f"  \"daily_tasks\": [\n"
-        f"    {{\n"
-        f"      \"day\": \"Monday\",\n"
-        f"      \"step_number\": 1,\n"
-        f"      \"tasks\": [\n"
-        f"        {{\n"
-        f"          \"step_number\": 1,\n"
-        f"          \"meal_type\": \"Breakfast\",\n"
-        f"          \"description\": \"Top the pre-prepared quinoa with sliced strawberries...\",\n"
-        f"          \"duration\": \"5 minutes\",\n"
-        f"          \"ingredients\": [\"quinoa\", \"strawberries\"],\n"
-        f"          \"notes\": \"Serve immediately.\"\n"
-        f"        }},\n"
-        f"        {{\n"
-        f"          \"step_number\": 2,\n"
-        f"          \"meal_type\": \"Breakfast\",\n"
-        f"          \"description\": \"Drizzle honey on top...\",\n"
-        f"          \"duration\": \"2 minutes\",\n"
-        f"          \"ingredients\": [\"honey\"],\n"
-        f"          \"notes\": \"Adjust sweetness as desired.\"\n"
-        f"        }}\n"
-        f"      ],\n"
-        f"      \"total_estimated_time\": \"7 minutes\"\n"
-        f"    }},\n"
-        f"    {{\n"
-        f"      \"day\": \"Tuesday\",\n"
-        f"      \"step_number\": 1,\n"
-        f"      \"tasks\": [ ... multiple tasks for Tuesday ... ],\n"
-        f"      \"total_estimated_time\": \"...\"\n"
-        f"    }},\n"
-        f"    {{\n"
-        f"      \"day\": \"Wednesday\",\n"
-        f"      \"step_number\": 1,\n"
-        f"      \"tasks\": [ ... multiple tasks for Wednesday ... ],\n"
-        f"      \"total_estimated_time\": \"...\"\n"
-        f"    }}\n"
-        f"  ]\n"
-        f"}}\n\n"
-
-    )
-    # Call OpenAI API
+        expiring_pantry_items = get_expiring_pantry_items(user)
+    except Exception as e:
+        logger.error(f"Error retrieving expiring pantry items for user {user.id}: {e}")
+        expiring_pantry_items = []
+    
+    expiring_items_str = ', '.join(expiring_pantry_items) if expiring_pantry_items else 'None'
+    
+    # Generate the user context
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
+        user_context = generate_user_context(user)
+    except Exception as e:
+        logger.error(f"Error generating user context: {e}")
+        user_context = 'No additional user context provided.'
+    
+    try:
+        # Format substitution information for prompt
+        substitution_str = ""
+        if substitution_info:
+            substitution_str = "Ingredient substitution information:\n"
+            for sub in substitution_info:
+                substitution_str += f"- {sub['notes']}\n"
+        
+        # Add chef meal note if needed
+        chef_note = ""
+        if chef_meals_present:
+            chef_note = "IMPORTANT: Some meals in this plan are chef-created and must be prepared exactly as specified. Do not suggest substitutions for chef-created meals."
+        
+        # Generate the bulk prep instructions using OpenAI
+        response = client.responses.create(
+            model="gpt-4o",  # Using the more capable model for bulk prep
+            input=[
                 {
                     "role": "system",
-                    "content": (
-                        f"You are a helpful assistant that generates comprehensive meal prep instructions. "
-                        f"The user prefers to minimize daily cooking time by preparing as much as possible in one day. "
-                        f"Ensure that all meals for the week are considered, and provide detailed instructions for both bulk prep and daily tasks. "
-                        f"For meals that typically require fresh preparation, include bulk prep steps to reduce time spent during the day-of cooking."
-                    )
+                    "content": f"You are a helpful assistant that generates efficient bulk meal prep instructions in {user_preferred_language}."
                 },
-                {"role": "user", "content": assistant_prompt}
+                {
+                    "role": "user",
+                    "content": (
+                        f"Answering in the user's preferred language: {user_preferred_language}, "
+                        f"Generate efficient bulk meal prep instructions for the entire week's meals: {json.dumps(meal_plan_data)}. "
+                        f"The meals should be scaled to the user's preferred serving size of {preferred_servings} servings. "
+                        f"The user has the following pantry items that are expiring soon: {expiring_items_str}. "
+                        f"Ensure these expiring items are used in the cooking instructions if they are part of the meals. "
+                        f"The instructions should help the user prepare as much as possible in a single session, "
+                        f"while ensuring food safety and quality throughout the week. "
+                        f"Consider which components can be pre-prepared, which should be cooked just before serving, "
+                        f"and how to safely store prepared components. "
+                        f"This bulk prep approach should adhere to the user's information: {user_context}."
+                        f"\n\n{substitution_str}\n"
+                        f"{chef_note}\n"
+                        f"IMPORTANT: If ingredient substitutions are provided for non-chef meals, clearly incorporate them into the prep instructions, "
+                        f"explaining how to use the substitute ingredients in place of the original ones, "
+                        f"including any cooking time or method adjustments needed."
+                    )
+                }
             ],
-            store=True,
-            metadata={'tag': 'bulk_prep_instructions'},
-            response_format={
+            text={
+                "format": {
                 'type': 'json_schema',
-                'json_schema': {
-                    "name": "BulkPrepInstructions",
-                    "schema": BulkPrepInstructions.model_json_schema()
+                'name': 'bulk_prep_instructions',
+                'schema': BulkPrepInstructions.model_json_schema()
                 }
             }
         )
-        instructions_content = response.choices[0].message.content
-    except Exception as e:
-        logger.error(f"Error generating bulk prep instructions: {e}")
-        return
-
-    # Parse and validate the instructions_content
-    try:
-        validated_prep = BulkPrepInstructions.model_validate_json(instructions_content)
-    except ValidationError as e:
-        logger.error(f"Instructions content validation error: {e}")
-        return
-
-    # Serialize the validated_prep to JSON
-    instruction_text = validated_prep.model_dump_json()
-    # Save bulk prep instructions for the meal plan (e.g., on Sunday)
-    MealPlanInstruction.objects.update_or_create(
-        meal_plan=meal_plan,
-        date=meal_plan.week_start_date,  # Assuming bulk prep is done on the start date
-        is_bulk_prep=True,
-        defaults={'instruction_text': instruction_text}
-    )
-
-    # Save follow-up instructions for each day
-    day_name_to_number = {
-        'Monday': 0,
-        'Tuesday': 1,
-        'Wednesday': 2,
-        'Thursday': 3,
-        'Friday': 4,
-        'Saturday': 5,
-        'Sunday': 6,
-    }
-    for daily_task in validated_prep.daily_tasks:
-        day_name = daily_task.day
-        day_number = day_name_to_number.get(day_name)
-        if day_number is not None:
-            instruction_date = meal_plan.week_start_date + timedelta(days=day_number)
+        
+        # Check if the response was successful
+        if response:
+            # Create a new MealPlanInstruction
+            MealPlanInstruction.objects.update_or_create(
+                meal_plan=meal_plan,
+                is_bulk_prep=True,
+                defaults={
+                    'instruction_text': response.output_text,
+                    'date': meal_plan.week_start_date
+                }
+            )
+            logger.info(f"Generated bulk prep instructions for meal plan {meal_plan_id}")
+            
+            # Send an email with the bulk prep instructions
+            send_bulk_prep_instructions.delay(meal_plan_id)
         else:
-            logger.error(f"Invalid day name '{day_name}' in daily tasks.")
-            continue
-
-        # Print the daily tasks before saving
-        print(f"Daily tasks for {day_name} about to be saved:", daily_task.model_dump())
-
-        instruction_text = json.dumps(daily_task.model_dump())
-
-        MealPlanInstruction.objects.update_or_create(
-            meal_plan=meal_plan,
-            date=instruction_date,
-            is_bulk_prep=False,
-            defaults={'instruction_text': instruction_text}
-        )
-
-    # Send bulk prep instructions to the user
-    try:
-        send_bulk_prep_instructions.delay(meal_plan_id)
+            logger.error(f"Failed to generate bulk prep instructions for meal plan {meal_plan_id}")
+    
     except Exception as e:
-        logger.error(f"Error sending bulk prep instructions: {e}")
+        logger.error(f"Error generating bulk prep instructions for meal plan {meal_plan_id}: {str(e)}")
 
 @shared_task
 def send_bulk_prep_instructions(meal_plan_id):

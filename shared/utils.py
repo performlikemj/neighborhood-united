@@ -38,6 +38,9 @@ import os
 import requests
 import logging
 import numpy as np 
+from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -146,22 +149,42 @@ def get_embedding(text, model="text-embedding-3-small"):
         # Fetch the response from the embedding API
         response = client.embeddings.create(input=[text], model=model)
         
-        # Log the entire response to understand what's being returned
-        # logger.info(f"Embedding API response: {response}")
-
-
-        embedding = response.data[0].embedding  # Access the embedding attribute
-
-        if isinstance(embedding, np.ndarray):
-            embedding = embedding.tolist()
-        return embedding if is_valid_embedding(embedding) else None
+        # Enable detailed logging when troubleshooting
+        logger.debug(f"Embedding API response type: {type(response)}")
+        logger.debug(f"Embedding API response structure: {response.__dict__.keys() if hasattr(response, '__dict__') else 'No __dict__ attribute'}")
+        
+        # Access the embedding data safely
+        if hasattr(response, 'data') and len(response.data) > 0:
+            embedding_data = response.data[0]
+            
+            logger.debug(f"Embedding data attributes: {embedding_data.__dict__.keys() if hasattr(embedding_data, '__dict__') else 'No __dict__ attribute'}")
+            
+            if hasattr(embedding_data, 'embedding'):
+                embedding = embedding_data.embedding
+                
+                # Convert numpy arrays to lists if necessary
+                if isinstance(embedding, np.ndarray):
+                    embedding = embedding.tolist()
+                
+                # Validate the embedding
+                if is_valid_embedding(embedding):
+                    return embedding
+                else:
+                    logger.error(f"Invalid embedding format or length: {len(embedding) if embedding else 'None'}")
+                    return None
+            else:
+                logger.error("No 'embedding' attribute found in response.data[0]")
+                return None
+        else:
+            logger.error(f"No data in embedding response: {response}")
+            return None
+            
     except OpenAIError as e:
-        logger.error(f"Error generating embedding: {e}")
+        logger.error(f"OpenAI Error generating embedding: {e}")
         return None
-
-
     except Exception as e:
-        logger.error(f"Error generating embedding: {e}")
+        logger.error(f"Unexpected error generating embedding: {str(e)}")
+        logger.error(f"Error traceback: {traceback.format_exc()}")
         return None
 
 
@@ -1284,16 +1307,43 @@ def create_meal(request=None, user_id=None, name=None, dietary_preference=None, 
                     f"Name: {meal.name}, Description: {meal.description}, Dietary Preference: {dietary_preference}, "
                     f"Meal Type: {meal.meal_type}, Chef: {user.username}, Price: {meal.price if meal.price else 'N/A'}"
                 )
-                meal_embedding = get_embedding(meal_representation)
-
-                if isinstance(meal_embedding, list) and len(meal_embedding) == 1536:
-                    meal.meal_embedding = meal_embedding
+                
+                # Try up to 3 times to get a valid embedding
+                embedding_attempts = 0
+                max_embedding_attempts = 3
+                while embedding_attempts < max_embedding_attempts:
+                    try:
+                        embedding_attempts += 1
+                        logger.info(f"Generating embedding for meal '{meal.name}' (attempt {embedding_attempts}/{max_embedding_attempts})")
+                        
+                        meal_embedding = get_embedding(meal_representation)
+                        
+                        if meal_embedding and isinstance(meal_embedding, list) and len(meal_embedding) == 1536:
+                            meal.meal_embedding = meal_embedding
+                            meal.save(update_fields=['meal_embedding'])
+                            logger.info(f"Meal embedding assigned successfully for '{meal.name}'.")
+                            break
+                        else:
+                            logger.warning(
+                                f"Invalid embedding format for meal '{meal.name}' on attempt {embedding_attempts}. "
+                                f"Type: {type(meal_embedding)}, Length: {len(meal_embedding) if meal_embedding else 'None'}"
+                            )
+                            # Short delay before retrying
+                            time.sleep(1)
+                    except Exception as e:
+                        logger.error(f"Error generating embedding on attempt {embedding_attempts}: {str(e)}")
+                        # Short delay before retrying
+                        time.sleep(1)
+                
+                # If we couldn't get a valid embedding after all attempts, create a fallback
+                if not hasattr(meal, 'meal_embedding') or meal.meal_embedding is None:
+                    logger.warning(f"Using fallback embedding for meal '{meal.name}' after {max_embedding_attempts} failed attempts")
+                    # Create a simple fallback embedding (all zeros with a single 1.0 to ensure non-zero magnitude)
+                    fallback_embedding = [0.0] * 1536
+                    fallback_embedding[0] = 1.0
+                    meal.meal_embedding = fallback_embedding
                     meal.save(update_fields=['meal_embedding'])
-                    logger.info(f"Meal embedding assigned successfully for '{meal.name}'.")
-                else:
-                    logger.error(f"Invalid embedding generated for meal '{meal.name}'. Expected list of length 1536.")
-                    attempt += 1
-                    continue  # Retry
+                    logger.info(f"Fallback embedding assigned for meal '{meal.name}'.")
 
                 # Step 8: Prepare the response
                 meal_dict = {
@@ -2307,3 +2357,37 @@ def sanitize_query(query):
     # Remove delimiters from the user input before executing the query
     return query.replace("####", "")
 
+def standardize_response(status, message, details=None, status_code=200, meal_plan=None):
+    """
+    Helper function to standardize API responses
+    
+    Parameters:
+    - status: A string indicating the status of the operation (e.g., "success", "error", "existing_plan")
+    - message: A user-friendly message describing the result
+    - details: Optional dictionary with additional context about the operation
+    - status_code: HTTP status code to return
+    - meal_plan: Optional MealPlan object to serialize and include in the response
+    
+    Returns:
+    - A Response object with a standardized structure
+    """
+    from meals.serializers import MealPlanSerializer
+
+    response = {
+        "status": status,
+        "message": message
+    }
+    
+    if details:
+        response["details"] = details
+        
+    if meal_plan:
+        serializer = MealPlanSerializer(meal_plan)
+        response["meal_plan"] = serializer.data
+        
+    return Response(response, status=status_code)
+
+class ChefMealEventPagination(PageNumberPagination):
+    page_size = 12
+    page_size_query_param = 'page_size'
+    max_page_size = 100

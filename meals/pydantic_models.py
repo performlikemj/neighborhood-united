@@ -1,6 +1,6 @@
 # meals/pydantic_models.py
-from pydantic import BaseModel, Field, RootModel
-from typing import List, Optional, Dict
+from pydantic import BaseModel, Field, ConfigDict
+from typing import List, Optional, Dict, Any, ClassVar
 from enum import Enum
 
 class DietaryPreference(str, Enum):
@@ -36,6 +36,23 @@ class ShoppingCategory(str, Enum):
     CONDIMENTS = "Condiments"
     MISC = "Miscellaneous"
 
+class EmergencySupplyItem(BaseModel):
+    item_name: str
+    quantity_to_buy: str
+    unit: Optional[str] = Field(..., description="Unit of measurement")
+    notes: Optional[str] = Field(..., description="Additional notes")
+
+    # Important: Don't include default values in the schema
+    model_config = ConfigDict(extra="forbid")
+
+class EmergencySupplyList(BaseModel):
+    emergency_list: List[EmergencySupplyItem]
+    notes: Optional[str] = Field(..., description="Additional notes")
+
+    # Set the schema title and forbid extra properties at the top level.
+    model_config = ConfigDict(title="EmergencySupplyList", extra="forbid")
+
+    
 # Define the possible meal types
 class MealType(str, Enum):
     BREAKFAST = "Breakfast"
@@ -43,85 +60,116 @@ class MealType(str, Enum):
     DINNER = "Dinner"
 
 class PantryUsageItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     pantry_item_name: str = Field(..., description="Exact name of the pantry item used.")
     quantity_used: Optional[str] = Field(
-        default=None, 
+        ..., 
         description="Amount of this pantry item used, e.g. '2', '1.5', '0.5', 'To taste', etc."
     )
     unit: Optional[str] = Field(
-        default=None,
+        ...,
         description="Unit of measure for the used quantity, e.g. 'cup', 'teaspoon', 'each', etc."
     )
-    notes: Optional[str] = Field(default=None, description="Any special notes about usage.")
+    notes: Optional[str] = Field(..., description="Any special notes about usage.")
 
 class ShoppingListItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     meal_name: str
     ingredient: str
     quantity: str
     unit: str
     notes: Optional[str] = None
-    category: ShoppingCategory = Field(default=ShoppingCategory.MISC) 
+    category: str = Field(..., description="Category of the item.")
 
 class ShoppingList(BaseModel):
     items: List[ShoppingListItem]
 
 class InstructionStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     step_number: int
     description: str
-    duration: Optional[str] = Field(default="N/A", description="Estimated duration. If not provided, defaults to 'N/A'.")
+    duration: Optional[str] = Field(..., description="Estimated duration. If not provided, defaults to 'N/A'.")
 
 class Instructions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     steps: List[InstructionStep]
 
 class MealData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str
     description: str
-    dietary_preference: DietaryPreference = Field(default=DietaryPreference.EVERYTHING)
+    dietary_preference: str = Field(..., description="Dietary preference for the meal.")
     meal_type: Optional[str] = Field(..., description="Type of meal (e.g., 'Breakfast', 'Lunch', 'Dinner')")
+    is_chef_meal: bool = Field(
+        ...,
+        description="Indicates if this meal was created by a chef"
+    )
+    chef_name: Optional[str] = Field(
+        ...,
+        description="Name of the chef who created this meal, if applicable"
+    )
+    chef_meal_event_id: Optional[int] = Field(
+        ...,
+        description="ID of the chef meal event, if this is a chef meal"
+    )
     used_pantry_items: List[str] = Field(
-        default=[],
+        ...,
         description="List of the user's expiring pantry items (in string form) actually used in this meal."
     )
 
 class MealOutputSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     meal: MealData
     status: str
     message: str
     current_time: str
 
 class MealPlanMeal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     day: str  # e.g., "Monday"
     meal_type: str  # e.g., "Breakfast"
     meal_name: str
     meal_description: Optional[str] = None
+    is_chef_meal: bool = Field(
+        ...,
+        description="Indicates if this meal was created by a chef"
+    )
+    chef_name: Optional[str] = Field(
+        ...,
+        description="Name of the chef who created this meal, if applicable"
+    )
+    chef_meal_event_id: Optional[int] = Field(
+        ...,
+        description="ID of the chef meal event, if this is a chef meal"
+    )
     servings: int = Field(
-        default=None, 
-        description="Number of servings for this meal (e.g., the meal’s base or intended portion after cooking)."
+        ..., 
+        description="Number of servings for this meal (e.g., the meal's base or intended portion after cooking)."
     )
 
 class MealPlanSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     meals: List[MealPlanMeal]
 
 class MealToReplace(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     meal_id: int = Field(..., description="ID of the meal to be replaced")
     day: str = Field(..., description="Day of the week (e.g., 'Monday')")
     meal_type: str = Field(..., description="Type of meal (e.g., 'Breakfast', 'Lunch', 'Dinner')")
 
 class MealsToReplaceSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     meals_to_replace: List[MealToReplace] = Field(..., description="List of meals that need to be replaced")
 
 class MealTypeAssignment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     meal_type: MealType = Field(
         ...,
         description="The type of the meal. Must be one of: Breakfast, Lunch, Dinner."
     )
 
-    model_config = {
-        "json_schema_extra": {
-            "example": {
-                "meal_type": "Breakfast"
-            }
-        }
+    example : ClassVar[Dict[str, Any]] = {
+        "meal_type": "Breakfast"
     }
 
 class SanitySchema(BaseModel):
@@ -130,12 +178,9 @@ class SanitySchema(BaseModel):
         description="True if the meal is allergen-free, False if it contains any allergens."
     )
 
-    model_config = {
-        "json_schema_extra": {
-            "example": {
-                "allergen_check": True
-            }
-        }
+    model_config = ConfigDict(extra="forbid")
+    example : ClassVar[Dict[str, Any]] = {
+        "allergen_check": True
     }
 
 class RelevantSchema(BaseModel):
@@ -144,141 +189,154 @@ class RelevantSchema(BaseModel):
         description="True if the question is relevant, False if it it is malicious and/or not related to the service."
     )
 
-    model_config = {
-        "json_schema_extra": {
-            "example": {
-                "relevant": True
-            }
-        }
+    model_config = ConfigDict(extra="forbid")
+    example : ClassVar[Dict[str, Any]] = {
+        "relevant": True
     }
 
 
 class DietaryPreferencesSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     dietary_preferences: List[DietaryPreference] = Field(
         ..., 
         description="List of dietary preferences applicable to the meal."
     )
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "dietary_preferences": ["Vegan", "Gluten-Free"]
-            }
+    example : ClassVar[Dict[str, Any]] = {
+            "dietary_preferences": ["Vegan", "Gluten-Free"]
         }
 
 class DietaryPreferenceDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     description: str = Field(..., description="A detailed description of the dietary preference.")
     allowed: List[str] = Field(..., description="A list of allowed foods for this dietary preference.")
     excluded: List[str] = Field(..., description="A list of excluded foods for this dietary preference.")
 
 # New Pydantic Models for Pantry Items
 class ReplenishItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     item_name: str = Field(..., description="Name of the item to replenish")
     quantity: int = Field(..., description="Quantity needed to meet the emergency supply goal")
     unit: str = Field(..., description="Unit of measurement (e.g., cans, grams)")
 
 class ReplenishItemsSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     items_to_replenish: List[ReplenishItem] = Field(..., description="List of items to replenish")
 
 # New Pydantic Models for Approving Meal Plans
 class MealItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     meal_name: str = Field(..., description="Name of the meal.")
     meal_type: str = Field(..., description="Type of the meal (e.g., Breakfast, Lunch, Dinner).")
     day: str = Field(..., description="Day of the week the meal is planned for.")
     description: str = Field(..., description="A tempting description of the meal.")
+    is_chef_meal: bool = Field(
+        ...,
+        description="Indicates if this meal was created by a chef"
+    )
+    chef_name: Optional[str] = Field(
+        ...,
+        description="Name of the chef who created this meal, if applicable"
+    )
+    chef_meal_event_id: Optional[int] = Field(
+        ...,
+        description="ID of the chef meal event, if this is a chef meal"
+    )
 
 class MealPlanApprovalEmailSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     user_name: str = Field(..., description="Name of the user.")
     meal_plan_week_start: str = Field(..., description="Start date of the meal plan week.")
     meal_plan_week_end: str = Field(..., description="End date of the meal plan week.")
     meals: List[MealItem] = Field(..., description="The full list of the meals included in the meal plan, ordered by day and meal type.")
     summary_text: str = Field(..., description="A tempting summary of the meal plan designed to entice the user to click the approval link.")
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "user_name": "JohnDoe",
-                "meal_plan_week_start": "2024-10-22",
-                "meal_plan_week_end": "2024-10-28",
-                "meals": [
+    example : ClassVar[Dict[str, Any]] = {
+            "user_name": "JohnDoe",
+            "meal_plan_week_start": "2024-10-22",
+            "meal_plan_week_end": "2024-10-28",
+            "meals": [
                     {
                         "meal_name": "Oatmeal with Fresh Berries",
                         "meal_type": "Breakfast",
                         "day": "Monday",
-                        "description": "A warm bowl of hearty oatmeal topped with juicy, fresh berries to start your day off right."
+                        "description": "A warm bowl of hearty oatmeal topped with juicy, fresh berries to start your day off right.",
+                        "is_chef_meal": False,
+                        "chef_name": None,
+                        "chef_meal_event_id": None
                     },
                     {
                         "meal_name": "Grilled Chicken Salad",
                         "meal_type": "Lunch",
                         "day": "Monday",
-                        "description": "Tender grilled chicken over a bed of crisp greens with a zesty vinaigrette."
+                        "description": "Tender grilled chicken over a bed of crisp greens with a zesty vinaigrette.",
+                        "is_chef_meal": False,
+                        "chef_name": None,
+                        "chef_meal_event_id": None
                     }
                 ],
                 "summary_text": "We've put together a week of mouthwatering meals just for you, JohnDoe! Whether you're enjoying a hearty breakfast of Oatmeal with Fresh Berries or a refreshing Grilled Chicken Salad, your week is set to be delicious. Ready to approve your meal plan?"
             }
-        }
+
 
 # Bulk Meal Plan Prepping
 class BulkPrepStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     step_number: int = Field(..., description="Step number in the bulk preparation sequence.")
     meal_type: str = Field(..., description="Type of meal for the step (e.g., Breakfast, Lunch, Dinner).")
     description: str = Field(..., description="Detailed description of the step.")
-    duration: Optional[str] = Field(None, description="Estimated duration for the step. If not provided, defaults to None.")
-    ingredients: Optional[List[str]] = Field(None, description="List of ingredients needed for this step.")
-    cooking_temperature: Optional[str] = Field(None, description="Cooking temperature if applicable.")
-    cooking_time: Optional[str] = Field(None, description="Cooking time if applicable.")
-    notes: Optional[str] = Field(None, description="Additional notes or tips.")
+    duration: Optional[str] = Field(..., description="Estimated duration for the step. If not provided, defaults to None.")
+    ingredients: Optional[List[str]] = Field(..., description="List of ingredients needed for this step.")
+    cooking_temperature: Optional[str] = Field(..., description="Cooking temperature if applicable.")
+    cooking_time: Optional[str] = Field(..., description="Cooking time if applicable.")
+    notes: Optional[str] = Field(..., description="Additional notes or tips.")
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "step_number": 1,
-                "meal_type": "Lunch",
-                "description": "Chop all vegetables and store in airtight containers.",
-                "duration": "30 minutes",
-                "ingredients": ["bell peppers", "onions", "carrots"],
-                "cooking_temperature": "180C",
+    example : ClassVar[Dict[str, Any]] = {
+            "step_number": 1,
+            "meal_type": "Lunch",
+            "description": "Chop all vegetables and store in airtight containers.",
+            "duration": "30 minutes",
+            "ingredients": ["bell peppers", "onions", "carrots"],
+            "cooking_temperature": "180C",
                 "cooking_time": "12 minutes",
                 "notes": "Store each vegetable in a separate container to maintain freshness."
             }
-        }
+        
 
 class DailyTaskStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     step_number: int = Field(..., description="Step number in the daily task sequence.")
     meal_type: str = Field(..., description="Type of meal for the step (e.g., Breakfast, Lunch, Dinner).")
     description: str = Field(..., description="Detailed description of the step.")
-    duration: Optional[str] = Field(None, description="Estimated duration for the step. If not provided, defaults to None.")
-    ingredients: Optional[List[str]] = Field(None, description="List of ingredients needed for this step.")
-    cooking_temperature: Optional[str] = Field(None, description="Cooking temperature if applicable.")
-    cooking_time: Optional[str] = Field(None, description="Cooking time if applicable.")
-    notes: Optional[str] = Field(None, description="Additional notes or tips.")
+    duration: Optional[str] = Field(..., description="Estimated duration for the step. If not provided, defaults to None.")
+    ingredients: Optional[List[str]] = Field(..., description="List of ingredients needed for this step.")
+    cooking_temperature: Optional[str] = Field(..., description="Cooking temperature if applicable.")
+    cooking_time: Optional[str] = Field(..., description="Cooking time if applicable.")
+    notes: Optional[str] = Field(..., description="Additional notes or tips.")
 
-    class Config:
-        json_schema_extra= {
-            "example": {
-                "step_number": 1,
-                "meal_type": "Breakfast",
-                "description": "Reheat the pre-cooked quinoa in a microwave for 2 minutes.",
-                "duration": "2 minutes",
-                "ingredients": ["quinoa"],
+    example : ClassVar[Dict[str, Any]] = {
+            "step_number": 1,
+            "meal_type": "Breakfast",
+            "description": "Reheat the pre-cooked quinoa in a microwave for 2 minutes.",
+            "duration": "2 minutes",
+            "ingredients": ["quinoa"],
                 "cooking_temperature": "300W",
                 "cooking_time": "2 minutes",
                 "notes": "Cover the bowl with a damp paper towel to prevent drying out."
             }
-        }
+        
 
 class DailyTask(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     step_number: int = Field(..., description="Step number in the daily task sequence.")
     day: str = Field(..., description="Day of the week (e.g., 'Monday').")
     tasks: List[DailyTaskStep] = Field(..., description="List of tasks for the day.")
-    total_estimated_time: Optional[str] = Field(None, description="Total estimated time to complete all tasks for the day.")
+    total_estimated_time: Optional[str] = Field(..., description="Total estimated time to complete all tasks for the day.")
 
-    class Config:
-        json_schema_extra= {
-            "example": {
-                "day": "Monday",
-                "step_number": 1,
-                "tasks": [
+    example : ClassVar[Dict[str, Any]] = {
+            "day": "Monday",
+            "step_number": 1,
+            "tasks": [
                     {
                         "step_number": 1,
                         "meal_type": "Breakfast",
@@ -300,18 +358,17 @@ class DailyTask(BaseModel):
                 ],
                 "total_estimated_time": "15 minutes"
             }
-        }
+        
 
 
 class BulkPrepInstructions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     bulk_prep_steps: List[BulkPrepStep] = Field(..., description="List of steps for bulk preparation.")
     daily_tasks: List[DailyTask] = Field(..., description="List of daily follow-up tasks, each representing a day of the week.")
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "bulk_prep_steps": [
-                    {
+    example : ClassVar[Dict[str, Any]] = {
+            "bulk_prep_steps": [
+                {
                         "step_number": 1,
                         "meal_type": "Breakfast",
                         "description": "Wash, hull, and slice 3 cups of strawberries. Store in an airtight container.",
@@ -432,21 +489,23 @@ class BulkPrepInstructions(BaseModel):
                     }
                 ]
             }
-        }
 
 # Pantry Management
 class PantryTagsSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     tags: List[str] = Field(
         ...,
         description="A list of tags describing the pantry item."
     )
 
 class UsageItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     item_name: str = Field(..., description="Exact name of the pantry item to use.")
     quantity_used: float = Field(..., description="How many units the recipe calls for.")
     unit: str = Field(..., description="Unit of measure, e.g. 'cups', 'pieces', 'grams'")
 
 class UsageList(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     """
     A top-level object containing an array of usage items. 
     This structure satisfies OpenAI's JSON Schema requirement 
@@ -457,16 +516,9 @@ class UsageList(BaseModel):
         description="An array of items indicating how much of each pantry item to use."
     )
 
-    class Config:
-        # In Pydantic v2, you can still define extra behaviors or examples like this:
-        title = "UsageList"
-        extra = "forbid"  # Forbid unknown fields
-
-        json_schema_extra = {
-            "examples": [
+    example : ClassVar[Dict[str, Any]] = {
+            "usage_items": [
                 {
-                    "usage_items": [
-                        {
                             "item_name": "milk",
                             "quantity_used": 2.0,
                             "unit": "cups"
@@ -475,8 +527,6 @@ class UsageList(BaseModel):
                             "item_name": "eggs",
                             "quantity_used": 3,
                             "unit": "pieces"
-                        }
-                    ]
                 }
             ]
         }

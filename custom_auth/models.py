@@ -5,8 +5,9 @@ from django.apps import apps
 from django.contrib.auth.models import AbstractUser
 from django.contrib.auth import get_user_model
 from django_countries.fields import CountryField
-from local_chefs.models import PostalCode
+from local_chefs.models import PostalCode, ChefPostalCode
 from django.contrib.postgres.fields import ArrayField
+from django.core.exceptions import ValidationError
 
 # Create your models here.
 class CustomUser(AbstractUser):
@@ -124,18 +125,94 @@ class Address(models.Model):
     street = models.CharField(max_length=255, blank=True, null=True)
     city = models.CharField(max_length=255, blank=True, null=True)
     state = models.CharField(max_length=255, blank=True, null=True)
-    input_postalcode = models.CharField(max_length=10, blank=True, null=True)
+    input_postalcode = models.CharField(max_length=10, blank=True, null=True)  # Normalized format for lookups
+    display_postalcode = models.CharField(max_length=15, blank=True, null=True)  # Original user input format
     country = CountryField(blank=True, null=True)
 
     def __str__(self):
-        return f'{self.user} - {self.input_postalcode}, {self.country}'
+        display_code = self.display_postalcode or self.input_postalcode
+        return f'{self.user} - {display_code}, {self.country}'
+
+    def normalize_postal_code(self, postal_code):
+        """
+        Normalize the postal code for database storage and lookups
+        Removes all non-alphanumeric characters and converts to uppercase
+        """
+        if not postal_code:
+            return None
+            
+        import re
+        # Remove all non-alphanumeric characters and convert to uppercase
+        return re.sub(r'[^A-Z0-9]', '', postal_code.upper())
+
+    def clean(self):
+        # Store the original user input for display
+        if self.input_postalcode and not self.display_postalcode:
+            self.display_postalcode = self.input_postalcode
+            
+        # Normalize postal code for lookups
+        if self.input_postalcode and self.country:
+            # Store the original format before normalizing
+            if not self.display_postalcode:
+                self.display_postalcode = self.input_postalcode
+                
+            # Normalize for database storage and lookups
+            self.input_postalcode = self.normalize_postal_code(self.input_postalcode)
+            
+            # You could add country-specific postal code validation here
+            # For example, US postal codes are 5 digits or 5+4 digits
+            if self.country == 'US' and not (
+                len(self.input_postalcode) == 5 or len(self.input_postalcode) == 9
+            ):
+                raise ValidationError({'input_postalcode': 'US postal codes must be 5 digits or 9 digits (ZIP+4)'})
+            
+            # Canadian postal codes are in the format A1A1A1 (after normalization)
+            elif self.country == 'CA' and not (
+                len(self.input_postalcode) == 6 and
+                self.input_postalcode[0::2].isalpha() and
+                self.input_postalcode[1::2].isdigit()
+            ):
+                raise ValidationError({'input_postalcode': 'Canadian postal codes must be in the format A1A 1A1'})
+                
+            # Japanese postal codes are 7 digits after normalization
+            elif self.country == 'JP' and not (
+                len(self.input_postalcode) == 7 and self.input_postalcode.isdigit()
+            ):
+                raise ValidationError({'input_postalcode': 'Japanese postal codes must be 7 digits'})
+                
+        # Require both country and postal code if either is provided
+        if (self.country and not self.input_postalcode) or (self.input_postalcode and not self.country):
+            raise ValidationError('Both country and postal code must be provided together')
+
+    def get_or_create_postal_code(self):
+        """
+        Gets the corresponding PostalCode object for this address, creating one if it doesn't exist.
+        Returns None if either country or input_postalcode is missing.
+        """
+        if not self.country or not self.input_postalcode:
+            return None
+            
+        postal_code, created = PostalCode.objects.get_or_create(
+            code=self.input_postalcode,  # Using normalized code
+            country=self.country
+        )
+        return postal_code
 
     def is_postalcode_served(self):
         """
         Checks if the input postal code is in the list of served postal codes.
         Returns True if served, False otherwise.
         """
-        return PostalCode.objects.filter(code=self.input_postalcode).exists()
+        # First ensure the postal code exists in our system
+        try:
+            postal_code = PostalCode.objects.get(
+                code=self.input_postalcode,  # Using normalized code
+                country=self.country
+            )
+            # Then check if any chef is serving this postal code
+            return ChefPostalCode.objects.filter(postal_code=postal_code).exists()
+        except PostalCode.DoesNotExist:
+            return False
 
     def save(self, *args, **kwargs):
         self.full_clean()  # This ensures that the model is validated before saving

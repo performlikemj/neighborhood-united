@@ -18,7 +18,7 @@ class Chef(models.Model):
     chef_request_bio = models.TextField(blank=True, null=True)
     chef_request_profile_pic = models.ImageField(upload_to='profile_pics/', blank=True, null=True)
     review_summary = models.TextField(blank=True, null=True)
-    chef_embedding = VectorField(dimensions=1536, null=True)  # Embedding field
+    chef_embedding = VectorField(dimensions=1536, null=True, blank=True)  # Embedding field
 
 
     def __str__(self):

@@ -14,7 +14,8 @@ from shared.utils import append_dietary_preference_to_json, get_dietary_preferen
 
 logger = logging.getLogger(__name__)
 
-client = OpenAI(api_key=settings.OPENAI_KEY)
+OPENAI_API_KEY = settings.OPENAI_KEY
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 @shared_task
@@ -27,9 +28,9 @@ def handle_custom_dietary_preference(custom_prefs):
         if custom_pref and not get_dietary_preference_info(custom_pref):
             try:
                 # Step 4: Use OpenAI to generate structured JSON
-                response = client.chat.completions.create(
+                response = client.responses.create(
                     model="gpt-4o-mini",
-                    messages=[
+                    input=[
                         {
                             "role": "system",
                             "content": "You are an assistant that helps define new dietary preferences."
@@ -42,21 +43,20 @@ def handle_custom_dietary_preference(custom_prefs):
                             )
                         }
                     ],
-                    store=True,
-                    metadata={'tag': 'custom_dietary_preference'},
-                    response_format={
-                        'type': 'json_schema',
-                        'json_schema': 
-                            {
-                                "name": "CustomDietaryPreference",
-                                "schema": DietaryPreferenceDetail.model_json_schema()
-                            }
+                    #store=True,
+                    #metadata={'tag': 'custom_dietary_preference'},
+                    text={
+                        "format": {
+                            'type': 'json_schema',
+                            'name': 'custom_dietary_preference',
+                            'schema': DietaryPreferenceDetail.model_json_schema()
                         }
-                    )
+                    }
+                )
 
 
                 # Parse GPT response
-                gpt_output = response.choices[0].message.content
+                gpt_output = response.output_text
                 new_pref_data = json.loads(gpt_output)
                 # Validate the structure using Pydantic
                 validated_pref = DietaryPreferenceDetail.model_validate(new_pref_data)
@@ -95,22 +95,21 @@ def assign_dietary_preferences(meal_id):
     try:
         meal = Meal.objects.get(id=meal_id)
         messages = meal.generate_messages()
-        response = client.chat.completions.create(
+        response = client.responses.create(
             model="gpt-4o-mini",
-            messages=messages,
-            store=True,
-            metadata={'tag': 'dietary_preferences'},
-            response_format={
-                'type': 'json_schema',
-                'json_schema': 
-                    {
-                        "name": "Preferences",
-                        "schema": DietaryPreferencesSchema.model_json_schema()
-                    }
+            input=messages,
+            #store=True,
+            #metadata={'tag': 'dietary_preferences'},
+            text={
+                "format": {
+                    'type': 'json_schema',
+                    'name': 'preferences',
+                    'schema': DietaryPreferencesSchema.model_json_schema()
                 }
+            }
         )  
 
-        assistant_message_content = response.choices[0].message.content.strip()
+        assistant_message_content = response.output_text.strip()
 
         dietary_prefs = meal.parse_dietary_preferences(assistant_message_content)
 

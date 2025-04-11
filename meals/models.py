@@ -22,10 +22,31 @@ import traceback
 import numpy as np
 import logging
 import uuid
+import dateutil.parser
+from django.db.models import Avg, Sum, Count, Max, F, Q
+from django.contrib.postgres.fields import ArrayField
+import decimal
+
+# Add status constants at the top of the file
+# Shared statuses between ChefMealEvent and ChefMealOrder
+STATUS_COMPLETED = 'completed'
+STATUS_CANCELLED = 'cancelled'
+
+# ChefMealEvent specific statuses
+STATUS_SCHEDULED = 'scheduled'
+STATUS_OPEN = 'open'
+STATUS_CLOSED = 'closed'
+STATUS_IN_PROGRESS = 'in_progress'
+
+# ChefMealOrder specific statuses
+STATUS_PLACED = 'placed'
+STATUS_CONFIRMED = 'confirmed'
+STATUS_REFUNDED = 'refunded'
 
 logger = logging.getLogger(__name__)
 
-client = OpenAI(api_key=settings.OPENAI_KEY)
+OPENAI_API_KEY = settings.OPENAI_KEY
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 class Migration(migrations.Migration):
     operations = [
@@ -35,15 +56,19 @@ class Migration(migrations.Migration):
 class Ingredient(models.Model):
     chef = models.ForeignKey(Chef, on_delete=models.CASCADE, related_name='ingredients')
     name = models.CharField(max_length=200)
-    spoonacular_id = models.IntegerField(null=True) 
-    calories = models.FloatField(null=True)
+    calories = models.FloatField(null=True, blank=True)  # Making all nutritional info blank=True
     fat = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     carbohydrates = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     protein = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     ingredient_embedding = VectorField(dimensions=1536, null=True)
+    is_custom = models.BooleanField(default=True)  # Flag to distinguish custom ingredients from Spoonacular ones
 
     class Meta:
-        unique_together = ('spoonacular_id', 'chef',)
+        unique_together = ('chef', 'name')
+        indexes = [
+            models.Index(fields=['name']),  # Add an index for name to improve search performance
+            models.Index(fields=['chef', 'name']),  # Add a composite index for chef+name searches
+        ]
 
     def __str__(self):
         # Start with the ingredient's name
@@ -81,29 +106,18 @@ class Dish(models.Model):
     protein = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     
     def __str__(self):
-        # Start with the basic dish info
-        basic_info = f'{self.name} by {self.chef.user.username}'
-
-        # Ingredients list
-        ingredients_list = ', '.join([ingredient.name for ingredient in self.ingredients.all()][:5])  # Get top 5 ingredients for brevity
-        ingredients_info = f'Ingredients: {ingredients_list}...'
-
-        # Nutritional info, displayed only if available
-        nutritional_info = ''
-        if any([self.calories, self.fat, self.carbohydrates, self.protein]):
-            nutritional_values = []
-            if self.calories:
-                nutritional_values.append(f'Calories: {self.calories} kcal')
-            if self.fat:
-                nutritional_values.append(f'Fat: {self.fat} g')
-            if self.carbohydrates:
-                nutritional_values.append(f'Carbs: {self.carbohydrates} g')
-            if self.protein:
-                nutritional_values.append(f'Protein: {self.protein} g')
-            nutritional_info = ', '.join(nutritional_values)
-
-        # Combine all the elements
-        return f'{basic_info}. {ingredients_info} {nutritional_info}'
+        # First check if the object has been saved (has an ID)
+        if self.id is None:
+            return f"{self.name} (unsaved)"
+        
+        # Now it's safe to access many-to-many relationships
+        try:
+            ingredient_names = [i.name for i in self.ingredients.all()[:5]]
+            ingredients_list = ', '.join(ingredient_names) if ingredient_names else "No ingredients"
+            return f"{self.name} ({ingredients_list}{'...' if self.ingredients.count() > 5 else ''})"
+        except Exception:
+            # Fallback if anything goes wrong
+            return f"{self.name} (ID: {self.id})"
 
     
     def update_nutritional_info(self):
@@ -131,9 +145,17 @@ class Dish(models.Model):
         self.protein = total_protein
 
     def save(self, *args, **kwargs):
-        # Update nutritional information before saving
-        self.update_nutritional_info()
-        super().save(*args, **kwargs)
+        # For new instances, we need to save first to establish M2M relationships
+        if not self.pk:
+            super().save(*args, **kwargs)
+            # After initial save, update nutritional info and save again
+            self.update_nutritional_info()
+            super().save(*args, **kwargs)
+        else:
+            # For existing instances, update nutritional info before saving
+            self.update_nutritional_info()
+            super().save(*args, **kwargs)
+
 
 
 class PostalCodeManager(models.Manager):
@@ -141,10 +163,12 @@ class PostalCodeManager(models.Manager):
         if user.is_authenticated:
             try:
                 user_postal_code = user.address.input_postalcode
-                if user_postal_code:
-                    # Get all chefs that serve this postal code
+                user_country = user.address.country
+                if user_postal_code and user_country:
+                    # Get all chefs that serve this postal code with the user's country
                     chef_postal_codes = ChefPostalCode.objects.filter(
-                        postal_code__code=user_postal_code
+                        postal_code__code=user_postal_code,
+                        postal_code__country=user_country
                     ).values_list('chef', flat=True)
                     return self.filter(chef__in=chef_postal_codes)
                 return self.none()
@@ -219,26 +243,27 @@ class Meal(models.Model):
         constraints = [
             # Your existing constraints here
             models.UniqueConstraint(fields=['name', 'creator'], condition=models.Q(creator__isnull=False), name='unique_meal_per_creator'),
-            models.UniqueConstraint(fields=['chef', 'start_date'], condition=models.Q(chef__isnull=False), name='unique_chef_meal_per_date')
+            models.UniqueConstraint(fields=['chef', 'start_date', 'meal_type'], condition=models.Q(chef__isnull=False), name='unique_chef_meal_per_date_and_type')
         ]
 
     def save(self, *args, **kwargs):
         is_new = self._state.adding  # Check if the meal is new
 
-        super(Meal, self).save(*args, **kwargs)  # Save the instance before any operations
+        # Validate required fields for chef-created meals
+        if self.chef and is_new:
+            if self.start_date is None or self.price is None or not self.image:
+                raise ValueError('start date, price, and image must be provided when a chef creates a meal')
+
+        # Always save the instance first to ensure it has an ID
+        super(Meal, self).save(*args, **kwargs)
 
         if not self.created_date:
             self.created_date = timezone.now()
         
-        # Validation for chef-created meals
-        if self.chef:
-            if self.start_date is None or self.price is None or not self.image:
-                raise ValueError('start_date, price, and image must be provided when a chef creates a meal')
-            if not self.dishes.exists():
-                raise ValueError('At least one dish must be provided when a chef creates a meal')
-        # Step 1: Save the instance first to ensure it has an ID
-        if not self.pk:  # Check if the instance is new (i.e., no primary key yet)
-            super(Meal, self).save(*args, **kwargs)
+        # For chef-created meals, validate dishes after save (so M2M can be established)
+        # Skip this validation for new meals since dishes are likely being added after save
+        if self.chef and not is_new and not self.dishes.exists():
+            raise ValueError('At least one dish must be provided when a chef creates a meal')
 
     def generate_messages(self):
         """
@@ -302,6 +327,26 @@ class Meal(models.Model):
             return None
         return qs.aggregate(models.Avg('rating'))['rating__avg']
     
+    def is_chef_created(self):
+        """Check if this meal was created by a chef."""
+        return self.chef is not None
+    
+    def get_upcoming_events(self):
+        """Get upcoming chef meal events for this meal."""
+        from django.utils import timezone
+        from django.db.models import F
+        
+        if not self.chef:
+            return []
+            
+        now = timezone.now()
+        return self.events.filter(
+            event_date__gte=now.date(),
+            status__in=['scheduled', 'open'],
+            order_cutoff_time__gt=now,
+            orders_count__lt=F('max_orders')
+        ).order_by('event_date', 'event_time')
+
     def __str__(self):
         creator_info = self.chef.user.username if self.chef else (self.creator.username if self.creator else 'No creator')
 
@@ -319,7 +364,7 @@ class Meal(models.Model):
                 cdp_list = [pref.name for pref in self.custom_dietary_preferences.all()] or ["No custom preferences"]
                 custom_dietary_prefs = ", ".join(cdp_list)
             except Exception as e:
-                custom_dietary_prefs = "Error retrieving custom preferences"
+                custom_dietary_prefs = "Error retrieving custom dietary preferences"
                 logger.error(f"Error accessing custom dietary preferences for meal '{self.name}': {e}")
 
         description_str = f'Description: {self.description[:100]}...' if self.description else ''
@@ -446,6 +491,7 @@ class MealPlanMeal(models.Model):
     meal_date = models.DateField(null=True, blank=True)
     day = models.CharField(max_length=10, choices=DAYS_OF_WEEK)
     meal_type = models.CharField(max_length=10, choices=MEAL_TYPE_CHOICES, default='Dinner')
+    already_paid = models.BooleanField(default=False, help_text="Flag indicating this meal was paid for in a previous order")
 
     class Meta:
         # Ensure a meal is unique per day within a specific meal plan, and meal type
@@ -646,7 +692,9 @@ class Order(models.Model):
     special_requests = models.TextField(blank=True)
     is_paid = models.BooleanField(default=False)
     meal_plan = models.ForeignKey(MealPlan, null=True, blank=True, on_delete=models.SET_NULL, related_name='related_orders')
-
+    
+    # Stripe payment tracking
+    stripe_session_id = models.CharField(max_length=255, blank=True, null=True, help_text="Stripe Checkout Session ID")
 
     def save(self, *args, **kwargs):
         if not self.order_date:  # only update if order_date is not already set
@@ -658,22 +706,31 @@ class Order(models.Model):
         return f'Order {self.id} - {self.customer.username}'
 
     def total_price(self):
-        """Calculate the total price of the order."""
-        total = 0
-        for order_meal in self.ordermeal_set.all():
-            total += order_meal.meal.price * order_meal.quantity
+        """
+        Calculate the total price of the order, using OrderMeal's get_price method
+        to ensure consistent pricing.
+        """
+        total = decimal.Decimal('0.00')  # Use Decimal for currency
+        # Fetch related objects efficiently
+        order_meals = self.ordermeal_set.select_related('meal', 'chef_meal_event', 'meal_plan_meal').all()
+
+        for order_meal in order_meals:
+            # Skip meals that have already been paid for
+            meal_plan_meal = order_meal.meal_plan_meal
+            if hasattr(meal_plan_meal, 'already_paid') and meal_plan_meal.already_paid:
+                # Skip this item in the total calculation
+                continue
+                
+            # Get the price using the OrderMeal's get_price method for consistency
+            item_price = order_meal.get_price()
+            
+            # Ensure quantity is valid (should be integer, but convert for safety)
+            quantity = decimal.Decimal(order_meal.quantity) if order_meal.quantity is not None else decimal.Decimal('0')
+            total += item_price * quantity
+
         return total
 
-    
-class OrderMeal(models.Model):
-    meal = models.ForeignKey(Meal, on_delete=models.CASCADE)
-    order = models.ForeignKey(Order, on_delete=models.CASCADE)
-    meal_plan_meal = models.ForeignKey(MealPlanMeal, on_delete=models.CASCADE)  # New field
-    quantity = models.IntegerField()
-
-    def __str__(self):
-        return f'{self.meal} - {self.order} on {self.meal_plan_meal.day}'
-
+   
 class SystemUpdate(models.Model):
     subject = models.CharField(max_length=200)
     message = models.TextField()
@@ -685,23 +742,30 @@ class SystemUpdate(models.Model):
 
 class ChefMealEvent(models.Model):
     """
-    Represents a meal offering by a chef on a specific date and time.
-    Supports dynamic pricing based on the number of orders.
+    Represents a specific meal offering by a chef that customers can order.
+    
+    This model allows chefs to schedule when they'll prepare a particular meal
+    and make it available to customers. For example, a chef might offer their
+    signature lasagna on Friday evening from 6-8pm with orders needed by Thursday.
+    
+    The dynamic pricing encourages group orders - as more customers order the same meal,
+    the price decreases for everyone, benefiting both the chef (more orders) and
+    customers (lower prices).
     """
     STATUS_CHOICES = [
-        ('scheduled', 'Scheduled'),
-        ('open', 'Open for Orders'),
-        ('closed', 'Closed for Orders'),
-        ('in_progress', 'In Progress'),
-        ('completed', 'Completed'),
-        ('cancelled', 'Cancelled'),
+        (STATUS_SCHEDULED, 'Scheduled'),
+        (STATUS_OPEN, 'Open for Orders'),
+        (STATUS_CLOSED, 'Closed for Orders'),
+        (STATUS_IN_PROGRESS, 'In Progress'),
+        (STATUS_COMPLETED, 'Completed'),
+        (STATUS_CANCELLED, 'Cancelled'),
     ]
     
     chef = models.ForeignKey(Chef, on_delete=models.CASCADE, related_name='meal_events')
     meal = models.ForeignKey(Meal, on_delete=models.CASCADE, related_name='events')
-    event_date = models.DateField()
-    event_time = models.TimeField()
-    order_cutoff_time = models.DateTimeField(help_text="Deadline for placing orders")
+    event_date = models.DateField(help_text="The date when the chef will prepare and serve this meal")
+    event_time = models.TimeField(help_text="The time when the meal will be available for pickup/delivery")
+    order_cutoff_time = models.DateTimeField(help_text="Deadline for placing orders (e.g., 24 hours before event)")
     
     max_orders = models.PositiveIntegerField(help_text="Maximum number of orders the chef can fulfill")
     min_orders = models.PositiveIntegerField(default=1, help_text="Minimum number of orders needed to proceed")
@@ -724,7 +788,7 @@ class ChefMealEvent(models.Model):
     
     class Meta:
         ordering = ['event_date', 'event_time']
-        unique_together = ('chef', 'meal', 'event_date', 'event_time')
+        unique_together = ('chef', 'meal', 'event_date', 'event_time', 'status')
     
     def __str__(self):
         return f"{self.meal.name} by {self.chef.user.username} on {self.event_date} at {self.event_time}"
@@ -733,12 +797,39 @@ class ChefMealEvent(models.Model):
         # If this is a new event, set the current price to the base price
         if not self.pk:
             self.current_price = self.base_price
+        else:
+            # If this is an existing event with orders, prevent price changes
+            try:
+                original = ChefMealEvent.objects.get(pk=self.pk)
+                if original.orders_count > 0:
+                    # Prevent changes to any price fields once orders exist
+                    self.base_price = original.base_price
+                    self.min_price = original.min_price
+                    # Allow current_price changes only through the update_price method
+                    # (for automatic group discounts)
+                    if not kwargs.get('update_fields') or 'current_price' not in kwargs.get('update_fields', []):
+                        self.current_price = original.current_price
+            except ChefMealEvent.DoesNotExist:
+                pass
+                
         super().save(*args, **kwargs)
     
     def update_price(self):
         """
         Update the price based on the number of orders.
         As more orders come in, the price decreases until it reaches min_price.
+        
+        The pricing algorithm works as follows:
+        1. For each order after the first one, the price decreases by 5% of the difference 
+           between base_price and min_price
+        2. The price will never go below the min_price
+        3. When price changes, all existing orders are updated to the new lower price
+        
+        This creates a win-win situation where:
+        - It incentivizes customers to share/promote the meal to get more orders
+        - Everyone benefits when more people join (price drops for all)
+        - The chef benefits from higher volume
+        - The minimum price protects the chef's profit margin
         """
         if self.orders_count <= 1:
             return
@@ -768,18 +859,31 @@ class ChefMealEvent(models.Model):
     def is_available_for_orders(self):
         """Check if the event is open for new orders"""
         now = timezone.now()
+        
+        # Make sure order_cutoff_time is a datetime object
+        cutoff_time = self.order_cutoff_time
+        if isinstance(cutoff_time, str):
+            # If it's a string, parse it and make it timezone-aware
+            try:
+                cutoff_time = dateutil.parser.parse(cutoff_time)
+                if not timezone.is_aware(cutoff_time):
+                    cutoff_time = timezone.make_aware(cutoff_time)
+            except Exception:
+                # If parsing fails, default to not available
+                return False
+        
         return (
-            self.status in ['scheduled', 'open'] and 
-            now < self.order_cutoff_time and
+            self.status in [STATUS_SCHEDULED, STATUS_OPEN] and 
+            now < cutoff_time and
             self.orders_count < self.max_orders
         )
     
     def cancel(self):
         """Cancel the event and all associated orders"""
-        self.status = 'cancelled'
+        self.status = STATUS_CANCELLED
         self.save()
         # Cancel all orders and initiate refunds
-        self.orders.filter(status__in=['placed', 'confirmed']).update(status='cancelled')
+        self.orders.filter(status__in=[STATUS_PLACED, STATUS_CONFIRMED]).update(status=STATUS_CANCELLED)
         # Refund logic would be implemented separately
 
 class ChefMealOrder(models.Model):
@@ -788,19 +892,29 @@ class ChefMealOrder(models.Model):
     Linked to the main Order model for unified order history.
     """
     STATUS_CHOICES = [
-        ('placed', 'Placed'),
-        ('confirmed', 'Confirmed'),
-        ('cancelled', 'Cancelled'),
-        ('refunded', 'Refunded'),
-        ('completed', 'Completed')
+        (STATUS_PLACED, 'Placed'),
+        (STATUS_CONFIRMED, 'Confirmed'),
+        (STATUS_CANCELLED, 'Cancelled'),
+        (STATUS_REFUNDED, 'Refunded'),
+        (STATUS_COMPLETED, 'Completed')
     ]
     
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='chef_meal_orders')
     meal_event = models.ForeignKey(ChefMealEvent, on_delete=models.CASCADE, related_name='orders')
     customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     
+    # Add this link to tie the ChefMealOrder to the specific meal plan slot
+    meal_plan_meal = models.ForeignKey(
+        MealPlanMeal, 
+        on_delete=models.SET_NULL, # Or CASCADE if a deleted slot should remove the order item
+        null=True, 
+        blank=True, 
+        related_name='chef_order_item' # Use a specific related_name
+    ) 
+
     quantity = models.PositiveIntegerField(default=1)
-    price_paid = models.DecimalField(max_digits=6, decimal_places=2)
+    # price_paid should store the *total* price paid for the quantity at the time of purchase/confirmation
+    price_paid = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True) # Allow null initially
     
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='placed')
     
@@ -808,44 +922,60 @@ class ChefMealOrder(models.Model):
     stripe_payment_intent_id = models.CharField(max_length=255, blank=True, null=True)
     stripe_refund_id = models.CharField(max_length=255, blank=True, null=True)
     
+    # Price adjustment tracking
+    price_adjustment_processed = models.BooleanField(default=False, help_text="Whether price adjustment/refund has been processed")
+    
     special_requests = models.TextField(blank=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
+        # Ensure only one ChefMealOrder per meal plan slot within a single order
+        unique_together = ('order', 'meal_plan_meal') 
         ordering = ['-created_at']
     
     def __str__(self):
         return f"Order #{self.id} - {self.meal_event.meal.name} by {self.customer.username}"
     
-    def save(self, *args, **kwargs):
-        # If this is a new order, set the price to the event's current price
-        if not self.pk:
-            self.price_paid = self.meal_event.current_price
+    def mark_as_paid(self):
+        """
+        Mark the order as paid and update the event's order count and pricing.
+        This should ONLY be called when payment is confirmed.
+        """
+        if self.status == STATUS_PLACED:
+            # Update status to confirmed
+            self.status = STATUS_CONFIRMED
+            self.save(update_fields=['status'])
             
             # Increment the orders count on the event
-            self.meal_event.orders_count += self.quantity
-            self.meal_event.save()
+            # Ensure quantity is not None before using it
+            quantity_to_add = self.quantity if self.quantity is not None else 1
+            self.meal_event.orders_count += quantity_to_add
+            self.meal_event.save() # Save the event after updating count
             
-            # Update the price for all orders
+            # Update the price for all orders on the event
             self.meal_event.update_price()
             
-        super().save(*args, **kwargs)
+            return True
+        return False
     
     def cancel(self):
         """Cancel the order and update the event's orders count"""
-        if self.status in ['placed', 'confirmed']:
+        if self.status in [STATUS_PLACED, STATUS_CONFIRMED]:
             previous_status = self.status
-            self.status = 'cancelled'
+            self.status = STATUS_CANCELLED
             self.save()
             
-            # Decrement the orders count on the event
-            self.meal_event.orders_count -= self.quantity
-            self.meal_event.save()
-            
-            # Update pricing only if this wasn't a brand new order
-            if previous_status == 'confirmed':
+            # Only decrement the count if this was a confirmed (paid) order
+            if previous_status == STATUS_CONFIRMED:
+                # Decrement the orders count on the event
+                # Ensure quantity is not None before using it
+                quantity_to_remove = self.quantity if self.quantity is not None else 1
+                self.meal_event.orders_count = max(0, self.meal_event.orders_count - quantity_to_remove) # Prevent negative count
+                self.meal_event.save() # Save the event after updating count
+                
+                # Update pricing
                 self.meal_event.update_price()
             
             # Refund logic would be implemented separately
@@ -873,6 +1003,47 @@ class ChefMealReview(models.Model):
     
     def __str__(self):
         return f"Review by {self.customer.username} for {self.meal_event.meal.name}"
+
+class OrderMeal(models.Model):
+    meal = models.ForeignKey(Meal, on_delete=models.CASCADE)
+    order = models.ForeignKey(Order, on_delete=models.CASCADE)
+    meal_plan_meal = models.ForeignKey(MealPlanMeal, on_delete=models.CASCADE)  # Existing field
+    chef_meal_event = models.ForeignKey(ChefMealEvent, null=True, blank=True, on_delete=models.SET_NULL) 
+    quantity = models.IntegerField()
+    
+    # Store the price at the time of order creation to avoid discrepancies
+    price_at_order = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True,
+                                         help_text="Price at the time of order creation")
+
+    def __str__(self):
+        return f'{self.meal} - {self.order} on {self.meal_plan_meal.day}'
+        
+    def save(self, *args, **kwargs):
+        # If this is a new order meal, set the price_at_order
+        if not self.pk:
+            # For chef meal events, always use the current_price from the event
+            if self.chef_meal_event and self.chef_meal_event.current_price is not None:
+                self.price_at_order = self.chef_meal_event.current_price
+            # Otherwise use the meal price
+            elif self.meal and self.meal.price is not None:
+                self.price_at_order = self.meal.price
+                
+        super().save(*args, **kwargs)
+    
+    def get_price(self):
+        """
+        Returns the price for this order meal, prioritizing:
+        1. Stored price_at_order if available
+        2. Current chef_meal_event price if linked
+        3. Base meal price as fallback
+        """
+        if self.price_at_order is not None:
+            return self.price_at_order
+        elif self.chef_meal_event and self.chef_meal_event.current_price is not None:
+            return self.chef_meal_event.current_price
+        elif self.meal and self.meal.price is not None:
+            return self.meal.price
+        return decimal.Decimal('0.00')  # Default fallback
 
 # StripeConnect model to store chef's Stripe connection information
 class StripeConnectAccount(models.Model):
@@ -946,3 +1117,45 @@ class PaymentLog(models.Model):
     def __str__(self):
         action_entity = f"Order #{self.order.id}" if self.order else f"ChefMealOrder #{self.chef_meal_order.id}" if self.chef_meal_order else "Unknown"
         return f"{self.action} - {action_entity} - {self.amount}"
+
+class MealCompatibility(models.Model):
+    """
+    Stores the compatibility analysis results between a meal and a dietary preference.
+    This caches the results of analyze_meal_compatibility to avoid redundant API calls.
+    """
+    meal = models.ForeignKey(Meal, on_delete=models.CASCADE, related_name='compatibility_analyses')
+    preference_name = models.CharField(max_length=100)
+    is_compatible = models.BooleanField(default=False)
+    confidence = models.FloatField(default=0.0)
+    reasoning = models.TextField(blank=True)
+    analyzed_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        unique_together = ('meal', 'preference_name')
+        indexes = [
+            models.Index(fields=['meal', 'preference_name']),
+        ]
+    
+    def __str__(self):
+        compatibility = "Compatible" if self.is_compatible else "Not compatible"
+        return f"{self.meal.name} - {self.preference_name}: {compatibility} ({self.confidence:.2f})"
+
+class MealAllergenSafety(models.Model):
+    """
+    Tracks whether a meal is safe for a user with allergies.
+    This is a caching layer to avoid repeated API calls.
+    """
+    meal = models.ForeignKey('Meal', on_delete=models.CASCADE, related_name='allergen_safety_checks')
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
+    is_safe = models.BooleanField(default=False)
+    flagged_ingredients = ArrayField(models.CharField(max_length=100), blank=True, default=list)
+    reasoning = models.TextField(blank=True)
+    last_checked = models.DateTimeField(auto_now=True)
+    substitutions = models.JSONField(blank=True, null=True)
+
+    class Meta:
+        unique_together = ('meal', 'user')
+        verbose_name_plural = 'Meal allergen safety checks'
+
+    def __str__(self):
+        return f"Allergen check: {self.meal.name} for {self.user.username} - {'Safe' if self.is_safe else 'Unsafe'}"

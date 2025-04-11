@@ -18,7 +18,8 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 # Initialize OpenAI client
-client = OpenAI(api_key=settings.OPENAI_KEY)
+OPENAI_API_KEY = settings.OPENAI_KEY
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # Define a Pydantic model for pantry item extraction
 class PantryItemSchema(BaseModel):
@@ -101,9 +102,9 @@ def extract_pantry_item_info(transcription: str) -> Dict[str, Any]:
     """
     # Use GPT to extract structured information from the transcription
     try:
-        response = client.chat.completions.create(
+        response = client.responses.create(
             model="gpt-4o-mini",
-            messages=[
+            input=[
                 {"role": "system", "content": """Extract pantry item information from the user's audio description.
                 
                 For weight_unit, map units as follows:
@@ -116,17 +117,17 @@ def extract_pantry_item_info(transcription: str) -> Dict[str, Any]:
                 """},
                 {"role": "user", "content": transcription}
             ],
-            response_format={
-                'type': 'json_schema',
-                'json_schema': {
-                    "name": "PantryItem",
-                    "schema": PantryItemSchema.model_json_schema()
+            text={
+                "format": {
+                    'type': 'json_schema',
+                    'name': 'pantry_item',
+                    'schema': PantryItemSchema.model_json_schema()
                 }
             }
         )
         
         # Parse the response to extract information
-        content = response.choices[0].message.content
+        content = response.output_text
         import json
         data = json.loads(content)
         

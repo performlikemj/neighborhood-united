@@ -12,7 +12,7 @@ from openai import OpenAI
 import uuid
 
 from custom_auth.models import CustomUser
-from meals.models import Meal, MealPlan, MealPlanMeal, PantryItem, MealPlanMealPantryUsage
+from meals.models import Meal, MealPlan, MealPlanMeal, PantryItem, MealPlanMealPantryUsage, MealCompatibility
 from meals.pydantic_models import MealOutputSchema, SanitySchema, UsageList
 from shared.utils import (generate_user_context, create_meal,
                           get_embedding, cosine_similarity)
@@ -21,7 +21,8 @@ from openai import OpenAIError, BadRequestError
 
 logger = logging.getLogger(__name__)
 
-client = OpenAI(api_key=settings.OPENAI_KEY)
+OPENAI_API_KEY = settings.OPENAI_KEY
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 def use_pantry_item(pantry_item: PantryItem, units_to_use: int) -> None:
     """
@@ -79,6 +80,9 @@ def generate_and_create_meal(
     Returns:
     - Dictionary with status, message, meal, and used_pantry_item
     """
+    # Import here to avoid circular imports
+    from meals.meal_plan_service import perform_comprehensive_sanity_check
+    
     # Generate a request ID if not provided
     if request_id is None:
         request_id = str(uuid.uuid4())
@@ -123,6 +127,12 @@ def generate_and_create_meal(
                 offset = day_to_offset(day_name)
                 meal_date = meal_plan.week_start_date + timedelta(days=offset)
                 logger.info(f"[{request_id}] Similar meal '{meal.name}' already exists. Adding to meal plan.")
+                # Remove meal plan meal for this day and meal type if it exists
+                MealPlanMeal.objects.filter(
+                    meal_plan=meal_plan,
+                    day=day_name,
+                    meal_type=meal_type
+                ).delete()
                 MealPlanMeal.objects.create(
                     meal_plan=meal_plan,
                     meal=meal,
@@ -155,16 +165,21 @@ def generate_and_create_meal(
             logger.error(f"[{request_id}] Meal with ID {meal_id} does not exist after creation.")
             continue  # Retry
 
-        # Step D: Perform an optional sanity check
-        sanity_ok = perform_openai_sanity_check(meal, user)
+        # Step D: Perform a comprehensive sanity check
+        sanity_ok = perform_comprehensive_sanity_check(meal, user, request_id)
         if not sanity_ok:
-            logger.warning(f"[{request_id}] Attempt {attempt}: Generated meal '{meal.name}' failed sanity check.")
+            logger.warning(f"[{request_id}] Attempt {attempt}: Generated meal '{meal.name}' failed comprehensive sanity check.")
             continue  # Retry
 
         # Step E: Actually attach the meal to the meal plan
         offset = day_to_offset(day_name)
         meal_date = meal_plan.week_start_date + timedelta(days=offset)
-
+        # Remove meal plan meal for this day and meal type if it exists
+        MealPlanMeal.objects.filter(
+            meal_plan=meal_plan,
+            day=day_name,
+            meal_type=meal_type
+        ).delete()
         new_meal_plan_meal = MealPlanMeal.objects.create(
             meal_plan=meal_plan,
             meal=meal,
@@ -228,13 +243,58 @@ def generate_and_create_meal(
     }
  
 def perform_openai_sanity_check(meal, user):
+    """
+    Check if a meal meets a user's dietary preferences using OpenAI.
+    Results are cached in the MealCompatibility model to avoid redundant API calls.
+    
+    Args:
+        meal: The Meal object to check
+        user: The CustomUser object
+        
+    Returns:
+        bool: True if the meal meets dietary preferences, False otherwise
+    """
     user_context = generate_user_context(user)
     combined_allergies = set((user.allergies or []) + (user.custom_allergies or []))
     allergies_str = ', '.join(combined_allergies) if combined_allergies else 'None'
+    
+    # Get all user's preferences
+    regular_dietary_prefs = list(user.dietary_preferences.all())
+    custom_dietary_prefs = list(user.custom_dietary_preferences.all())
+    all_prefs = regular_dietary_prefs + custom_dietary_prefs
+    
+    # Check if we have cached compatibility results for all preferences
+    all_compatible = True
+    all_cached = True
+    
+    for pref in all_prefs:
+        pref_name = pref.name if hasattr(pref, 'name') else pref.custom_name
+        
+        cached_result = MealCompatibility.objects.filter(
+            meal=meal,
+            preference_name=pref_name
+        ).first()
+        
+        if cached_result:
+            # Use cached result
+            if not cached_result.is_compatible or cached_result.confidence < 0.7:
+                # If any preference is incompatible, the meal is incompatible
+                logger.info(f"Using cached dietary check: Meal '{meal.name}' is incompatible with {pref_name}")
+                return False
+        else:
+            # We don't have a cached result for at least one preference
+            all_cached = False
+    
+    # If we have cached results for all preferences and they're all compatible, return True
+    if all_cached and all_compatible:
+        logger.info(f"Using cached dietary checks: Meal '{meal.name}' is compatible with all user preferences")
+        return True
+    
+    # We need to perform a sanity check with OpenAI
     try:
-        response = client.chat.completions.create(
+        response = client.responses.create(
             model="gpt-4o-mini",
-            messages=[
+            input=[
                 {
                     "role": "system",
                     "content": (
@@ -252,19 +312,44 @@ def perform_openai_sanity_check(meal, user):
                     )
                 }
             ],
-            store=True,
-            metadata={'tag': 'sanity_check'},
-            response_format={
-                'type': 'json_schema',
-                'json_schema': {
-                    "name": "Sanity",
-                    "schema": SanitySchema.model_json_schema()
+            #store=True,
+            #metadata={'tag': 'sanity_check'},
+            text={
+                "format": {
+                    'type': 'json_schema',
+                    'name': 'sanity_check',
+                    'schema': SanitySchema.model_json_schema()
                 }
             }
         )
 
-        gpt_output = response.choices[0].message.content
+        gpt_output = response.output_text
         allergen_check = json.loads(gpt_output).get('allergen_check', False)
+        
+        # Cache the result for each preference
+        if allergen_check:
+            confidence = 1.0  # High confidence for positive results
+            reasoning = "Meal meets all user dietary preferences according to GPT analysis"
+        else:
+            confidence = 0.0  # Low confidence for negative results
+            reasoning = "Meal does not meet user dietary preferences according to GPT analysis"
+        
+        # Cache the result for each preference (with the same result)
+        for pref in all_prefs:
+            pref_name = pref.name if hasattr(pref, 'name') else pref.custom_name
+            try:
+                MealCompatibility.objects.update_or_create(
+                    meal=meal,
+                    preference_name=pref_name,
+                    defaults={
+                        'is_compatible': allergen_check,
+                        'confidence': confidence,
+                        'reasoning': reasoning
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Error caching compatibility result for {pref_name}: {e}")
+        
         return allergen_check
 
     except Exception as e:
@@ -410,28 +495,38 @@ def generate_meal_details(
 
     Begin!
     """
-
+    from meals.pydantic_models import DietaryPreference
     # 6) Attempt up to max_attempts
     for attempt in range(max_attempts):
         try:
-            response = client.chat.completions.create(
+            # Pass the list of possible dietary preferences to the model
+            dietary_preferences_list = [pref.value for pref in DietaryPreference]
+            dietary_preferences_str = ", ".join(dietary_preferences_list)
+            
+            # Add dietary preferences to the base prompt
+            base_prompt += f"""
+            
+            Available dietary preferences: {dietary_preferences_str}
+            Please ensure the meal's dietary_preference field uses one of these exact values.
+            """
+            response = client.responses.create(
                 model="gpt-4o",
-                messages=[
+                input=[
                     {"role": "system", "content": "You are a helpful assistant that generates a single meal JSON."},
                     {"role": "user", "content": base_prompt}
                 ],
-                store=True,
-                metadata={'tag': 'meal_details'},
-                response_format={
-                    'type': 'json_schema',
-                    'json_schema': {
-                        "name": "Meal",
-                        "schema": MealOutputSchema.model_json_schema()
+                #store=True,
+                #metadata={'tag': 'meal_details'},
+                text={
+                    "format": {
+                        'type': 'json_schema',
+                        'name': 'meal_details',
+                        'schema': MealOutputSchema.model_json_schema()
                     }
                 }
             )
 
-            gpt_output = response.choices[0].message.content
+            gpt_output = response.output_text
             meal_data = json.loads(gpt_output)
 
             meal_dict = meal_data.get('meal', {})
@@ -537,23 +632,23 @@ def determine_usage_for_meal(
     )
 
     try:
-        response = client.chat.completions.create(
+        response = client.responses.create(
             model="gpt-4o-mini",
-            messages=[
+            input=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg}
             ],
-            store=True,
-            metadata={'tag': 'meal_usage'},
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "Meal",
-                    "schema": UsageList.model_json_schema()
+            #store=True,
+            #metadata={'tag': 'meal_usage'},
+            text={
+                "format": {
+                    'type': 'json_schema',
+                    'name': 'meal_usage',
+                    'schema': UsageList.model_json_schema()
                 }
             }
         )
-        usage_json = response.choices[0].message.content
+        usage_json = response.output_text
     except Exception as e:
         logger.error(f"Error calling GPT for usage (MealPlanMeal {meal_plan_meal_id}): {e}")
         return

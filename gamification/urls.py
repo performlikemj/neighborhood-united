@@ -10,4 +10,5 @@ urlpatterns = [
     path('api/achievements/', views.achievements_list, name='api_achievements'),
     path('api/points-history/', views.points_history, name='api_points_history'),
     path('api/streamlit-data/', views.streamlit_data, name='api_streamlit_data'),
+    path('api/event/', views.event_handler, name='api_event'),
 ] 

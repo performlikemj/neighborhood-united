@@ -11,6 +11,8 @@ from django.urls import path
 from .email_service import send_system_update_email
 from django.contrib import messages
 from .tasks import queue_system_update_email
+from .utils.order_utils import create_chef_meal_orders
+from django.utils import timezone
 
 class ReviewInline(GenericTabularInline):
     model = Review
@@ -51,12 +53,73 @@ class OrderMealInline(admin.TabularInline):
     fields = ('meal', 'quantity', 'meal_plan_meal')
     # Show meal details inline for reference
 
+@admin.action(description="Create missing ChefMealOrder records")
+def reconcile_chef_meal_orders(modeladmin, request, queryset):
+    total_created = 0
+    for order in queryset:
+        # Only process paid orders
+        if not order.is_paid:
+            continue
+            
+        # Use the shared utility function
+        created_count = create_chef_meal_orders(order)
+        total_created += created_count
+    
+    modeladmin.message_user(
+        request, 
+        f"Created {total_created} missing ChefMealOrder records", 
+        level=messages.SUCCESS
+    )
+
+@admin.action(description="Reconcile payment logs for paid orders")
+def reconcile_payment_logs(modeladmin, request, queryset):
+    """Ensure that all paid orders have payment logs and confirmed ChefMealOrder records"""
+    from decimal import Decimal
+    
+    payment_logs_created = 0
+    chef_orders_updated = 0
+    
+    for order in queryset:
+        if order.is_paid:
+            # Update ChefMealOrder records
+            chef_meal_orders = order.chef_meal_orders.filter(status='placed')
+            for chef_order in chef_meal_orders:
+                chef_order.status = 'confirmed'
+                chef_order.save()
+                chef_orders_updated += 1
+                
+                # Create PaymentLog if missing
+                if not PaymentLog.objects.filter(chef_meal_order=chef_order).exists():
+                    PaymentLog.objects.create(
+                        chef_meal_order=chef_order,
+                        order=order,
+                        user=chef_order.customer,
+                        chef=chef_order.meal_event.chef,
+                        action='charge',
+                        amount=float(chef_order.price_paid) * chef_order.quantity,
+                        stripe_id=f"reconciled-{order.id}-{chef_order.id}",
+                        status='succeeded',
+                        details={
+                            'reconciled_by_admin': True,
+                            'reconciled_at': timezone.now().isoformat(),
+                            'admin_user': request.user.username
+                        }
+                    )
+                    payment_logs_created += 1
+    
+    modeladmin.message_user(
+        request, 
+        f"Updated {chef_orders_updated} ChefMealOrder records and created {payment_logs_created} missing PaymentLog entries", 
+        level=messages.SUCCESS
+    )
+
 class OrderAdmin(admin.ModelAdmin):
     list_display = ('id', 'customer', 'order_date', 'status', 'delivery_method', 'is_paid', 'total_price')
-    list_filter = ('status', 'delivery_method', 'is_paid', 'order_date')
-    search_fields = ('customer__user__username', 'meal__name')
+    list_filter = ('status', 'is_paid', 'delivery_method', 'order_date')
+    search_fields = ('customer__username', 'customer__email', 'id')
     inlines = [OrderMealInline]
     readonly_fields = ('order_date', 'updated_at')
+    actions = [reconcile_chef_meal_orders, reconcile_payment_logs]
 
 class MealAdmin(admin.ModelAdmin):
     list_display = ('name', 'chef', 'start_date', 'price', 'average_rating_display')
@@ -215,6 +278,22 @@ class ChefMealEventAdmin(admin.ModelAdmin):
     readonly_fields = ('orders_count', 'current_price', 'created_at', 'updated_at')
     inlines = [ChefMealOrderInline]
     date_hierarchy = 'event_date'
+    
+    def get_form(self, request, obj=None, **kwargs):
+        form = super().get_form(request, obj, **kwargs)
+        
+        # Add a warning message if this event has orders
+        if obj and obj.orders_count > 0:
+            help_text = (
+                "⚠️ <strong>WARNING:</strong> This event has existing orders! "
+                "Changing prices could affect customer charges. "
+                "Price increases are blocked through the API but can be changed here. "
+                "Make sure you understand the implications before saving."
+            )
+            form.base_fields['base_price'].help_text = help_text
+            form.base_fields['min_price'].help_text = help_text
+            
+        return form
     
     fieldsets = (
         (None, {

@@ -14,7 +14,8 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         force_regenerate = options['force']
         meals = Meal.objects.all()
-        client = OpenAI(api_key=settings.OPENAI_KEY)
+        OPENAI_API_KEY = settings.OPENAI_KEY
+        client = OpenAI(api_key=OPENAI_API_KEY)
 
         for meal in meals:
             if meal.image and not force_regenerate:

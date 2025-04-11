@@ -232,29 +232,95 @@ def points_history(request):
 @permission_classes([IsAuthenticated])
 def streamlit_data(request):
     """Endpoint to provide data for the Streamlit UI."""
-    user = request.user
-    profile = get_or_create_profile(user)
+    try:
+        user = request.user
+        
+        try:
+            profile = get_or_create_profile(user)
+        except Exception as e:
+            return Response({'error': f'Failed to get user profile: {str(e)}'}, status=500)
+        
+        # Get weekly goal
+        try:
+            weekly_goal = get_weekly_goal_progress(user)
+        except Exception as e:
+            return Response({'error': f'Failed to get weekly goal progress: {str(e)}'}, status=500)
+        
+        # Check for new achievements
+        try:
+            unnotified = get_unnotified_achievements(user)
+            has_new_achievements = unnotified.exists()
+        except Exception as e:
+            return Response({'error': f'Failed to check for new achievements: {str(e)}'}, status=500)
+        
+        # Format for Streamlit
+        try:
+            data = {
+                'user_level': profile.level,
+                'meal_plan_streak': profile.streak_count,
+                'total_meals_planned': profile.total_meals_planned,
+                'points': profile.points,
+                'weekly_goal': {
+                    'progress': weekly_goal['progress'],
+                    'completed_days': weekly_goal['completed_days'],
+                    'target_days': weekly_goal['target_days'],
+                    'text': f"{weekly_goal['completed_days']}/{weekly_goal['target_days']} days planned"
+                },
+                'has_new_achievements': has_new_achievements
+            }
+        except Exception as e:
+            return Response({'error': f'Failed to format data: {str(e)}'}, status=500)
+        
+        return Response(data)
+    except Exception as e:
+        return Response({'error': f'Unexpected error: {str(e)}'}, status=500)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def event_handler(request):
+    """
+    API endpoint to handle gamification events.
+    Expects a JSON payload with event details.
     
-    # Get weekly goal
-    weekly_goal = get_weekly_goal_progress(user)
-    
-    # Check for new achievements
-    unnotified = get_unnotified_achievements(user)
-    has_new_achievements = unnotified.exists()
-    
-    # Format for Streamlit
-    data = {
-        'user_level': profile.level,
-        'meal_plan_streak': profile.streak_count,
-        'total_meals_planned': profile.total_meals_planned,
-        'points': profile.points,
-        'weekly_goal': {
-            'progress': weekly_goal['progress'],
-            'completed_days': weekly_goal['completed_days'],
-            'target_days': weekly_goal['target_days'],
-            'text': f"{weekly_goal['completed_days']}/{weekly_goal['target_days']} days planned"
-        },
-        'has_new_achievements': has_new_achievements
+    Example payload:
+    {
+        "event_type": "meal_planned",
+        "details": {
+            "meal_id": 123,
+            "timestamp": "2025-03-30T14:34:45Z"
+        }
     }
-    
-    return Response(data)
+    """
+    # TODO: Add event type actions to the database
+    user = request.user
+    try:
+        event_data = request.data  # Django REST Framework automatically parses JSON
+        
+        # Retrieve the event type from the payload
+        event_type = event_data.get('event_type')
+        if not event_type:
+            return Response({'error': 'Missing event_type in payload'}, status=400)
+        
+        # Process the event based on its type
+        # You could create a separate service function, e.g., process_event(user, event_data),
+        # which encapsulates the event handling logic.
+        # For demonstration, we'll use a simple conditional:
+        if event_type == 'meal_planned':
+            # For example, update the user's streak or meal plan count.
+            # update_streak(user)  # Uncomment if you wish to update the streak.
+            # Optionally, add other processing logic here.
+            pass
+        elif event_type == 'login':
+            # Handle login event, or any other event types.
+            pass
+        elif event_type == 'meal_plan_approved':
+            # Handle meal plan approval event, or any other event types.
+            pass
+        else:
+            # You can handle other event types or return an error if unsupported.
+            return Response({'error': f'Unsupported event type: {event_type}'}, status=400)
+        
+        # Return a success response after processing the event
+        return Response({'status': 'Event processed successfully', 'event_type': event_type})
+    except Exception as e:
+        return Response({'error': str(e)}, status=500)

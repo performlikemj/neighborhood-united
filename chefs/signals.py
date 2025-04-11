@@ -17,7 +17,8 @@ def create_chef_image(sender, instance, created, **kwargs):
             instance.profile_pic.save(image_name, ContentFile(response.content), save=True)
 
 def generate_chef_image():
-    client = OpenAI(api_key=settings.OPENAI_KEY)  # Initialize with your API credentials
+    OPENAI_API_KEY = settings.OPENAI_KEY
+    client = OpenAI(api_key=OPENAI_API_KEY)
     prompt = "A gender-neutral chef in a professional kitchen with their back to the camera as if they're preparing a dish."
     response = client.images.generate(
         model="dall-e-3",

@@ -11,7 +11,7 @@ from django.core.files.base import ContentFile
 from openai import OpenAI
 from django.conf import settings
 from rest_framework.test import APIRequestFactory
-from meals.email_service import generate_shopping_list, generate_user_summary, generate_emergency_supply_list
+from meals.email_service import generate_shopping_list, generate_user_summary
 from meals.meal_instructions import generate_bulk_prep_instructions
 from meals.meal_plan_service import create_meal_plan_for_new_user
 from meals.pantry_management import assign_pantry_tags

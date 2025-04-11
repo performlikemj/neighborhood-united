@@ -68,21 +68,21 @@ logger = logging.getLogger(__name__)
 # example: logger.warning("This is a warning message")
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated, IsCustomer])
+@permission_classes([IsAuthenticated])
 def api_recommend_follow_up(request):
     user_id = request.user.id
     user = get_object_or_404(CustomUser, id=user_id)
 
     # Step 1: Retrieve the most recent active chat thread for the user
     try:
-        print(f'Recommend follow-up for user: {user}')
         chat_thread = ChatThread.objects.filter(user=user, is_active=True).latest('created_at')
     except ChatThread.DoesNotExist:
         return Response({'error': 'No active chat thread found.'}, status=404)
 
     # Step 2: Fetch the chat history using the openai_thread_id
     try:
-        client = OpenAI(api_key=settings.OPENAI_KEY)
+        OPENAI_API_KEY = settings.OPENAI_KEY
+        client = OpenAI(api_key=OPENAI_API_KEY)
         messages = client.beta.threads.messages.list(chat_thread.openai_thread_id)
         chat_history = api_format_chat_history(messages)
     except Exception as e:
@@ -110,7 +110,6 @@ def api_user_summary_status(request):
     
     user_id = request.user.id
     user_summary = UserSummary.objects.filter(user_id=user_id).first()
-    print(f'User Summary: {user_summary}')
     
 
     # Check if the summary doesn't exist or contains "No summary available"
@@ -137,8 +136,6 @@ def api_user_summary_status(request):
         return Response({"status": "completed"})
     else:
         return Response({"status": "error", "message": "An error occurred during summary generation."}, status=500)
-
-
 
 
 @api_view(['GET'])
@@ -300,7 +297,6 @@ def api_user_metrics(request):
 @permission_classes([IsAuthenticated])
 def api_user_goal_view(request):
     # Fetch or create goal for the user
-    print(f'Request: {request}')
     goal, created = GoalTracking.objects.get_or_create(user=request.user)
     serializer = GoalTrackingSerializer(goal)
     return Response(serializer.data)
@@ -343,7 +339,8 @@ def api_thread_history(request):
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_thread_detail_view(request, openai_thread_id):
     # Assuming you have a function to handle the OpenAI communication
-    client = OpenAI(api_key=settings.OPENAI_KEY)
+    OPENAI_API_KEY = settings.OPENAI_KEY
+    client = OpenAI(api_key=OPENAI_API_KEY)
     try:
         messages = client.beta.threads.messages.list(openai_thread_id)
         # Format and return the messages as per your requirement
@@ -391,7 +388,8 @@ def history_page(request):
 @login_required
 @user_passes_test(is_customer)
 def thread_detail(request, openai_thread_id):
-    client = OpenAI(api_key=settings.OPENAI_KEY)
+    OPENAI_API_KEY = settings.OPENAI_KEY
+    client = OpenAI(api_key=OPENAI_API_KEY)
     try:
         messages = client.beta.threads.messages.list(openai_thread_id)
         chat_history = format_chat_history(messages)
@@ -707,7 +705,8 @@ def guest_chat_with_gpt(request):
     print("Chatting with Guest GPT")
     guest_assistant_id_file = "guest_assistant_id.txt"
     # Set up OpenAI
-    client = OpenAI(api_key=settings.OPENAI_KEY)    
+    OPENAI_API_KEY = settings.OPENAI_KEY
+    client = OpenAI(api_key=OPENAI_API_KEY) 
     # Check if the assistant ID is already stored in a file
   
     if os.path.exists(guest_assistant_id_file):
@@ -808,7 +807,6 @@ def guest_chat_with_gpt(request):
                     content=question
                 )
             except OpenAIError as e:
-                print(f'Error: {e}')
                 if 'Can\'t add messages to thread' in str(e) and 'while a run' in str(e) and 'is active' in str(e):
                     # Extract the run ID from the error message
                     match = re.search(r'run (\w+)', str(e))
@@ -852,7 +850,8 @@ def chat_with_gpt(request):
     print("Chatting with GPT")
     assistant_id_file = "assistant_id.txt"
     # Set up OpenAI
-    client = OpenAI(api_key=settings.OPENAI_KEY)    
+    OPENAI_API_KEY = settings.OPENAI_KEY
+    client = OpenAI(api_key=OPENAI_API_KEY) 
     # Check if the assistant ID is already stored in a file
     print(f"Request data: {request.data}")
     try:
@@ -1621,7 +1620,6 @@ def chat_with_gpt(request):
                     content=question,
                 )
             except OpenAIError as e:
-                print(f'Error: {e}')
                 if 'Can\'t add messages to thread' in str(e) and 'while a run' in str(e) and 'is active' in str(e):
                     # Extract the run ID from the error message
                     match = re.search(r'run (\w+)', str(e))

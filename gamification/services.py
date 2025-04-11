@@ -47,7 +47,7 @@ def award_points(user, amount, source, description=""):
         level_up = profile.add_points(amount)
         
         # Record the transaction
-        transaction = PointsTransaction.objects.create(
+        points_transaction = PointsTransaction.objects.create(
             user=user,
             amount=amount,
             transaction_type='earned',
@@ -123,7 +123,6 @@ def update_streak(user):
                 )
                 
     return new_streak
-
 
 def register_meal_planned(user):
     """Record that a user has planned a meal and update stats."""

@@ -32,6 +32,27 @@
     </div>
     {% endif %}
 
+    <!-- Stripe Account Status Section -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-info text-white">
+                    <h3 class="card-title mb-0">Payment Account Status</h3>
+                </div>
+                <div class="card-body">
+                    <div id="stripe-account-status">
+                        <div class="text-center">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="sr-only">Loading...</span>
+                            </div>
+                            <p class="mt-2">Checking your payment account status...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Upcoming Events Section -->
     <div class="row mb-4">
         <div class="col-12">
@@ -144,6 +165,107 @@
 
 {% block extra_js %}
 <script>
-    // Add any JavaScript functionality here
+    // Check Stripe account status when page loads
+    document.addEventListener('DOMContentLoaded', function() {
+        checkStripeAccountStatus();
+    });
+
+    function checkStripeAccountStatus() {
+        fetch('/meals/api/stripe-account-status/', {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken')
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            const statusDiv = document.getElementById('stripe-account-status');
+            
+            if (data.has_account && data.is_active) {
+                // Account exists and is active
+                statusDiv.innerHTML = `
+                    <div class="alert alert-success">
+                        <h4><i class="fas fa-check-circle"></i> Your payment account is connected and active</h4>
+                        <p>Your Stripe account is fully set up and ready to receive payments from customers.</p>
+                        <p>Account ID: ${data.account_id}</p>
+                    </div>
+                `;
+            } else if (data.has_account && !data.is_active) {
+                // Account exists but is not fully onboarded
+                statusDiv.innerHTML = `
+                    <div class="alert alert-warning">
+                        <h4><i class="fas fa-exclamation-triangle"></i> Your payment account needs attention</h4>
+                        <p>Your Stripe account is connected but not fully set up. You need to complete the onboarding process before you can receive payments.</p>
+                        <button id="complete-stripe-setup" class="btn btn-warning">Complete Setup</button>
+                    </div>
+                `;
+                
+                // Add event listener to button
+                document.getElementById('complete-stripe-setup').addEventListener('click', createStripeAccountLink);
+            } else {
+                // No account exists
+                statusDiv.innerHTML = `
+                    <div class="alert alert-info">
+                        <h4><i class="fas fa-info-circle"></i> Payment account setup required</h4>
+                        <p>You need to connect a payment account to receive payments from customers. This is a simple process that takes just a few minutes.</p>
+                        <button id="setup-stripe-account" class="btn btn-primary">Set Up Payment Account</button>
+                    </div>
+                `;
+                
+                // Add event listener to button
+                document.getElementById('setup-stripe-account').addEventListener('click', createStripeAccountLink);
+            }
+        })
+        .catch(error => {
+            console.error('Error checking Stripe account status:', error);
+            const statusDiv = document.getElementById('stripe-account-status');
+            statusDiv.innerHTML = `
+                <div class="alert alert-danger">
+                    <h4><i class="fas fa-times-circle"></i> Error checking payment account status</h4>
+                    <p>There was a problem checking your payment account status. Please try refreshing the page or contact support if the issue persists.</p>
+                </div>
+            `;
+        });
+    }
+
+    function createStripeAccountLink() {
+        fetch('/meals/api/stripe-account-link/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken')
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.url) {
+                // Redirect to Stripe onboarding
+                window.location.href = data.url;
+            } else {
+                alert('Error creating Stripe account link. Please try again or contact support.');
+            }
+        })
+        .catch(error => {
+            console.error('Error creating Stripe account link:', error);
+            alert('Error creating Stripe account link. Please try again or contact support.');
+        });
+    }
+
+    // Helper function to get CSRF token from cookies
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
 </script>
 {% endblock %} 

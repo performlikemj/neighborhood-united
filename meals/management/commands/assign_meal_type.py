@@ -101,7 +101,7 @@ class Command(BaseCommand):
                     # Define the response_format using Pydantic's model_json_schema
                     response_format={
                         'type': 'json_schema',
-                        'json_schema': {
+                        'schema' {
                             "name": "MealTypeAssignment",
                             "schema": MealTypeAssignment.model_json_schema()  # Pydantic v2 method
                         }

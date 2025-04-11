@@ -34,4 +34,18 @@ app.conf.beat_schedule = {
         'task': 'meals.email_service.send_meal_plan_reminder_email',
         'schedule': crontab(hour=10, minute=0)  # Runs daily at 10 AM
     },
+    'analyze-existing-meals': {
+        'task': 'meals.tasks.analyze_existing_meals',
+        'schedule': crontab(hour='2', minute='30'),  # Run at 2:30 AM every day
+        'args': (30,),  # Analyze 30 meals in each batch
+    },
+    'sync-all-chef-payments': {
+        'task': 'meals.tasks.sync_all_chef_payments',
+        'schedule': crontab(hour=0, minute=0),  # Runs daily at midnight
+    },
+    'process-chef-meal-price-adjustments': {
+        'task': 'meals.tasks.process_chef_meal_price_adjustments',
+        'schedule': crontab(day_of_week='monday', hour=3, minute=0),  # Run every Monday at 3:00 AM
+        'args': (),
+    },
 }

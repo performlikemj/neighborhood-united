@@ -17,7 +17,8 @@ from openai import OpenAI, OpenAIError
 
 logger = logging.getLogger(__name__)
 
-client = OpenAI(api_key=settings.OPENAI_KEY)
+OPENAI_API_KEY = settings.OPENAI_KEY
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 def get_user_pantry_items(user):
     """
@@ -55,26 +56,27 @@ def check_item_for_allergies_gpt(item_name: str, user) -> bool:
     ]
 
     try:
-        response = client.chat.completions.create(
+        response = client.responses.create(
             model="gpt-4o-mini",
-            messages=prompt_messages,
-            response_format={
-                'type': 'json_schema',
-                'json_schema': {
-                    "name": "SafeCheck",
+            input=prompt_messages,
+            text={
+                "format": {
+                    'type': 'json_schema',
+                    'name': 'safe_check',
                     "schema": {
-                        "type": "object",
-                        "properties": {
-                            "safe_check": {
-                                "type": "boolean"
-                            }
-                        },
-                        "required": ["safe_check"]
+                            "type": "object",
+                            "properties": {
+                                "safe_check": {
+                                    "type": "boolean"
+                                }
+                            },
+                            "required": ["safe_check"],
+                            "additionalProperties": False
+                        }
                     }
                 }
-            }
         )
-        gpt_output = response.choices[0].message.content
+        gpt_output = response.output_text
         data = json.loads(gpt_output)
         return data.get("safe_check", False)
 
@@ -244,21 +246,21 @@ def determine_items_to_replenish(user):
     
     # Step 6: Call OpenAI API
     try:
-        response = client.chat.completions.create(
+        response = client.responses.create(
             model="gpt-4o-mini",
-            messages=[
+            input=[
                 {"role": "system", "content": prompt_system},
                 {"role": "user", "content": prompt_user},
             ],
-            response_format={
-                'type': 'json_schema',
-                'json_schema': {
-                    'name': 'ReplenishItems',
+            text={
+                "format": {
+                    'type': 'json_schema',
+                    'name': 'replenish_items',
                     'schema': ReplenishItemsSchema.model_json_schema()
                 }
             }
         )
-        assistant_message = response.choices[0].message.content
+        assistant_message = response.output_text
         
         # Step 7: Parse and validate GPT response
         try:
@@ -291,23 +293,23 @@ def assign_pantry_tags(pantry_item_id):
     )
 
     try:
-        response = client.chat.completions.create(
+        response = client.responses.create(
             model="gpt-4o-mini",
-            messages=[
+            input=[
                 {"role": "system", "content": "You are a helpful assistant that generates tags in JSON format."},
                 {"role": "user", "content": prompt}
             ],
-            response_format={
-                'type': 'json_schema',
-                'json_schema': {
-                    "name": "PantryTags",
-                    "schema": PantryTagsSchema.model_json_schema()
+            text={
+                "format": {
+                    'type': 'json_schema',
+                    'name': 'pantry_tags',
+                    'schema': PantryTagsSchema.model_json_schema()
                 }
             }
         )
 
         # The OpenAI response should now be JSON that matches PantryTagsSchema
-        response_content = response.choices[0].message.content.strip()
+        response_content = response.output_text
         logger.info(f"Raw OpenAI response for pantry item {pantry_item_id}: {response_content}")
 
         # Parse and validate with Pydantic

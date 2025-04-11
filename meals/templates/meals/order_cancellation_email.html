@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Order Cancellation</title>
+    <style>
+        /* Basic reset & body styling */
+        body { 
+            margin: 0; 
+            padding: 0; 
+            width: 100% !important; 
+            background-color: #f8f8f8;
+        }
+
+        /* Container for the "white card" look */
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #ffffff;
+        }
+
+        /* Typography */
+        h1, h2, h3, p {
+            margin-top: 0;
+            font-family: Arial, sans-serif;
+            color: #333333;
+        }
+        h1 {
+            font-size: 24px; 
+            color: #f44336;
+        }
+        h2 {
+            font-size: 20px; 
+            color: #e57373; 
+            border-bottom: 1px solid #dddddd; 
+            padding-bottom: 10px;
+        }
+        h3 {
+            font-size: 18px; 
+        }
+        p {
+            font-size: 16px; 
+            line-height: 1.5; 
+            margin: 0 0 10px;
+        }
+
+        /* Order details section */
+        .order-details {
+            border: 1px solid #dddddd;
+            border-radius: 5px;
+            padding: 20px;
+            margin: 20px 0;
+            background-color: #f9f9f9;
+        }
+
+        .amount-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        /* Logo */
+        .logo { 
+            text-align: center; 
+            margin-bottom: 20px; 
+        }
+        .logo img { 
+            max-width: 200px; 
+            height: auto; 
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center; 
+            color: #777777; 
+            font-size: 12px; 
+            padding: 10px; 
+            margin-top: 20px; 
+        }
+        .footer a { 
+            color: #007BFF; 
+            text-decoration: none; 
+        }
+
+        /* Reason box */
+        .reason-box {
+            background-color: #fff8e1;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        
+        /* Status badge */
+        .status-badge {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 3px;
+            font-size: 14px;
+            font-weight: bold;
+            color: white;
+        }
+        
+        .status-pending {
+            background-color: #ff9800;
+        }
+        
+        .status-processed {
+            background-color: #4CAF50;
+        }
+        
+        .status-failed {
+            background-color: #f44336;
+        }
+        
+        /* Recommended alternative section */
+        .alternatives {
+            background-color: #e8f5e9;
+            border: 1px solid #c8e6c9;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f8f8f8;">
+        <tr>
+            <td align="center" valign="top">
+                <div class="container">
+                    <!-- Logo Section -->
+                    <div class="logo">
+                        <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" />
+                    </div>
+
+                    <!-- Greeting -->
+                    <h1>Order Cancellation Notice</h1>
+                    <p>Dear {{ user_name }},</p>
+                    {% if canceled_by_chef %}
+                    <p>We regret to inform you that the chef has canceled your meal order.</p>
+                    {% else %}
+                    <p>This email confirms that your order has been canceled as requested.</p>
+                    {% endif %}
+
+                    <!-- Order Details -->
+                    <h2>Order Details</h2>
+                    <div class="order-details">
+                        <p><strong>Order ID:</strong> #{{ order_id }}</p>
+                        <p><strong>Meal:</strong> {{ meal_name }}</p>
+                        <p><strong>Chef:</strong> {{ chef_name }}</p>
+                        <p><strong>Scheduled Date:</strong> {{ event_date }} at {{ event_time }}</p>
+                        <p><strong>Order Amount:</strong> ${{ "%.2f"|format(order_amount) }}</p>
+                    </div>
+
+                    <!-- Cancellation Reason -->
+                    <h2>Cancellation Information</h2>
+                    <div class="reason-box">
+                        <p><strong>Reason:</strong> {{ cancellation_reason }}</p>
+                        <p><strong>Cancellation Date:</strong> {{ cancellation_date }}</p>
+                    </div>
+
+                    <!-- Refund Information (if applicable) -->
+                    {% if refund_status %}
+                    <h2>Refund Information</h2>
+                    <div class="order-details">
+                        <p><strong>Refund Amount:</strong> ${{ "%.2f"|format(order_amount) }}</p>
+                        <p><strong>Status:</strong> 
+                            {% if refund_status == 'processed' %}
+                            <span class="status-badge status-processed">Processed</span>
+                            {% elif refund_status == 'pending' %}
+                            <span class="status-badge status-pending">Pending</span>
+                            {% elif refund_status == 'failed' %}
+                            <span class="status-badge status-failed">Failed</span>
+                            {% endif %}
+                        </p>
+                        {% if refund_status == 'processed' %}
+                        <p>Your refund has been processed and should be returned to your original payment method within 5-10 business days, depending on your financial institution.</p>
+                        {% elif refund_status == 'pending' %}
+                        <p>Your refund is being processed. You'll receive another email once it's complete.</p>
+                        {% elif refund_status == 'failed' %}
+                        <p>We encountered an issue processing your refund. Our team has been notified and will contact you shortly.</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+
+                    <!-- Alternatives (optional) -->
+                    {% if canceled_by_chef %}
+                    <div class="alternatives">
+                        <h3>Looking for alternatives?</h3>
+                        <p>Browse other available chef meals in your area by visiting our app or website.</p>
+                    </div>
+                    {% endif %}
+
+                    <!-- Footer -->
+                    <div class="footer">
+                        <p>If you have any questions about this cancellation, please contact our support team.</p>
+                        <p>Thank you for being a valued customer. We look forward to serving you again soon!</p>
+                    </div>
+                </div>
+            </td>
+        </tr>
+    </table>
+</body>
+</html> 

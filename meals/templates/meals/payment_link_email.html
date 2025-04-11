@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Complete Your Payment</title>
+    <style>
+        /* Reuse styles from shopping_list_email.html */
+        body { font-family: Arial, sans-serif; color: #333333; margin: 0; padding: 0; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .logo img { max-width: 200px; height: auto; }
+        h2 { color: #555; border-bottom: 1px solid #dddddd; padding-bottom: 5px; }
+        .button {
+            display: inline-block;
+            padding: 10px 20px;
+            margin: 15px 0;
+            background-color: #007BFF; /* Example button color */
+            color: #ffffff !important; /* Ensure text is white */
+            text-decoration: none;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+         .button:visited {
+            color: #ffffff !important; /* Ensure text remains white after visit */
+        }
+        .footer { text-align: center; color: #777; font-size: 12px; margin-top: 20px; }
+        .footer a { color: #007BFF; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo" style="text-align: center; margin-bottom: 20px;">
+            <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo">
+        </div>
+
+        <h2>Payment Required for Your Meal Plan</h2>
+        <p>Dear {{ user_name }},</p>
+        <p>
+            Your meal plan for the week of <strong>{{ meal_plan_week }}</strong> requires payment as it includes chef-prepared meals.
+        </p>
+        <p>
+            Please click the button below to complete your secure payment via Stripe.
+        </p>
+        <div style="text-align: center;">
+            <a href="{{ checkout_url }}" class="button" style="color: #ffffff;">Proceed to Payment</a>
+        </div>
+        <p>
+            Your Order ID is: <strong>{{ order_id }}</strong>.
+        </p>
+        <p style="margin-top: 20px;">
+            If you have any questions, please don't hesitate to contact us.
+        </p>
+        <div class="footer">
+            <p>You are receiving this email because your approved meal plan requires payment.</p>
+            {% if profile_url %}
+            <p><a href="{{ profile_url }}">Manage Your Account</a></p>
+            {% endif %}
+        </div>
+        <p style="color: #777; font-size: 12px; margin-top: 20px;">
+            <strong>Disclaimer:</strong> SautAI uses generative AI which may produce inaccuracies. Always double-check crucial information.
+        </p>
+    </div>
+</body>
+</html> 

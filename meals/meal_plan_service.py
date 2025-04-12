@@ -274,15 +274,28 @@ def create_meal_plan_for_all_users():
     users = CustomUser.objects.filter(email_confirmed=True)
 
     for user in users:
-        meal_plan = create_meal_plan_for_user(user, start_of_week, end_of_week)
-        if meal_plan:
-            try:
-                # Add local import to avoid circular dependency
-                from meals.email_service import send_meal_plan_approval_email
-                send_meal_plan_approval_email(meal_plan.id)
-            except Exception as e:
-                logger.error(f"Error sending approval email for user {user.username}: {e}")
-                traceback.print_exc()
+        # Convert current UTC time to the user's time zone
+      
+        current_utc_time = timezone.now()
+        try:
+            user_timezone = pytz.timezone(user.timezone)
+        except pytz.UnknownTimeZoneError:
+            logger.error(f"Unknown timezone for user {user.email}: {user.timezone}")
+            continue
+
+        user_time = current_utc_time.astimezone(user_timezone)
+
+        # Only create and send on Saturday at 7:00 AM in the user's time zone
+        if user_time.weekday() == 5 and user_time.hour == 7:
+            meal_plan = create_meal_plan_for_user(user, start_of_week, end_of_week)
+            if meal_plan:
+                try:
+                    # Add local import to avoid circular dependency
+                    from meals.email_service import send_meal_plan_approval_email
+                    send_meal_plan_approval_email(meal_plan.id)
+                except Exception as e:
+                    logger.error(f"Error sending approval email for user {user.username}: {e}")
+                    traceback.print_exc()
 
 def day_to_offset(day_name: str) -> int:
     """Convert 'Monday' -> 0, 'Tuesday' -> 1, etc."""

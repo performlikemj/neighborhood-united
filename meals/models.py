@@ -238,6 +238,8 @@ class Meal(models.Model):
     postal_objects = PostalCodeManager()  # Attach the custom manager
     dietary_objects = DietaryPreferenceManager()  # Attach the dietary preference manager
     meal_embedding = VectorField(dimensions=1536, null=True)
+    macro_info = models.JSONField(blank=True, null=True)
+    youtube_videos = models.JSONField(blank=True, null=True)
 
     class Meta:
         constraints = [
@@ -409,6 +411,7 @@ class MealPlan(models.Model):
     has_changes = models.BooleanField(default=False)  # Track if there are changes to the plan
     approval_token = models.UUIDField(default=uuid.uuid4, unique=True)   
     reminder_sent = models.BooleanField(default=False)
+    approval_email_sent = models.BooleanField(default=False)
     order = models.OneToOneField(
         'Order',
         null=True,

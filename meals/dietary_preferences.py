@@ -29,7 +29,7 @@ def handle_custom_dietary_preference(custom_prefs):
             try:
                 # Step 4: Use OpenAI to generate structured JSON
                 response = client.responses.create(
-                    model="gpt-4o-mini",
+                    model="gpt-4.1-mini",
                     input=[
                         {
                             "role": "system",
@@ -96,7 +96,7 @@ def assign_dietary_preferences(meal_id):
         meal = Meal.objects.get(id=meal_id)
         messages = meal.generate_messages()
         response = client.responses.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             input=messages,
             #store=True,
             #metadata={'tag': 'dietary_preferences'},

@@ -57,7 +57,7 @@ def check_item_for_allergies_gpt(item_name: str, user) -> bool:
 
     try:
         response = client.responses.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             input=prompt_messages,
             text={
                 "format": {
@@ -247,7 +247,7 @@ def determine_items_to_replenish(user):
     # Step 6: Call OpenAI API
     try:
         response = client.responses.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             input=[
                 {"role": "system", "content": prompt_system},
                 {"role": "user", "content": prompt_user},
@@ -294,7 +294,7 @@ def assign_pantry_tags(pantry_item_id):
 
     try:
         response = client.responses.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             input=[
                 {"role": "system", "content": "You are a helpful assistant that generates tags in JSON format."},
                 {"role": "user", "content": prompt}

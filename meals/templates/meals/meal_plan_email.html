@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+{% load meal_filters %}
 <html>
 <head>
     <meta charset="UTF-8">
@@ -58,7 +59,7 @@
             margin-bottom: 10px;
         }
 
-        /* Bulletproof buttons: We’re using table-based code for broad compatibility */
+        /* Bulletproof buttons: We're using table-based code for broad compatibility */
         .btn-table {
             border-collapse: collapse;
             margin: 0 auto;
@@ -131,7 +132,7 @@
 
                     <!-- Greeting and Personal Touch -->
                     <p>
-                        We’ve created a delightful meal plan for you from
+                        We've created a delightful meal plan for you from
                         {{ meal_plan_week_start }} to {{ meal_plan_week_end }}. 
                         You can look forward to a balanced, fresh, and worry-free week of meals!
                     </p>
@@ -143,7 +144,7 @@
                     <div class="option">
                         <h3>📅 Option 1: One-day Bulk Prep</h3>
                         <p>
-                            Get all your cooking done in one go. We’ll provide a 
+                            Get all your cooking done in one go. We'll provide a 
                             detailed one-day prep guide for Sunday, so you can enjoy 
                             stress-free meals throughout the week.
                         </p>
@@ -189,6 +190,55 @@
                         <p><strong>Meal Type:</strong> {{ meal.meal_type }}</p>
                         <p><strong>Meal Name:</strong> {{ meal.meal_name }}</p>
                         <p><strong>Description:</strong> {{ meal.description }}</p>
+                        
+                        <!-- Macro Information Section -->
+                        {% if meal.meal_obj.macro_info %}
+                        {% with macro_info=meal.meal_obj.macro_info|json_parse %}
+                        <div class="macro-info" style="margin-top: 10px; background-color: #f9f9f9; padding: 10px; border-radius: 5px;">
+                            <h4 style="margin-top: 0; color: #4CAF50;">Nutritional Information</h4>
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <tr>
+                                    <td style="padding: 3px; font-weight: bold;">Calories:</td>
+                                    <td style="padding: 3px;">{{ macro_info.calories }} kcal</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 3px; font-weight: bold;">Protein:</td>
+                                    <td style="padding: 3px;">{{ macro_info.protein }}g</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 3px; font-weight: bold;">Carbs:</td>
+                                    <td style="padding: 3px;">{{ macro_info.carbohydrates }}g</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 3px; font-weight: bold;">Fat:</td>
+                                    <td style="padding: 3px;">{{ macro_info.fat }}g</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 3px; font-weight: bold;">Serving Size:</td>
+                                    <td style="padding: 3px;">{{ macro_info.serving_size }}</td>
+                                </tr>
+                            </table>
+                        </div>
+                        {% endwith %}
+                        {% endif %}
+                        
+                        <!-- YouTube Videos Section -->
+                        {% if meal.meal_obj.youtube_videos %}
+                        {% with video_info=meal.meal_obj.youtube_videos|json_parse %}
+                        <div class="youtube-videos" style="margin-top: 10px; background-color: #f9f9f9; padding: 10px; border-radius: 5px;">
+                            <h4 style="margin-top: 0; color: #4CAF50;">Cooking Inspiration</h4>
+                            <ul style="padding-left: 20px; margin-bottom: 0;">
+                                {% for video in video_info.videos %}
+                                <li style="margin-bottom: 5px;">
+                                    <a href="{{ video.url }}" target="_blank" style="color: #2196F3; text-decoration: none;">
+                                        {{ video.title }} ({{ video.channel }})
+                                    </a>
+                                </li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                        {% endwith %}
+                        {% endif %}
                     </div>
                     {% endfor %}
 

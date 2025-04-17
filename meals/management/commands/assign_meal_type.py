@@ -85,7 +85,7 @@ class Command(BaseCommand):
             try:
                 # Call OpenAI Chat Completion API
                 response = client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model="gpt-4.1-mini",
                     messages=[
                         {
                             "role": "system",
@@ -101,7 +101,7 @@ class Command(BaseCommand):
                     # Define the response_format using Pydantic's model_json_schema
                     response_format={
                         'type': 'json_schema',
-                        'schema' {
+                        'json_schema': {
                             "name": "MealTypeAssignment",
                             "schema": MealTypeAssignment.model_json_schema()  # Pydantic v2 method
                         }

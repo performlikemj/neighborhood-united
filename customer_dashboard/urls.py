@@ -1,7 +1,7 @@
 from django.urls import path
 from . import views
 from . import utils
-
+from . import secure_email_integration
 app_name = 'customer_dashboard'
 
 urlpatterns = [
@@ -40,4 +40,13 @@ urlpatterns = [
     path('api/user_summary/', views.api_user_summary, name='api_user_summary'),
     path('api/user_summary_status/', views.api_user_summary_status, name='api_user_summary'),
     path('api/recommend_follow_up/', views.api_recommend_follow_up, name='api_recommend_follow_up'),
+
+    # Updated Endpoints for the new AI Assistant
+    path('api/assistant/send-message/', views.send_message, name='send_message'),
+    path('api/assistant/stream-message/', views.stream_message, name='stream_message'),
+    path('api/assistant/guest-stream-message/', views.guest_stream_message, name='guest_stream_message'),
+    path('api/assistant/reset-conversation/', views.reset_conversation, name='reset_conversation'),
+    path('api/assistant/conversation/<str:user_id>/history/', views.get_conversation_history, name='get_conversation_history'),
+    path('api/email-assistant/process/', secure_email_integration.process_email, name='process_email')
+
 ]

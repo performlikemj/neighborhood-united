@@ -103,7 +103,7 @@ def extract_pantry_item_info(transcription: str) -> Dict[str, Any]:
     # Use GPT to extract structured information from the transcription
     try:
         response = client.responses.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             input=[
                 {"role": "system", "content": """Extract pantry item information from the user's audio description.
                 

@@ -13,6 +13,8 @@ from django.contrib import messages
 from .tasks import queue_system_update_email
 from .utils.order_utils import create_chef_meal_orders
 from django.utils import timezone
+import json
+from django.utils.safestring import mark_safe
 
 class ReviewInline(GenericTabularInline):
     model = Review
@@ -122,16 +124,85 @@ class OrderAdmin(admin.ModelAdmin):
     actions = [reconcile_chef_meal_orders, reconcile_payment_logs]
 
 class MealAdmin(admin.ModelAdmin):
-    list_display = ('name', 'chef', 'start_date', 'price', 'average_rating_display')
+    list_display = ('name', 'chef', 'start_date', 'price', 'average_rating_display', 'has_macro_info', 'has_youtube_videos')
     list_filter = ('chef', 'start_date', 'meal_type')
     search_fields = ('name', 'chef__user__username', 'dishes__name', 'dietary_preferences__name', 'custom_dietary_preferences__name')
     filter_horizontal = ('dishes',)
     inlines = [ReviewInline]
+    readonly_fields = ('macro_info_display', 'youtube_videos_display')
+    
+    fieldsets = (
+        ('Basic Information', {
+            'fields': ('name', 'chef', 'creator', 'description', 'meal_type', 'start_date', 'price', 'image')
+        }),
+        ('Dietary Information', {
+            'fields': ('dishes', 'dietary_preferences', 'custom_dietary_preferences')
+        }),
+        ('Enhanced Information', {
+            'fields': ('macro_info_display', 'youtube_videos_display')
+        }),
+    )
 
     def average_rating_display(self, obj):
         avg = obj.average_rating()
         return f"{avg:.2f}" if avg else "No Ratings"
     average_rating_display.short_description = 'Avg. Rating'
+    
+    def has_macro_info(self, obj):
+        try:
+            return bool(obj.macro_info)
+        except (AttributeError, TypeError):
+            return False
+    has_macro_info.boolean = True
+    has_macro_info.short_description = 'Macro Info'
+    
+    def has_youtube_videos(self, obj):
+        try:
+            return bool(obj.youtube_videos)
+        except (AttributeError, TypeError):
+            return False
+    has_youtube_videos.boolean = True
+    has_youtube_videos.short_description = 'YouTube'
+    
+    def macro_info_display(self, obj):
+        try:
+            if not hasattr(obj, 'macro_info') or not obj.macro_info:
+                return "No macro information available"
+            
+            data = json.loads(obj.macro_info)
+            html = "<table>"
+            html += f"<tr><th>Calories</th><td>{data.get('calories', 'N/A')} kcal</td></tr>"
+            html += f"<tr><th>Protein</th><td>{data.get('protein', 'N/A')} g</td></tr>"
+            html += f"<tr><th>Carbohydrates</th><td>{data.get('carbohydrates', 'N/A')} g</td></tr>"
+            html += f"<tr><th>Fat</th><td>{data.get('fat', 'N/A')} g</td></tr>"
+            html += f"<tr><th>Serving Size</th><td>{data.get('serving_size', 'N/A')}</td></tr>"
+            html += "</table>"
+            return mark_safe(html)
+        except Exception as e:
+            return f"Error processing macro information: {str(e)}"
+    macro_info_display.short_description = 'Macro Information'
+    
+    def youtube_videos_display(self, obj):
+        try:
+            if not hasattr(obj, 'youtube_videos') or not obj.youtube_videos:
+                return "No YouTube videos available"
+            
+            data = json.loads(obj.youtube_videos)
+            videos = data.get('videos', [])
+            if not videos:
+                return "No videos found"
+            
+            html = "<ul>"
+            for video in videos:
+                title = video.get('title', 'Untitled')
+                url = video.get('url', '#')
+                channel = video.get('channel', 'Unknown')
+                html += f'<li><a href="{url}" target="_blank">{title}</a> ({channel})</li>'
+            html += "</ul>"
+            return mark_safe(html)
+        except Exception as e:
+            return f"Error processing YouTube videos: {str(e)}"
+    youtube_videos_display.short_description = 'YouTube Videos'
 
 class CartAdmin(admin.ModelAdmin):
     list_display = ('customer', 'get_meals_count')

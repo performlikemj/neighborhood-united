@@ -28,6 +28,7 @@ from meals.serializers import MealPlanSerializer
 from customer_dashboard.models import GoalTracking, UserHealthMetrics, CalorieIntake, UserSummary
 from shared.utils import generate_user_context
 from meals.meal_plan_service import is_chef_meal
+from django.template.loader import render_to_string
 
 logger = logging.getLogger(__name__)
 OPENAI_API_KEY = settings.OPENAI_KEY
@@ -64,6 +65,10 @@ def send_meal_plan_approval_email(meal_plan_id):
             # **Check if the user has opted in to receive meal plan emails**
             if not user.email_meal_plan_saved:
                 logger.info(f"User {user.username} has opted out of meal plan emails.")
+                return  # Do not send the email
+
+            if meal_plan.approval_email_sent:
+                logger.info(f"Approval email already sent for MealPlan ID {meal_plan_id}.")
                 return  # Do not send the email
 
         # Proceed with external calls after the transaction is successful
@@ -107,6 +112,7 @@ def send_meal_plan_approval_email(meal_plan_id):
                 "meal_type": meal.meal_type,
                 "day": meal.day,
                 "description": meal.meal.description or "A delicious meal prepared for you.",
+                "meal_obj": meal.meal  # Add the actual meal object
             })
 
         # Sort the meals_list by day and meal type
@@ -122,7 +128,7 @@ def send_meal_plan_approval_email(meal_plan_id):
         # Call OpenAI to generate the email content
         try:
             response = client.responses.create(
-                model="gpt-4o-mini",
+                model="gpt-4.1-mini",
                 input=[
                     {
                         "role": "system",
@@ -163,25 +169,26 @@ def send_meal_plan_approval_email(meal_plan_id):
 
             email_model = MealPlanApprovalEmailSchema(**email_data_dict)
 
-            # Set up Jinja2 environment
-            project_dir = settings.BASE_DIR
-            env = Environment(loader=FileSystemLoader(os.path.join(project_dir, 'meals', 'templates')))
-            template = env.get_template('meals/meal_plan_email.html')
-
             # Generate the profile URL
             profile_url = f"{os.getenv('STREAMLIT_URL')}/profile"
 
-            # Render the template with data from the Pydantic model
-            email_body_html = template.render(
-                user_name=email_model.user_name,
-                meal_plan_week_start=email_model.meal_plan_week_start,
-                meal_plan_week_end=email_model.meal_plan_week_end,
-                approval_link_daily=approval_link_daily,
-                approval_link_one_day=approval_link_one_day,
-                meals_list=meals_list,
-                summary_text=email_model.summary_text,
-                profile_url=profile_url
-            )
+            # --- Replace Jinja2 with Django Template Rendering ---
+            context = {
+                'user_name': user_name,
+                'meal_plan_week_start': meal_plan.week_start_date.strftime('%B %d, %Y'), # Example formatting
+                'meal_plan_week_end': meal_plan.week_end_date.strftime('%B %d, %Y'),   # Example formatting
+                'approval_link_daily': approval_link_daily,
+                'approval_link_one_day': approval_link_one_day,
+                'meals_list': meals_list,
+                'summary_text': email_model.summary_text, # Use summary from model
+                'profile_url': profile_url,
+            }
+
+            # Render the template using Django's engine
+            # Note: The path 'meals/meal_plan_email.html' should be relative to a directory
+            # listed in TEMPLATES['DIRS'] or within an app's 'templates' directory.
+            email_body_html = render_to_string('meals/meal_plan_email.html', context)
+            # --- End of replacement ---
 
             email_data = {
                 'subject': f'Approve Your Meal Plan for {meal_plan.week_start_date} - {meal_plan.week_end_date}',
@@ -194,15 +201,18 @@ def send_meal_plan_approval_email(meal_plan_id):
                 logger.debug(f"Sending approval email to n8n for: {user_email}")
                 n8n_url = os.getenv("N8N_GENERATE_APPROVAL_EMAIL_URL")
                 response = requests.post(n8n_url, json=email_data)
+                response.raise_for_status() # Check for HTTP errors from n8n
+                logger.info(f"Approval email successfully sent to n8n for: {user_email}")
+                with transaction.atomic():
+                    meal_plan.approval_email_sent = True
+                    meal_plan.save()
             except Exception as e:
                 logger.error(f"Error sending approval email to n8n for: {user_email}, error: {str(e)}")
                 traceback.print_exc()
 
-
-            logger.info(f"Approval email sent to n8n for: {user_email}")
-
         except Exception as e:
             logger.error(f"Error generating or sending approval email: {e}")
+            traceback.print_exc()
             # Optionally, re-raise the exception if needed
             # raise
 
@@ -275,42 +285,6 @@ def generate_shopping_list(meal_plan_id):
                         }
                         substitution_info.append(sub_info)
     
-    # Also check for meals that are substitution variants
-    substitution_variants = meal_plan_meals.filter(is_substitution_variant=True)
-    for variant in substitution_variants:
-        # Skip chef meals
-        if is_chef_meal(variant):
-            continue
-            
-        if variant.base_meal:
-            # Check for original ingredients that were replaced
-            variant_ingredients = []
-            original_ingredients = []
-            
-            for dish in variant.dishes.all():
-                variant_ingredients.extend([
-                    {
-                        "name": ing.name,
-                        "is_substitution": getattr(ing, 'is_substitution', False),
-                        "original_ingredient": getattr(ing, 'original_ingredient', None)
-                    }
-                    for ing in dish.ingredients.all()
-                ])
-            
-            for dish in variant.base_meal.dishes.all():
-                original_ingredients.extend([ing.name for ing in dish.ingredients.all()])
-            
-            # Find substitutions by comparing ingredients
-            for ing in variant_ingredients:
-                if ing.get("is_substitution") and ing.get("original_ingredient"):
-                    sub_info = {
-                        "meal_name": variant.name,
-                        "original_ingredient": ing.get("original_ingredient"),
-                        "substitutes": [ing.get("name")],
-                        "notes": f"For {variant.name}, using {ing.get('name')} instead of {ing.get('original_ingredient')}"
-                    }
-                    substitution_info.append(sub_info)
-
     # Retrieve bridging usage for leftover logic
     bridging_qs = (
         MealPlanMealPantryUsage.objects
@@ -410,7 +384,7 @@ def generate_shopping_list(meal_plan_id):
                 chef_note = "IMPORTANT: Some meals in this plan are chef-created and must be prepared exactly as specified. Do not suggest substitutions for chef-created meals. Include all ingredients for chef meals without alternatives."
             
             response = client.responses.create(
-                model="gpt-4o-mini",
+                model="gpt-4.1-mini",
                 input=[
                     {
                         "role": "system",
@@ -600,7 +574,7 @@ def generate_user_summary(user_id):
     preferred_language = language_prompt.get(user.preferred_language, 'English')
     try:
         response = client.responses.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             input=[
                 {"role": "system", 
                  "content": f"Answering in {preferred_language}, Generate a detailed summary based on the following data that gives the user a high-level view of their goals, health data, and how their caloric intake relates to those goals. Start the response off with a friendly welcoming tone. If there is no data, please respond with the following message: {message}\n\n{formatted_data}"
@@ -685,7 +659,7 @@ def generate_emergency_supply_list(user_id):
     try:
         from meals.pydantic_models import EmergencySupplyList
         response = client.responses.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             input=[
                 {
                     "role": "system",

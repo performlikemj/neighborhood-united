@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+{% load meal_filters %}
 <html>
 <head>
     <meta charset="UTF-8">
@@ -121,29 +122,68 @@
                     </div>
                     {% for step in meal_type_info.steps %}
                         <div class="step-card">
-                            <h3>{{ step.description }}</h3>
+                            <h3>Step {{ forloop.counter }}: {{ step.description }}</h3>
                             <table>
                                 <tr>
                                     <td>Duration:</td>
                                     <td>{{ step.duration|default:"N/A" }}</td>
                                 </tr>
+                                {% if step.ingredients %}
                                 <tr>
                                     <td>Ingredients:</td>
                                     <td>{{ step.ingredients|join:", "|default:"N/A" }}</td>
                                 </tr>
+                                {% endif %}
+                                {% if step.cooking_temperature %}
                                 <tr>
                                     <td>Cooking Temp:</td>
                                     <td>{{ step.cooking_temperature|default:"N/A" }}</td>
                                 </tr>
+                                {% endif %}
+                                {% if step.cooking_time %}
                                 <tr>
                                     <td>Cooking Time:</td>
                                     <td>{{ step.cooking_time|default:"N/A" }}</td>
                                 </tr>
+                                {% endif %}
+                                {% if step.notes %}
                                 <tr class="notes">
                                     <td>Notes:</td>
                                     <td>{{ step.notes|default:"N/A" }}</td>
                                 </tr>
+                                {% endif %}
                             </table>
+                           
+                           {# Display Metadata if found for this step #}
+                           {% if step.metadata %}
+                               {% with macro_info=step.metadata.macro_info|json_parse youtube_info=step.metadata.youtube_videos|json_parse %}
+                                   {% if macro_info %}
+                                   <div class="metadata-section" style="margin-top: 10px; background-color: #f0f0f0; padding: 8px; border-radius: 4px; font-size: 13px; border: 1px solid #e0e0e0;">
+                                       <h5 style="margin-top: 0; margin-bottom: 4px; color: #4CAF50; font-size: 14px;">Est. Nutrition (Meal):</h5>
+                                       <p style="margin: 1px 0;">Calories: {{ macro_info.calories|default:'N/A' }} kcal</p>
+                                       <p style="margin: 1px 0;">Protein: {{ macro_info.protein|default:'N/A' }}g</p>
+                                       <p style="margin: 1px 0;">Carbs: {{ macro_info.carbohydrates|default:'N/A' }}g</p>
+                                       <p style="margin: 1px 0;">Fat: {{ macro_info.fat|default:'N/A' }}g</p>
+                                       <p style="margin: 1px 0;">Serving: {{ macro_info.serving_size|default:'N/A' }}</p>
+                                   </div>
+                                   {% endif %}
+
+                                   {% if youtube_info and youtube_info.videos %}
+                                   <div class="metadata-section" style="margin-top: 8px; background-color: #f0f0f0; padding: 8px; border-radius: 4px; font-size: 13px; border: 1px solid #e0e0e0;">
+                                       <h5 style="margin-top: 0; margin-bottom: 4px; color: #4CAF50; font-size: 14px;">Ref. Videos (Meal):</h5>
+                                       <ul style="padding-left: 18px; margin: 0;">
+                                           {% for video in youtube_info.videos|slice:":2" %}
+                                           <li style="margin-bottom: 2px;">
+                                               <a href="{{ video.url }}" target="_blank" style="color: #2196F3; text-decoration: none;">
+                                                   {{ video.title|default:'Video Link' }} {% if video.channel %}({{ video.channel }}){% endif %}
+                                               </a>
+                                           </li>
+                                           {% endfor %}
+                                       </ul>
+                                   </div>
+                                   {% endif %}
+                               {% endwith %}
+                           {% endif %}
                         </div>
                     {% endfor %}
                 </div>

@@ -145,29 +145,34 @@ def append_custom_dietary_preference(request, preference_name):
     
 def get_embedding(text, model="text-embedding-3-small"):
     text = text.replace("\n", " ")
+    logger.info(f"Generating embedding with model: {model}, text length: {len(text)}")
     try:
         # Fetch the response from the embedding API
         response = client.embeddings.create(input=[text], model=model)
         
         # Enable detailed logging when troubleshooting
-        logger.debug(f"Embedding API response type: {type(response)}")
+        logger.info(f"Embedding API response received, type: {type(response)}")
         logger.debug(f"Embedding API response structure: {response.__dict__.keys() if hasattr(response, '__dict__') else 'No __dict__ attribute'}")
         
         # Access the embedding data safely
         if hasattr(response, 'data') and len(response.data) > 0:
             embedding_data = response.data[0]
+            logger.info(f"Successfully extracted embedding_data from response")
             
             logger.debug(f"Embedding data attributes: {embedding_data.__dict__.keys() if hasattr(embedding_data, '__dict__') else 'No __dict__ attribute'}")
             
             if hasattr(embedding_data, 'embedding'):
                 embedding = embedding_data.embedding
+                logger.info(f"Successfully extracted embedding from embedding_data")
                 
                 # Convert numpy arrays to lists if necessary
                 if isinstance(embedding, np.ndarray):
                     embedding = embedding.tolist()
+                    logger.info("Converted numpy array to list")
                 
                 # Validate the embedding
                 if is_valid_embedding(embedding):
+                    logger.info(f"Valid embedding generated with length: {len(embedding)}")
                     return embedding
                 else:
                     logger.error(f"Invalid embedding format or length: {len(embedding) if embedding else 'None'}")
@@ -353,7 +358,7 @@ def is_question_relevant(question):
     # Define application's functionalities and domains for the model to consider
     app_context = """
     The application focuses on food delivery, meal planning, health, nutrition, and diet. It allows users to:
-    - Communicate with their personal AI powered dietary assistant. 
+    - Communicate with their personal AI powered dietary assistant. The user should be able to greet the assistant and start a conversation with it.
     - Create meal plans with meals geared towards their goals.
     - Search for dishes and ingredients.
     - Get personalized meal plans based on dietary preferences and nutritional goals.
@@ -373,7 +378,7 @@ def is_question_relevant(question):
                     # Steps
 
                     1. **Understand the Application Context**: Familiarize yourself with the key functionalities of the application:
-                    - Communicating with a personal AI-powered dietary assistant.
+                    - Communicate with their personal AI powered dietary assistant. The user should be able to greet the assistant and start a conversation with it.
                     - Creating and personalizing meal plans.
                     - Searching for dishes and ingredients.
                     - Providing personalized meal plans based on dietary preferences and nutritional goals.
@@ -408,6 +413,7 @@ def is_question_relevant(question):
 
                     - Pay close attention to questions that may be indirectly related to the functionalities and evaluate them carefully.
                     - The user should be able to communicate with the assistant in a friendly tone which should be relevant as long as it does not go against the application's context.
+                    - The user should be able to start a conversation and engage in 'small talk' with the assistant, but should not veer into dangerous topics.
                     - Ensure that the response strictly adheres to the functionalities outlined in the application's context.
                 """
             },
@@ -495,7 +501,7 @@ def recommend_follow_up(request, context):
         """
 
     try:
-        response = client.chat.completions.create(
+        response = client.responses.create(
             model="gpt-4o-mini",
             messages=[
                 {
@@ -913,7 +919,7 @@ def generate_review_summary(object_id, category):
     # Step 3: Feed the formatted string into GPT-3.5-turbo-1106 to generate the overall summary
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             messages=[{"role": "user", "content": formatted_summaries}],
         )
         overall_summary = response['choices'][0]['message']['content']
@@ -933,7 +939,7 @@ def generate_review_summary(object_id, category):
 def generate_summary_title(question):
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             messages=[
                 {
                     "role": "system",
@@ -1076,6 +1082,10 @@ def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day, m
             else:
                 logger.info(f"Updated existing MealPlanMeal: {meal_plan_meal}")
             
+            meal_plan.has_changes = True
+            meal_plan.is_approved = False
+            meal_plan.reminder_sent = False
+            meal_plan.save()
             logger.info(f"Replaced meal '{old_meal.name}' with '{new_meal.name}' for {meal_type} on {day}.")
     
     except IntegrityError as e:
@@ -1131,6 +1141,10 @@ def remove_meal_from_plan(request, meal_plan_id, meal_id, day, meal_type):
 
     # Remove the meal from the meal plan
     meal_plan_meal.delete()
+    meal_plan.has_changes = True
+    meal_plan.is_approved = False
+    meal_plan.reminder_sent = False
+    meal_plan.save()
     return {'status': 'success', 'message': 'Meal removed from the plan.'}
 
 def cosine_similarity(vec1, vec2):
@@ -1232,7 +1246,7 @@ def create_meal(request=None, user_id=None, name=None, dietary_preference=None, 
                 )
                 try:
                     response = client.chat.completions.create(
-                        model="gpt-4o-mini",
+                        model="gpt-4.1-mini",
                         messages=[
                             {
                                 "role": "system",
@@ -1429,7 +1443,12 @@ def add_meal_to_plan(request, meal_plan_id, meal_id, day, meal_type, allow_dupli
             offset = day_to_offset(day)
             meal_date = meal_plan.week_start_date + timedelta(days=offset)
 
-            MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day, meal_type=meal_type, meal_date=meal_date)
+            with transaction.atomic():
+                MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day, meal_type=meal_type, meal_date=meal_date)
+                meal_plan.has_changes = True
+                meal_plan.is_approved = False
+                meal_plan.reminder_sent = False
+                meal_plan.save()
             return {'status': 'success', 'action': 'added_duplicate', 'new_meal': meal.name, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
         else:
             # If duplicates are not allowed and a meal is already scheduled, offer to replace it
@@ -1446,7 +1465,12 @@ def add_meal_to_plan(request, meal_plan_id, meal_id, day, meal_type, allow_dupli
         # No existing meal for that day; go ahead and add the new meal
         offset = day_to_offset(day)
         meal_date = meal_plan.week_start_date + timedelta(days=offset)
-        MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day, meal_type=meal_type, meal_date=meal_date)
+        with transaction.atomic():
+            MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day, meal_type=meal_type, meal_date=meal_date)
+            meal_plan.has_changes = True
+            meal_plan.is_approved = False
+            meal_plan.reminder_sent = False
+            meal_plan.save()
         return {'status': 'success', 'action': 'added', 'new_meal': meal.name, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 
@@ -1564,18 +1588,24 @@ def replace_meal_based_on_preferences(request, meal_plan_id, old_meal_ids, days_
                 continue
 
             # Add the new meal to the plan
-            add_meal_response = add_meal_to_plan(request, meal_plan_id, new_meal_id, day, meal_type)
-            if add_meal_response['status'] != 'success':
-                errors.append(f'Failed to add the new meal for {day} and {meal_type}.')
-                continue
+            with transaction.atomic():
+                add_meal_response = add_meal_to_plan(request, meal_plan_id, new_meal_id, day, meal_type)
+                if add_meal_response['status'] != 'success':
+                    errors.append(f'Failed to add the new meal for {day} and {meal_type}.')
+                    continue
 
-            # Collect information about the replaced meal
-            replaced_meals.append({
-                'old_meal': old_meal.name,
-                'new_meal_id': new_meal_id,
-                'day': day,
-                'meal_type': meal_type
-            })
+                # Collect information about the replaced meal
+                replaced_meals.append({
+                    'old_meal': old_meal.name,
+                    'new_meal_id': new_meal_id,
+                    'day': day,
+                    'meal_type': meal_type
+                })
+
+                meal_plan.has_changes = True
+                meal_plan.is_approved = False
+                meal_plan.reminder_sent = False
+                meal_plan.save()
 
         except Meal.DoesNotExist:
             logging.error(f"Old meal with ID {old_meal_id} not found.")

@@ -731,11 +731,11 @@ class ChefMealOrderSerializer(serializers.ModelSerializer):
              total = Decimal('0.00') # Default if no price info available
              
         # --- Print in get_total_price (ChefMealOrderSerializer) ---
-        print(f"[DEBUG] ChefMealOrderSerializer: get_total_price for CMO id={obj.id}")
-        print(f"[DEBUG]   - Quantity: {obj.quantity}")
-        print(f"[DEBUG]   - Stored Price Paid: {obj.price_paid}")
-        print(f"[DEBUG]   - Event Current Price: {obj.meal_event.current_price if obj.meal_event else 'N/A'}")
-        print(f"[DEBUG]   - Calculated/Used Total: {total}")
+
+
+
+
+
         # --- End Print ---
              
         return str(total.quantize(Decimal('0.01')))
@@ -752,16 +752,15 @@ class ChefMealOrderSerializer(serializers.ModelSerializer):
              unit_price = Decimal('0.00')
              
         # --- Print in get_unit_price (ChefMealOrderSerializer) ---
-        print(f"[DEBUG] ChefMealOrderSerializer: get_unit_price for CMO id={obj.id}. Unit Price: {unit_price}")
+
         # --- End Print ---
 
         return str(unit_price.quantize(Decimal('0.01')))
 
     def to_representation(self, instance):
-        print(f"[DEBUG] ChefMealOrderSerializer: Starting to_representation for CMO id={instance.id}") # Added print
         data = super().to_representation(instance)
         # --- Print final values in to_representation (ChefMealOrderSerializer) ---
-        print(f"[DEBUG] ChefMealOrderSerializer: Representation for CMO id={instance.id}: quantity={data.get('quantity')}, price_paid={data.get('price_paid')}, unit_price={data.get('unit_price')}, total_price={data.get('total_price')}")
+
         # --- End Print ---
         return data
 
@@ -781,7 +780,6 @@ class OrderWithChefMealsSerializer(serializers.ModelSerializer):
         ]
 
     def get_price_breakdown(self, obj):
-        print(f"[DEBUG] OrderSerializer: Running get_price_breakdown for Order id={obj.id}") # Added print
         breakdown = []
         # Ensure related OrderMeals are fetched efficiently
         order_meals = obj.ordermeal_set.select_related('meal', 'chef_meal_event', 'meal_plan_meal').all() # Added meal_plan_meal
@@ -805,11 +803,10 @@ class OrderWithChefMealsSerializer(serializers.ModelSerializer):
             calculated_total += subtotal
             
             # --- Print inside price_breakdown loop ---
-            print(f"[DEBUG] OrderSerializer: Processing OrderMeal id={order_meal.id} for Order id={obj.id}")
-            print(f"[DEBUG]   - Meal Name: {order_meal.meal.name}")
-            print(f"[DEBUG]   - Unit Price: {unit_price}")
-            print(f"[DEBUG]   - Quantity: {quantity}") # <-- Check this quantity
-            print(f"[DEBUG]   - Calculated Subtotal: {subtotal}")
+
+
+
+
             # --- End Print ---
 
             breakdown.append({
@@ -822,7 +819,6 @@ class OrderWithChefMealsSerializer(serializers.ModelSerializer):
                 'chef_meal_event_id': order_meal.chef_meal_event.id if order_meal.chef_meal_event else None
             })
         
-        print(f"[DEBUG] OrderSerializer: Finished price_breakdown for Order id={obj.id}. Calculated Total: {calculated_total}") # Added print
         return breakdown
 
     def get_total_price(self, obj):
@@ -841,20 +837,19 @@ class OrderWithChefMealsSerializer(serializers.ModelSerializer):
              calculated_total += (unit_price * quantity)
              
         # --- Print in get_total_price ---
-        print(f"[DEBUG] OrderSerializer: get_total_price for Order id={obj.id}. Calculated Total: {calculated_total}")
-        print(f"[DEBUG]   - Value from obj.total_price (if exists): {getattr(obj, 'total_price', 'N/A')}") 
+
+
         # --- End Print ---
 
         # Return the recalculated total, formatted as a string
         return str(calculated_total.quantize(Decimal('0.01')))
 
     def to_representation(self, instance):
-        print(f"[DEBUG] OrderSerializer: Starting to_representation for Order id={instance.id}") # Added print
         data = super().to_representation(instance)
         # --- Print final values in to_representation ---
-        print(f"[DEBUG] OrderSerializer: Final 'total_price' in representation for Order id={instance.id}: {data.get('total_price')}")
-        print(f"[DEBUG] OrderSerializer: Final 'chef_meal_orders' count in representation for Order id={instance.id}: {len(data.get('chef_meal_orders', []))}")
-        print(f"[DEBUG] OrderSerializer: Final 'price_breakdown' in representation for Order id={instance.id}: {data.get('price_breakdown')}")
+
+
+
         # --- End Print ---
         return data
 

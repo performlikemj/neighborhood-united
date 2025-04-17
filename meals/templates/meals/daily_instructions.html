@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+{% load meal_filters %}
 <html>
 <head>
     <meta charset="UTF-8">
@@ -66,9 +67,37 @@
                       <h2 class="meal-type-header">{{ meal_type }}</h2>
                       {% for meal in meals %}
                         <h3>{{ meal.meal_name }}</h3>
-                        <table>
-                          {{ meal.formatted_instructions|safe }}
-                        </table>
+                        <div class="meal-block">
+                            {{ meal.formatted_instructions|safe }}
+                            
+                            {% with macro_info=meal.macro_info|json_parse youtube_info=meal.youtube_videos|json_parse %}
+                                {% if macro_info %}
+                                <div class="metadata-section" style="margin-top: 10px; background-color: #f9f9f9; padding: 10px; border-radius: 5px; font-size: 14px;">
+                                    <h5 style="margin-top: 0; margin-bottom: 5px; color: #4CAF50;">Estimated Nutrition:</h5>
+                                    <p style="margin: 2px 0;">Calories: {{ macro_info.calories|default:'N/A' }} kcal</p>
+                                    <p style="margin: 2px 0;">Protein: {{ macro_info.protein|default:'N/A' }}g</p>
+                                    <p style="margin: 2px 0;">Carbs: {{ macro_info.carbohydrates|default:'N/A' }}g</p>
+                                    <p style="margin: 2px 0;">Fat: {{ macro_info.fat|default:'N/A' }}g</p>
+                                    <p style="margin: 2px 0;">Serving: {{ macro_info.serving_size|default:'N/A' }}</p>
+                                </div>
+                                {% endif %}
+
+                                {% if youtube_info and youtube_info.videos %}
+                                <div class="metadata-section" style="margin-top: 10px; background-color: #f9f9f9; padding: 10px; border-radius: 5px; font-size: 14px;">
+                                    <h5 style="margin-top: 0; margin-bottom: 5px; color: #4CAF50;">Reference Videos:</h5>
+                                    <ul style="padding-left: 20px; margin: 0;">
+                                        {% for video in youtube_info.videos|slice:":2" %}{# Limit to 2 videos #}
+                                        <li style="margin-bottom: 3px;">
+                                            <a href="{{ video.url }}" target="_blank" style="color: #2196F3; text-decoration: none;">
+                                                {{ video.title|default:'Video Link' }} {% if video.channel %}({{ video.channel }}){% endif %}
+                                            </a>
+                                        </li>
+                                        {% endfor %}
+                                    </ul>
+                                </div>
+                                {% endif %}
+                            {% endwith %}
+                        </div>
                         <!-- Add the link to review this meal -->
                         <p>
                           <a href="{{ streamlit_url }}/meal_plans?action=review_meal&amp;meal_plan_id={{ meal.meal_plan_id }}&amp;meal_id={{ meal.meal_id }}">

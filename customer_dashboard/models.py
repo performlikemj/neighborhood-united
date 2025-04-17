@@ -1,9 +1,47 @@
+# customer_dashboard > models.py
 from django.db import models
 from custom_auth.models import CustomUser
 from meals.models import Dish
 from django.utils import timezone
 from .helper_functions import get_current_week
-from meals.models import Meal  # Import the Meal model
+from meals.models import Meal  
+import secrets
+import string
+
+class AssistantEmailToken(models.Model):
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='email_tokens')
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    
+    @classmethod
+    def generate_token(cls, length=32):
+        """Generate a secure random token."""
+        alphabet = string.ascii_letters + string.digits
+        return ''.join(secrets.choice(alphabet) for _ in range(length))
+    
+    @classmethod
+    def create_for_user(cls, user):
+        """Create a new token for a user."""
+        token = cls.generate_token()
+        return cls.objects.create(user=user, token=token)
+    
+    @classmethod
+    def validate_and_update_token(cls, token):
+        """
+        Validate a token and update its last_used_at timestamp.
+        
+        Returns:
+            Tuple of (is_valid, user, token_obj)
+        """
+        try:
+            token_obj = cls.objects.get(token=token, is_active=True)
+            token_obj.last_used_at = timezone.now()
+            token_obj.save(update_fields=['last_used_at'])
+            return True, token_obj.user, token_obj
+        except cls.DoesNotExist:
+            return False, None, None
 
 
 class GoalTracking(models.Model):
@@ -18,7 +56,7 @@ class GoalTracking(models.Model):
 class ChatThread(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='chat_threads')
     title = models.CharField(max_length=255, default="Chat with Assistant")
-    openai_thread_id = models.CharField(max_length=255, unique=True)
+    openai_thread_id = models.CharField(max_length=255, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     is_active = models.BooleanField(default=True)
 

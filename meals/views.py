@@ -339,6 +339,10 @@ def submit_meal_plan_updates(request):
                 meal_date=meal_date
             )
 
+        meal_plan.has_changes = True
+        meal_plan.is_approved = False
+        meal_plan.reminder_sent = False
+        meal_plan.save()
         return JsonResponse({'status': 'success', 'message': 'Meal plan updated successfully.'})
     except Exception as e:
         return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
@@ -1235,6 +1239,8 @@ def api_update_meals_with_prompt(request):
         if updates:
             logger.info(f"Updates completed: {len(updates)} meals updated out of {total_meals} selected")
             meal_plan.has_changes = True
+            meal_plan.is_approved = False
+            meal_plan.reminder_sent = False
             meal_plan.save()
         
         logger.info("Successfully completed meal updates")
@@ -3256,7 +3262,8 @@ def api_replace_meal_plan_meal(request):
             if meal_plan.is_approved:
                 meal_plan.has_changes = True
                 meal_plan.is_approved = False
-                meal_plan.save(update_fields=['has_changes', 'is_approved'])
+                meal_plan.reminder_sent = False
+                meal_plan.save(update_fields=['has_changes', 'is_approved', 'reminder_sent'])
                 logger.info(f"Marked MealPlan id={meal_plan.id} as having changes and not approved")
 
             # Mark as already paid if associated order is paid

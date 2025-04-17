@@ -10,6 +10,8 @@ from django.db.models import Q
 from django.utils import timezone
 from openai import OpenAI
 import uuid
+import time
+import traceback
 
 from custom_auth.models import CustomUser
 from meals.models import Meal, MealPlan, MealPlanMeal, PantryItem, MealPlanMealPantryUsage, MealCompatibility
@@ -82,7 +84,8 @@ def generate_and_create_meal(
     """
     # Import here to avoid circular imports
     from meals.meal_plan_service import perform_comprehensive_sanity_check
-    
+    from meals.macro_info_retrieval import get_meal_macro_information
+    from meals.youtube_api_search import find_youtube_cooking_videos
     # Generate a request ID if not provided
     if request_id is None:
         request_id = str(uuid.uuid4())
@@ -161,6 +164,62 @@ def generate_and_create_meal(
         try:
             meal_id = meal_data['meal']['id']
             meal = Meal.objects.get(id=meal_id)
+            
+            # Get ingredients if available
+            ingredients = []
+            try:
+                for dish in meal.dishes.all():
+                    ingredients.extend([i.name for i in dish.ingredients.all()])
+                logger.info(f"[{request_id}] Found {len(ingredients)} ingredients for meal '{meal.name}': {ingredients}")
+            except Exception as e:
+                logger.warning(f"[{request_id}] Could not retrieve ingredients for meal '{meal.name}': {e}")
+                
+            # DIRECT ENHANCEMENT: Add macro information
+            try:
+                logger.info(f"[{request_id}] Getting macro information for meal '{meal.name}'")
+                macro_info = get_meal_macro_information(
+                    meal_name=meal.name,
+                    meal_description=meal.description,
+                    ingredients=ingredients
+                )
+                
+                if macro_info:
+                    logger.info(f"[{request_id}] Saving macro information for meal '{meal.name}': {macro_info}")
+                    meal.macro_info = json.dumps(macro_info)
+                    meal.save()
+                    logger.info(f"[{request_id}] Successfully added macro information to meal '{meal.name}'")
+                else:
+                    logger.warning(f"[{request_id}] No macro information returned for meal '{meal.name}'")
+            except Exception as e:
+                logger.error(f"[{request_id}] Error adding macro information to meal '{meal.name}': {e}")
+                logger.error(f"[{request_id}] {traceback.format_exc()}")
+                
+            # DIRECT ENHANCEMENT: Add YouTube videos
+            try:
+                logger.info(f"[{request_id}] Finding YouTube videos for meal '{meal.name}'")
+                video_info = find_youtube_cooking_videos(
+                    meal_name=meal.name,
+                    meal_description=meal.description
+                )
+                
+                if video_info and video_info.get("videos"):
+                    logger.info(f"[{request_id}] Saving YouTube videos for meal '{meal.name}': {video_info}")
+                    meal.youtube_videos = json.dumps(video_info)
+                    meal.save()
+                    logger.info(f"[{request_id}] Successfully added YouTube videos to meal '{meal.name}'")
+                else:
+                    logger.warning(f"[{request_id}] No YouTube videos returned for meal '{meal.name}'")
+            except Exception as e:
+                logger.error(f"[{request_id}] Error adding YouTube videos to meal '{meal.name}': {e}")
+                logger.error(f"[{request_id}] {traceback.format_exc()}")
+                
+            # Verify the data was actually saved
+            try:
+                meal.refresh_from_db()
+                logger.info(f"[{request_id}] Verification - Meal '{meal.name}' now has: macro_info: {bool(meal.macro_info)}, youtube_videos: {bool(meal.youtube_videos)}")
+            except Exception as e:
+                logger.error(f"[{request_id}] Error verifying saved data for meal '{meal.name}': {e}")
+                
         except Meal.DoesNotExist:
             logger.error(f"[{request_id}] Meal with ID {meal_id} does not exist after creation.")
             continue  # Retry
@@ -293,7 +352,7 @@ def perform_openai_sanity_check(meal, user):
     # We need to perform a sanity check with OpenAI
     try:
         response = client.responses.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             input=[
                 {
                     "role": "system",
@@ -510,7 +569,7 @@ def generate_meal_details(
             Please ensure the meal's dietary_preference field uses one of these exact values.
             """
             response = client.responses.create(
-                model="gpt-4o",
+                model="gpt-4.1-mini",
                 input=[
                     {"role": "system", "content": "You are a helpful assistant that generates a single meal JSON."},
                     {"role": "user", "content": base_prompt}
@@ -633,7 +692,7 @@ def determine_usage_for_meal(
 
     try:
         response = client.responses.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             input=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg}

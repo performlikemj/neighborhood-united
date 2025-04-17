@@ -1,3 +1,4 @@
+# customer_dashboard > views.py
 from uuid import uuid4
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
@@ -10,7 +11,8 @@ from datetime import timedelta
 from django.template.loader import render_to_string
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_http_methods
-from .models import GoalTracking, ChatThread, UserHealthMetrics, CalorieIntake, UserMessage, UserSummary, ToolCall
+from .models import (GoalTracking, ChatThread, UserHealthMetrics, CalorieIntake, 
+                     UserMessage, UserSummary, ToolCall, AssistantEmailToken)
 from .forms import GoalForm
 import openai
 from openai import NotFoundError, OpenAI, OpenAIError
@@ -37,7 +39,7 @@ from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
 from .serializers import ChatThreadSerializer, GoalTrackingSerializer, UserHealthMetricsSerializer, CalorieIntakeSerializer
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from .permissions import IsCustomer
 from rest_framework import status
 from rest_framework.response import Response
@@ -52,9 +54,14 @@ import asyncio
 import logging
 import threading
 from django.views import View
+from django.http import JsonResponse, StreamingHttpResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+from meals.meal_assistant_implementation import MealPlanningAssistant, generate_guest_id
 import traceback
 from django.conf import settings
 from asgiref.sync import async_to_sync
+from meals.guest_tool_registration import get_guest_tool_registry
 
 class GuestChatThrottle(UserRateThrottle):
     rate = '100/day'  
@@ -62,14 +69,146 @@ class GuestChatThrottle(UserRateThrottle):
 class AuthChatThrottle(UserRateThrottle):
     rate = '1000/day'
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__) 
+assistant = MealPlanningAssistant()
 
-# Use logger as needed
-# example: logger.warning("This is a warning message")
+@login_required
+@require_http_methods(["POST"]) 
+def send_message(request):
+    """API endpoint for sending a message to the assistant"""
+    try:
+        data = json.loads(request.body)
+        message = data.get('message')
+        
+        if not message:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Missing required parameter: message'
+            }, status=400)
+        
+        # Get user ID from the authenticated user
+        user_id = str(request.user.id)
+        
+        # Send message to assistant
+        result = assistant.send_message(user_id, message)
+        
+        return JsonResponse(result)
+    except Exception as e:
+        logger.error(f"Error sending message: {str(e)}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to send message: {str(e)}'
+        }, status=500)
+
+
+@login_required
+@require_http_methods(["POST"]) 
+def reset_conversation(request):
+    """API endpoint for resetting a conversation with the assistant"""
+    try:
+        # Get user ID from the authenticated user
+        user_id = str(request.user.id)
+        
+        # Reset conversation
+        result = assistant.reset_conversation(user_id)
+        
+        return JsonResponse(result)
+    except Exception as e:
+        logger.error(f"Error resetting conversation: {str(e)}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to reset conversation: {str(e)}'
+        }, status=500)
+
+@csrf_exempt
+@require_http_methods(["GET"]) 
+def get_conversation_history(request, user_id):
+    """
+    API endpoint for getting conversation history for a user.
+    
+    URL parameter:
+    - user_id: The ID of the user
+    
+    Returns a JSON response with:
+    - status: "success" or "error"
+    - conversation_id: The ID of the conversation
+    - messages: List of messages in the conversation
+    - language: The language of the conversation
+    """
+    try:
+        # Get conversation history
+        result = assistant.get_conversation_history(user_id)
+        
+        return JsonResponse(result)
+        
+    except Exception as e:
+        logger.error(f"Error getting conversation history: {str(e)}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to get conversation history: {str(e)}'
+        }, status=500)
+    
+# Email-based assistant view
+@csrf_exempt
+@require_http_methods(["POST"]) 
+def process_email(request):
+    """API endpoint for processing emails from n8n"""
+    try:
+        # Parse the request body
+        data = json.loads(request.body)
+        sender_email = data.get('sender_email')
+        token = data.get('token')  # Extracted from assistant+{token}@domain.com
+        message_content = data.get('message_content')
+        conversation_token = data.get('conversation_token')
+        
+        # Validate required parameters
+        if not sender_email or not token or not message_content:
+            logger.error(f"Missing required parameters: {data}")
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Missing required parameters'
+            }, status=400)
+        
+        # Validate and get user from token
+        is_valid, user, token_obj = AssistantEmailToken.validate_and_update_token(token)
+        
+        if not is_valid or not user:
+            logger.error(f"Invalid token: {token}")
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Invalid token'
+            }, status=403)
+        
+        # Verify sender email matches token owner
+        if user.email != sender_email:
+            logger.warning(f"Email mismatch: token user {user.email}, sender {sender_email}")
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Sender email does not match token owner'
+            }, status=403)
+        
+        # Process the message with the assistant
+        user_id = str(user.id)
+        result = assistant.send_message(user_id, message_content)
+        
+        # Add the token to the result for n8n to use in the reply address
+        result['token'] = token
+        
+        return JsonResponse(result)
+    except Exception as e:
+        logger.error(f"Error processing email: {str(e)}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to process email: {str(e)}'
+        }, status=500)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def api_recommend_follow_up(request):
+    """
+    Generate follow-up recommendations based on the most recent conversation.
+    Updated to work with the OpenAI Responses API instead of the Assistants API.
+    """
     user_id = request.user.id
     user = get_object_or_404(CustomUser, id=user_id)
 
@@ -79,13 +218,61 @@ def api_recommend_follow_up(request):
     except ChatThread.DoesNotExist:
         return Response({'error': 'No active chat thread found.'}, status=404)
 
-    # Step 2: Fetch the chat history using the openai_thread_id
+    # Step 2: Fetch the chat history using the response_id (stored in openai_thread_id field)
     try:
         OPENAI_API_KEY = settings.OPENAI_KEY
         client = OpenAI(api_key=OPENAI_API_KEY)
-        messages = client.beta.threads.messages.list(chat_thread.openai_thread_id)
-        chat_history = api_format_chat_history(messages)
+        
+        # With the Responses API, we retrieve the conversation using the response ID
+        response_id = chat_thread.openai_thread_id  # This now stores the response ID
+        
+        if not response_id:
+            return Response({'error': 'No response ID found for this conversation.'}, status=404)
+            
+        # Retrieve the response from the Responses API
+        response = client.responses.retrieve(response_id)
+        
+        # Extract the conversation history from the response
+        chat_history = []
+        
+        # Add the input messages (user messages)
+        if hasattr(response, 'input'):
+            if isinstance(response.input, list):
+                for msg in response.input:
+                    if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                        chat_history.append({
+                            'role': msg.role,
+                            'content': msg.content
+                        })
+            else:
+                # If input is a string, it's a user message
+                chat_history.append({
+                    'role': 'user',
+                    'content': response.input
+                })
+        
+        # Add the output messages (assistant messages)
+        if hasattr(response, 'output') and response.output:
+            for output_item in response.output:
+                if hasattr(output_item, 'type') and output_item.type == 'message':
+                    if hasattr(output_item, 'role') and hasattr(output_item, 'content'):
+                        # Handle the nested content structure
+                        content_text = ""
+                        if isinstance(output_item.content, list):
+                            for content_item in output_item.content:
+                                if hasattr(content_item, 'type') and content_item.type == 'output_text':
+                                    if hasattr(content_item, 'text'):
+                                        content_text += content_item.text
+                        else:
+                            content_text = output_item.content
+                            
+                        chat_history.append({
+                            'role': output_item.role,
+                            'content': content_text
+                        })
+        
     except Exception as e:
+        logger.error(f"Error fetching conversation history: {str(e)}")
         return Response({'error': f'Failed to fetch chat history: {str(e)}'}, status=400)
 
     # Step 3: Generate the context string from the chat history
@@ -322,6 +509,10 @@ def api_goal_management(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_history_page(request):
+    """
+    Get the 5 most recent chat threads for the user.
+    This function doesn't directly interact with OpenAI API, so no changes needed.
+    """
     chat_threads = ChatThread.objects.filter(user=request.user).order_by('-created_at')[:5]
     serializer = ChatThreadSerializer(chat_threads, many=True)
     return Response(serializer.data)
@@ -329,6 +520,10 @@ def api_history_page(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_thread_history(request):
+    """
+    Get paginated chat threads for the user.
+    This function doesn't directly interact with OpenAI API, so no changes needed.
+    """
     chat_threads = ChatThread.objects.filter(user=request.user).order_by('-created_at')
     paginator = PageNumberPagination()
     paginated_chat_threads = paginator.paginate_queryset(chat_threads, request)
@@ -338,23 +533,96 @@ def api_thread_history(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_thread_detail_view(request, openai_thread_id):
-    # Assuming you have a function to handle the OpenAI communication
+    """
+    Get the details of a chat thread.
+    Updated to work with the OpenAI Responses API instead of the Assistants API.
+    
+    Note: The parameter name 'openai_thread_id' is kept for backward compatibility,
+    but it now represents a response ID from the Responses API.
+    """
     OPENAI_API_KEY = settings.OPENAI_KEY
     client = OpenAI(api_key=OPENAI_API_KEY)
+    
     try:
-        messages = client.beta.threads.messages.list(openai_thread_id)
-        # Format and return the messages as per your requirement
-        chat_history = api_format_chat_history(messages)
+        # With the Responses API, we retrieve the conversation using the response ID
+        response_id = openai_thread_id  # This now represents a response ID
+        
+        # Retrieve the response from the Responses API
+        response = client.responses.retrieve(response_id)
+        
+        # Format the chat history using the updated formatter
+        chat_history = api_format_chat_history_from_response(response)
+        
         return Response({'chat_history': chat_history})
     except Exception as e:
+        logger.error(f"Error retrieving thread detail: {str(e)}")
         return Response({'error': str(e)}, status=400)
 
+def api_format_chat_history_from_response(response):
+    """
+    Format the chat history from a response object from the Responses API.
+    This is a new function to handle the different structure of the Responses API.
+    """
+    formatted_messages = []
+    
+    # Add the input messages (user messages)
+    if hasattr(response, 'input'):
+        if isinstance(response.input, list):
+            for msg in response.input:
+                if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                    formatted_messages.append({
+                        'role': msg.role,
+                        'content': msg.content,
+                        'created_at': response.created_at  # Use response creation time as fallback
+                    })
+        else:
+            # If input is a string, it's a user message
+            formatted_messages.append({
+                'role': 'user',
+                'content': response.input,
+                'created_at': response.created_at  # Use response creation time
+            })
+    
+    # Add the output messages (assistant messages)
+    if hasattr(response, 'output') and response.output:
+        for output_item in response.output:
+            if hasattr(output_item, 'type') and output_item.type == 'message':
+                if hasattr(output_item, 'role') and hasattr(output_item, 'content'):
+                    # Handle the nested content structure
+                    content_text = ""
+                    if isinstance(output_item.content, list):
+                        for content_item in output_item.content:
+                            if hasattr(content_item, 'type') and content_item.type == 'output_text':
+                                if hasattr(content_item, 'text'):
+                                    content_text += content_item.text
+                    else:
+                        content_text = output_item.content
+                        
+                    # Get creation time if available, otherwise use response creation time
+                    created_at = getattr(output_item, 'created_at', response.created_at)
+                    
+                    formatted_messages.append({
+                        'role': output_item.role,
+                        'content': content_text,
+                        'created_at': created_at
+                    })
+    
+    # Sort messages by creation time if available
+    formatted_messages.sort(key=lambda x: x['created_at'])
+    
+    return formatted_messages
+
+# Keep the original function for backward compatibility with any code that might still use it
 def api_format_chat_history(messages):
+    """
+    Format the chat history from a messages object from the Assistants API.
+    This function is kept for backward compatibility.
+    """
     formatted_messages = []
     for msg in messages.data:
         formatted_msg = {
             "role": msg.role,
-            "content": msg.content[0].text.value,
+            "content": msg.content[0].text.value if hasattr(msg, 'content') and msg.content else "",
             "created_at": msg.created_at,
         }
         formatted_messages.append(formatted_msg)
@@ -621,1049 +889,240 @@ def update_goal_api(request):
             return JsonResponse({'success': False, 'errors': form.errors}, status=400)
     return JsonResponse({'error': 'Invalid request'}, status=400)
 
-guest_functions = {
-    "guest_search_dishes": guest_search_dishes,
-    "guest_search_chefs": guest_search_chefs,
-    "guest_get_meal_plan": guest_get_meal_plan,
-    "guest_search_ingredients": guest_search_ingredients,
-    "chef_service_areas": chef_service_areas,
-}
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def stream_message(request):
+    """
+    Stream a message from the assistant for logged‑in users via SSE.
+    """
+    user_id = str(request.user.id)
+    message = request.data.get('message')
+    thread_id = request.data.get('thread_id')
+    assistant = MealPlanningAssistant()
 
-functions = {
-    "auth_search_dishes": auth_search_dishes,
-    "auth_search_chefs": auth_search_chefs,
-    "auth_get_meal_plan": auth_get_meal_plan,
-    "chef_service_areas": chef_service_areas,
-    "service_area_chefs": service_area_chefs,
-    "approve_meal_plan": approve_meal_plan,
-    "auth_search_ingredients": auth_search_ingredients,
-    "search_meal_ingredients": search_meal_ingredients,
-    "auth_search_meals_excluding_ingredient": auth_search_meals_excluding_ingredient,
-    "suggest_alternative_meals": suggest_alternative_meals,
-    "add_meal_to_plan": add_meal_to_plan,
-    "create_meal_plan": create_meal_plan,
-    "get_date": get_date,
-    "list_upcoming_meals": list_upcoming_meals,
-    "remove_meal_from_plan": remove_meal_from_plan,
-    "replace_meal_in_plan": replace_meal_in_plan,
-    "post_review": post_review,
-    "update_review": update_review,
-    "delete_review": delete_review,
-    "generate_review_summary": generate_review_summary,
-    "access_past_orders": access_past_orders,
-    "get_user_info": get_user_info,
-    "get_goal": get_goal,
-    "update_goal": update_goal,
-    "adjust_week_shift": adjust_week_shift,
-    "get_unupdated_health_metrics": get_unupdated_health_metrics,
-    "update_health_metrics": update_health_metrics,
-    "check_allergy_alert": check_allergy_alert,
-    "provide_nutrition_advice": provide_nutrition_advice,
-    "find_nearby_supermarkets": find_nearby_supermarkets,
-    "search_healthy_meal_options": search_healthy_meal_options,
-    "provide_healthy_meal_suggestions": provide_healthy_meal_suggestions,
-    "understand_dietary_choices": understand_dietary_choices,
-    "create_meal": create_meal,
-    "analyze_nutritional_content": analyze_nutritional_content,
-    "replace_meal_based_on_preferences": replace_meal_based_on_preferences,
-    "append_custom_dietary_preference": append_custom_dietary_preference,
-    
-}
+    def event_stream():
+        emitted_id = False
+        for chunk in assistant.stream_message(str(user_id), message, thread_id):
+            # Emit the response.created event once
+            if not emitted_id and chunk.get("type") == "response_id":
+                yield f"data: {json.dumps({'type':'response.created','id':chunk.get('id')})}\n\n"
+                emitted_id = True
 
-def ai_call(tool_call, request):
-    function = tool_call.function
-    name = function.name
-    arguments = json.loads(function.arguments)
-    # Ensure that 'request' is included in the arguments if needed
-    arguments['request'] = request
-    return_value = functions[name](**arguments)
-    tool_outputs = {
-        "tool_call_id": tool_call.id,
-        "output": return_value,
-        "function": name,
-    }
-    return tool_outputs
+            # Handle raw text chunks
+            if chunk.get("type") == "text":
+                text = chunk.get("content", "")
+                payload = json.dumps({
+                    "type": "response.output_text.delta",
+                    "delta": {"text": text}
+                })
+                yield f"data: {payload}\n\n"
+                continue
 
-def guest_ai_call(tool_call, request):
-    function = tool_call.function
-    name = function.name
-    arguments = json.loads(function.arguments)
-    # Ensure that 'request' is included in the arguments if needed
-    arguments['request'] = request
-    return_value = guest_functions[name](**arguments)
-    tool_outputs = {
-        "tool_call_id": tool_call.id,
-        "output": return_value,
-        "function": name,
-    }
-    return tool_outputs
+            # Stream every text‐delta from the Responses API
+            if chunk.get("type") == "response.output_text.delta":
+                # chunk.delta is the text fragment
+                yield f"data: {json.dumps({'type':'response.output_text.delta','delta':{'text':chunk.get('delta')}})}\n\n"
 
+            # Stream the final completion event
+            if chunk.get("type") == "response.completed":
+                yield f"data: {json.dumps({'type':'response.completed','content':chunk.get('content')})}\n\n"
+        # Close the stream
+        yield 'event: close\n\n'
+
+    return StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+
+
+@csrf_exempt
+@api_view(['POST'])
+def guest_stream_message(request):
+    """
+    Stream a message from the assistant for guest users via SSE.
+    """
+    guest_id = request.data.get('guest_id') or generate_guest_id()
+    message = request.data.get('message')
+    thread_id = request.data.get('response_id')
+    assistant = MealPlanningAssistant()
+
+    # Build registry of guest-specific tools for this request
+    GUEST_TOOL_REGISTRY = get_guest_tool_registry(request)
+
+    def event_stream():
+        emitted_id = False
+        for chunk in assistant.stream_message(guest_id, message, thread_id):
+            if not emitted_id and chunk.get("type") == "response_id":
+                yield f"data: {json.dumps({'type':'response.created','id':chunk.get('id')})}\n\n"
+                emitted_id = True
+
+            if chunk.get("type") == "response.function_call":
+                func_name = chunk["name"]
+                func_args = json.loads(chunk.get("arguments", "{}"))
+                print(f"[GUEST_STREAM_MESSAGE] Invoking guest tool {func_name} with args {func_args!r}")
+                tool_output = GUEST_TOOL_REGISTRY.get(func_name, lambda **kwargs: None)(**func_args)
+                payload = {'type': 'response.tool', 'name': func_name, 'output': tool_output}
+                yield f"data: {json.dumps(payload)}\n\n"
+                continue
+
+            if chunk.get("type") == "text":
+                text = chunk.get("content", "")
+                payload = json.dumps({
+                    "type": "response.output_text.delta",
+                    "delta": {"text": text}
+                })
+                yield f"data: {payload}\n\n"
+                continue
+
+            if chunk.get("type") == "response.output_text.delta":
+                yield f"data: {json.dumps({'type':'response.output_text.delta','delta':{'text':chunk.get('delta')}})}\n\n"
+
+            if chunk.get("type") == "response.completed":
+                yield f"data: {json.dumps({'type':'response.completed','content':chunk.get('content')})}\n\n"
+        yield 'event: close\n\n'
+
+    # Tie guest_id back into the response (so front end can continue)
+    response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+    response["X-Guest-ID"] = guest_id
+    return response
 
 @api_view(['POST'])
-@throttle_classes([GuestChatThrottle])
-def guest_chat_with_gpt(request):
-    print("Chatting with Guest GPT")
-    guest_assistant_id_file = "guest_assistant_id.txt"
-    # Set up OpenAI
-    OPENAI_API_KEY = settings.OPENAI_KEY
-    client = OpenAI(api_key=OPENAI_API_KEY) 
-    # Check if the assistant ID is already stored in a file
-  
-    if os.path.exists(guest_assistant_id_file):
-        with open(guest_assistant_id_file, 'r') as f:
-            guest_assistant_id = f.read().strip()
-
-
-    else:
-        print("Creating a new assistant")
-        # Create an Assistant
-        assistant = client.beta.assistants.create(
-            name="Guest Food Expert",
-            instructions='You help guests understand the functionality of the app and help them find good food, chefs, and ingredients.',
-            model="gpt-4-1106-preview",
-            tools=[ 
-                {"type": "code_interpreter"},
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "guest_search_dishes",
-                        "description": "Search dishes in the database",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {},
-                            "required": []
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "guest_search_chefs",
-                        "description": "Search chefs in the database and get their info",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {},
-                            "required": []
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "guest_get_meal_plan",
-                        "description": "Get a meal plan for the current week",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {},
-                            "required": []
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "guest_search_ingredients",
-                        "description": "Search ingredients used in dishes in the database and get their info.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {},
-                            "required": []
-                        }
-                    }
-                },
-            ]
-        )      
-        guest_assistant_id = assistant.id
-        # Store the assistant ID in a file
-        with open(guest_assistant_id_file, 'w') as f:
-            f.write(guest_assistant_id)
-
-    try:
-        print("Processing POST request")
-        data = request.data
-        print(f"Data: {data}")
-
-        question = data.get('question')
-        thread_id = data.get('thread_id')
-
-        if not question:
-            return Response({'error': 'No question provided'}, status=400)
-
-
-        relevant = is_question_relevant(question)
-
-        if thread_id and not re.match("^thread_[a-zA-Z0-9]*$", thread_id):
-            return Response({'error': 'Invalid thread_id'}, status=400)
-
-        if not thread_id:
-            openai_thread = client.beta.threads.create()
-            thread_id = openai_thread.id
-
-        if relevant:
-            try:
-                client.beta.threads.messages.create(
-                    thread_id=thread_id,
-                    role="user",
-                    content=question
-                )
-            except OpenAIError as e:
-                if 'Can\'t add messages to thread' in str(e) and 'while a run' in str(e) and 'is active' in str(e):
-                    # Extract the run ID from the error message
-                    match = re.search(r'run (\w+)', str(e))
-                    if match:
-                        run_id = match.group(1)
-                        # Cancel the active run
-                        client.beta.threads.runs.cancel(run_id, thread_id=thread_id)
-                        # Try to create the message again
-                        client.beta.threads.messages.create(
-                            thread_id=thread_id,
-                            role="user",
-                            content=question
-                        )
-                else:
-                    logger.error(f'Failed to create message: {str(e)}')
-                    return  # Stopping the task if message creation fails
-            response_data = {
-                'new_thread_id': thread_id,
-                'recommend_follow_up': False,
-            }
-            return Response(response_data)
-        else:
-            response_data = {
-                'last_assistant_message': "I'm sorry, I cannot help with that.",
-                'new_thread_id': thread_id,
-                'recommend_follow_up': False,
-            }
-            return Response(response_data)
-
-    except Exception as e:
-        logger.error(f'Error: {str(e)}')
-        traceback.print_exc()
-        return Response({'error': str(e)}, status=500)
-
-
-# @login_required
-# @user_passes_test(is_customer)
-@api_view(['POST'])
-@throttle_classes([AuthChatThrottle])
+@permission_classes([IsAuthenticated])
 def chat_with_gpt(request):
-    print("Chatting with GPT")
-    assistant_id_file = "assistant_id.txt"
-    # Set up OpenAI
-    OPENAI_API_KEY = settings.OPENAI_KEY
-    client = OpenAI(api_key=OPENAI_API_KEY) 
-    # Check if the assistant ID is already stored in a file
-    print(f"Request data: {request.data}")
-    try:
-        user = CustomUser.objects.get(id=request.data.get('user_id'))
-    except CustomUser.DoesNotExist:
-        traceback.print_exc()
-        return Response({'error': 'User not found'}, status=404)
-            
-    if os.path.exists(assistant_id_file):
-        with open(assistant_id_file, 'r') as f:
-            assistant_id = f.read().strip()
-
-    else:
-        print("Creating a new assistant")
-        # Create an Assistant
-        assistant = client.beta.assistants.create(
-            name="Food Expert",
-            instructions=create_openai_prompt(user.id),
-            # model="gpt-3.5-turbo-1106",
-            model="gpt-4o",
-            tools=[ 
-                {"type": "code_interpreter",},
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "auth_search_dishes",
-                        "description": "Search dishes in the database",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "query": {
-                                    "type": "string",
-                                    "description": "The query to search for dishes",
-                                },
-                            },
-                            "required": ["query"],
-                        },
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "auth_search_chefs",
-                        "description": "Search chefs in the database and get their info",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "query": {
-                                    "type": "string",
-                                    "description": "The query to search for chefs",
-                                },
-                            },
-                            "required": ["query"],
-                        },
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "auth_get_meal_plan",
-                        "description": "Get a meal plan for the current week or a future week based on the user's week_shift. This function depends on the request object to access the authenticated user and their week_shift attribute.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {},
-                            "required": []
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "create_meal_plan",
-                        "description": "Create a new meal plan for the user.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {},
-                            "required": []
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "chef_service_areas",
-                        "description": "Retrieve service areas for a specified chef based on their name or identifier.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "query": {
-                                    "type": "string",
-                                    "description": "The query to search for a chef's service areas, typically using the chef's name or identifier."
-                                }
-                            },
-                            "required": ["query"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "service_area_chefs",
-                        "description": "Search for chefs serving a specific postal code area.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {},
-                            "required": []
-                        }
-                    }
-                },  
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "approve_meal_plan",
-                        "description": "Approve the meal plan and proceed to payment",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "meal_plan_id": {
-                                    "type": "integer",
-                                    "description": "The ID of the meal plan to approve"
-                                }
-                            },
-                            "required": ["meal_plan_id"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "auth_search_ingredients",
-                        "description": "Search for ingredients in the database",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "query": {
-                                    "type": "string",
-                                    "description": "The query to search for ingredients",
-                                },
-                            },
-                            "required": ["query"],
-                        },
-                    }
-                }, 
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "auth_search_meals_excluding_ingredient",
-                        "description": "Search the database for meals that are excluding an ingredient",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "query": {
-                                    "type": "string",
-                                    "description": "The query to search for meals that exclude the ingredient",
-                                },
-                            },
-                            "required": ["query"],
-                        },
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "search_meal_ingredients",
-                        "description": "Search the database for the ingredients of a meal",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "query": {
-                                    "type": "string",
-                                    "description": "The query to search for a meal's ingredients",
-                                },
-                            },
-                            "required": ["query"],
-                        },
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "suggest_alternative_meals",
-                        "description": "Suggest alternative meals based on a list of meal IDs and corresponding days of the week. Each meal ID will have a corresponding day to find alternatives.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "meal_ids": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "integer",
-                                        "description": "A unique identifier for a meal."
-                                    },
-                                    "description": "List of meal IDs to exclude from suggestions."
-                                },
-                                "days_of_week": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "string",
-                                        "description": "The day of the week for a meal, e.g., 'Monday', 'Tuesday', etc."
-                                    },
-                                    "description": "List of days of the week corresponding to each meal ID."
-                                }
-                            },
-                            "required": ["meal_ids", "days_of_week"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "add_meal_to_plan",
-                        "description": "Add a meal to a specified day in the meal plan",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "meal_plan_id": {
-                                    "type": "integer",
-                                    "description": "The unique identifier of the meal plan"
-                                },
-                                "meal_id": {
-                                    "type": "integer",
-                                    "description": "The unique identifier of the meal to add"
-                                },
-                                "day": {
-                                    "type": "string",
-                                    "description": "The day to add the meal to"
-                                }
-                            },
-                            "required": ["meal_plan_id", "meal_id", "day"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "get_date",
-                        "description": "Get the current date and time. This function returns the current date and time in a user-friendly format, taking into account the server's time zone.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {},
-                            "required": []
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "list_upcoming_meals",
-                        "description": "Lists upcoming meals for the current week, filtered by user's dietary preference and postal code. The meals are adjusted based on the user's week_shift to plan for future meals.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {},
-                            "required": []
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "remove_meal_from_plan",
-                        "description": "Remove a meal from a specified day in the meal plan",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "meal_plan_id": {
-                                    "type": "integer",
-                                    "description": "The unique identifier of the meal plan"
-                                },
-                                "meal_id": {
-                                    "type": "integer",
-                                    "description": "The unique identifier of the meal to remove"
-                                },
-                                "day": {
-                                    "type": "string",
-                                    "description": "The day to remove the meal from"
-                                }
-                            },
-                            "required": ["meal_plan_id", "meal_id", "day"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "replace_meal_in_plan",
-                        "description": "Replace a meal with another meal on a specified day in the meal plan",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "meal_plan_id": {
-                                    "type": "integer",
-                                    "description": "The unique identifier of the meal plan"
-                                },
-                                "old_meal_id": {
-                                    "type": "integer",
-                                    "description": "The unique identifier of the meal to be replaced"
-                                },
-                                "new_meal_id": {
-                                    "type": "integer",
-                                    "description": "The unique identifier of the new meal"
-                                },
-                                "day": {
-                                    "type": "string",
-                                    "description": "The day to replace the meal on"
-                                }
-                            },
-                            "required": ["meal_plan_id", "old_meal_id", "new_meal_id", "day"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "post_review",
-                        "description": "Post a review for a meal or a chef.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "user_id": {
-                                    "type": "integer",
-                                    "description": "The ID of the user posting the review."
-                                },
-                                "content": {
-                                    "type": "string",
-                                    "description": "The content of the review. Must be between 10 and 1000 characters."
-                                },
-                                "rating": {
-                                    "type": "integer",
-                                    "description": "The rating given in the review, from 1 (Poor) to 5 (Excellent)."
-                                },
-                                "item_id": {
-                                    "type": "integer",
-                                    "description": "The ID of the item (meal or chef) being reviewed."
-                                },
-                                "item_type": {
-                                    "type": "string",
-                                    "enum": ["meal", "chef"],
-                                    "description": "The type of item being reviewed."
-                                }
-                            },
-                            "required": ["user_id", "content", "rating", "item_id", "item_type"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "update_review",
-                        "description": "Update an existing review.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "review_id": {
-                                    "type": "integer",
-                                    "description": "The ID of the review to be updated."
-                                },
-                                "updated_content": {
-                                    "type": "string",
-                                    "description": "The updated content of the review. Must be between 10 and 1000 characters."
-                                },
-                                "updated_rating": {
-                                    "type": "integer",
-                                    "description": "The updated rating, from 1 (Poor) to 5 (Excellent)."
-                                }
-                            },
-                            "required": ["review_id", "updated_content", "updated_rating"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "delete_review",
-                        "description": "Delete a review.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "review_id": {
-                                    "type": "integer",
-                                    "description": "The ID of the review to be deleted."
-                                }
-                            },
-                            "required": ["review_id"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "generate_review_summary",
-                        "description": "Generate a summary of all reviews for a specific object (meal or chef) using AI model.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "object_id": {
-                                    "type": "integer",
-                                    "description": "The unique identifier of the object (meal or chef) to summarize reviews for."
-                                },
-                                "category": {
-                                    "type": "string",
-                                    "enum": ["meal", "chef"],
-                                    "description": "The category of the object being reviewed."
-                                }
-                            },
-                            "required": ["object_id", "category"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "access_past_orders",
-                        "description": "Retrieve past orders for a user, optionally filtered by specific criteria.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "user_id": {
-                                    "type": "integer",
-                                    "description": "The ID of the user whose past orders are being accessed."
-                                },
-                                "status": {
-                                    "type": "string",
-                                    "enum": ["Placed", "In Progress", "Completed", "Cancelled", "Refunded", "Delayed"],
-                                    "description": "The status of the orders to retrieve."
-                                },
-                                "delivery_method": {
-                                    "type": "string",
-                                    "enum": ["Pickup", "Delivery"],
-                                    "description": "The delivery method of the orders to retrieve."
-                                }
-                            },
-                            "required": ["user_id"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "get_user_info",
-                        "description": "Retrieve essential information about the user such as user ID, dietary preference, week shift, and postal code.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {},
-                            "required": []
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "get_goal",
-                        "description": "Retrieve the user's goal to aide in making smart dietary decisions and offering advise.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {},
-                            "required": []
-                        }
-                    }    
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "update_goal",
-                        "description": "Update the user's goal to aide in making smart dietary decisions and offering advise.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "goal_name": {
-                                    "type": "string",
-                                    "description": "The name of the goal."
-                                },
-                                "goal_description": {
-                                    "type": "string",
-                                    "description": "The description of the goal."
-                                }
-                            },
-                            "required": ["goal_name", "goal_description"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "adjust_week_shift",
-                        "description": "Adjust the week shift forward for meal planning, allowing users to plan for future meals. This function will not allow shifting to previous weeks. To be transparent, always let the user know the week they are working with at the start of the conversation, and asking them if they would like to work on this week's plan--changing the week shit to 0 if so.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "week_shift_increment": {
-                                    "type": "integer",
-                                    "description": "The number of weeks to shift forward. Must be a positive integer."
-                                }
-                            },
-                            "required": ["week_shift_increment"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "update_health_metrics",
-                        "description": "Update the health metrics for a user including weight, BMI, mood, and energy level.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "user_id": {
-                                    "type": "integer",
-                                    "description": "The unique identifier of the user."
-                                },
-                                "weight": {
-                                    "type": "number",
-                                    "description": "The updated weight of the user."
-                                },
-                                "bmi": {
-                                    "type": "number",
-                                    "description": "The updated Body Mass Index (BMI) of the user."
-                                },
-                                "mood": {
-                                    "type": "string",
-                                    "description": "The updated mood of the user."
-                                },
-                                "energy_level": {
-                                    "type": "number",
-                                    "description": "The updated energy level of the user."
-                                }
-                            },
-                            "required": ["user_id"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "analyze_nutritional_content",
-                        "description": "Analyze the nutritional content of a specified dish.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "dish_id": {
-                                    "type": "integer",
-                                    "description": "The unique identifier of the dish to analyze."
-                                }
-                            },
-                            "required": ["dish_id"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "check_allergy_alert",
-                        "description": "Check for potential allergens in a meal by checking the user's list of allergies against the meal and informing the user if there are possible allergens to be concerned about.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "meal_id": {
-                                    "type": "integer",
-                                    "description": "The unique identifier of the meal to check."
-                                },
-                                "dish_id": {
-                                    "type": "integer",
-                                    "description": "The unique identifier of the dish to check."
-                                },
-                                "user_id": {
-                                    "type": "integer",
-                                    "description": "The unique identifier of the user."
-                                }
-                            },
-                            "required": ["user_id"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "provide_nutrition_advice",
-                        "description": "Offer personalized nutrition advice based on user's dietary preferences and health goals.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "user_id": {
-                                    "type": "integer",
-                                    "description": "The ID of the user seeking advice."
-                                }
-                            },
-                            "required": ["user_id"]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "understand_dietary_choices",
-                        "description": "Understand the available dietary choices that all users have access to. Use this to create more precise queries.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {},
-                            "required": []
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "create_meal",
-                        "description": "Create custom meals in the database that will be used as part of meal plans.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "name": {
-                                    "type": "string",
-                                    "description": "The name of the meal."
-                                },
-                                "dietary_preference": {
-                                    "type": "string",
-                                    "description": "The dietary preference category of the meal.",
-                                    "enum": [
-                                        "Vegan",
-                                        "Vegetarian",
-                                        "Pescatarian",
-                                        "Gluten-Free",
-                                        "Keto",
-                                        "Paleo",
-                                        "Halal",
-                                        "Kosher",
-                                        "Low-Calorie",
-                                        "Low-Sodium",
-                                        "High-Protein",
-                                        "Dairy-Free",
-                                        "Nut-Free",
-                                        "Raw Food",
-                                        "Whole 30",
-                                        "Low-FODMAP",
-                                        "Diabetic-Friendly",
-                                        "Everything"
-                                    ]
-                                },
-                                "description": {
-                                    "type": "string",
-                                    "description": "A brief description of the meal."
-                                }
-                            },
-                            "required": [
-                                "name",
-                                "dietary_preference",
-                                "description"
-                            ]
-                        }
-                    }
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "replace_meal_based_on_preferences",
-                        "description": "Replace one or more meals in a user's meal plan based on their dietary preferences and restrictions. If no suitable alternative meal is found, a new meal is created.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "meal_plan_id": {
-                                    "type": "integer",
-                                    "description": "The unique identifier of the meal plan."
-                                },
-                                "old_meal_ids": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "integer",
-                                        "description": "A unique identifier for a meal."
-                                    },
-                                    "description": "List of unique identifiers of the meals to be replaced."
-                                },
-                                "days_of_week": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "string",
-                                        "description": "The day of the week on which the meal is scheduled, e.g., 'Monday', 'Tuesday', etc."
-                                    },
-                                    "description": "List of days of the week corresponding to each meal ID."
-                                },
-                                "meal_types": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "string",
-                                        "description": "The type of the meals, e.g., 'Breakfast', 'Lunch', 'Dinner'.",
-                                        "enum": [
-                                            "Breakfast",
-                                            "Lunch",
-                                            "Dinner"
-                                        ]
-                                    },
-                                    "description": "List of meal types corresponding to each meal ID."
-                                }
-                            },
-                            "required": [
-                                "meal_plan_id",
-                                "old_meal_ids",
-                                "days_of_week",
-                                "meal_types"
-                            ]
-                        }
-                    }
-                },                        
-            ],
-        )        
-        assistant_id = assistant.id
-        # Store the assistant ID in a file
-        with open(assistant_id_file, 'w') as f:
-            f.write(assistant_id)
-        
-    # Processing the POST request
-    try:
-        print("Processing POST request")
-        try:
-            print(f"Request data: {request.data}")
-            data = request.data
-            print(f"Data: {data}")
-        except json.JSONDecodeError:
-            return Response({'error': 'Failed to parse JSON'}, status=400)
-
-        question = data.get('question')
-        thread_id = data.get('thread_id')
-
-
-
-        if not question:
-            return Response({'error': 'No question provided'}, status=400)
-        user_message = UserMessage.objects.create(
-            user=user,
-            message=question
-        )
-        relevant = is_question_relevant(question)
-        # Check if thread_id is safe
-        if thread_id and not re.match("^thread_[a-zA-Z0-9]*$", thread_id):
-            return Response({'error': 'Invalid thread_id'}, status=400)
-
-        # Handle existing or new thread
-        if thread_id:
-            # Check if thread_id exists in the database
-            if not ChatThread.objects.filter(openai_thread_id=thread_id).exists():
-                return Response({'error': 'Thread_id does not exist'}, status=400)
-
-            ChatThread.objects.filter(user=user).update(is_active=False)
-            ChatThread.objects.filter(openai_thread_id=thread_id).update(is_active=True)
-        else:
-            openai_thread = client.beta.threads.create()
-            thread_id = openai_thread.id
-            summarized_title = generate_summary_title(question)
-            print(f"New thread ID: {thread_id}")
-            ChatThread.objects.create(
-                user=user,
-                openai_thread_id=thread_id,
-                title=summarized_title[:254],
-                is_active=True
-            )
-
-            user.week_shift = 0
-
-        thread = ChatThread.objects.get(openai_thread_id=thread_id)
-        user_message.thread = thread
-        user_message.save()
-        # Variable to store tool call results
-        formatted_outputs = []
-        if relevant:
-            try:
-                client.beta.threads.messages.create(
-                    thread_id=thread_id,
-                    role="user",
-                    content=question,
-                )
-            except OpenAIError as e:
-                if 'Can\'t add messages to thread' in str(e) and 'while a run' in str(e) and 'is active' in str(e):
-                    # Extract the run ID from the error message
-                    match = re.search(r'run (\w+)', str(e))
-                    if match:
-                        run_id = match.group(1)
-                        # Cancel the active run
-                        client.beta.threads.runs.cancel(run_id, thread_id=thread_id)
-                        # Try to create the message again
-                        client.beta.threads.messages.create(
-                            thread_id=thread_id,
-                            role="user",
-                            content=question
-                        )
-                else:
-                    logger.error(f'Failed to create message: {str(e)}')
-                    user_message.response = f"Sorry, I was unable to send your message. Please try again."
-                    user_message.save()
-                    return  # Stopping the task if message creation fails
-            response_data = {
-                'new_thread_id': thread_id,
-                'recommend_follow_up': False,
-            }
-            return Response(response_data)  
-        else:
-            response_data = {
-                'last_assistant_message': "I'm sorry, I cannot help with that.",
-                'new_thread_id': thread_id,
-                'recommend_follow_up': False,
-            }
-            return Response(response_data)
-        #TODO: Tie this function with the shared task, and with a listener that checks whether the message.response is ready
+    """
+    Send a message to the OpenAI Responses API and get a response.
     
+    This endpoint is for authenticated users and returns the full response
+    along with the new response ID.
+    """
+    try:
+        # Extract parameters from request
+        message = request.data.get('message')
+        thread_id = request.data.get('thread_id')  # Previous response ID
+        user_id = request.user.id
+        
+        # Initialize the MealPlanningAssistant
+        assistant = MealPlanningAssistant()
+        
+        # Send the message and get the response
+        result = assistant.send_message(user_id, message, thread_id)
+        
+        # Return the response
+        return Response({
+            'message': result.get('message', ''),
+            'new_thread_id': result.get('response_id'),
+            'recommend_follow_up': False  # Default value, can be updated if needed
+        })
     except Exception as e:
-        # Return error message wrapped in Response
-        tb = traceback.format_exc()
-        # Log the detailed error message
-        logger.error(f'Error: {str(e)}\nTraceback: {tb}')
+        logger.error(f"Error in chat_with_gpt: {str(e)}")
         return Response({'error': str(e)}, status=500)
 
+@csrf_exempt
+@api_view(['POST'])
+def guest_chat_with_gpt(request):
+    """API endpoint for guest users to chat with the assistant"""
+    print(f"Request: {request}")
+    try:
+        data = request.data
+        message = data.get('message')
+        thread_id = data.get('thread_id')  # This is actually the response_id
+        
+        if not message:
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Missing required parameter: message'
+            }, status=400)
+        
+        # Get or create a guest user ID from session
+        guest_id = request.session.get('guest_id')
+        if not guest_id:
+            guest_id = generate_guest_id()
+            request.session['guest_id'] = guest_id
+        
+        # Send message to assistant with thread_id parameter
+        result = assistant.send_message(guest_id, message, thread_id)
+        
+        # Return the response with the new thread_id (which is actually the response_id)
+        return JsonResponse({
+            'message': result.get('message', ''),
+            'new_thread_id': result.get('response_id'),
+            'recommend_follow_up': False  # Default value
+        })
+    except Exception as e:
+        logger.error(f"Error in guest_chat_with_gpt: {str(e)}")
+        traceback.print_exc()
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to get response from assistant: {str(e)}'
+        }, status=500)
+
+
+@api_view(['POST'])
+def ai_tool_call(request):
+    """
+    Adapter function for handling tool calls with the new MealPlanningAssistant.
+    
+    Note: The MealPlanningAssistant handles tool calls internally, but we need to
+    maintain this endpoint for compatibility with the frontend.
+    """
+    try:
+        user_id = request.data.get('user_id')
+        user = CustomUser.objects.get(id=user_id)
+        tool_call = request.data.get('tool_call')
+        logger.info(f"Tool call received: {tool_call}")
+        
+        # Get the active thread for this user
+        try:
+            thread = ChatThread.objects.get(user=user, is_active=True)
+        except ChatThread.DoesNotExist:
+            return Response({'error': 'No active thread found'}, status=404)
+        
+        # The MealPlanningAssistant already handles tool calls internally,
+        # but we need to maintain this endpoint for compatibility.
+        # We'll use the assistant's handle_tool_call method directly.
+        from meals.tool_registration import handle_tool_call
+        
+        # Create a tool call object that matches the expected format
+        class ToolCallObj:
+            def __init__(self, tc_data):
+                self.id = tc_data['id']
+                self.function = type('obj', (object,), {
+                    'name': tc_data['function'],
+                    'arguments': tc_data['arguments']
+                })
+        
+        tool_call_obj = ToolCallObj(tool_call)
+        
+        # Handle the tool call
+        tool_result = handle_tool_call(tool_call_obj)
+        
+        # Save the tool call to the database
+        from customer_dashboard.models import ToolCall
+        ToolCall.objects.create(
+            user=user,
+            function_name=tool_call['function'],
+            arguments=tool_call['arguments'],
+            response=tool_result
+        )
+        
+        # Return the result in the format expected by the frontend
+        return Response({
+            "tool_call_id": tool_call['id'],
+            "output": tool_result,
+        })
+        
+    except Exception as e:
+        # Handle errors
+        logger.error(f'Error: {str(e)} - Tool call: {tool_call if "tool_call" in locals() else "N/A"}')
+        return Response({'status': 'error', 'message': f"An unexpected error occurred: {str(e)}"})
 
 @api_view(['GET'])
 def get_message_status(request, message_id):
+    """
+    Adapter function for checking message status.
+    
+    Note: With the MealPlanningAssistant, responses are immediate, but we maintain
+    this endpoint for compatibility with the frontend.
+    """
     try:
-        user_id = request.query_params.get('user_id')  # Use query_params for GET requests
+        user_id = request.query_params.get('user_id')
         user = CustomUser.objects.get(id=user_id)
         message = UserMessage.objects.get(id=message_id, user=user)
         
@@ -1672,91 +1131,60 @@ def get_message_status(request, message_id):
             return Response({
                 'message_id': message.id,
                 'response': message.response,
-                'status': 'completed'  # Indicate that the message has been processed
+                'status': 'completed'
             })
         else:
+            # With the MealPlanningAssistant, responses should be immediate,
+            # but we'll maintain the pending status for compatibility
             return Response({
                 'message_id': message.id,
-                'status': 'pending'  # Indicate that the message is still being processed
+                'status': 'pending'
             })
     except CustomUser.DoesNotExist:
         return Response({'error': 'User not found'}, status=404)
     except UserMessage.DoesNotExist:
         return Response({'error': 'Message not found'}, status=404)
 
+
 @api_view(['POST'])
 def guest_ai_tool_call(request):
-    tool_call = request.data.get('tool_call')
-    print(f"Guest tool call: {tool_call}")
-    name = tool_call['function']
-    arguments = json.loads(tool_call['arguments'])  # Get arguments from tool_call
-    if arguments is None:  # Check if arguments is None
-        arguments = {}  # Assign an empty dictionary to arguments
-    # Ensure that 'request' is included in the arguments if needed
-    arguments['request'] = request
-    return_value = guest_functions[name](**arguments)
-    tool_outputs = {
-        "tool_call_id": tool_call['id'],
-        "output": return_value,
-        "function": name,
-    }
-
-    return Response(tool_outputs)
-
-
-@api_view(['POST'])
-def ai_tool_call(request):
+    """
+    Adapter function for handling guest tool calls with the new MealPlanningAssistant.
+    
+    Note: The MealPlanningAssistant handles tool calls internally, but we need to
+    maintain this endpoint for compatibility with the frontend.
+    """
     try:
-        user_id = request.data.get('user_id')
-        user = CustomUser.objects.get(id=user_id)
         tool_call = request.data.get('tool_call')
-        logger.info(f"Tool call received: {tool_call}")
+        logger.info(f"Guest tool call received: {tool_call}")
         
-        name = tool_call['function']
-        logger.info(f"Function to call: {name}")
-
-        try:
-            arguments = json.loads(tool_call['arguments'])  # Get arguments from tool_call
-            logger.info(f"Parsed arguments: {arguments}")
-        except json.JSONDecodeError as json_err:
-            logger.error(f"JSON decode error: {json_err} - Raw arguments: {tool_call['arguments']}")
-            return Response({'status': 'error', 'message': f"JSON decode error: {json_err}"})
-
-        if arguments is None:  # Check if arguments is None
-            arguments = {}  # Assign an empty dictionary to arguments
+        # The MealPlanningAssistant already handles tool calls internally,
+        # but we need to maintain this endpoint for compatibility.
+        # We'll use the assistant's handle_tool_call method directly.
+        from meals.tool_registration import handle_tool_call
         
-        # Ensure that 'request' is included in the arguments if needed
-        arguments['request'] = request
-
-        try:
-            # This inner try block specifically catches TypeError that may occur 
-            # when calling the function with incorrect arguments
-            return_value = functions[name](**arguments)
-        except TypeError as e:
-            # Handle unexpected arguments or missing arguments
-            logger.error(f'Function call error: {str(e)} - Function: {name}, Arguments: {arguments}')
-            return Response({'status': 'error', 'message': f"Function call error: {str(e)}"})
-        except Exception as e:
-            # Catch other unexpected errors
-            logger.error(f'Tool Call Error: {str(e)} - Function: {name}, Arguments: {arguments}')
-            return Response({'status': 'error', 'message': f"An unexpected error occurred: {str(e)}"})
+        # Create a tool call object that matches the expected format
+        class ToolCallObj:
+            def __init__(self, tc_data):
+                self.id = tc_data['id']
+                self.function = type('obj', (object,), {
+                    'name': tc_data['function'],
+                    'arguments': tc_data['arguments']
+                })
         
-        tool_outputs = {
+        tool_call_obj = ToolCallObj(tool_call)
+        
+        # Handle the tool call
+        tool_result = handle_tool_call(tool_call_obj)
+        
+        # Return the result in the format expected by the frontend
+        return Response({
             "tool_call_id": tool_call['id'],
-            "output": return_value,
-        }
-
-        # Create a new ToolCall instance
-        tool_call_instance = ToolCall.objects.create(
-            user=user,
-            function_name=name,
-            arguments=tool_call['arguments'],
-            response=tool_outputs['output']
-        )
-        logger.info(f"Tool call logged successfully: {tool_call_instance.id}")
-
-        return Response(tool_outputs)
+            "output": tool_result,
+            "function": tool_call['function'],
+        })
+        
     except Exception as e:
-        # Handle errors that occur outside the function call
-        logger.error(f'Error: {str(e)} - Tool call: {tool_call}')
+        # Handle errors
+        logger.error(f'Error: {str(e)} - Tool call: {tool_call if "tool_call" in locals() else "N/A"}')
         return Response({'status': 'error', 'message': f"An unexpected error occurred: {str(e)}"})

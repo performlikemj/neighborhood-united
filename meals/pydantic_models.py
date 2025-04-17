@@ -36,6 +36,58 @@ class ShoppingCategory(str, Enum):
     CONDIMENTS = "Condiments"
     MISC = "Miscellaneous"
 
+class MealMacroInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    
+    calories: float = Field(..., description="Total calories in kcal")
+    protein: float = Field(..., description="Protein content in grams")
+    carbohydrates: float = Field(..., description="Carbohydrate content in grams")
+    fat: float = Field(..., description="Fat content in grams")
+    fiber: Optional[float] = Field(..., description="Dietary fiber in grams")
+    sugar: Optional[float] = Field(..., description="Sugar content in grams")
+    sodium: Optional[float] = Field(..., description="Sodium content in mg")
+    serving_size: str = Field(..., description="Serving size (e.g., '1 cup', '200g')")
+    
+    example: ClassVar[Dict[str, Any]] = {
+        "calories": 350.5,
+        "protein": 25.2,
+        "carbohydrates": 30.5,
+        "fat": 12.3,
+        "fiber": 5.2,
+        "sugar": 3.1,
+        "sodium": 120.0,
+        "serving_size": "1 cup (240g)"
+    }
+
+class YouTubeVideo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    
+    title: str = Field(..., description="Title of the YouTube video")
+    url: str = Field(..., description="Full URL to the YouTube video")
+    channel: str = Field(..., description="Name of the YouTube channel")
+    description: Optional[str] = Field(..., description="Brief description of the video content")
+    duration: Optional[str] = Field(..., description="Duration of the video (if available)")
+    
+    example: ClassVar[Dict[str, Any]] = {
+        "title": "Easy Chicken Stir Fry Recipe - Ready in 20 Minutes",
+        "url": "https://www.youtube.com/watch?v=example123",
+        "channel": "Cooking with Chef John",
+        "description": "A quick and healthy chicken stir fry recipe perfect for weeknight dinners.",
+        "duration": "10:25"
+    }
+
+class YouTubeVideoResults(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    
+    videos: List[YouTubeVideo] = Field(..., description="List of relevant YouTube videos")
+    search_query: Optional[str] = Field(..., description="Search query used to find these videos")
+
+# --- Pydantic Schemas for Meal Metadata --- 
+
+class MealMetadata(BaseModel):
+    macro_info: Optional[MealMacroInfo] = Field(..., description="Nutritional information for the meal")
+    youtube_videos: Optional[YouTubeVideoResults] = Field(..., description="Links to relevant YouTube cooking videos")
+
 class EmergencySupplyItem(BaseModel):
     item_name: str
     quantity_to_buy: str

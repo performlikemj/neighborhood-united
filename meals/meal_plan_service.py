@@ -6,6 +6,7 @@ import logging
 import os
 import random
 import requests
+import pytz
 import traceback
 import uuid
 from collections import defaultdict
@@ -37,7 +38,31 @@ class DietaryCompatibilityResponse(BaseModel):
     is_compatible: bool = Field(..., description="Whether the meal is compatible with the dietary preference")
     confidence: float = Field(..., description="Confidence score between 0.0 and 1.0")
     reasoning: str = Field(..., description="Brief explanation for the compatibility assessment")
+
+def is_saturday_in_timezone(user_timezone_str):
+    """
+    Check if it's Saturday in the user's timezone
     
+    Args:
+        user_timezone_str: String representing the user's timezone (e.g., 'America/New_York')
+        
+    Returns:
+        Boolean indicating if it's Saturday in the user's timezone
+    """
+    try:
+        # Get the timezone object
+        user_tz = pytz.timezone(user_timezone_str)
+        
+        # Get current time in user's timezone
+        user_local_time = datetime.now(user_tz)
+        
+        # Check if it's Saturday (weekday 5)
+        return user_local_time.weekday() == 5
+    except Exception as e:
+        logger.error(f"Error determining if it's Saturday in timezone {user_timezone_str}: {str(e)}")
+        # Default to server's timezone if there's an error
+        return timezone.now().weekday() == 5
+
 # TODO: Add parameter to include ingredients from the gpt generated check
 def analyze_meal_compatibility(meal, dietary_preference):
     """
@@ -62,19 +87,14 @@ def analyze_meal_compatibility(meal, dietary_preference):
         # Prepare the prompt
         input = [
             {"role": "system", 
-             "content": {
-                 "type": "text",
-                 "text": (
+             "content": (
                     "You are a nutritionist specializing in dietary restrictions. "
                     "Analyze meal ingredients to determine compatibility with specific dietary preferences. "
                     "Consider both explicit ingredients and common preparation methods."
                 )
-             }
             },
             {"role": "user", 
-             "content": {
-                 "type": "text",
-                 "text": (
+             "content": (
                     f"Meal Name: {meal.name}\n"
                     f"Description: {meal.description}\n"
                     f"Ingredients: {', '.join(ingredients)}\n\n"
@@ -82,13 +102,12 @@ def analyze_meal_compatibility(meal, dietary_preference):
                     f"Even if it's not explicitly labeled as {dietary_preference}, "
                     f"determine if its ingredients and preparation would satisfy that dietary requirement."
                 )
-            }
         }
         ]
 
         # Make API call
         response = client.responses.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             input=input,
             text={
                 "format": {
@@ -262,27 +281,48 @@ def create_meal_plan_for_new_user(user_id):
 
 @shared_task
 def create_meal_plan_for_all_users():
-    today = timezone.now().date()
-
-    # If today is Sunday, we want to start the meal plan for the next day (Monday)
-    start_of_week = today + timedelta(days=1) if today.weekday() == 6 else today - timedelta(days=today.weekday()) + timedelta(days=7)
+    """
+    Create meal plans for all users, respecting their local timezones.
+    Only creates and sends meal plans on Saturday in the user's local timezone.
+    """
+    server_today = timezone.now().date()
     
-    # End of the week is 6 days after the start of the week
-    end_of_week = start_of_week + timedelta(days=6)
-
-    # Fetch all users
+    # Fetch all users with confirmed emails
     users = CustomUser.objects.filter(email_confirmed=True)
-
+    
     for user in users:
-        meal_plan = create_meal_plan_for_user(user, start_of_week, end_of_week)
-        if meal_plan:
-            try:
-                # Add local import to avoid circular dependency
-                from meals.email_service import send_meal_plan_approval_email
-                send_meal_plan_approval_email(meal_plan.id)
-            except Exception as e:
-                logger.error(f"Error sending approval email for user {user.username}: {e}")
-                traceback.print_exc()
+        # Check if it's Saturday in the user's timezone
+        if is_saturday_in_timezone(user.timezone):
+            logger.info(f"It's Saturday in {user.timezone} for user {user.username}. Creating meal plan.")
+            
+            # Calculate start and end dates for the upcoming week
+            user_tz = pytz.timezone(user.timezone)
+            user_local_time = datetime.now(user_tz)
+            user_local_date = user_local_time.date()
+            
+            # Calculate days until next Monday (weekday 0)
+            days_until_monday = (7 - user_local_date.weekday()) % 7
+            if days_until_monday == 0:  # If today is Monday
+                days_until_monday = 7  # Use next Monday
+                
+            # Calculate start and end dates for the meal plan
+            start_of_week = user_local_date + timedelta(days=days_until_monday)  # Next Monday
+            end_of_week = start_of_week + timedelta(days=6)  # Sunday after next Monday
+            
+            # Create meal plan for the user
+            meal_plan = create_meal_plan_for_user(user, start_of_week, end_of_week)
+            
+            if meal_plan:
+                try:
+                    from meals.email_service import send_meal_plan_approval_email
+                    send_meal_plan_approval_email(meal_plan.id)
+                    logger.info(f"Sent meal plan approval email to user {user.username} for week starting {start_of_week}")
+                except Exception as e:
+                    logger.error(f"Error sending approval email for user {user.username}: {e}")
+                    traceback.print_exc()
+        else:
+            logger.debug(f"It's not Saturday in {user.timezone} for user {user.username}. Skipping meal plan creation.")
+
 
 def day_to_offset(day_name: str) -> int:
     """Convert 'Monday' -> 0, 'Tuesday' -> 1, etc."""
@@ -570,10 +610,10 @@ def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None, monday
     from meals.email_service import send_meal_plan_approval_email, generate_emergency_supply_list
     send_meal_plan_approval_email(meal_plan.id)
 
-    # Generate emergency supply list if user has enabled this
-    if user.emergency_supply_goal and user.emergency_supply_goal > 0:
-        logger.info(f"[{request_id}] User has emergency supply goal of {user.emergency_supply_goal} days. Generating supply list.")
-        generate_emergency_supply_list(user.id)
+    # # Generate emergency supply list if user has enabled this
+    # if user.emergency_supply_goal and user.emergency_supply_goal > 0:
+    #     logger.info(f"[{request_id}] User has emergency supply goal of {user.emergency_supply_goal} days. Generating supply list.")
+    #     generate_emergency_supply_list(user.id)
 
     return meal_plan
 
@@ -634,7 +674,7 @@ def analyze_and_replace_meals(user, meal_plan, meal_types, request_id=None):
         #store=True,
         #metadata={'tag': 'meal-plan-analysis'}
         response = client.responses.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             input=input,
             text={
                 "format": {
@@ -1103,7 +1143,7 @@ def guess_meal_ingredients_gpt(meal_name: str, meal_description: str) -> List[st
     
     try:
         response = client.responses.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             input=prompt_messages,
             text={
                 "format": {
@@ -1287,7 +1327,7 @@ def check_meal_for_allergens_gpt(meal, user) -> Tuple[bool, List[str], Dict[str,
     
     try:
         response = client.responses.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             input=prompt_messages,
             text={
                 "format": {
@@ -1412,7 +1452,7 @@ def get_substitution_suggestions(flagged_ingredients, user_allergies, meal_name)
         ]
         
         response = client.responses.create(
-            model="gpt-4o-mini",
+            model="gpt-4.1-mini",
             input=prompt_messages,
             text={
                 "format": {

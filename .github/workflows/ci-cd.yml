@@ -31,9 +31,14 @@ jobs:
       - name: Export dev .env
         run: |
           echo "$DEV_DOTENV" > .env
-          set -o allexport
-          source .env
-          set +o allexport
+
+          # Promote every KEY=value pair to future steps via $GITHUB_ENV
+          while IFS= read -r line || [ -n "$line" ]; do
+            [[ "$line" =~ ^[[:space:]]*$ ]] && continue        # skip blanks
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue        # skip comments
+            [[ "$line" != *"="* ]] && { echo "Malformed .env line: $line" >&2; exit 1; }
+            echo "$line" >> "$GITHUB_ENV"
+          done
         env:
           DEV_DOTENV: ${{ secrets.DEV_DOTENV }}
 

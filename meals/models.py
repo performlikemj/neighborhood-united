@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 OPENAI_API_KEY = settings.OPENAI_KEY
 client = OpenAI()
-OpenAI.api_key = OPENAI_API_KEY
+client.api_key = OPENAI_API_KEY
 
 class Migration(migrations.Migration):
     operations = [

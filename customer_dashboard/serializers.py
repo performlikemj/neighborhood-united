@@ -10,7 +10,7 @@ class GoalTrackingSerializer(serializers.ModelSerializer):
 class ChatThreadSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChatThread
-        fields = ['id', 'user', 'title', 'openai_thread_id', 'created_at']
+        fields = ['id', 'user', 'title', 'openai_thread_id', 'created_at', 'latest_response_id']
 
 
 class UserHealthMetricsSerializer(serializers.ModelSerializer):

@@ -56,82 +56,9 @@ def send_daily_meal_instructions():
 
         user_time = current_utc_time.astimezone(user_timezone)
 
-        # # # Check if it's 8 PM in the user's time zone
-        # if user_time.hour == 20 and user_time.minute == 0:
+        # # Check if it's 8 PM in the user's time zone
+        if user_time.hour == 20 and user_time.minute == 0:
 
-        #     # Get the next day's date in the user's time zone
-        #     next_day = user_time.date() + timedelta(days=1)
-        #     next_day_name = next_day.strftime('%A')
-
-        #     # Get the current week start and end dates
-        #     week_start_date = next_day - timedelta(days=next_day.weekday())
-        #     week_end_date = week_start_date + timedelta(days=6)
-
-
-        #     # Filter MealPlanMeal instances for this user, day, and week
-        #     meal_plan_meals_for_next_day = MealPlanMeal.objects.filter(
-        #         meal_plan__user=user,
-        #         day=next_day_name,
-        #         meal_plan__week_start_date=week_start_date,
-        #         meal_plan__week_end_date=week_end_date,
-        #     )
-            
-        #     # Check one meal to see if meal plan is daily or bulk
-        #     meal_plan = meal_plan_meals_for_next_day.first().meal_plan if meal_plan_meals_for_next_day.exists() else None
-            
-        #     if meal_plan is None:
-        #         logger.info(f"No meal plan found for user {user.email} on {next_day_name}")
-        #         continue
-        #     if meal_plan.is_approved is False:
-        #         logger.info(f"Meal plan for user {user.email} on {next_day_name} is not approved")
-        #         continue
-        #     if meal_plan.meal_prep_preference == 'daily':
-        #         print(f'Daily meal plan for user {user.email} on {next_day_name}')
-        #         if meal_plan_meals_for_next_day.exists():
-        #             # Get the IDs of the MealPlanMeals for the next day
-        #             meal_plan_meal_ids = list(meal_plan_meals_for_next_day.values_list('id', flat=True))
-        #             logger.debug(f"MealPlanMeal IDs for user {user.email} on {next_day_name}: {meal_plan_meal_ids}")
-        #             generate_instructions.delay(meal_plan_meal_ids)
-        #     elif meal_plan.meal_prep_preference == 'one_day_prep':
-        #         print(f'One day prep meal plan for user {user.email} on {next_day_name}')
-        #         # Check for follow-up instructions scheduled for next_day
-        #         follow_up_instruction = MealPlanInstruction.objects.filter(
-        #             meal_plan=meal_plan,
-        #             date=next_day,
-        #             is_bulk_prep=False
-        #         ).first()
-            
-        #         if follow_up_instruction:
-        #             instruction_text = follow_up_instruction.instruction_text
-            
-        #             # Deserialize and validate the instruction_text
-        #             try:
-        #                 instruction_data = json.loads(instruction_text)
-        #                 print(f"Instruction data: {instruction_data}")
-        #                 # If instruction_data is a list, wrap it into a dictionary
-        #                 if isinstance(instruction_data, list):
-        #                     instruction_data = {
-        #                         "day": next_day_name,
-        #                         "tasks": instruction_data,
-        #                         "total_estimated_time": None  # Set this appropriately if available
-        #                     }
-                        
-        #                 daily_task = DailyTask.model_validate(instruction_data)
-        #                 print(f"Daily task: {daily_task}")
-        #             except Exception as e:
-        #                 logger.error(f"Failed to parse follow-up instructions for user {user.email}: {e}")
-        #                 continue
-            
-        #             formatted_instructions = format_follow_up_instructions(daily_task, user.username)
-            
-        #             send_follow_up_email(user, formatted_instructions)
-        #         else:
-        #             logger.info(f"No follow-up instructions for user {user.email} on {next_day} for meal plan {meal_plan.id}")
-        #     else:
-        #         logger.info(f"No meals found for user {user.email} on {next_day_name}")
-
-        if user.username == 'ferris':
-            print('User ferris')
             # Get the next day's date in the user's time zone
             next_day = user_time.date() + timedelta(days=1)
             next_day_name = next_day.strftime('%A')   # e.g. "Saturday"
@@ -142,7 +69,6 @@ def send_daily_meal_instructions():
                 meal_plan__week_end_date__gte=next_day,
                 day=next_day_name
             )
-            print(meal_plan_meals_for_next_day)
             # Check one meal to see if meal plan is daily or bulk
             meal_plan = meal_plan_meals_for_next_day.first().meal_plan if meal_plan_meals_for_next_day.exists() else None
             
@@ -172,7 +98,6 @@ def send_daily_meal_instructions():
                     # Deserialize and validate the instruction_text
                     try:
                         instruction_data = json.loads(instruction_text)
-                        print(f"Instruction data: {instruction_data}")
                         # If instruction_data is a list, wrap it into a dictionary
                         if isinstance(instruction_data, list):
                             instruction_data = {
@@ -182,7 +107,6 @@ def send_daily_meal_instructions():
                             }
                         
                         daily_task = DailyTask.model_validate(instruction_data)
-                        print(f"Daily task: {daily_task}")
                     except Exception as e:
                         logger.error(f"Failed to parse follow-up instructions for user {user.email}: {e}")
                         continue
@@ -363,8 +287,60 @@ def generate_instructions(meal_plan_meal_ids):
                     model="gpt-4.1-mini",
                     input=[
                         {
-                            "role": "system",
-                            "content": f"You are a helpful assistant that generates cooking instructions in {user_preferred_language} based on the provided meal data and user context. Output JSON conforming to the Instructions schema."
+                            "role": "developer",
+                            "content": (
+                                f"Generate cooking instructions in the user's preferred language of {user_preferred_language} based on the provided meal data and user context. The output should be in JSON format conforming to the provided Instructions schema. "
+                                """
+                                # Steps
+
+                                1. **Understand the Meal Data:** Analyze the provided meal data to understand the ingredients, cooking methods, and overall recipe structure.
+                                
+                                2. **Generate Instructions:**
+                                - For each step in the cooking process, determine the sequence, actions, and necessary details.
+                                - Assign a step number to each action in chronological order.
+                                - Write a clear description of the step in the user's preferred language.
+                                - Estimate the duration for each step. If the duration is not provided, use "N/A". 
+
+                                3. **Compile the Output:**
+                                - Ensure each instruction fits the InstructionStep schema: step number, description, and duration.
+                                - Aggregate all steps into a list matching the structure of the Instructions schema.
+
+                                # Output Format
+
+                                The output should be a JSON object matching the Instructions schema with a list of steps. Each step should include the step number, description, and duration. The JSON should not be wrapped in code blocks.
+
+                                # Examples
+
+                                **Example Input:**
+                                - Meal Data: [Ingredients and cooking method details]
+                                - User Preferred Language: "Spanish"
+
+                                **Example Output:**
+                                ```json
+                                {
+                                    "steps": [
+                                        {
+                                            "step_number": 1,
+                                            "description": "Precalienta el horno a 180 grados Celsius.",
+                                            "duration": "5 minutos"
+                                        },
+                                        {
+                                            "step_number": 2,
+                                            "description": "Mezcla la harina y el azúcar en un bol grande.",
+                                            "duration": "N/A"
+                                        }
+                                    ]
+                                }
+                                ```
+                                (Note: In a real scenario, ensure the descriptions are fully detailed and appropriately translated based on the meal data and language specified.)
+
+                                # Notes
+
+                                - Ensure that each instruction is adapted to the user's preferred language.
+                                - If specific durations are given in the meal data, those should be used; otherwise, default to "N/A" for duration estimation.
+                                - Pay attention to making the steps easy to understand and follow.
+                                """
+                            )
                         },
                         {
                             "role": "user",
@@ -522,7 +498,7 @@ def generate_instructions(meal_plan_meal_ids):
     email_data = {
         'subject': subject,
         'message': email_body_html,
-        'to': user_email,
+        'to': user_email if not settings.DEBUG else os.getenv('TEST_EMAIL'),
         'from': 'support@sautai.com',
     }
 
@@ -713,8 +689,50 @@ def generate_bulk_prep_instructions(meal_plan_id):
             model="gpt-4.1-mini", # Or gpt-4-turbo if more complexity needed
             input=[
                 {
-                    "role": "system",
-                    "content": f"You are an expert meal prep assistant. Generate efficient, step-by-step bulk meal prep instructions in {user_preferred_language}, outputting JSON conforming to the BulkPrepInstructions schema. Group instructions logically (e.g., chop all veggies, cook all grains). Include storage tips and instructions for final assembly/reheating on the day of eating."
+                    "role": "developer",
+                    "content": (
+                        f"Generate efficient, step-by-step bulk meal prep instructions in the specified language of {user_preferred_language}, outputting JSON conforming to the BulkPrepInstructions schema. Group instructions logically (e.g., chop all veggies, cook all grains) and include storage tips and instructions for final assembly/reheating on the day of eating. "
+                        """
+                        # Steps
+
+                        1. **Bulk Preparation**: Develop a detailed list of bulk preparation steps. Each step should be efficient and grouped logically (e.g., all vegetables chopping should occur together). Include:
+                        - Step number indicating the order of operations.
+                        - Meal type (Breakfast, Lunch, Dinner) relevant to the step.
+                        - Detailed description of the step.
+                        - Duration (time needed for the step).
+                        - List of ingredients needed.
+                        - Optional notes or tips for storage and freshness.
+
+                        2. **Integration**: Ensure that the bulk preparation steps logically integrate to facilitate reduced daily workload.
+
+                        # Output Format
+
+                        The output should be provided in JSON format, structured according to the BulkPrepInstructions schema. Each component must adhere strictly to the fields defined in this schema.
+
+                        # Examples
+
+                        ## Example of BulkPrepInstructions
+
+                        ```json
+                        {
+                            "step_number": 1,
+                            "meal_type": "Breakfast",
+                            "description": "Wash, hull, and slice 3 cups of strawberries. Store in an airtight container.",
+                            "duration": "15 minutes",
+                            "ingredients": ["strawberries"],
+                            "notes": "Keep refrigerated and use within 3 days."
+                        }
+                        ```
+
+                        (Note: The actual number of tasks and steps will vary depending on the complexity and requirements of the meal prep plan.)
+
+                        # Notes
+
+                        - Ensure all steps are clearly described and placed in the correct sequence.
+                        - Include storage tips to maintain freshness and practicality.
+                        - The JSON should be well-structured and valid according to the BulkPrepInstructions schema.
+                        """
+                    )
                 },
                 {
                     "role": "user",
@@ -893,7 +911,7 @@ def send_bulk_prep_instructions(meal_plan_id):
     email_data = {
         'subject': f"Your Bulk Meal Prep Instructions for {meal_plan.week_start_date.strftime('%b %d')} - {meal_plan.week_end_date.strftime('%b %d')}",
         'html_message': email_body_html, # Use html_message key if n8n expects it
-        'to': user.email,
+        'to': user.email if not settings.DEBUG else os.getenv('TEST_EMAIL'),
         'from': 'support@sautai.com',
     }
 
@@ -958,7 +976,7 @@ def send_follow_up_email(user, daily_task_context):
     email_data = {
         'subject': email_subject,
         'message': email_body_html,
-        'to': recipient_email,
+        'to': recipient_email if not settings.DEBUG else os.getenv('TEST_EMAIL'),
         'from': 'support@sautai.com',
         'html': True
     }

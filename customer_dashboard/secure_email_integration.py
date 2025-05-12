@@ -5,7 +5,7 @@ from django.views.decorators.http import require_http_methods
 import logging
 import json
 from customer_dashboard.models import AssistantEmailToken
-from customer_dashboard.views import assistant
+from meals.meal_assistant_implementation import MealPlanningAssistant
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,7 @@ def process_email(request):
         
         # Process the message with the assistant
         user_id = str(user.id)
+        assistant = MealPlanningAssistant()
         result = assistant.send_message(user_id, message_content)
         
         # Add the token to the result for n8n to use in the reply address

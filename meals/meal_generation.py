@@ -62,7 +62,8 @@ def generate_and_create_meal(
     day_name, 
     max_attempts=3,
     user_prompt=None,
-    request_id=None
+    request_id=None,
+    user_goal_description: Optional[str] = None
 ):
     """
     Generate and create a meal for a specific day and meal type.
@@ -78,6 +79,7 @@ def generate_and_create_meal(
     - max_attempts: Maximum number of attempts to generate a valid meal
     - user_prompt: Optional user prompt to guide meal generation
     - request_id: Optional request ID for logging correlation
+    - user_goal_description: Optional string describing the user’s dietary or macro goal, forwarded to the generation prompt.
     
     Returns:
     - Dictionary with status, message, meal, and used_pantry_item
@@ -103,7 +105,8 @@ def generate_and_create_meal(
             existing_meal_embeddings,
             meal_plan=meal_plan,
             user_prompt=user_prompt,
-            request_id=request_id
+            request_id=request_id,
+            user_goal_description=user_goal_description,
         )
         if not meal_details:
             logger.error(f"[{request_id}] Attempt {attempt}: Failed to generate meal details for {meal_type} on {day_name}.")
@@ -355,11 +358,70 @@ def perform_openai_sanity_check(meal, user):
             model="gpt-4.1-mini",
             input=[
                 {
-                    "role": "system",
+                    "role": "developer",
                     "content": (
-                        "You are a helpful assistant that checks whether a meal has the possibility of including a user's allergens and meets their dietary preference. "
-                        "If they do contain allergens or doesn't meet their requirements, you return 'False'. If they are allergen-free AND align with their preferences, you return 'True'."
-                    )
+                    """
+                    Check whether a meal is free of allergens and meets a user's dietary preferences.
+
+                    You will assess the ingredients of a meal to determine if any of the specified allergens are present and if the meal aligns with the user's dietary preferences. If the meal is allergen-free and matches the user's dietary requirements, return 'True'. Otherwise, return 'False'.
+
+                    # Steps
+
+                    1. **Receive Input**: You will receive a list of meal ingredients, a list of allergens to check, and a set of dietary preferences.
+                    2. **Allergen Evaluation**: Compare the meal ingredients against the user's specified allergens.
+                    3. **Dietary Preference Check**: Verify if the meal complies with all given dietary preferences.
+                    4. **Determine Result**: If the meal does not contain any allergens and meets the dietary preferences, return 'True'. Otherwise, return 'False'.
+
+                    # Output Format
+
+                    - The output should be structured as a JSON adhering to the following format:
+                    ```json
+                    {
+                        "allergen_check": true|false
+                    }
+                    ```
+                    
+                    - "allergen_check" should be `true` if the meal is free of specified allergens and aligns with dietary preferences; otherwise, it should be `false`.
+
+                    # Examples
+
+                    **Input:**
+                    - Meal Ingredients: ["wheat", "milk", "peanut"]
+                    - Allergens: ["peanut", "soy"]
+                    - Dietary Preferences: ["vegetarian"]
+
+                    **Process:**
+                    - Compare ingredients and allergens: "peanut" is present (Allergen found)
+                    - Check dietary preferences: The meal is vegetarian
+
+                    **Output:**
+                    ```json
+                    {
+                    "allergen_check": false
+                    }
+                    ```
+
+                    **Input:**
+                    - Meal Ingredients: ["rice", "broccoli", "tofu"]
+                    - Allergens: ["peanut", "soy"]
+                    - Dietary Preferences: ["vegetarian"]
+
+                    **Process:**
+                    - Compare ingredients and allergens: No allergens present
+                    - Check dietary preferences: The meal is vegetarian
+
+                    **Output:**
+                    ```json
+                    {
+                    "allergen_check": true
+                    }
+                    ```
+
+                    # Notes
+
+                    - **Edge Cases**: Consider cross-contamination scenarios where ingredients may not directly list allergens but could be contaminated.
+                    - Ensure that all dietary preferences must be strictly adhered to unless explicitly stated otherwise.
+                    """                    )
                 },
                 {
                     "role": "user",
@@ -424,7 +486,8 @@ def generate_meal_details(
     min_similarity=0.1,
     max_attempts=5,
     user_prompt=None,
-    request_id=None
+    request_id=None,
+    user_goal_description: Optional[str] = None
 ):
     """
     Generate meal details using OpenAI.
@@ -439,6 +502,7 @@ def generate_meal_details(
     - max_attempts: Maximum number of attempts to generate a valid meal
     - user_prompt: Optional user prompt to guide meal generation
     - request_id: Optional request ID for logging correlation
+    - user_goal_description: Optional string describing the user's goal to guide meal detail generation.
     
     Returns:
     - Dictionary with meal details or None if generation fails
@@ -503,7 +567,7 @@ def generate_meal_details(
     # 4) Gather user allergy/goal info for the GPT prompt
     allergens = set(user.allergies or []) | set(user.custom_allergies or [])
     allergens_str = ', '.join(allergens) if allergens else 'None'
-    user_goals = getattr(user.goal, 'goal_description', 'None')
+    user_goals = user_goal_description if user_goal_description is not None else getattr(getattr(user, 'goal', None), 'goal_description', 'None')
 
     # 5) Build the GPT prompt
     base_prompt = f"""
@@ -571,7 +635,69 @@ def generate_meal_details(
             response = client.responses.create(
                 model="gpt-4.1-mini",
                 input=[
-                    {"role": "system", "content": "You are a helpful assistant that generates a single meal JSON."},
+                    {"role": "developer", "content": (
+                        """
+                        Generate a single meal JSON based on specified criteria, ensuring it aligns with user goals and preferences, while avoiding similarities to past meals and any user allergies.
+
+                        You will use the provided schemas to structure your response, ensuring all required fields are included and validated.
+
+                        # Steps
+
+                        1. **Analyze User Requirements:**
+                        - Consider user goals, allergies, preferences, and the required meal type.
+                        - Ensure the new meal is distinct from past meals listed.
+
+                        2. **Meal Creation:**
+                        - Develop a creative meal idea that satisfies the user's requirements and preferences.
+                        - Avoid ingredients that the user is allergic to.
+
+                        3. **JSON Structure:**
+                        - Utilize the `MealData` and `MealOutputSchema` schemas.
+                        - Ensure all relevant fields, such as meal name, description, dietary preferences, chef data, and pantry items, are appropriately filled.
+
+                        # Output Format
+
+                        The output must be a JSON object following the `MealOutputSchema`. This includes:
+                        - "status": A string indicating the success of the meal creation.
+                        - "message": A success message for the meal creation.
+                        - "current_time": A timestamp in ISO 8601 format (use a placeholder for demonstration).
+                        - "meal": An object conforming to `MealData`.
+
+                        # Example
+
+                        Example input: (input details would be provided in actual use, this is a placeholder)
+                        - combined_meal_names = ["Hearty Lentil Tomato Stew", "Spicy Black Bean Soup"]
+                        - user_goals = "Create a healthy, balanced meal."
+                        - allergens_str = "gluten"
+                        - generate_user_context(user) = "Prefers vegan meals, likes spicy flavors."
+                        - meal_type = "Dinner"
+
+                        Example output: 
+                        ```json
+                        {
+                        "status": "success",
+                        "message": "Meal created successfully!",
+                        "current_time": "2023-10-05T12:00:00Z",
+                        "meal": {
+                            "name": "Spicy Quinoa Chili",
+                            "description": "A hearty and spicy vegan chili with quinoa, kidney beans, and bell peppers.",
+                            "dietary_preference": "Vegan",
+                            "meal_type": "Dinner",
+                            "is_chef_meal": false,
+                            "chef_name": null,
+                            "chef_meal_event_id": null,
+                            "used_pantry_items": ["quinoa", "kidney beans", "bell peppers"]
+                        }
+                        }
+                        ```
+
+                        # Notes
+
+                        - Ensure creativity when generating meal descriptions, while respecting user dietary preferences and restrictions.
+                        - Always verify that the meal is unique compared to the combined meal names provided.
+                        - Use appropriate placeholders where real-time data, such as current time, is needed.                        
+                        """
+                    )},
                     {"role": "user", "content": base_prompt}
                 ],
                 #store=True,
@@ -674,10 +800,68 @@ def determine_usage_for_meal(
     combined_prefs = regular_diet_prefs + custom_diet_prefs
 
     system_msg = (
-        "You are a helpful assistant that calculates how much of each used pantry item "
-        "is needed for a meal, given the user's desired serving size. "
-        "Return JSON in this form: "
-        "[{\"item_name\": \"...\", \"quantity_used\": <float>, \"unit\": \"...\"}]."
+        """
+        Calculate the quantity of each pantry item needed for a meal based on the user's desired serving size and return the results in the specified JSON format.
+
+        Here are the schemas that describe the structure of your response:
+
+        - `UsageItem`: Represents an individual pantry item and includes:
+        - `item_name`: The exact name of the pantry item.
+        - `quantity_used`: A float indicating the number of units required.
+        - `unit`: The unit of measurement, such as 'cups', 'pieces', or 'grams'.
+
+        - `UsageList`: A top-level object that contains an array of `UsageItem`.
+
+        # Steps
+
+        1. **Gather Input**: Determine the base recipe quantity for each pantry item in a single serving.
+        2. **Calculate Quantities**: Multiply the base recipe quantity by the user's desired serving size to get the total quantity needed for each pantry item.
+        3. **Create JSON**: Format the results according to the provided JSON schema.
+
+        # Output Format
+
+        Produce the output as a JSON object in the following structure:
+        ```
+        {
+        "usage_items": [
+            {
+            "item_name": "string",
+            "quantity_used": float,
+            "unit": "string"
+            },
+            ...
+        ]
+        }
+        ```
+
+        # Examples
+
+        **Input**: Base recipe requires 1 cup of milk and 2 eggs per serving. User desires 3 servings.
+
+        **Output**:
+        ```json
+        {
+        "usage_items": [
+            {
+            "item_name": "milk",
+            "quantity_used": 3.0,
+            "unit": "cups"
+            },
+            {
+            "item_name": "eggs",
+            "quantity_used": 6.0,
+            "unit": "pieces"
+            }
+        ]
+        }
+        ```
+
+        # Notes
+
+        - Ensure all numeric quantities are represented as floats.
+        - Follow the JSON schema strictly, especially with field names and types.
+        - Consider units carefully, especially when multiple units are possible for an item (e.g., grams vs. ounces).
+        """
     )
 
     user_msg = (
@@ -694,7 +878,7 @@ def determine_usage_for_meal(
         response = client.responses.create(
             model="gpt-4.1-mini",
             input=[
-                {"role": "system", "content": system_msg},
+                {"role": "developer", "content": system_msg},
                 {"role": "user", "content": user_msg}
             ],
             #store=True,

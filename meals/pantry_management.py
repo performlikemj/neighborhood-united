@@ -38,10 +38,72 @@ def check_item_for_allergies_gpt(item_name: str, user) -> bool:
     # The prompt ensures GPT focuses on allergen presence
     prompt_messages = [
         {
-            "role": "system",
+            "role": "developer",
             "content": (
-                "You are a helpful assistant that checks whether a pantry item could contain any potential allergens "
-                "listed by the user. Return 'true' if it's safe, or 'false' if it might contain allergens."
+                """
+                Check whether a pantry item could contain any potential allergens listed by the user and return a boolean response indicating its safety.
+
+                Use the following schema to communicate results.
+
+                # Steps
+
+                1. **Input Understanding**: 
+                - Receive a description of a pantry item and a list of potential allergens from the user.
+                
+                2. **Ingredient Analysis**:
+                - Examine the ingredients of the pantry item to identify any potential allergens.
+                - Compare the identified allergens against the list provided by the user.
+
+                3. **Safety Determination**:
+                - If any listed allergens are found in the pantry item, it is not safe.
+                - If no listed allergens are found, it is considered safe.
+
+                # Output Format
+
+                Responses should be in JSON format, adhering to the following schema:
+                ```json
+                {
+                    "safe_check": true // Replace `true` with `false` if the item might contain allergens.
+                }
+                ```
+
+                # Examples
+
+                **Example 1:**
+
+                - **Input**: 
+                - Pantry item: "Peanut Butter"
+                - Potential allergens: ["peanuts", "tree nuts"]
+
+                - **Reasoning**: Peanut Butter contains peanuts, which are in the list of user-provided allergens.
+                
+                - **Output**:
+                ```json
+                {
+                    "safe_check": false
+                }
+                ```
+
+                **Example 2:**
+
+                - **Input**:
+                - Pantry item: "Rice"
+                - Potential allergens: ["peanuts", "tree nuts"]
+
+                - **Reasoning**: Rice does not contain any of the potential allergens listed by the user.
+                
+                - **Output**:
+                ```json
+                {
+                    "safe_check": true
+                }
+                ```
+
+                # Notes
+
+                - Ensure careful comparison between the item ingredients and user-provided allergen list, as false negatives could be harmful.
+                - Assume the ingredient list of the pantry item is appropriately provided for analysis.
+                """
             )
         },
         {
@@ -221,9 +283,75 @@ def determine_items_to_replenish(user):
     
     # Step 4: Create GPT prompt
     prompt_system = (
-        "You are a helpful assistant that, given the user's context, current pantry items, and emergency supply goal, "
-        "recommends a list of dried or canned goods the user should replenish to meet their emergency supply goal. "
-        "Ensure that the recommendations align with the user's dietary preferences, allergies, and goals."
+        """
+        Given the user's context, current pantry items, and emergency supply goal, recommend a list of dried or canned goods the user should replenish to meet their emergency supply goal. Ensure that the recommendations are aligned with the user's dietary preferences, allergies, and goals.
+
+        # Steps
+
+        1. **Understand User Context**: 
+        - Gather information on the user's dietary preferences and allergies.
+        - Identify the user's specific emergency supply goal in terms of nutritional needs and duration.
+
+        2. **Assess Current Pantry**:
+        - Review the list of current pantry items provided by the user.
+        - Compare the current pantry items against the emergency supply goal to assess shortfalls.
+
+        3. **Recommend Items**:
+        - Recommend dried or canned goods that fill gaps in the current pantry and align with the user's dietary needs.
+        - Consider shelf life, nutritional value, and compatibility with dietary restrictions.
+
+        4. **Quantify Recommendations**:
+        - Calculate the quantity needed for each recommended item to meet the emergency supply goal.
+
+        # Output Format
+
+        The output should be in JSON format adhering to the ReplenishItemsSchema:
+
+        ```json
+        {
+        "items_to_replenish": [
+            {
+            "item_name": "<Name of the item>",
+            "quantity": <Quantity integer>,
+            "unit": "<Unit of measurement>"
+            },
+            ...
+        ]
+        }
+        ```
+
+        # Examples
+
+        **Input**: 
+        - **User Pantry**: ["rice": 2 kg, "canned beans": 3 cans]
+        - **Dietary Preferences**: Vegetarian, gluten-free
+        - **Emer. Supply Goal**: 7 days for a family of 4
+
+        **Output**:
+        ```json
+        {
+        "items_to_replenish": [
+            {
+            "item_name": "canned chickpeas",
+            "quantity": 6,
+            "unit": "cans"
+            },
+            {
+            "item_name": "quinoa",
+            "quantity": 3,
+            "unit": "kg"
+            }
+            ...
+        ]
+        }
+        ```
+
+        # Notes
+
+        - Always respect dietary preferences and allergies when making recommendations.
+        - Consider the family size and the duration of the emergency supply when determining quantities.
+        - Suggest items with a long shelf life to ensure they remain useful over time.
+        """
     )
     
     prompt_user = (
@@ -249,7 +377,7 @@ def determine_items_to_replenish(user):
         response = client.responses.create(
             model="gpt-4.1-mini",
             input=[
-                {"role": "system", "content": prompt_system},
+                {"role": "developer", "content": prompt_system},
                 {"role": "user", "content": prompt_user},
             ],
             text={
@@ -296,7 +424,55 @@ def assign_pantry_tags(pantry_item_id):
         response = client.responses.create(
             model="gpt-4.1-mini",
             input=[
-                {"role": "system", "content": "You are a helpful assistant that generates tags in JSON format."},
+                {"role": "developer", "content": (
+                    """
+                    Generate tags for a pantry item in JSON format using the specified schema.
+
+                    You will create a JSON object with a key "tags" which contains a list of strings. Each string should describe the pantry item.
+
+                    # Output Format
+
+                    Output should be in JSON format adhering to the following schema:
+
+                    ```json
+                    {
+                        "tags": ["tag1", "tag2", "tag3"]
+                    }
+                    ```
+
+                    Where each item in the list is a descriptive tag for the pantry item. 
+
+                    # Examples
+
+                    **Example 1:**
+
+                    - **Input:** "brown rice"
+                    - **Output:** 
+                    ```json
+                    {
+                        "tags": ["whole grain", "rice", "brown"]
+                    }
+                    ```
+
+                    **Example 2:**
+
+                    - **Input:** "tomato sauce"
+                    - **Output:** 
+                    ```json
+                    {
+                        "tags": ["sauce", "tomato", "canned"]
+                    }
+                    ```
+
+                    (Examples are illustrative and actual tags should match the pantry item's specifics.)
+
+                    # Notes
+
+                    - Ensure that no additional fields are added to the JSON output.
+                    - Use concise and relevant tags based on common attributes of the pantry item.
+                    - Forbidden to include extra keys or unrelated information in the JSON output.
+                    """
+                )},
                 {"role": "user", "content": prompt}
             ],
             text={

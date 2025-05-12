@@ -23,7 +23,9 @@ from custom_auth.models import CustomUser
 from meals.meal_generation import generate_and_create_meal, perform_openai_sanity_check
 from meals.models import Meal, MealPlan, MealPlanMeal, MealPlanInstruction, ChefMealEvent
 from meals.tasks import MAX_ATTEMPTS
-from meals.pydantic_models import (MealsToReplaceSchema, MealPlanApprovalEmailSchema, BulkPrepInstructions)
+from meals.pydantic_models import (MealsToReplaceSchema, MealPlanApprovalEmailSchema, BulkPrepInstructions,
+                                  MealPlanModificationRequest, PromptMealMap)
+from meals.meal_modification_parser import parse_modification_request
 from shared.utils import (generate_user_context, get_embedding, cosine_similarity, replace_meal_in_plan,
                           remove_meal_from_plan)
 from django.db import transaction
@@ -86,11 +88,71 @@ def analyze_meal_compatibility(meal, dietary_preference):
         
         # Prepare the prompt
         input = [
-            {"role": "system", 
+            {"role": "developer", 
              "content": (
-                    "You are a nutritionist specializing in dietary restrictions. "
-                    "Analyze meal ingredients to determine compatibility with specific dietary preferences. "
-                    "Consider both explicit ingredients and common preparation methods."
+                    """
+                    Analyze a list of meal ingredients and preparation methods to determine their compatibility with specific dietary preferences. Consider both explicit ingredients and common preparation methods.
+
+                    Use the following criteria for your analysis:
+                    - Evaluate each ingredient and preparation method in the context of the given dietary preference.
+                    - Consider common allergens or restricted ingredients associated with the preference.
+                    - Assess how preparation methods might alter ingredient compatibility.
+                    - Provide a confidence score to reflect the certainty of your assessment.
+                    - Explain your reasoning with a brief yet clear description for your compatibility assessment.
+
+                    # Steps
+
+                    1. **Identify Ingredients**: List out all explicit ingredients from the meal.
+                    2. **Evaluate Preparation Methods**: Identify and consider any typical preparation methods that might affect dietary compatibility.
+                    3. **Compatibility Assessment**: Determine if the meal aligns with the specified dietary preference.
+                    4. **Confidence Scoring**: Assign a confidence score between 0.0 and 1.0 based on the certainty of the compatibility analysis.
+                    5. **Reasoning**: Provide a brief explanation detailing why the meal is deemed compatible or incompatible.
+
+                    # Output Format
+
+                    Return a JSON object using the following schema:
+
+                    ```json
+                    {
+                    "is_compatible": boolean,  // Indicates if the meal aligns with the dietary preference
+                    "confidence": float,       // A score between 0.0 and 1.0 reflecting the analysis confidence
+                    "reasoning": "string"      // A brief explanation for the assessment
+                    }
+                    ```
+
+                    # Examples
+
+                    **Input**: 
+                    - Meal: "Caesar Salad with Croutons"
+                    - Dietary Preference: "Gluten-Free"
+
+                    **Output**:
+                    ```json
+                    {
+                    "is_compatible": false,
+                    "confidence": 0.9,
+                    "reasoning": "The salad contains croutons, which are typically made from wheat bread, incompatible with a gluten-free diet."
+                    }
+                    ```
+
+                    **Input**: 
+                    - Meal: "Grilled Chicken with Steamed Vegetables"
+                    - Dietary Preference: "Paleo"
+
+                    **Output**:
+                    ```json
+                    {
+                    "is_compatible": true,
+                    "confidence": 0.95,
+                    "reasoning": "Grilled chicken and steamed vegetables are generally considered paleo-friendly, as they consist of whole, unprocessed foods."
+                    }
+                    ```
+
+                    # Notes
+
+                    - Be aware of cross-contamination possibilities which might affect compatibility.
+                    - Consider any additional nuances in preparation methods that might introduce non-compliant elements (e.g., sauces, dressings, or marination).
+                    """
                 )
             },
             {"role": "user", 
@@ -332,30 +394,58 @@ def day_to_offset(day_name: str) -> int:
     }
     return mapping.get(day_name, 0)
 
-def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None, monday_date=None, request_id=None):
+def create_meal_plan_for_user(
+    user,
+    start_of_week: Optional[datetime.date] = None,
+    end_of_week: Optional[datetime.date] = None,
+    monday_date: Optional[datetime.date] = None,
+    request_id: Optional[str] = None,
+    *,
+    days_to_plan: Optional[List[str]] = None,
+    prioritized_meals: Optional[Dict[str, List[str]]] = None,
+    user_prompt: Optional[str] = None,
+    number_of_days: Optional[int] = None,
+):
     """
-    Create a meal plan for a user for a specific week.
+    Create a meal plan for a user for a specific week, allowing for flexibility.
+    
+    If start_of_week and end_of_week are not provided, they must be calculable.
     
     Parameters:
-    - user: The user to create the meal plan for
-    - start_of_week: The start date of the week
-    - end_of_week: The end date of the week
-    - monday_date: The Monday date of the week (optional)
-    - request_id: Optional request ID for logging correlation
+    - user: The user to create the meal plan for.
+    - start_of_week: The start date of the week.
+    - end_of_week: The end date of the week.
+    - monday_date: The Monday date of the week (optional, used for plan identification).
+    - request_id: Optional request ID for logging correlation.
+    - days_to_plan (keyword-only): Optional list of weekday names (e.g., ['Monday', 'Wednesday']) to populate. Defaults to the entire week between start_of_week and end_of_week if None.
+    - prioritized_meals (keyword-only): Optional dict mapping day names to lists of meal types to prioritize (e.g., {'Friday': ['Dinner', 'Lunch']}). Meals not listed are added after prioritized ones. Defaults to ['Breakfast', 'Lunch', 'Dinner'] order if None or day not specified.
+    - user_prompt (keyword-only): Optional free-text user request that triggered this plan (e.g., "Lunches for cutting phase"). Passed down for better meal generation context.
     
     Returns:
-    - The created meal plan or None if creation failed
+    - The created MealPlan object or None if creation failed.
+    
+    Note:
+    - This function is backward-compatible. Existing calls without the new keyword-only arguments will continue to work using the default behavior (full week, standard meal order).
     """
     from meals.pantry_management import get_expiring_pantry_items
-    
+    from meals.models import (STATUS_SCHEDULED, STATUS_OPEN)
+
     # Generate a request ID if not provided
     if request_id is None:
         request_id = str(uuid.uuid4())
     
     logger.info(f"[{request_id}] Creating meal plan for user {user.username} from {start_of_week} to {end_of_week}")
-    
+    # Capture user's stored goal description, if available
+    user_goal_description = getattr(getattr(user, "goals", None), "goal_description", "")
+    today = timezone.localdate()
+    if start_of_week is None or end_of_week is None:
+        # Calculate Monday and Sunday around today
+        start_of_week = today - timedelta(days=today.weekday())
+        end_of_week   = start_of_week + timedelta(days=6)    
     # Use a transaction to prevent race conditions
     with transaction.atomic():
+        logger.info(f"[{request_id}] Starting transaction for meal plan creation")
+        print(f"[DEBUG] Entering create_meal_plan_for_user: user_id={user.id}, days_to_plan={days_to_plan}, prioritized_meals={prioritized_meals}, user_prompt={user_prompt}, goal={user_goal_description}")
         # Check for existing meal plan with select_for_update to lock the rows
         existing_meal_plan = MealPlan.objects.select_for_update().filter(
             user=user,
@@ -399,6 +489,39 @@ def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None, monday
     
     # These operations can be outside the transaction since we now have a valid meal plan
     meal_types = ['Breakfast', 'Lunch', 'Dinner']
+
+    # parse prompt into structured map 
+    allowed_map = None
+    if user_prompt:
+        input = [
+            {
+                "role": "developer",
+                "content": (
+                    "You are responsible for understanding a user's request and turning it into a mapped list of meal day and meal type where applicable. Do not include meal days or types where the user did not specify. "
+                )
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Please use my prompt to create a list of meal days and meal types that I should plan for the week. "
+                    f"Prompt: {user_prompt} and days to plan: {days_to_plan if days_to_plan else 'None'} and number of days: {number_of_days if number_of_days else 'None'}"
+                )
+            }
+        ]
+        call = client.responses.create(
+            model="gpt-4.1-mini",
+            input=input,
+            text={
+                "format": {
+                    'type': 'json_schema',
+                    'name': 'meal_map',
+                    'schema': PromptMealMap.model_json_schema()
+                }
+            }
+        )
+        parsed = PromptMealMap.model_validate_json(call.output_text)
+        allowed_map = {(s.day, s.meal_type.value): True for s in parsed.slots}
+            
     existing_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan).select_related('meal')
     existing_meal_names = set(existing_meals.values_list('meal__name', flat=True))
     existing_meal_embeddings = list(existing_meals.values_list('meal__meal_embedding', flat=True))
@@ -406,15 +529,78 @@ def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None, monday
     skipped_meal_ids = set()
     used_pantry_item = False  # ADDED
 
-    day_count = (end_of_week - start_of_week).days + 1
-    logger.info(f"[{request_id}] Creating meal plan for {day_count} days")
+    # Determine and normalize the valid days to plan for
+    if start_of_week and end_of_week:
+        # 1) Build the set of actual weekdays in the span
+        valid_week_days = {
+            (start_of_week + timedelta(days=i)).strftime("%A")
+            for i in range((end_of_week - start_of_week).days + 1)
+        }
+    else:
+        logger.error(f"[{request_id}] Cannot determine planning days. Need start/end dates or explicit days_to_plan.")
+        meal_plan.delete()
+        return None
+
+    # 2) Select source days based on prompt, UI, or default
+    if allowed_map:
+        candidate_days = sorted({d for d, _ in allowed_map})
+    elif days_to_plan:
+        candidate_days = [d.capitalize() for d in days_to_plan]
+    else:
+        candidate_days = sorted(valid_week_days)
+
+    # 3) Filter to only days that actually fall within this week
+    planning_days = [day for day in candidate_days if day in valid_week_days]
+
+    # 4) Fallback to full week if none matched
+    if not planning_days:
+        logger.warning(
+            f"[{request_id}] No valid planning days found from candidate_days {candidate_days} "
+            f"in the week {start_of_week} to {end_of_week}. Falling back to full week."
+        )
+        planning_days = sorted(valid_week_days)
+
+    logger.info(f"[{request_id}] Planning meals for days: {', '.join(planning_days)}")
+    print(f"[DEBUG] planning_days = {planning_days}")
+
+    # Map planning days to their offset from the start_of_week for date calculation
+    day_offset_map = {
+        day: offset
+        for offset, day in enumerate(
+            (start_of_week + timedelta(days=i)).strftime("%A")
+            for i in range((end_of_week - start_of_week).days + 1)
+        ) if day in planning_days
+    }
     
-    for day_offset in range(day_count):
+    for day_name in planning_days:
+        day_offset = day_offset_map[day_name]
         meal_date = start_of_week + timedelta(days=day_offset)
-        day_name = meal_date.strftime('%A')
+        print(f"[DEBUG] Processing day: {day_name} (date={meal_date})")
         logger.debug(f"[{request_id}] Processing day: {day_name} ({meal_date})")
-        
-        for meal_type in meal_types:
+
+        # Determine meal type order for the current day
+        day_meal_types = meal_types.copy()  # Default order
+        if prioritized_meals:
+            day_priorities = prioritized_meals.get(day_name)
+            if day_priorities:
+                # Filter priorities to valid meal types and create sorted list
+                prios = [m for m in day_priorities if m in meal_types]
+                # Append remaining meal types in their original order
+                day_meal_types = prios + [m for m in meal_types if m not in prios]
+                logger.debug(f"[{request_id}] Using prioritized meal types for {day_name}: {day_meal_types}")
+
+        # If user_prompt produced an allowed_map, restrict meal_types to only requested ones for this day
+        if allowed_map:
+            # Collect the meal types requested by the user for this day
+            requested_meals = [mt for (d, mt) in allowed_map.keys() if d == day_name]
+            # Filter the default/prioritized list to only those requested
+            day_meal_types = [mt for mt in day_meal_types if mt in requested_meals]
+            if not day_meal_types:
+                logger.info(f"[{request_id}] No meal types requested for {day_name}. Skipping day.")
+                continue
+
+        for meal_type in day_meal_types:
+            print(f"[DEBUG] Checking existing MealPlanMeal for {day_name} {meal_type}")
             # Check if a meal already exists for this day and meal type
             if MealPlanMeal.objects.filter(
                 meal_plan=meal_plan,
@@ -429,6 +615,7 @@ def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None, monday
             meal_added = False
 
             while attempt < MAX_ATTEMPTS and not meal_added:
+                print(f"[DEBUG] Attempt {attempt+1} for {day_name} {meal_type}")
                 attempt += 1
                 logger.debug(f"[{request_id}] Attempt {attempt} to add meal for {day_name} {meal_type}")
 
@@ -458,8 +645,11 @@ def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None, monday
                         existing_meal_embeddings=existing_meal_embeddings,
                         user_id=user_id,
                         day_name=day_name,
-                        request_id=request_id
+                        request_id=request_id,
+                        user_goal_description=user_goal_description,
+                        user_prompt=user_prompt
                     )
+                    print(f"[DEBUG] generate_and_create_meal result: {result}")
                     if result['status'] == 'success':
                         meal = result['meal']
                         
@@ -544,7 +734,7 @@ def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None, monday
                             meal=meal_found,
                             chef=meal_found.chef,
                             event_date=target_meal_date, 
-                            status__in=['scheduled', 'open'],
+                            status__in=[STATUS_SCHEDULED, STATUS_OPEN],
                             order_cutoff_time__gt=timezone.now()
                         ).exists()
                         
@@ -585,6 +775,8 @@ def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None, monday
                 if attempt >= MAX_ATTEMPTS and not meal_added:
                     logger.error(f"[{request_id}] Failed to add meal for {day_name} {meal_type} after {MAX_ATTEMPTS} attempts.")
 
+        print(f"[DEBUG] Total meals added so far: {MealPlanMeal.objects.filter(meal_plan=meal_plan).count()}")
+
     # Check if we added any meals
     meal_count = MealPlanMeal.objects.filter(meal_plan=meal_plan).count()
     if meal_count == 0:
@@ -592,7 +784,7 @@ def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None, monday
         meal_plan.delete()
         return None
 
-    logger.info(f"[{request_id}] Meal plan created successfully for {user.username} with {meal_count} meals")
+    logger.info(f"[{request_id}] Meal plan created successfully for {user.username} with {meal_count} meals across {len(planning_days)} day(s)")
 
     # If any meal used pantry items, skip replacements
     if used_pantry_item:
@@ -615,6 +807,181 @@ def create_meal_plan_for_user(user, start_of_week=None, end_of_week=None, monday
     #     logger.info(f"[{request_id}] User has emergency supply goal of {user.emergency_supply_goal} days. Generating supply list.")
     #     generate_emergency_supply_list(user.id)
 
+    return meal_plan
+
+
+# -----------------------------------------------
+# New function: modify_existing_meal_plan
+# -----------------------------------------------
+def modify_existing_meal_plan(
+    user,
+    meal_plan_id: int,
+    user_prompt: Optional[str] = None,
+    *,
+    days_to_modify: Optional[List[str]] = None,
+    prioritized_meals: Optional[Dict[str, List[str]]] = None,
+    request_id: Optional[str] = None,
+    should_remove: bool = False,
+):
+    """
+    Modify an existing meal plan for a user in‑place.
+
+    This mirrors the behaviour of `create_meal_plan_for_user` but operates
+    on an already‑created `MealPlan` identified by `meal_plan_id`.
+
+    Parameters
+    ----------
+    user : CustomUser
+        The owner of the meal plan.
+    meal_plan_id : int
+        ID of the `MealPlan` to modify.
+    user_prompt : str, optional
+        Free‑text prompt that triggered the modification.
+    days_to_modify : list[str], keyword‑only, optional
+        Weekday names (e.g. ['Tuesday', 'Thursday']) whose meals should be
+        regenerated.  If `None`, the entire week is considered.
+    prioritized_meals : dict[str, list[str]], keyword‑only, optional
+        Same semantics as in `create_meal_plan_for_user`.
+    request_id : str, optional
+        An externally‑supplied request ID for log correlation.
+    should_remove : bool, optional
+        If True, the meal will be removed without being replaced. Default is False.
+
+    Returns
+    -------
+    MealPlan | None
+        The modified `MealPlan` object on success, otherwise `None`.
+    """
+    from meals.models import MealPlanMeal
+    from django.db import transaction
+    from django.utils import timezone
+
+    if request_id is None:
+        request_id = str(uuid.uuid4())
+
+    log_prefix = f"[{request_id}]"
+    logger.info(f"{log_prefix} Modifying meal_plan {meal_plan_id} for {user.username}")
+
+    # 1. Fetch & sanity‑check the meal plan
+    try:
+        with transaction.atomic():
+            meal_plan = MealPlan.objects.select_for_update().get(id=meal_plan_id, user=user)
+            
+            # Check if meal plan is from a previous week (end date is before today)
+            current_date = timezone.now().date()
+            if meal_plan.week_end_date < current_date:
+                logger.warning(f"{log_prefix} Attempted to modify a meal plan from a previous week (ID: {meal_plan_id})")
+                return None
+            
+            start_of_week = meal_plan.week_start_date
+            end_of_week   = meal_plan.week_end_date
+            meal_types    = ['Breakfast', 'Lunch', 'Dinner']
+
+            # 2. Determine which days to touchRight
+            if days_to_modify:
+                planning_days = [d.capitalize() for d in days_to_modify]
+            else:
+                planning_days = [
+                    (start_of_week + timedelta(days=i)).strftime("%A")
+                    for i in range((end_of_week - start_of_week).days + 1)
+                ]
+
+            day_offset_map = {
+                day: offset
+                for offset, day in enumerate(
+                    (start_of_week + timedelta(days=i)).strftime("%A")
+                    for i in range((end_of_week - start_of_week).days + 1)
+                ) if day in planning_days
+            }
+
+            # 3. Gather context from existing plan
+            existing_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan)
+            existing_meal_names = set(existing_meals.values_list("meal__name", flat=True))
+            existing_meal_embeddings = list(existing_meals.values_list("meal__meal_embedding", flat=True))
+
+            skipped_meal_ids: Set[int] = set()
+
+            # 4. Iterate through selected days/types
+            for day_name in planning_days:
+                day_offset = day_offset_map[day_name]
+                meal_date  = start_of_week + timedelta(days=day_offset)
+
+                # Establish meal order for this day
+                # FIXED: Only regenerate meal types the caller explicitly asked for
+                if prioritized_meals and prioritized_meals.get(day_name):
+                    day_meal_types = [m for m in prioritized_meals[day_name] if m in meal_types]
+                else:
+                    day_meal_types = meal_types.copy()  # fallback for "touch whole day"
+                
+                # Add safety check to avoid processing days with no meal types to modify
+                if not day_meal_types:
+                    logger.debug(f"{log_prefix} No meal types flagged for modification for {day_name}; skipping day.")
+                    continue
+
+                for meal_type in day_meal_types:
+                    log_ctx = f"{log_prefix} {day_name} {meal_type}"
+
+                    # Remove current MealPlanMeal (if any) – we regenerate from scratch
+                    MealPlanMeal.objects.filter(
+                        meal_plan=meal_plan,
+                        meal_date=meal_date,
+                        day=day_name,
+                        meal_type=meal_type
+                    ).delete()
+
+                    # If meal should be removed, skip generation
+                    if should_remove:
+                        logger.info(f"{log_ctx} Meal removed as requested and will not be replaced")
+                        continue
+
+                    attempt     = 0
+                    meal_added  = False
+                    MAX_ATTEMPTS = 3  # keep it light for modifications
+
+                    while attempt < MAX_ATTEMPTS and not meal_added:
+                        attempt += 1
+                        logger.debug(f"{log_ctx} attempt {attempt}")
+
+                        # Re‑use the existing helper that prefers pantry items / uniqueness
+                        result = generate_and_create_meal(
+                            user=user,
+                            meal_plan=meal_plan,
+                            meal_type=meal_type,
+                            existing_meal_names=existing_meal_names,
+                            existing_meal_embeddings=existing_meal_embeddings,
+                            user_id=user.id,
+                            day_name=day_name,
+                            request_id=request_id,
+                            user_prompt=user_prompt
+                        )
+
+                        if result["status"] == "success":
+                            new_meal = result["meal"]
+                            existing_meal_names.add(new_meal.name)
+                            existing_meal_embeddings.append(new_meal.meal_embedding)
+                            meal_added = True
+                            logger.info(f"{log_ctx} added '{new_meal.name}'")
+                        else:
+                            logger.warning(f"{log_ctx} {result['message']}")
+
+                    if not meal_added:
+                        logger.error(f"{log_ctx} failed after {MAX_ATTEMPTS} attempts")
+    except MealPlan.DoesNotExist:
+        logger.error(f"{log_prefix} MealPlan {meal_plan_id} does not exist or is not owned by user.")
+        return None
+
+    # 5. Re‑analyse plan for similarity after changes
+    analyze_and_replace_meals(user, meal_plan, meal_types, request_id)
+
+    # 6. Persist & notify
+    meal_plan.save()
+    try:
+        from meals.email_service import send_meal_plan_approval_email
+        send_meal_plan_approval_email(meal_plan.id)
+    except Exception as e:
+        logger.error(f"{log_prefix} Error sending approval email: {e}")
+
+    logger.info(f"{log_prefix} Meal plan modification complete.")
     return meal_plan
 
 def analyze_and_replace_meals(user, meal_plan, meal_types, request_id=None):
@@ -650,12 +1017,68 @@ def analyze_and_replace_meals(user, meal_plan, meal_types, request_id=None):
     try:
         input = [
             {
-                "role": "system",
+                "role": "developer",
                 "content": (
-                    "You are a meal planning assistant tasked with ensuring variety in the user's meal plans. "
-                    "Analyze the current week's meal plan in the context of the previous two weeks' meal plans. "
-                    "Identify any meals that are duplicates or too similar to previous meals and should be replaced. "
-                    "Provide your response in the specified JSON format."
+                    """
+                    You are a meal planning assistant tasked with ensuring variety in the user's meal plans. Analyze the current week's meal plan in the context of the previous two weeks' meal plans. Identify any meals that are duplicates or too similar to previous meals and should be replaced. Provide your response in the specified JSON format.
+
+                    Evaluate the meal plans as follows:
+                    - Compare the meals of the current week against those from the previous two weeks.
+                    - Assess both exact duplicates and meals that are too similar in terms of ingredients, preparation, or flavor profile.
+                    - Consider meals too similar if they share the majority of their main ingredients or would result in the user experiencing a lack of variety.
+
+                    # Steps
+
+                    1. Gather the meal plans for the current and previous two weeks.
+                    2. Identify duplicate or similar meals within the current week's plan when compared to the prior weeks.
+                    3. Create a list of meals to replace, specifying the detailed information for each meal using the MealsToReplaceSchema.
+
+                    # Output Format
+
+                    The output should be a JSON object following the MealsToReplaceSchema structure:
+                    ```json
+                    {
+                    "meals_to_replace": [
+                        {
+                        "meal_id": [meal_id],
+                        "day": "[day_of_week]",
+                        "meal_type": "[meal_type]"
+                        },
+                        ...
+                    ]
+                    }
+                    ```
+
+                    # Examples
+
+                    **Example Input:**
+                    - Current Week's Meals: A list of meals with IDs, days, and types.
+                    - Previous Two Weeks' Meals: Lists of meals for comparison.
+
+                    **Example Output:**
+                    ```json
+                    {
+                    "meals_to_replace": [
+                        {
+                        "meal_id": 101,
+                        "day": "Tuesday",
+                        "meal_type": "Lunch"
+                        },
+                        {
+                        "meal_id": 205,
+                        "day": "Thursday",
+                        "meal_type": "Dinner"
+                        }
+                    ]
+                    }
+                    ```
+
+                    # Notes
+
+                    - Pay special attention to varying the protein sources, culinary styles, and key ingredients.
+                    - If no replacements are needed, return an empty list for `meals_to_replace`.
+                    - Ensure that the JSON output strictly adheres to the schema without any additional fields.
+                    """
                 )
             },
             {
@@ -1124,10 +1547,65 @@ def guess_meal_ingredients_gpt(meal_name: str, meal_description: str) -> List[st
     """
     prompt_messages = [
         {
-            "role": "system",
+            "role": "developer",
             "content": (
-                "You are a culinary expert. Given a meal name and description, "
-                "predict which common or hidden ingredients might be used. "
+                """
+                Predict the ingredients likely used in a given meal name and description.
+
+                Use your culinary expertise to deduce both common and hidden ingredients that would typically be used in the preparation of the provided meal. Consider traditional recipes, regional variations, and modern twists.
+
+                # Steps
+
+                1. **Analyze the Meal Name**: Start by identifying keywords from the meal name that can hint at specific ingredients.
+                2. **Evaluate the Description**: Look for descriptive words that suggest flavors, textures, or cooking methods which indicate certain ingredients.
+                3. **Consider Recipe Traditions**: Think about traditional recipes for the dish from different regions or variations that might incorporate unique ingredients.
+                4. **Include Common Ingredients**: Identify staple ingredients generally found in the dish based on your culinary knowledge.
+                5. **Suggest Hidden Ingredients**: Consider any unique or less obvious ingredients that could enhance the meal's flavor profile.
+
+                # Output Format
+
+                Your response should conform to the following JSON schema:
+
+                ```json
+                {
+                "likely_ingredients": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                }
+                }
+                ```
+
+                # Examples
+
+                ### Example 1
+                **Input**
+                - Meal Name: "Spaghetti Carbonara"
+                - Description: "A classic Italian pasta dish made with eggs, cheese, pancetta, and pepper."
+
+                **Output**
+                ```json
+                {
+                "likely_ingredients": ["spaghetti", "eggs", "Pecorino Romano cheese", "pancetta", "black pepper", "garlic", "olive oil"]
+                }
+                ```
+
+                ### Example 2
+                **Input**
+                - Meal Name: "Thai Green Curry"
+                - Description: "A spicy, aromatic dish with a coconut milk base and a vibrant green hue from green curry paste."
+
+                **Output**
+                ```json
+                {
+                "likely_ingredients": ["coconut milk", "green curry paste", "chicken", "bamboo shoots", "Thai basil", "fish sauce", "lemongrass", "galangal", "kaffir lime leaves"]
+                }
+                ```
+
+                # Notes
+
+                - Consider cross-referencing with common ingredients used in well-known variations of the dish.
+                - Balance the list of ingredients between universally recognized essentials and unique, chef-inspired inclusions.
+                """
             )
         },
         {
@@ -1303,12 +1781,67 @@ def check_meal_for_allergens_gpt(meal, user) -> Tuple[bool, List[str], Dict[str,
     # No obvious matches, now check with GPT for more sophisticated analysis with substitutions
     prompt_messages = [
         {
-            "role": "system",
+            "role": "developer",
             "content": (
-                "You are a nutritionist and culinary expert specialized in ingredient substitutions for food allergies "
-                "and dietary restrictions. Analyze each ingredient to determine if it could contain or be derived from "
-                "any of the user's allergens. For any flagged ingredients, suggest 1-2 substitutions that are both safe "
-                "and maintain the dish's flavor profile and culinary function."
+                """
+                Analyze each ingredient for potential allergens based on the user's dietary restrictions. For any ingredients that could contain or be derived from allergens, suggest 1-2 substitutions that maintain the dish's flavor profile and culinary function.
+
+                Include reasoning to explain why ingredients are flagged and why specific substitutions are suggested.
+
+                # Steps
+
+                1. **Identify Allergens**: Determine the allergens the user needs to avoid.
+                2. **Analyze Ingredients**: Examine each ingredient to assess whether it contains or is derived from any of the allergies.
+                3. **Reasoning**: Explain why the ingredient is considered safe or unsafe.
+                4. **Substitution Suggestion**: For flagged ingredients, recommend 1-2 substitutions that ensure safety and maintain the dish's flavor and function.
+
+                # Output Format
+
+                Use the following JSON schema for output:
+
+                - `is_safe`: Boolean indicating if all ingredients are safe.
+                - `flagged_ingredients`: List of ingredients that may contain allergens.
+                - `substitutions`: Object where each flagged ingredient maps to an array of potential substitutions.
+                - `reasoning`: String explaining the analysis process.
+
+                Example:
+
+                ```json
+                {
+                "is_safe": true,
+                "flagged_ingredients": ["ingredient1", "ingredient2"],
+                "substitutions": {
+                    "ingredient1": ["substitute1a", "substitute1b"],
+                    "ingredient2": ["substitute2a"]
+                },
+                "reasoning": "After examining the ingredients, ingredient1 contains a common allergen, and ingredient2 is derived from another allergen. Suitable substitutions for ingredient1 are substitute1a and substitute1b, while substitute2a is recommended for ingredient2."
+                }
+                ```
+
+                # Examples
+
+                **Input:**
+                User is allergic to nuts and dairy.
+
+                **Output:**
+                ```json
+                {
+                "is_safe": false,
+                "flagged_ingredients": ["almonds", "milk"],
+                "substitutions": {
+                    "almonds": ["pumpkin seeds", "sunflower seeds"],
+                    "milk": ["almond milk", "oat milk"]
+                },
+                "reasoning": "Almonds are a type of tree nut, which the user is allergic to. Milk is a dairy product. Substitute almond with pumpkin seeds or sunflower seeds, and replace milk with almond milk or oat milk to maintain culinary function and flavor."
+                }
+                ```
+
+                # Notes
+
+                - Always consider maintaining the original dish's flavor profile and culinary functions when suggesting substitutions.
+                - Ensure that all suggested substitutes are free from the user's identified allergens.
+                - Clarify any assumptions made regarding the user's dietary restrictions or specific ingredients.
+                """
             )
         },
         {
@@ -1429,11 +1962,62 @@ def get_substitution_suggestions(flagged_ingredients, user_allergies, meal_name)
     try:
         prompt_messages = [
             {
-                "role": "system",
+                "role": "developer",
                 "content": (
-                    "You are a culinary expert specialized in ingredient substitutions for those with allergies "
-                    "or dietary restrictions. Your task is to suggest safe, delicious alternatives that maintain "
-                    "the dish's flavor profile and culinary function."
+                    """
+                    Provide substitution suggestions for flagged ingredients based on user allergies.
+
+                    You are a culinary expert specialized in ingredient substitutions for those with allergies or dietary restrictions. Your task is to suggest safe, delicious alternatives that maintain the dish's flavor profile and culinary function.
+
+                    # Steps
+
+                    1. Identify each ingredient in the `flagged_ingredients` list that matches the user's allergies from the `user_allergies` list.
+                    2. For each flagged ingredient:
+                    - Understand the ingredient's role in the meal (e.g., flavor, texture, function).
+                    - Suggest alternatives that are not in the `user_allergies` list and match the ingredient's role.
+                    - Ensure the substitution aligns with the culinary profile of the `meal_name`.
+                    3. Construct and return the recommendations as a JSON object, mapping each flagged ingredient to a list of viable substitutions.
+
+                    # Output Format
+
+                    The output should be a JSON object where each key is a flagged ingredient, and the value is a list of substitution suggestions. Here is the JSON schema:
+                    ```json
+                    {
+                        "format": {
+                            "type": "json_schema",
+                            "name": "substitution_suggestions",
+                            "schema": {
+                                "type": "object",
+                                "additionalProperties": {
+                                    "type": "array",
+                                    "items": {"type": "string"}
+                                }
+                            }
+                        }
+                    }
+                    ```
+
+                    # Examples
+
+                    ### Example Input
+                    - flagged_ingredients: ["milk", "peanut", "egg"]
+                    - user_allergies: ["dairy", "peanut"]
+                    - meal_name: "Vegan Pancakes"
+
+                    ### Example Output
+                    ```json
+                    {
+                        "milk": ["almond milk", "coconut milk", "soy milk"],
+                        "peanut": ["sunflower seed butter", "almond butter"]
+                    }
+                    ```
+
+                    # Notes
+
+                    - Consider the common culinary function of each ingredient such as binding, leavening, or flavoring.
+                    - It's important to tailor your substitutes to the type of meal. For example, if the meal is a dessert, sweeter alternatives might be more appropriate.
+                    - Always ensure substitutes are safe given the listed user allergies.
+                    """
                 )
             },
             {
@@ -1672,11 +2256,81 @@ def apply_substitutions_to_meal(meal, substitutions, user):
         
         prompt_messages = [
             {
-                "role": "system",
+                "role": "developer",
                 "content": (
-                    "You are a culinary expert specialized in adapting recipes with ingredient substitutions. "
-                    "Your task is to modify a recipe to accommodate specific ingredient substitutions while "
-                    "maintaining the dish's flavor, texture, and culinary integrity."
+                    """
+                    Adapt a recipe to accommodate specific ingredient substitutions while maintaining the dish's flavor, texture, and culinary integrity. As a culinary expert, modify the recipe to ensure that the changes align with the desired culinary standards.
+
+                    Utilize the following schema to structure your output:
+
+                    - **modified_name**: The new name of the dish reflecting the substitutions.
+                    - **modified_description**: A brief description of the dish with the new ingredients.
+                    - **modified_instructions**: Detailed cooking instructions for the modified dish.
+                    - **ingredient_changes**: A list detailing the original and substitute ingredients used in the recipe.
+
+                    # Output Format
+
+                    The output should be formatted as a JSON object following this structure:
+
+                    ```json
+                    {
+                    "modified_name": "string",
+                    "modified_description": "string",
+                    "modified_instructions": "string",
+                    "ingredient_changes": [
+                        {
+                        "original": "string",
+                        "substitute": "string"
+                        }
+                        // Add more objects as necessary for additional substitutions
+                    ]
+                    }
+                    ```
+
+                    # Steps
+
+                    1. Identify the ingredients that need to be substituted.
+                    2. Choose appropriate substitute ingredients that maintain flavor, texture, and culinary integrity.
+                    3. Modify the recipe instructions to incorporate the new ingredients effectively.
+                    4. Update the dish's name and description to reflect the changes.
+                    5. Document each substitution clearly.
+
+                    # Examples
+
+                    **Example Start**
+
+                    **Input**: A recipe for 'Classic Caesar Salad' with a request to substitute anchovies and croutons.
+
+                    **Output**:
+
+                    ```json
+                    {
+                    "modified_name": "Vegan Caesar Salad",
+                    "modified_description": "A plant-based twist on the classic Caesar salad, featuring savory toasted almonds and smoky coconut flakes instead of anchovies.",
+                    "modified_instructions": "Toss lettuce with dressing made of vegan ingredients and top with toasted almonds. Sprinkle with smoky coconut flakes instead of anchovies.",
+                    "ingredient_changes": [
+                        {
+                        "original": "anchovies",
+                        "substitute": "smoky coconut flakes"
+                        },
+                        {
+                        "original": "croutons",
+                        "substitute": "toasted almonds"
+                        }
+                    ]
+                    }
+                    ```
+
+                    **Example End** 
+
+                    (Real examples should include more detailed instructions and substitutions where necessary.)
+
+                    # Notes
+
+                    - Ensure substitutions are suitable for dietary needs if specified.
+                    - Maintain the balance between the original recipe and the target dietary requirements or preferences.
+                    - Be mindful of dietary restrictions, allergies, and preferences when suggesting substitutions.
+                    """
                 )
             },
             {
@@ -1697,7 +2351,7 @@ def apply_substitutions_to_meal(meal, substitutions, user):
         ]
         
         response = client.responses.create(
-            model="gpt-4o",  # Using more capable model for recipe adaptation
+            model="gpt-4.1-mini",  # Using more capable model for recipe adaptation
             input=prompt_messages,
             text={
                 "format": {
@@ -1844,3 +2498,131 @@ def regenerate_replaced_meal(original_meal_id, user, meal_type, meal_plan, reque
     except Exception as e:
         logger.error(f"[{request_id}] Exception regenerating meal: {e}")
         return False
+
+def apply_modifications(
+    user,
+    meal_plan: MealPlan,
+    raw_prompt: str,
+    *,
+    request_id: Optional[str] = None,
+):
+    """
+    High-level entry point: parse the user's request and apply slot-level changes.
+    """
+    if request_id is None:
+        request_id = str(uuid.uuid4())
+
+    print(f"DEBUG apply_modifications: Starting with request_id={request_id}, meal_plan_id={meal_plan.id}, prompt={raw_prompt}")
+    logger.info("[%s] Parsing modification request for MealPlan %s", request_id, meal_plan.id)
+    
+    try:
+        parsed_req = parse_modification_request(raw_prompt, meal_plan)
+        print(f"DEBUG apply_modifications: Got parsed_req with {len(parsed_req.slots)} slots")
+    except Exception as e:
+        import traceback
+        print(f"DEBUG apply_modifications: Error in parsing: {str(e)}")
+        print(f"DEBUG apply_modifications: Traceback: {traceback.format_exc()}")
+        raise
+
+    # Map slot IDs to DB rows once to avoid repetitive queries
+    try:
+        meals = meal_plan.mealplanmeal_set.select_related("meal").all()
+        id_to_mpm = {
+            mpm.id: mpm
+            for mpm in meals
+        }
+        print(f"DEBUG apply_modifications: Found {len(id_to_mpm)} meal plan meals, ids: {list(id_to_mpm.keys())}")
+    except Exception as e:
+        import traceback
+        print(f"DEBUG apply_modifications: Error creating id_to_mpm dictionary: {str(e)}")
+        print(f"DEBUG apply_modifications: Traceback: {traceback.format_exc()}")
+        raise
+
+    num_changes = 0
+    for slot in parsed_req.slots:
+        print(f"DEBUG apply_modifications: Processing slot with meal_plan_meal_id={slot.meal_plan_meal_id}, meal_name={slot.meal_name}, change_rules={slot.change_rules}")
+        
+        # Check if we need to skip this slot
+        if not slot.change_rules:
+            print(f"DEBUG apply_modifications: No change rules for slot {slot.meal_plan_meal_id}, skipping")
+            continue  # No change -> skip
+
+        try:
+            # Convert meal_plan_meal_id to int if it's a string
+            meal_id = int(slot.meal_plan_meal_id) if isinstance(slot.meal_plan_meal_id, str) else slot.meal_plan_meal_id
+            mpm = id_to_mpm.get(meal_id)
+        except Exception as e:
+            print(f"DEBUG apply_modifications: Error converting meal_plan_meal_id {slot.meal_plan_meal_id} to int: {str(e)}")
+            mpm = None
+
+        if not mpm:
+            logger.warning(
+                "[%s] Slot ID %s not found – skipping (parser error?)",
+                request_id,
+                slot.meal_plan_meal_id,
+            )
+            print(f"DEBUG apply_modifications: Meal plan meal with id {slot.meal_plan_meal_id} not found in dictionary")
+            continue
+
+        logger.info(
+            "[%s] Modifying %s (%s %s) with rules %s",
+            request_id,
+            mpm.meal.name,
+            mpm.day,
+            mpm.meal_type,
+            slot.change_rules,
+        )
+        print(f"DEBUG apply_modifications: About to call modify_existing_meal_plan for slot {mpm.id}")
+
+        try:
+            # Join change rules into a semicolon-separated string
+            rules_text = "; ".join(slot.change_rules)
+            print(f"DEBUG apply_modifications: Joined change_rules: {rules_text}")
+            
+            # Check if this meal should be removed without replacement
+            if slot.should_remove:
+                logger.info(
+                    "[%s] Meal %s (%s %s) marked for removal without replacement",
+                    request_id,
+                    mpm.meal.name,
+                    mpm.day,
+                    mpm.meal_type
+                )
+                print(f"DEBUG apply_modifications: Meal marked for removal: should_remove=True")
+            
+            modify_existing_meal_plan(
+                user=user,
+                meal_plan_id=meal_plan.id,
+                user_prompt=rules_text,
+                days_to_modify=[mpm.day],
+                prioritized_meals={mpm.day: [mpm.meal_type]},
+                request_id=request_id,
+                should_remove=slot.should_remove,  # Pass the should_remove flag
+            )
+            print(f"DEBUG apply_modifications: Successfully called modify_existing_meal_plan for slot {mpm.id}")
+            num_changes += 1
+        except Exception as e:
+            import traceback
+            print(f"DEBUG apply_modifications: Error in modify_existing_meal_plan for slot {mpm.id}: {str(e)}")
+            print(f"DEBUG apply_modifications: Traceback: {traceback.format_exc()}")
+            raise
+
+    # Re-analyse plan only once
+    if num_changes:
+        print(f"DEBUG apply_modifications: Made {num_changes} changes, about to call analyze_and_replace_meals")
+        try:
+            analyze_and_replace_meals(user, meal_plan, ["Breakfast", "Lunch", "Dinner"], request_id)
+            print(f"DEBUG apply_modifications: Successfully called analyze_and_replace_meals")
+        except Exception as e:
+            import traceback
+            print(f"DEBUG apply_modifications: Error in analyze_and_replace_meals: {str(e)}")
+            print(f"DEBUG apply_modifications: Traceback: {traceback.format_exc()}")
+            raise
+            
+        logger.info("[%s] Applied %d slot change(s) for MealPlan %s", request_id, num_changes, meal_plan.id)
+    else:
+        logger.info("[%s] No slot required changes – meal plan unchanged", request_id)
+        print(f"DEBUG apply_modifications: No changes were needed")
+    
+    print(f"DEBUG apply_modifications: Returning meal_plan with id={meal_plan.id}")
+    return meal_plan

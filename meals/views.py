@@ -60,6 +60,8 @@ from django.template.loader import render_to_string
 import time
 import html
 from django.contrib.postgres.fields import ArrayField
+from meals.meal_plan_service import apply_modifications
+import pytz
 
 
 logger = logging.getLogger(__name__)
@@ -1674,6 +1676,14 @@ def create_chef_meal_event(request):
     chef_meals = Meal.objects.filter(chef=chef)
     logger.debug(f"Found {chef_meals.count()} meals for chef {chef.id}")
     
+    # Get chef's timezone for context/validation
+    import pytz
+    chef_timezone = chef.user.timezone if hasattr(chef.user, 'timezone') else 'UTC'
+    try:
+        chef_tz = pytz.timezone(chef_timezone)
+    except pytz.exceptions.UnknownTimeZoneError:
+        chef_tz = pytz.UTC
+    
     if request.method == 'POST':
         # Get form data
         meal_id = request.POST.get('meal')
@@ -1692,11 +1702,43 @@ def create_chef_meal_event(request):
             # Validate form data
             meal = Meal.objects.get(id=meal_id, chef=chef)
             
-            # Convert cutoff time string to datetime
-            cutoff_datetime = timezone.datetime.strptime(
+            # Convert cutoff time string to datetime and make it timezone-aware
+            cutoff_datetime = datetime.strptime(
                 f"{event_date} {cutoff_time}", 
                 "%Y-%m-%d %H:%M"
             )
+            
+            # Assume cutoff time is in chef's timezone, localize it and convert to UTC for storage
+            cutoff_datetime = chef_tz.localize(cutoff_datetime)
+            cutoff_datetime_utc = cutoff_datetime.astimezone(timezone.utc)
+            
+            # Check if the event_date/time is in the future in chef's timezone
+            event_datetime = datetime.strptime(
+                f"{event_date} {event_time}", 
+                "%Y-%m-%d %H:%M"
+            )
+            event_datetime = chef_tz.localize(event_datetime)
+            
+            # Get current time in chef's timezone
+            now = timezone.now().astimezone(chef_tz)
+            
+            if event_datetime <= now:
+                messages.error(request, f"Event date and time must be in the future in your local timezone ({chef_timezone}).")
+                context = {
+                    'chef': chef,
+                    'chef_meals': chef_meals,
+                    'chef_timezone': chef_timezone,
+                }
+                return render(request, 'meals/create_chef_meal_event.html', context)
+                
+            if cutoff_datetime >= event_datetime:
+                messages.error(request, "Order cutoff time must be before the event time.")
+                context = {
+                    'chef': chef,
+                    'chef_meals': chef_meals,
+                    'chef_timezone': chef_timezone,
+                }
+                return render(request, 'meals/create_chef_meal_event.html', context)
             
             # Create the ChefMealEvent
             event = ChefMealEvent.objects.create(
@@ -1704,7 +1746,7 @@ def create_chef_meal_event(request):
                 meal=meal,
                 event_date=event_date,
                 event_time=event_time,
-                order_cutoff_time=cutoff_datetime,
+                order_cutoff_time=cutoff_datetime_utc,  # Store in UTC timezone
                 base_price=base_price,
                 current_price=base_price,  # Initially same as base price
                 min_price=min_price,
@@ -1715,7 +1757,7 @@ def create_chef_meal_event(request):
                 status='scheduled'
             )
             
-            messages.success(request, f"Meal event '{meal.name}' scheduled successfully for {event_date}.")
+            messages.success(request, f"Meal event '{meal.name}' scheduled successfully for {event_date} in your local timezone ({chef_timezone}).")
             return redirect('chef_meal_dashboard')
             
         except (Meal.DoesNotExist, ValueError) as e:
@@ -1724,6 +1766,7 @@ def create_chef_meal_event(request):
     context = {
         'chef': chef,
         'chef_meals': chef_meals,
+        'chef_timezone': chef_timezone,  # Add timezone to context
     }
     return render(request, 'meals/create_chef_meal_event.html', context)
 
@@ -1736,18 +1779,27 @@ def edit_chef_meal_event(request, event_id):
         logger.warning(f"User {request.user.id} tried to edit meal event but does not have a chef profile")
         messages.error(request, "You do not have a chef profile.")
         return redirect('home')
-    except ChefMealEvent.DoesNotExist:
-        messages.error(request, "Meal event not found.")
-        return redirect('chef_meal_dashboard')
     
     event = get_object_or_404(ChefMealEvent, id=event_id, chef=chef)
-    # Check if event can be edited (not too close to event date or has orders)
-    now = timezone.now()
-    cutoff = timezone.datetime.combine(event.event_date, event.event_time, tzinfo=timezone.get_current_timezone()) - timezone.timedelta(hours=24)
     
-    if now > cutoff:
-        messages.error(request, "This event is too close to its scheduled date and cannot be edited.")
-        return redirect('chef_meal_dashboard')
+    # Get chef's timezone for context/validation
+    import pytz
+    chef_timezone = chef.user.timezone if hasattr(chef.user, 'timezone') else 'UTC'
+    try:
+        chef_tz = pytz.timezone(chef_timezone)
+    except pytz.exceptions.UnknownTimeZoneError:
+        chef_tz = pytz.UTC
+    
+    # Check if event can be edited (not too close to event date or has orders)
+    now = timezone.now().astimezone(chef_tz)
+    
+    # Convert event_datetime to chef's timezone for comparison
+    event_datetime = event.get_event_datetime()
+    if event_datetime:
+        # Check if the event is within 24 hours
+        if now + timezone.timedelta(hours=24) >= event_datetime:
+            messages.error(request, f"This event is too close to its scheduled date and cannot be edited (within 24 hours in your timezone: {chef_timezone}).")
+            return redirect('chef_meal_dashboard')
     
     if event.orders_count > 0:
         messages.warning(request, "This event has orders. Some fields cannot be modified.")
@@ -1776,28 +1828,54 @@ def edit_chef_meal_event(request, event_id):
             if float(base_price) != float(event.base_price):
                 event.current_price = base_price
         
-        # Convert cutoff time string to datetime
-        cutoff_datetime = timezone.datetime.strptime(
-            f"{event_date} {cutoff_time}", 
-            "%Y-%m-%d %H:%M"
-        )
-        
-        # Update the event
-        event.event_date = event_date
-        event.event_time = event_time
-        event.order_cutoff_time = cutoff_datetime
-        event.description = description
-        event.special_instructions = special_instructions
-        event.save()
-        
-        messages.success(request, f"Meal event updated successfully.")
-        return redirect('chef_meal_dashboard')
+        try:
+            # Convert cutoff time string to datetime in chef's timezone
+            cutoff_datetime = datetime.strptime(
+                f"{event_date} {cutoff_time}", 
+                "%Y-%m-%d %H:%M"
+            )
+            
+            # Localize to chef's timezone and convert to UTC for storage
+            cutoff_datetime = chef_tz.localize(cutoff_datetime)
+            cutoff_datetime_utc = cutoff_datetime.astimezone(timezone.utc)
+            
+            # Create event datetime in chef's timezone
+            event_datetime = datetime.strptime(
+                f"{event_date} {event_time}", 
+                "%Y-%m-%d %H:%M"
+            )
+            event_datetime = chef_tz.localize(event_datetime)
+            
+            # Validate cutoff is before event time
+            if cutoff_datetime >= event_datetime:
+                messages.error(request, "Order cutoff time must be before the event time.")
+                context = {
+                    'chef': chef,
+                    'event': event,
+                    'has_orders': event.orders_count > 0,
+                    'chef_timezone': chef_timezone,
+                }
+                return render(request, 'meals/edit_chef_meal_event.html', context)
+            
+            # Update the event
+            event.event_date = event_date
+            event.event_time = event_time
+            event.order_cutoff_time = cutoff_datetime_utc
+            event.description = description
+            event.special_instructions = special_instructions
+            event.save()
+            
+            messages.success(request, f"Meal event updated successfully in your local timezone ({chef_timezone}).")
+            return redirect('chef_meal_dashboard')
+        except ValueError as e:
+            messages.error(request, f"Error updating meal event: {str(e)}")
     
     # Pre-populate the form
     context = {
         'chef': chef,
         'event': event,
         'has_orders': event.orders_count > 0,
+        'chef_timezone': chef_timezone,
     }
     return render(request, 'meals/edit_chef_meal_event.html', context)
 
@@ -1843,26 +1921,18 @@ def cancel_chef_meal_event(request, event_id):
                 action='refund',
                 amount=order.price_paid * order.quantity,
                 status='pending',
-                details={
-                    'cancellation_reason': reason,
-                    'cancelled_by': 'chef',
-                    'event_id': event.id,
-                    'event_name': event.meal.name
-                }
+                details={'reason': reason or 'Chef cancelled event'}
             )
         
-        # TODO: Send email notifications to customers
-        
-        messages.success(request, f"Meal event '{event.meal.name}' has been cancelled.")
+        messages.success(request, f"Meal event cancelled successfully. {orders.count()} orders have been cancelled.")
         return redirect('chef_meal_dashboard')
     
     context = {
-        'chef': chef,
         'event': event,
+        'orders_count': event.orders_count,
     }
     return render(request, 'meals/cancel_chef_meal_event.html', context)
 
-# Customer-facing views for chef meals
 @login_required
 def browse_chef_meals(request):
     """Browse available chef meal events"""
@@ -2958,8 +3028,8 @@ def api_stripe_webhook(request):
                         chef_order.mark_as_paid()
                         
                         # Update payment details
-                        chef_order.stripe_payment_intent_id = session.payment_intent
-                        chef_order.save(update_fields=['stripe_payment_intent_id'])
+                        chef_order.payment_intent_id = session.payment_intent
+                        chef_order.save(update_fields=['payment_intent_id'])
                         
                         logger.info(f"Updated ChefMealOrder {chef_order.id} to confirmed status and updated meal counts")
                         
@@ -2994,7 +3064,7 @@ def api_stripe_webhook(request):
         
         # Check if this is for a chef meal order
         try:
-            chef_meal_order = ChefMealOrder.objects.get(stripe_payment_intent_id=payment_intent.id)
+            chef_meal_order = ChefMealOrder.objects.get(payment_intent_id=payment_intent.id)
             logger.info(f"Found chef meal order {chef_meal_order.id} for payment {payment_intent.id}")
             
             # Use mark_as_paid to update order status and pricing
@@ -3697,7 +3767,7 @@ def payment_success(request):
                     for chef_order in chef_meal_orders:
                         if chef_order.status == 'placed':
                             chef_order.status = STATUS_CONFIRMED
-                            chef_order.stripe_payment_intent_id = session.payment_intent
+                            chef_order.payment_intent_id = session.payment_intent
                             chef_order.save()
                             logger.info(f"Updated ChefMealOrder {chef_order.id} to confirmed status")
                             
@@ -3747,5 +3817,106 @@ def payment_success(request):
         return Response(
             {"success": False, "message": "An unexpected error occurred"}, 
             status=500
+        )
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_modify_meal_plan(request, meal_plan_id):
+    """
+    API endpoint to modify an existing meal plan using free-form text input.
+    
+    POST data:
+    - prompt (str): Free-form text describing the changes to make to the meal plan
+    
+    Returns:
+    - JSON data with meal plan details and status message
+    """
+    try:
+        print(f"DEBUG api_modify_meal_plan: Starting with meal_plan_id={meal_plan_id}, user={request.user.username}")
+        
+        # Get the meal plan and ensure it belongs to the requesting user
+        meal_plan = MealPlan.objects.get(id=meal_plan_id, user=request.user)
+        print(f"DEBUG api_modify_meal_plan: Found meal_plan with id={meal_plan.id}")
+        
+        # Get the prompt from the request data
+        prompt = request.data.get('prompt')
+        print(f"DEBUG api_modify_meal_plan: Got prompt: {prompt}")
+        
+        if not prompt:
+            print(f"DEBUG api_modify_meal_plan: No prompt provided, returning 400")
+            return Response(
+                {"error": "Prompt is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Generate a request_id for tracing
+        request_id = str(uuid.uuid4())
+        print(f"DEBUG api_modify_meal_plan: Generated request_id={request_id}")
+        
+        try:
+            # Apply the modifications
+            updated_meal_plan = apply_modifications(
+                user=request.user,
+                meal_plan=meal_plan,
+                raw_prompt=prompt,
+                request_id=request_id
+            )
+            print(f"DEBUG api_modify_meal_plan: Successfully applied modifications to meal_plan={updated_meal_plan.id}")
+        except Exception as e:
+            import traceback
+            print(f"DEBUG api_modify_meal_plan: Error in apply_modifications: {str(e)}")
+            print(f"DEBUG api_modify_meal_plan: Traceback: {traceback.format_exc()}")
+            raise  # Re-raise for the outer try/except block
+        
+        try:
+            # Fetch the updated meal plan meals to return in the response
+            meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=updated_meal_plan).select_related('meal')
+            print(f"DEBUG api_modify_meal_plan: Found {meal_plan_meals.count()} meals in updated plan")
+            
+            # Format the response data
+            meals_data = []
+            for mpm in meal_plan_meals:
+                try:
+                    is_chef = mpm.meal.is_chef_created() if hasattr(mpm.meal, 'is_chef_created') else False
+                    meals_data.append({
+                        "id": mpm.id,
+                        "day": mpm.day,
+                        "meal_type": mpm.meal_type,
+                        "meal_name": mpm.meal.name,
+                        "meal_description": mpm.meal.description,
+                        "is_chef_meal": is_chef,
+                    })
+                except Exception as meal_err:
+                    print(f"DEBUG api_modify_meal_plan: Error processing meal {mpm.id}: {str(meal_err)}")
+            
+            response_data = {
+                "status": "success",
+                "message": "Meal plan updated successfully",
+                "meal_plan_id": updated_meal_plan.id,
+                "meals": meals_data
+            }
+            
+            print(f"DEBUG api_modify_meal_plan: Returning success response with {len(meals_data)} meals")
+            return Response(response_data, status=status.HTTP_200_OK)
+        except Exception as format_err:
+            import traceback
+            print(f"DEBUG api_modify_meal_plan: Error formatting response: {str(format_err)}")
+            print(f"DEBUG api_modify_meal_plan: Traceback: {traceback.format_exc()}")
+            raise  # Re-raise for the outer try/except block
+    
+    except MealPlan.DoesNotExist:
+        print(f"DEBUG api_modify_meal_plan: Meal plan {meal_plan_id} not found for user {request.user.id}")
+        return Response(
+            {"error": "Meal plan not found or does not belong to you"}, 
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        import traceback
+        print(f"DEBUG api_modify_meal_plan: Error: {str(e)}")
+        print(f"DEBUG api_modify_meal_plan: Traceback: {traceback.format_exc()}")
+        logger.error(f"Error modifying meal plan: {str(e)}")
+        return Response(
+            {"error": f"Failed to modify meal plan: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 

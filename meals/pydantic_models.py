@@ -124,16 +124,40 @@ class PantryUsageItem(BaseModel):
     )
     notes: Optional[str] = Field(..., description="Any special notes about usage.")
 
+# Define a Pydantic model for pantry item extraction
+class PantryItemSchema(BaseModel):
+    item_name: str = Field(..., description="The name of the pantry item")
+    quantity: int = Field(1, description="The count/number of items (integer)")
+    expiration_date: Optional[str] = Field(None, description="The expiration date in format YYYY-MM-DD, MM/DD/YYYY, or similar")
+    item_type: str = Field("Canned", description="Either 'Canned' or 'Dry'")
+    notes: Optional[str] = Field(None, description="Additional notes about the item")
+    weight_per_unit: Optional[float] = Field(None, description="Weight or volume per unit, e.g. 2.0 for 2 liters or 16.0 for 16 ounces")
+    weight_unit: Optional[str] = Field(None, description="Unit of measurement: 'oz', 'lb', 'g', or 'kg'")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "item_name": "Black Beans",
+                "quantity": 3,
+                "expiration_date": "2025-12-31",
+                "item_type": "Canned",
+                "notes": "Organic, low sodium",
+                "weight_per_unit": 15.5,
+                "weight_unit": "oz"
+            }
+        }
+        
 class ShoppingListItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
     meal_name: str
     ingredient: str
     quantity: str
     unit: str
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(..., description="Any special notes about the item.")
     category: str = Field(..., description="Category of the item.")
 
 class ShoppingList(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     items: List[ShoppingListItem]
 
 class InstructionStep(BaseModel):
@@ -203,6 +227,14 @@ class MealPlanSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
     meals: List[MealPlanMeal]
 
+class MealCompatibility(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    is_compatible: bool = Field(..., description="True if the meal fits every user preference")
+    violations: list[str] = Field(...,
+        description="Human-readable list of each preference it violated")
+    confidence: float = Field(...,
+        description="Model confidence that its judgement is correct, ge=0, le=1")
+    
 class MealToReplace(BaseModel):
     model_config = ConfigDict(extra="forbid")
     meal_id: int = Field(..., description="ID of the meal to be replaced")
@@ -582,3 +614,88 @@ class UsageList(BaseModel):
                 }
             ]
         }
+
+# YouTube Video Ranking Models
+class VideoRankingItem(BaseModel):
+    """Individual video ranking information."""
+    model_config = ConfigDict(extra="forbid")
+    
+    video_id: str = Field(..., description="YouTube video ID")
+    relevance_score: float = Field(..., description="Relevance score (0-10)")
+    relevance_explanation: str = Field(..., description="Explanation of why the video is relevant")
+    matching_ingredients: List[str] = Field(
+        ...,
+        description="List of ingredients mentioned in the video that match the meal"
+    )
+    matching_techniques: List[str] = Field(
+        ...,
+        description="List of cooking techniques mentioned in the video that match the meal"
+    )
+    recommended: bool = Field(
+        ..., 
+        description="Whether this video is recommended for the meal"
+    )
+
+class VideoRankings(BaseModel):
+    """Top-level container for video rankings."""
+    model_config = ConfigDict(extra="forbid")
+    
+    ranked_videos: List[VideoRankingItem] = Field(
+        ...,
+        description="List of videos ranked by relevance to the meal"
+    )
+
+# -------------------------------------------------
+# Atomic meal-plan change – structured-output schema
+# -------------------------------------------------
+class MealSlotDirective(BaseModel):
+    """Instruction set for ONE MealPlanMeal row."""
+    model_config = ConfigDict(extra="forbid")
+    meal_plan_meal_id: int = Field(..., description="PK of MealPlanMeal to examine")
+    meal_name: str = Field(..., description="Human-readable meal name")
+    change_rules: List[str] = Field(
+        ...,
+        description=(
+            "List of directives for this slot – e.g. "
+            "'vegan', 'no rice', 'specific:pancakes'. "
+            "Empty array ⇒ leave slot untouched."
+        ),
+    )
+    should_remove: bool = Field(
+        ...,
+        description=(
+            "Set to true if the meal should be completely removed without being replaced. "
+            "This is used when the user explicitly wants to remove a meal rather than modify it."
+        ),
+    )
+
+class MealPlanModificationRequest(BaseModel):
+    """Top-level structured output expected from the parser Assistant."""
+    model_config = ConfigDict(extra="forbid")
+    slots: List[MealSlotDirective]
+
+# --- User-prompt → slot map ---------------------------------
+class PromptedSlot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    day: str = Field(..., description="^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)$")
+    meal_type: MealType  # reuse existing Enum
+    notes: Optional[str] = Field(
+        ..., description="Optional extra info extracted from the prompt."
+    )
+
+class PromptMealMap(BaseModel):
+    """
+    Parsed intent extracted from a free-text user prompt.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    user_prompt: str
+    slots: List[PromptedSlot] = Field(..., description="List of meal slots to plan")
+
+# Payment processing
+class PaymentInfoSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    checkout_url: str = Field(..., description="Checkout URL")
+    session_id: str = Field(..., description="Stripe session ID")
+    html_button: str = Field(..., description="HTML button containing the full checkout url")

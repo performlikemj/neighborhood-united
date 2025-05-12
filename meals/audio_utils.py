@@ -10,7 +10,7 @@ import tempfile
 from datetime import datetime
 from typing import Dict, Optional, Tuple, Any, List
 from decimal import Decimal
-
+from meals.pydantic_models import PantryItemSchema
 from django.conf import settings
 from openai import OpenAI
 from pydantic import BaseModel, Field
@@ -21,28 +21,7 @@ logger = logging.getLogger(__name__)
 OPENAI_API_KEY = settings.OPENAI_KEY
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Define a Pydantic model for pantry item extraction
-class PantryItemSchema(BaseModel):
-    item_name: str = Field(..., description="The name of the pantry item")
-    quantity: int = Field(1, description="The count/number of items (integer)")
-    expiration_date: Optional[str] = Field(None, description="The expiration date in format YYYY-MM-DD, MM/DD/YYYY, or similar")
-    item_type: str = Field("Canned", description="Either 'Canned' or 'Dry'")
-    notes: Optional[str] = Field(None, description="Additional notes about the item")
-    weight_per_unit: Optional[float] = Field(None, description="Weight or volume per unit, e.g. 2.0 for 2 liters or 16.0 for 16 ounces")
-    weight_unit: Optional[str] = Field(None, description="Unit of measurement: 'oz', 'lb', 'g', or 'kg'")
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "item_name": "Black Beans",
-                "quantity": 3,
-                "expiration_date": "2025-12-31",
-                "item_type": "Canned",
-                "notes": "Organic, low sodium",
-                "weight_per_unit": 15.5,
-                "weight_unit": "oz"
-            }
-        }
 
 def transcribe_audio(audio_file) -> str:
     """
@@ -105,16 +84,50 @@ def extract_pantry_item_info(transcription: str) -> Dict[str, Any]:
         response = client.responses.create(
             model="gpt-4.1-mini",
             input=[
-                {"role": "system", "content": """Extract pantry item information from the user's audio description.
-                
-                For weight_unit, map units as follows:
-                - ounces, oz → 'oz'
-                - pounds, lbs → 'lb'
-                - grams → 'g'
-                - kilograms, kg → 'kg'
-                - liters, L → 'kg' (approximate 1L = 1kg)
-                - milliliters, mL → 'g' (approximate 1mL = 1g)
-                """},
+                {"role": "developer", "content": ("""
+                 # Identity
+
+                    You are an assistant that helps the user convert the user's audio input into pantry item information. Identify the weight and the corresponding unit, then convert the unit into a standardized format using specific mappings.
+
+                    - **Weight Unit Conversion**: 
+                    - Convert and map the units as follows:
+                        - "ounces" or "oz" to `'oz'`
+                        - "pounds" or "lbs" to `'lb'`
+                        - "grams" to `'g'`
+                        - "kilograms" or "kg" to `'kg'`
+                        - "liters" or "L" approximately to `'kg'` (1L ≈ 1kg)
+                        - "milliliters" or "mL" approximately to `'g'` (1mL ≈ 1g)
+
+                    # Instructions
+
+                    1. **Identify Item Information**: 
+                    - Listen to or transcribe the user's audio to extract pantry item details such as item name, quantity, and weight.
+                    2. **Standardize Units**:
+                    - Use the mappings above to standardize the units of measurement.
+                    3. **Provide Output**:
+                    - Clearly list out the pantry item information including the standardized weight unit.
+
+                    # Output Format
+
+                    Produce the output in a structured JSON format as follows:
+                    ```json
+                    {
+                    "item_name": "placeholder_name",
+                    "quantity": "placeholder_quantity",
+                    "expiration_date": "placeholder_date",
+                    "item_type": Canned/Dry,
+                    "notes": "placeholder_notes",
+                    "weight_per_unit": "placeholder_weight",
+                    "weight_unit": oz/lbs/g etc.
+                    }
+                    ```
+
+                    # Notes
+
+                    - Ensure accurate extraction of item names and quantities.
+                    - The standardization of units is based on approximate conversions for liters and milliliters.
+                    - This task assumes ideal conditions where audio correctly translates into transcribable text.
+                """)},
                 {"role": "user", "content": transcription}
             ],
             text={

@@ -52,7 +52,7 @@ def get_macro_info(meal_name: str, meal_description: str, ingredients: List[str]
         response = client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=[
-                {"role": "system", "content": "You are a nutritionist who provides accurate macro information for meals."},
+                {"role": "developer", "content": "You are a nutritionist who provides accurate macro information for meals."},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"}
@@ -123,7 +123,7 @@ def find_youtube_videos(meal_name: str, meal_description: str) -> Dict[str, Any]
         response = client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=[
-                {"role": "system", "content": "You are a helpful assistant that finds cooking videos."},
+                {"role": "developer", "content": "You are a helpful assistant that finds cooking videos."},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"}

@@ -43,6 +43,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
+import pytz
 
 
 logger = logging.getLogger(__name__)
@@ -545,14 +546,14 @@ def api_confirm_chef_meal_order(request, order_id):
             chef_meal_order.save()
             
             # Create payment log if it doesn't exist and if there's a payment intent
-            if order_meal.stripe_payment_intent_id and not PaymentLog.objects.filter(chef_meal_order=chef_meal_order, stripe_id=order_meal.stripe_payment_intent_id).exists():
+            if order_meal.payment_intent_id and not PaymentLog.objects.filter(chef_meal_order=chef_meal_order, stripe_id=order_meal.payment_intent_id).exists():
                 PaymentLog.objects.create(
                     chef_meal_order=chef_meal_order,
                     user=order_meal.customer,
                     chef=chef_meal_order.meal_event.chef,
                     action='charge',
                     amount=float(order_meal.price_paid) * order_meal.quantity,
-                    stripe_id=order_meal.stripe_payment_intent_id or '',
+                    stripe_id=order_meal.payment_intent_id or '',
                     status='succeeded',
                     details={'confirmed_by_chef': True}
                 )
@@ -664,8 +665,8 @@ def stripe_webhook(request):
                     order.mark_as_paid()
                     
                     # Update Stripe payment details
-                    order.stripe_payment_intent_id = session.payment_intent
-                    order.save(update_fields=['stripe_payment_intent_id'])
+                    order.payment_intent_id = session.payment_intent
+                    order.save(update_fields=['payment_intent_id'])
                     
                     # Update corresponding Order if it exists
                     if order.order:
@@ -726,8 +727,8 @@ def stripe_webhook(request):
                         chef_order.mark_as_paid()
                         
                         # Update Stripe payment details
-                        chef_order.stripe_payment_intent_id = session.payment_intent
-                        chef_order.save(update_fields=['stripe_payment_intent_id'])
+                        chef_order.payment_intent_id = session.payment_intent
+                        chef_order.save(update_fields=['payment_intent_id'])
                         
                         logger.info(f"Updated ChefMealOrder {chef_order.id} to confirmed status and updated meal counts")
                     
@@ -764,7 +765,7 @@ def stripe_webhook(request):
             logger.info(f"Payment intent succeeded: {payment_intent.id}")
             
             # Check if we have any orders with this payment intent
-            chef_meal_orders = ChefMealOrder.objects.filter(stripe_payment_intent_id=payment_intent.id)
+            chef_meal_orders = ChefMealOrder.objects.filter(payment_intent_id=payment_intent.id)
             
             if chef_meal_orders.exists():
                 for order in chef_meal_orders:
@@ -829,12 +830,9 @@ def api_chef_meal_events(request):
             queryset = ChefMealEvent.objects.all()
             
             # Filter by chef if we're looking at chef's own events
-            if request.query_params.get('my_events') == 'true':
-                try:
-                    chef = Chef.objects.get(user=user)
-                    queryset = queryset.filter(chef=chef)
-                except Chef.DoesNotExist:
-                    queryset = ChefMealEvent.objects.none()
+            chef = Chef.objects.get(user=user)
+            queryset = queryset.filter(chef=chef)
+
 
             # Filter by postal code if provided
             postal_code = request.query_params.get('postal_code')
@@ -941,30 +939,54 @@ def api_chef_meal_events(request):
             event_date = datetime.strptime(data['event_date'], '%Y-%m-%d').date()
             event_time = datetime.strptime(data['event_time'], '%H:%M').time()
             
-            event_datetime = datetime.combine(event_date, event_time)
-            # Make event_datetime timezone-aware by attaching the current timezone
-            event_datetime = timezone.make_aware(event_datetime)
-            now = timezone.now()
+            # Get the chef's timezone
+            chef_timezone = chef.user.timezone if hasattr(chef.user, 'timezone') else 'UTC'
+            try:
+                chef_tz = pytz.timezone(chef_timezone)
+            except pytz.exceptions.UnknownTimeZoneError:
+                chef_tz = pytz.UTC
+                
+            # Get current time in chef's timezone
+            now = timezone.now().astimezone(chef_tz)
             
+            # Create event datetime in chef's timezone
+            event_datetime = datetime.combine(event_date, event_time)
+            event_datetime = chef_tz.localize(event_datetime)
+            
+            # Compare with current time in chef's timezone
             if event_datetime <= now:
                 return standardize_response(
                     status="error",
-                    message="Event date and time must be in the future.",
+                    message=f"Event date and time must be in the future in your local timezone ({chef_timezone}).",
                     status_code=400
                 )
                 
-            # Validate order cutoff time is before event time
+            # Parse and validate order cutoff time in chef's timezone
             order_cutoff_time = dateutil.parser.parse(data['order_cutoff_time'])
-            # Ensure order_cutoff_time is also timezone-aware for proper comparison
-            if not timezone.is_aware(order_cutoff_time):
-                order_cutoff_time = timezone.make_aware(order_cutoff_time)
             
+            # If cutoff time is naive, assume it's in chef's timezone
+            if not timezone.is_aware(order_cutoff_time):
+                order_cutoff_time = chef_tz.localize(order_cutoff_time)
+            
+            # Compare with event time in chef's timezone
             if order_cutoff_time >= event_datetime:
                 return standardize_response(
                     status="error",
                     message="Order cutoff time must be before the event time.",
                     status_code=400
                 )
+                
+            # Also check cutoff time is in the future
+            if order_cutoff_time <= now:
+                return standardize_response(
+                    status="error",
+                    message=f"Order cutoff time must be in the future in your local timezone ({chef_timezone}).",
+                    status_code=400
+                )
+                
+            # Convert order_cutoff_time to UTC for storage
+            order_cutoff_time = order_cutoff_time.astimezone(timezone.utc)
+            
         except ValueError:
             return standardize_response(
                 status="error",
@@ -1030,14 +1052,14 @@ def api_chef_meal_events(request):
                 meal=meal,
                 event_date=event_date,
                 event_time=event_time,
-                order_cutoff_time=order_cutoff_time,  # Use the already parsed and timezone-aware value
+                order_cutoff_time=order_cutoff_time,  # Use the UTC value for storage
                 base_price=data['base_price'],
                 min_price=data['min_price'],
                 max_orders=data['max_orders'],
                 min_orders=data['min_orders'],
                 description=data['description'],
                 special_instructions=data.get('special_instructions', ''),
-                status=data.get('status', 'scheduled'),
+                status=data.get('status', STATUS_SCHEDULED),
                 current_price=data['base_price']  # Initialize current price to base price
             )
             
@@ -1173,15 +1195,15 @@ def api_cancel_chef_meal_event(request, event_id):
 
                 
                 # Process refunds if payment was made
-                if order.stripe_payment_intent_id:
+                if order.payment_intent_id:
 
                     try:
                         # Create a refund in Stripe
                         stripe.api_key = settings.STRIPE_SECRET_KEY
-                        if order.stripe_payment_intent_id:
+                        if order.payment_intent_id:
 
                             refund = stripe.Refund.create(
-                                payment_intent=order.stripe_payment_intent_id
+                                payment_intent=order.payment_intent_id
                             )
                             order.refund_id = refund.id
                             order.refund_status = 'processed'
@@ -1250,7 +1272,7 @@ def api_get_meals(request):
     logger.info(f"Request data: {request.query_params}")
     try:
         user = request.user
-        
+        print(f"User: {user} and Username: {user.username}")
         # Default behavior: return chef's own meals
         try:
             chef = Chef.objects.get(user=user)
@@ -1299,6 +1321,8 @@ def api_create_chef_meal(request):
     - dietary_preferences: List, dietary preferences related to the meal
     - custom_dietary_preferences: List, custom dietary preferences
     """
+    print(f"Request from api_create_chef_meal: {request.data}")
+    print(f"Request from api_create_chef_meal: {request.user}")
     # Verify the user is a chef
     try:
         chef = request.user.chef
@@ -1364,15 +1388,10 @@ def api_create_chef_meal(request):
         
         # Call create_meal with chef-specific parameters, but skip compatibility analysis for now
         result = create_meal(
-            request=request,
             user_id=request.user.id,
             name=data['name'],
             description=data['description'],
             meal_type=data['meal_type'],
-            dietary_preference=dietary_prefs,
-            is_chef_meal=True,  # Flag this as a chef meal
-            chef=chef,
-            price=data['price'],
         )
         
         if result['status'] != 'success':
@@ -1384,21 +1403,27 @@ def api_create_chef_meal(request):
         
         # Get the created meal
         meal = Meal.objects.get(id=result['meal']['id'])
-        
+        meal.chef = chef
+        meal.price = data['price']
         # Use a transaction to handle the many-to-many relationships
         with transaction.atomic():
             # Set many-to-many relationships
             if dish_ids:
                 meal.dishes.set(dish_ids)
             if dietary_prefs:
-                meal.dietary_preferences.set(dietary_prefs)
+                # Ensure dietary_prefs is always a list/iterable
+                if isinstance(dietary_prefs, int):
+                    meal.dietary_preferences.set([dietary_prefs])
+                else:
+                    meal.dietary_preferences.set(dietary_prefs)
             if custom_prefs:
                 meal.custom_dietary_preferences.set(custom_prefs)
             
             # Attach image if provided
             if 'image' in request.FILES:
                 meal.image = request.FILES['image']
-                meal.save()
+        
+        meal.save()
         
         # Generate and store meal embedding
         from meals.meal_embedding import prepare_meal_representation
@@ -1442,7 +1467,7 @@ def api_create_chef_meal(request):
         traceback.print_exc()
         return standardize_response(
             status="error",
-            message=f"Error creating meal: {str(e)}",
+            message=f"Error creating meal. We will look into it and get back to you. Apologies for the inconvenience.",
             status_code=400
         )
 
@@ -2654,19 +2679,33 @@ def api_update_chef_meal_event(request, event_id):
             
             if 'order_cutoff_time' in data:
                 try:
+                    # Get the chef's timezone
+                    chef_timezone = event.chef.user.timezone if hasattr(event.chef.user, 'timezone') else 'UTC'
+                    try:
+                        chef_tz = pytz.timezone(chef_timezone)
+                    except pytz.exceptions.UnknownTimeZoneError:
+                        chef_tz = pytz.UTC
+                    
+                    # Parse the cutoff time
                     order_cutoff_time = dateutil.parser.parse(data['order_cutoff_time'])
+                    
+                    # If cutoff time is naive, assume it's in chef's timezone
                     if not timezone.is_aware(order_cutoff_time):
-                        order_cutoff_time = timezone.make_aware(order_cutoff_time)
+                        order_cutoff_time = chef_tz.localize(order_cutoff_time)
+                    
+                    # Get current time in chef's timezone    
+                    now = timezone.now().astimezone(chef_tz)
                     
                     # Ensure the new cutoff time is still in the future
-                    if order_cutoff_time <= timezone.now():
+                    if order_cutoff_time <= now:
                         return standardize_response(
                             status="error",
-                            message="Order cutoff time must be in the future.",
+                            message=f"Order cutoff time must be in the future in your local timezone ({chef_timezone}).",
                             status_code=400
                         )
-                        
-                    event.order_cutoff_time = order_cutoff_time
+                    
+                    # Convert to UTC for storage
+                    event.order_cutoff_time = order_cutoff_time.astimezone(timezone.utc)
                 except ValueError:
                     return standardize_response(
                         status="error",
@@ -2678,28 +2717,22 @@ def api_update_chef_meal_event(request, event_id):
             # Construct event_datetime using potentially updated event_date/event_time
             current_event_date = event.event_date
             current_event_time = event.event_time
-            if 'event_date' in data: # Use the date potentially being updated
-                 try:
-                    current_event_date = datetime.strptime(data['event_date'], '%Y-%m-%d').date()
-                 except ValueError:
-                    # This error would have been caught earlier, but double-check
-                     pass 
-            if 'event_time' in data: # Use the time potentially being updated
-                try:
-                    current_event_time = datetime.strptime(data['event_time'], '%H:%M').time()
-                except ValueError:
-                    # This error would have been caught earlier, but double-check
-                    pass
-
+            
+            # Get chef's timezone for validation
+            chef_timezone = event.chef.user.timezone if hasattr(event.chef.user, 'timezone') else 'UTC'
+            try:
+                chef_tz = pytz.timezone(chef_timezone)
+            except pytz.exceptions.UnknownTimeZoneError:
+                chef_tz = pytz.UTC
+            
+            # Create event datetime in chef's timezone
             event_datetime = datetime.combine(current_event_date, current_event_time)
-            event_datetime = timezone.make_aware(event_datetime) # Ensure it's timezone-aware
-
-            # Use the potentially updated order_cutoff_time for comparison
-            current_order_cutoff_time = event.order_cutoff_time
-            if 'order_cutoff_time' in data and 'order_cutoff_time' in locals() : # Check if we just updated it
-                 current_order_cutoff_time = order_cutoff_time
-
-            if current_order_cutoff_time >= event_datetime:
+            event_datetime = chef_tz.localize(event_datetime)
+            
+            # Compare with cutoff time in chef's timezone
+            cutoff_time = event.order_cutoff_time.astimezone(chef_tz)
+            
+            if cutoff_time >= event_datetime:
                 return standardize_response(
                     status="error",
                     message="Order cutoff time must be before the event time.",
@@ -3202,7 +3235,7 @@ def sync_recent_payments(chef):
                             # Find associated order
                             try:
                                 # For direct chef meal orders
-                                order = ChefMealOrder.objects.get(stripe_payment_intent_id=payment.id)
+                                order = ChefMealOrder.objects.get(payment_intent_id=payment.id)
                                 print(f"Found order {order.id} for payment {payment.id}")
                                 # Log the payment
                                 PaymentLog.objects.create(
@@ -3299,7 +3332,7 @@ def payment_success(request):
                         
                         # Update order status
                         chef_order.status = STATUS_CONFIRMED
-                        chef_order.stripe_payment_intent_id = session.payment_intent
+                        chef_order.payment_intent_id = session.payment_intent
                         chef_order.save()
                         
                         # Update corresponding Order if it exists
@@ -3376,7 +3409,7 @@ def payment_success(request):
                         for chef_order in chef_meal_orders:
                             if chef_order.status == STATUS_PLACED:
                                 chef_order.status = STATUS_CONFIRMED
-                                chef_order.stripe_payment_intent_id = session.payment_intent
+                                chef_order.payment_intent_id = session.payment_intent
                                 chef_order.save()
                                 logger.info(f"Updated ChefMealOrder {chef_order.id} to confirmed status in success redirect")
                                 
@@ -3565,3 +3598,239 @@ def api_debug_order_info(request, order_id):
         import traceback
         logger.error(traceback.format_exc())
         return Response({"error": str(e)}, status=500)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_create_chef_meal_order(request, event_id):
+    """
+    Create a new chef meal order for a specific event.
+    Uses the new order_service with idempotency support.
+    
+    Request body should include:
+    - quantity: Integer (required)
+    - special_requests: String (optional)
+    """
+    from meals.models import ChefMealEvent, ChefMealOrder
+    from meals.services.order_service import create_order
+    import json
+    
+    try:
+        # Get the event
+        event = get_object_or_404(ChefMealEvent, id=event_id)
+        
+        # Validate quantity
+        try:
+            quantity = int(request.data.get('quantity', 1))
+            if quantity < 1:
+                return Response(
+                    {"error": "Quantity must be at least 1"},
+                    status=400
+                )
+        except (ValueError, TypeError):
+            return Response(
+                {"error": "Invalid quantity format"},
+                status=400
+            )
+        
+        # Get optional fields
+        special_requests = request.data.get('special_requests', '')
+        
+        # Check for idempotency key in headers
+        idempotency_key = request.headers.get('Idempotency-Key')
+        if not idempotency_key:
+            # Generate one if not provided
+            import uuid
+            idempotency_key = f"order_{event_id}_{request.user.id}_{uuid.uuid4()}"
+        
+        try:
+            # Create the order using the service
+            order = create_order(
+                user=request.user,
+                event=event,
+                qty=quantity,
+                idem_key=idempotency_key
+            )
+            
+            # Update special requests if provided
+            if special_requests:
+                order.special_requests = special_requests
+                order.save(update_fields=['special_requests'])
+            
+            # Return the created order
+            from meals.serializers import ChefMealOrderSerializer
+            serializer = ChefMealOrderSerializer(order)
+            return Response(serializer.data, status=201)
+            
+        except ValueError as e:
+            # Handle validation errors from the service
+            return Response(
+                {"error": str(e)},
+                status=409 if "already exists" in str(e).lower() else 400
+            )
+        except Exception as e:
+            # Log the error and return a generic message
+            logger.error(f"Error creating chef meal order: {str(e)}")
+            return Response(
+                {"error": "Failed to create order"},
+                status=500
+            )
+    
+    except Exception as e:
+        logger.error(f"Unexpected error in api_create_chef_meal_order: {str(e)}")
+        return Response(
+            {"error": "An unexpected error occurred"},
+            status=500
+        )
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def api_adjust_chef_meal_quantity(request, order_id):
+    """
+    Adjust the quantity of an existing chef meal order.
+    Uses the new order_service with idempotency support.
+    
+    Request body should include:
+    - quantity: Integer (required)
+    """
+    from meals.models import ChefMealOrder
+    from meals.services.order_service import adjust_quantity
+    
+    try:
+        # Get the order and verify ownership
+        order = get_object_or_404(ChefMealOrder, id=order_id)
+        
+        # Verify ownership
+        if order.customer != request.user:
+            return Response(
+                {"error": "You don't have permission to modify this order"},
+                status=403
+            )
+        
+        # Validate quantity
+        try:
+            new_quantity = int(request.data.get('quantity', 1))
+            if new_quantity < 1:
+                return Response(
+                    {"error": "Quantity must be at least 1"},
+                    status=400
+                )
+        except (ValueError, TypeError):
+            return Response(
+                {"error": "Invalid quantity format"},
+                status=400
+            )
+        
+        # No change needed
+        if new_quantity == order.quantity:
+            return Response(
+                {"message": "No change in quantity"},
+                status=200
+            )
+        
+        # Check for idempotency key in headers
+        idempotency_key = request.headers.get('Idempotency-Key')
+        if not idempotency_key:
+            # Generate one if not provided
+            import uuid
+            idempotency_key = f"adjust_{order_id}_{new_quantity}_{uuid.uuid4()}"
+        
+        try:
+            # Adjust the quantity using the service
+            adjust_quantity(
+                order=order,
+                new_qty=new_quantity,
+                idem_key=idempotency_key
+            )
+            
+            # Return the updated order
+            from meals.serializers import ChefMealOrderSerializer
+            serializer = ChefMealOrderSerializer(order)
+            return Response(serializer.data, status=200)
+            
+        except ValueError as e:
+            # Handle validation errors from the service
+            return Response(
+                {"error": str(e)},
+                status=400
+            )
+        except Exception as e:
+            # Log the error and return a generic message
+            logger.error(f"Error adjusting chef meal order quantity: {str(e)}")
+            return Response(
+                {"error": "Failed to adjust order quantity"},
+                status=500
+            )
+    
+    except Exception as e:
+        logger.error(f"Unexpected error in api_adjust_chef_meal_quantity: {str(e)}")
+        return Response(
+            {"error": "An unexpected error occurred"},
+            status=500
+        )
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated]) 
+def api_cancel_chef_meal_order(request, order_id):
+    """
+    Cancel a chef meal order.
+    Uses the new order_service with idempotency support.
+    """
+    from meals.models import ChefMealOrder
+    from meals.services.order_service import cancel_order
+    
+    try:
+        # Get the order and verify ownership
+        order = get_object_or_404(ChefMealOrder, id=order_id)
+        
+        # Verify ownership
+        if order.customer != request.user:
+            return Response(
+                {"error": "You don't have permission to cancel this order"},
+                status=403
+            )
+        
+        # Order already cancelled
+        if order.status == 'cancelled':
+            return Response(
+                {"message": "Order already cancelled"},
+                status=200
+            )
+        
+        # Check for idempotency key in headers
+        idempotency_key = request.headers.get('Idempotency-Key')
+        if not idempotency_key:
+            # Generate one if not provided
+            import uuid
+            idempotency_key = f"cancel_{order_id}_{uuid.uuid4()}"
+        
+        # Get cancellation reason
+        reason = request.data.get('reason', 'customer_requested')
+        
+        try:
+            # Cancel the order using the service
+            cancel_order(
+                order=order,
+                reason=reason,
+                idem_key=idempotency_key
+            )
+            
+            # Return success response
+            return Response(
+                {"message": "Order cancelled successfully"},
+                status=200
+            )
+            
+        except Exception as e:
+            # Log the error and return a generic message
+            logger.error(f"Error cancelling chef meal order: {str(e)}")
+            return Response(
+                {"error": "Failed to cancel order"},
+                status=500
+            )
+    
+    except Exception as e:
+        logger.error(f"Unexpected error in api_cancel_chef_meal_order: {str(e)}")
+        return Response(
+            {"error": "An unexpected error occurred"},
+            status=500
+        )

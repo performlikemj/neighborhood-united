@@ -48,4 +48,13 @@ app.conf.beat_schedule = {
         'schedule': crontab(day_of_week='monday', hour=3, minute=0),  # Run every Monday at 3:00 AM
         'args': (),
     },
+    'generate-daily-user-summaries': {
+        'task': 'meals.tasks.generate_daily_user_summaries',
+        'schedule': crontab(minute=0),  # Run hourly to catch users in all time zones
+        'args': (),
+    },
+    'summarize-user-chat-sessions': {
+        'task': 'customer_dashboard.tasks.summarize_user_chat_sessions',
+        'schedule': crontab(minute=30),  # Run every hour at X:30 to check for users in different timezones
+    },
 }

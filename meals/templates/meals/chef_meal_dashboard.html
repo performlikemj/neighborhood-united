@@ -68,6 +68,7 @@
                                 <tr>
                                     <th>Meal</th>
                                     <th>Date & Time</th>
+                                    <th>Order Cutoff</th>
                                     <th>Price</th>
                                     <th>Orders</th>
                                     <th>Status</th>
@@ -78,7 +79,13 @@
                                 {% for event in upcoming_events %}
                                 <tr>
                                     <td>{{ event.meal.name }}</td>
-                                    <td>{{ event.event_date|date:"M d, Y" }} at {{ event.event_time|time:"g:i A" }}</td>
+                                    <td>
+                                        {{ event.event_date|date:"M d, Y" }} at {{ event.event_time|time:"g:i A" }}
+                                        <small class="d-block text-muted">Timezone: {{ event.get_chef_timezone }}</small>
+                                    </td>
+                                    <td>
+                                        {{ event.order_cutoff_time|date:"M d, Y" }} at {{ event.order_cutoff_time|time:"g:i A" }}
+                                    </td>
                                     <td>
                                         ${{ event.current_price }} 
                                         {% if event.current_price < event.base_price %}
@@ -141,7 +148,10 @@
                                 {% for event in past_events %}
                                 <tr>
                                     <td>{{ event.meal.name }}</td>
-                                    <td>{{ event.event_date|date:"M d, Y" }} at {{ event.event_time|time:"g:i A" }}</td>
+                                    <td>
+                                        {{ event.event_date|date:"M d, Y" }} at {{ event.event_time|time:"g:i A" }}
+                                        <small class="d-block text-muted">Timezone: {{ event.get_chef_timezone }}</small>
+                                    </td>
                                     <td>${{ event.current_price }}</td>
                                     <td>{{ event.orders_count }} / {{ event.max_orders }}</td>
                                     <td><span class="badge badge-{{ event.status|lower }}">{{ event.get_status_display }}</span></td>

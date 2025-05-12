@@ -127,6 +127,8 @@ class Address(models.Model):
     state = models.CharField(max_length=255, blank=True, null=True)
     input_postalcode = models.CharField(max_length=10, blank=True, null=True)  # Normalized format for lookups
     display_postalcode = models.CharField(max_length=15, blank=True, null=True)  # Original user input format
+    latitude  = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     country = CountryField(blank=True, null=True)
 
     def __str__(self):
@@ -215,8 +217,21 @@ class Address(models.Model):
             return False
 
     def save(self, *args, **kwargs):
+        # Check if this is an update and if postal code has changed
+        if self.pk:  # Check if the instance already exists
+            try:
+                original = Address.objects.get(pk=self.pk)
+                # Normalize the current input postal code for accurate comparison
+                current_normalized_postalcode = self.normalize_postal_code(self.input_postalcode)
+                if original.input_postalcode != current_normalized_postalcode:
+                    self.latitude = None
+                    self.longitude = None
+            except Address.DoesNotExist:
+                pass # Instance is new, skip comparison
+            
         self.full_clean()  # This ensures that the model is validated before saving
         super().save(*args, **kwargs)
+
 
 
 class UserRole(models.Model):

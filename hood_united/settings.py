@@ -30,7 +30,9 @@ DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
 ALLOWED_HOSTS = ['127.0.0.1', 'localhost', 'nbhdunited.azurewebsites.net', 'www.nbhdunited.com', 'nbhdunited.com', 'www.sautai.com', 'sautai.com', '169.254.131.6:8000', '169.254.131.3:8000', 'hoodunited.org']
 
-
+# Model quota limits
+GPT41_AUTH_LIMIT = int(os.getenv('GPT41_AUTH_LIMIT', 5))  # GPT-4.1 per authenticated user / day
+GPT41_MINI_GUEST_LIMIT = int(os.getenv('GPT41_MINI_GUEST_LIMIT', 10))  # GPT-4.1-mini per guest / day
 # Application definition
 
 INSTALLED_APPS = [
@@ -70,12 +72,25 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'corsheaders.middleware.CorsMiddleware', # CORS middleware
+    'utils.middleware.ModelSelectionMiddleware', # Model selection middleware
 ]
 
+# CORS settings
+CORS_ALLOW_CREDENTIALS = True
+CORS_ORIGIN_ALLOW_ALL = False
 CORS_ALLOWED_ORIGINS = [
-    os.getenv('STREAMLIT_URL'),  # Add your Streamlit app's origin here
-    # "https://example.com",  # Add other origins as needed
+    os.getenv('STREAMLIT_URL'),  
 ]
+
+# Cookie settings for cross-origin requests
+if DEBUG:
+    SESSION_COOKIE_SAMESITE = 'Lax'
+    SESSION_COOKIE_SECURE = False
+else:
+    SESSION_COOKIE_SAMESITE = 'None'
+    SESSION_COOKIE_SECURE = True
+
+SESSION_COOKIE_HTTPONLY = True
 
 ROOT_URLCONF = 'hood_united.urls'
 
@@ -147,17 +162,23 @@ AUTH_PASSWORD_VALIDATORS = [
 REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
-        'rest_framework.throttling.UserRateThrottle'
+        'rest_framework.throttling.UserRateThrottle',
+        'api.throttles.GPT4DailyThrottle',
+        'api.throttles.GuestGPT4MiniThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
         'anon': '100/day',
-        'user': '1000/day'
+        'user': '1000/day',
+        'gpt4': f'{GPT41_AUTH_LIMIT}/day',
+        'gpt4_mini_guest': f'{GPT41_MINI_GUEST_LIMIT}/day',
     },
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'utils.authentication.GuestIDAuthentication',  # Add custom guest authentication
     ),
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 10,
+    'EXCEPTION_HANDLER': 'api.views.custom_exception_handler',
 }
 
 SIMPLE_JWT = {
@@ -233,6 +254,13 @@ LOGIN_URL = 'custom_auth:login'
 OPENAI_KEY = os.getenv('OPENAI_KEY')
 SPOONACULAR_API_KEY = os.getenv('SPOONACULAR_API_KEY')
 
+# Redis configuration for quotas
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+# Session settings
+SESSION_ENGINE = 'django.contrib.sessions.backends.db'
+SESSION_COOKIE_AGE = 60 * 60 * 24 * 30  # 30 days in seconds
+SESSION_SAVE_EVERY_REQUEST = True  # Ensure sessions are saved for every request
 
 # OpenAI prompt
 OPENAI_PROMPT = os.getenv('OPENAI_PROMPT')
@@ -325,3 +353,6 @@ if DEBUG == False:
     # Celery settings
     CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL')
     CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND')
+
+# Webhook URL for n8n order events
+N8N_ORDER_EVENTS_WEBHOOK_URL = os.getenv('N8N_ORDER_EVENTS_WEBHOOK_URL', '')

@@ -1,0 +1,136 @@
+name: CI / CD (no third-party actions)
+
+on:
+  push:
+    branches: [ main ]
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1) Write the dev .env into runner env
+      - name: Export dev .env
+        run: |
+          echo "$DEV_DOTENV" > .env
+          set -o allexport
+          source .env
+          set +o allexport
+        env:
+          DEV_DOTENV: ${{ secrets.DEV_DOTENV }}
+
+      # 2) Run test suite
+      - run: python -m pytest
+
+  deploy-prod:
+    needs: build-test
+    runs-on: ubuntu-latest
+    environment: production           # approval & prod secrets gate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build config.env           # replaces old Build‑config.json step
+        run: |
+          mkdir -p build
+          : > build/config.env           # truncate / create file
+          # list every prod variable that must travel
+          for var in SECRET_KEY DEBUG OPENAI_KEY ASSISTANT_ID SPOONACULAR_API_KEY \
+                     STRIPE_PUBLIC_KEY STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET \
+                     EMAIL_BACKEND EMAIL_HOST EMAIL_PORT EMAIL_USE_TLS \
+                     EMAIL_HOST_USER EMAIL_HOST_PASSWORD DEFAULT_FROM_EMAIL \
+                     ELASTIC_API_KEY STREAMLIT_URL STREAMLIT_SUPPORT_EMAIL \
+                     KROGER_CLIENT_ID KROGER_CLIENT_SECRET \
+                     DB_NAME DB_USER DB_PASSWORD DB_HOST DB_PORT \
+                     AZURE_ACCOUNT_KEY AZURE_ACCOUNT_NAME AZURE_CONTAINER \
+                     N8N_PW_RESET_URL N8N_UPDATE_PROFILE_URL N8N_REGISTER_URL \
+                     N8N_GENERATE_INSTRUCTIONS_URL N8N_GENERATE_SHOPPING_LIST_URL \
+                     N8N_GENERATE_APPROVAL_EMAIL_URL N8N_SEND_BULK_PREP_EMAIL_URL \
+                     N8N_SEND_FOLLOW_UP_EMAIL_URL N8N_RESEND_URL N8N_SEND_REMINDER_EMAIL_URL \
+                     N8N_SEND_SYSTEM_UPDATE_EMAIL_URL N8N_GENERATE_EMERGENCY_LIST_URL \
+                     N8N_PAYMENT_LINK_WEBHOOK_URL CELERY_BROKER_URL CELERY_RESULT_BACKEND \
+                     DJANGO_URL YOUTUBE_API_KEY PLACES_API_KEY GOOGLE_API_KEY \
+                     GUEST_PROMPT_TEMPLATE AUTH_PROMPT_TEMPLATE \
+                     GPT41_AUTH_LIMIT GPT41_MINI_GUEST_LIMIT; do
+              printf '%s="%s"\n' "$var" "${!var}" >> build/config.env
+          done
+        env:
+          SECRET_KEY:               ${{ secrets.SECRET_KEY }}
+          DEBUG:                    ${{ secrets.DEBUG }}
+          OPENAI_KEY:               ${{ secrets.OPENAI_KEY }}
+          ASSISTANT_ID:             ${{ secrets.ASSISTANT_ID }}
+          SPOONACULAR_API_KEY:      ${{ secrets.SPOONACULAR_API_KEY }}
+          STRIPE_PUBLIC_KEY:        ${{ secrets.STRIPE_PUBLIC_KEY }}
+          STRIPE_SECRET_KEY:        ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET:    ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          EMAIL_BACKEND:            ${{ secrets.EMAIL_BACKEND }}
+          EMAIL_HOST:               ${{ secrets.EMAIL_HOST }}
+          EMAIL_PORT:               ${{ secrets.EMAIL_PORT }}
+          EMAIL_USE_TLS:            ${{ secrets.EMAIL_USE_TLS }}
+          EMAIL_HOST_USER:          ${{ secrets.EMAIL_HOST_USER }}
+          EMAIL_HOST_PASSWORD:      ${{ secrets.EMAIL_HOST_PASSWORD }}
+          DEFAULT_FROM_EMAIL:       ${{ secrets.DEFAULT_FROM_EMAIL }}
+          ELASTIC_API_KEY:          ${{ secrets.ELASTIC_API_KEY }}
+          STREAMLIT_URL:            ${{ secrets.STREAMLIT_URL }}
+          STREAMLIT_SUPPORT_EMAIL:  ${{ secrets.STREAMLIT_SUPPORT_EMAIL }}
+          KROGER_CLIENT_ID:         ${{ secrets.KROGER_CLIENT_ID }}
+          KROGER_CLIENT_SECRET:     ${{ secrets.KROGER_CLIENT_SECRET }}
+          DB_NAME:                  ${{ secrets.DB_NAME }}
+          DB_USER:                  ${{ secrets.DB_USER }}
+          DB_PASSWORD:              ${{ secrets.DB_PASSWORD }}
+          DB_HOST:                  ${{ secrets.DB_HOST }}
+          DB_PORT:                  ${{ secrets.DB_PORT }}
+          AZURE_ACCOUNT_KEY:        ${{ secrets.AZURE_ACCOUNT_KEY }}
+          AZURE_ACCOUNT_NAME:       ${{ secrets.AZURE_ACCOUNT_NAME }}
+          AZURE_CONTAINER:          ${{ secrets.AZURE_CONTAINER_NAME }}
+          N8N_PW_RESET_URL:         ${{ secrets.N8N_PW_RESET_URL }}
+          N8N_UPDATE_PROFILE_URL:   ${{ secrets.N8N_UPDATE_PROFILE_URL }}
+          N8N_REGISTER_URL:         ${{ secrets.N8N_REGISTER_URL }}
+          N8N_GENERATE_INSTRUCTIONS_URL:       ${{ secrets.N8N_GENERATE_INSTRUCTIONS_URL }}
+          N8N_GENERATE_SHOPPING_LIST_URL:      ${{ secrets.N8N_GENERATE_SHOPPING_LIST_URL }}
+          N8N_GENERATE_APPROVAL_EMAIL_URL:     ${{ secrets.N8N_GENERATE_APPROVAL_EMAIL_URL }}
+          N8N_SEND_BULK_PREP_EMAIL_URL:        ${{ secrets.N8N_SEND_BULK_PREP_EMAIL_URL }}
+          N8N_SEND_FOLLOW_UP_EMAIL_URL:        ${{ secrets.N8N_SEND_FOLLOW_UP_EMAIL_URL }}
+          N8N_RESEND_URL:                      ${{ secrets.N8N_RESEND_URL }}
+          N8N_SEND_REMINDER_EMAIL_URL:         ${{ secrets.N8N_SEND_REMINDER_EMAIL_URL }}
+          N8N_SEND_SYSTEM_UPDATE_EMAIL_URL:    ${{ secrets.N8N_SEND_SYSTEM_UPDATE_EMAIL_URL }}
+          N8N_GENERATE_EMERGENCY_LIST_URL:     ${{ secrets.N8N_GENERATE_EMERGENCY_LIST_URL }}
+          N8N_PAYMENT_LINK_WEBHOOK_URL:        ${{ secrets.N8N_PAYMENT_LINK_WEBHOOK_URL }}
+          CELERY_BROKER_URL:        ${{ secrets.CELERY_BROKER_URL }}
+          CELERY_RESULT_BACKEND:    ${{ secrets.CELERY_RESULT_BACKEND }}
+          DJANGO_URL:               ${{ secrets.DJANGO_URL }}
+          YOUTUBE_API_KEY:          ${{ secrets.YOUTUBE_API_KEY }}
+          PLACES_API_KEY:           ${{ secrets.PLACES_API_KEY }}
+          GOOGLE_API_KEY:           ${{ secrets.GOOGLE_API_KEY }}
+          GUEST_PROMPT_TEMPLATE:    ${{ secrets.GUEST_PROMPT_TEMPLATE }}
+          AUTH_PROMPT_TEMPLATE:     ${{ secrets.AUTH_PROMPT_TEMPLATE }}
+          GPT41_AUTH_LIMIT:         ${{ secrets.GPT41_AUTH_LIMIT }}
+          GPT41_MINI_GUEST_LIMIT:   ${{ secrets.GPT41_MINI_GUEST_LIMIT }}
+
+      # 2) Push code and config to VM
+      - name: Rsync to Azure VM
+        run: |
+          echo "$SSH_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          
+          # Add host key to known_hosts to stop MITM
+          echo "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
+          
+          rsync -avz --delete -e "ssh -i /tmp/deploy_key" \
+            ./ $SSH_USER@$SSH_HOST:/var/www/myapp
+          
+          ssh -i /tmp/deploy_key $SSH_USER@$SSH_HOST "
+            sudo mv /var/www/myapp/build/config.env /etc/myapp/config.env
+            sudo chown root:root /etc/myapp/config.env
+            sudo chmod 600 /etc/myapp/config.env
+            sudo systemctl restart apache2
+          "
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}

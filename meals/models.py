@@ -9,7 +9,7 @@ from datetime import date, timedelta
 from django.utils import timezone
 from custom_auth.models import CustomUser, Address
 from django.contrib.contenttypes.fields import GenericRelation
-from django.core.validators import MinValueValidator, MaxValueValidator
+from django.core.validators import MinValueValidator, MaxValueValidator, RegexValidator
 from django.db import migrations
 from pgvector.django import VectorExtension
 from pgvector.django import VectorField
@@ -26,6 +26,7 @@ import dateutil.parser
 from django.db.models import Avg, Sum, Count, Max, F, Q
 from django.contrib.postgres.fields import ArrayField
 import decimal
+from django.db.models import UniqueConstraint
 
 # Add status constants at the top of the file
 # Shared statuses between ChefMealEvent and ChefMealOrder
@@ -37,6 +38,8 @@ STATUS_SCHEDULED = 'scheduled'
 STATUS_OPEN = 'open'
 STATUS_CLOSED = 'closed'
 STATUS_IN_PROGRESS = 'in_progress'
+STATUS_COMPLETED = 'completed'
+STATUS_CANCELLED = 'cancelled'
 
 # ChefMealOrder specific statuses
 STATUS_PLACED = 'placed'
@@ -176,8 +179,24 @@ class PostalCodeManager(models.Manager):
                 return self.none()
         return self.none()
 
+def clean_preference_name(value):
+    if any(char in value for char in '{}[]"\''):
+        raise ValidationError('Preference name cannot contain brackets or quotes')
+    return value
+
 class DietaryPreference(models.Model):
-    name = models.CharField(max_length=100, unique=True)
+    name = models.CharField(
+        max_length=100, 
+        unique=True,
+        validators=[
+            RegexValidator(
+                regex=r'^[^{}\[\]"\']*$',
+                message="Name cannot contain brackets or quotes",
+                code="invalid_name"
+            ),
+            clean_preference_name
+        ]
+    )
 
     def __str__(self):
         return self.name
@@ -296,7 +315,66 @@ class Meal(models.Model):
 
         # The messages array contains a system and a user message
         messages = [
-            {"role": "system", "content": "You are an assistant that assigns dietary preferences to meals."},
+            {"role": "developer", "content": (
+                """
+                Analyze the following meal details and determine its additional applicable dietary preferences.
+
+                - Meal Name: [Provide the name of the meal here]
+                - Description: [Provide a brief description of the meal here]
+                - Dishes: [List the names of all dishes included in the meal]
+                - Ingredients: [List all ingredients of the meal, separated by commas]
+                - Existing Dietary Preferences: [List any existing dietary preferences associated with the meal]
+
+                Include dietary preferences such as Vegetarian, Gluten-Free, Vegan, etc. Determine these from the meal details provided.
+
+                # Steps
+
+                1. **Analyze Meal Details:**
+                - Review the meal name, description, dishes, and ingredients to understand the food components.
+                - Note any existing dietary preferences to supplement them with new findings.
+
+                2. **Determine Dietary Preferences:**
+                - Identify if the meal is suitable for common dietary preferences like Vegetarian, Vegan, Gluten-Free, Dairy-Free, Nut-Free, etc.
+                - Consider the ingredients and preparation methods described to identify potential new dietary preferences.
+
+                3. **Compose Dietary Preferences:**
+                - Prepare a list of all applicable dietary preferences for the meal.
+
+                # Output Format
+
+                The response should be in JSON format, listing all additional applicable dietary preferences:
+
+                ```json
+                {
+                "dietary_preferences": [
+                    "Preference1",
+                    "Preference2"
+                ]
+                }
+                ```
+
+                # Examples
+
+                **Input:**
+                - Meal Name: "Quinoa Salad"
+                - Description: "A healthy mix of quinoa, roasted vegetables, and a light lemon dressing."
+                - Dishes: "Salad"
+                - Ingredients: "quinoa, bell peppers, zucchini, lemon juice, olive oil, salt, pepper"
+                - Existing Dietary Preferences: "Vegetarian"
+
+                **Output:**
+                ```json
+                {
+                "dietary_preferences": [
+                    "Vegan",
+                    "Gluten-Free"
+                ]
+                }
+                ```
+
+                (Note: Ensure real examples are detailed and comprehensive, using actual meal data.)
+                """
+            )},
             {"role": "user", "content": prompt}
         ]
         return messages
@@ -796,6 +874,74 @@ class ChefMealEvent(models.Model):
     def __str__(self):
         return f"{self.meal.name} by {self.chef.user.username} on {self.event_date} at {self.event_time}"
     
+    def get_chef_timezone(self):
+        """
+        Get the chef's timezone. Defaults to UTC if not set.
+        """
+        return self.chef.user.timezone if hasattr(self.chef.user, 'timezone') else 'UTC'
+    
+    def get_chef_timezone_object(self):
+        """
+        Get the chef's timezone as a pytz timezone object.
+        """
+        import pytz
+        timezone_str = self.get_chef_timezone()
+        try:
+            return pytz.timezone(timezone_str)
+        except pytz.exceptions.UnknownTimeZoneError:
+            return pytz.UTC
+    
+    def to_chef_timezone(self, dt):
+        """
+        Convert a datetime from UTC to the chef's timezone.
+        """
+        if not dt:
+            return dt
+            
+        if not timezone.is_aware(dt):
+            dt = timezone.make_aware(dt)
+            
+        return dt.astimezone(self.get_chef_timezone_object())
+    
+    def from_chef_timezone(self, dt):
+        """
+        Convert a datetime from the chef's timezone to UTC for storage.
+        """
+        if not dt:
+            return dt
+            
+        # If the datetime is naive, assume it's in the chef's timezone and make it aware
+        if not timezone.is_aware(dt):
+            chef_tz = self.get_chef_timezone_object()
+            dt = chef_tz.localize(dt)
+            
+        # Convert to UTC
+        return dt.astimezone(timezone.utc)
+    
+    def get_event_datetime(self):
+        """
+        Combine event_date and event_time into a timezone-aware datetime.
+        """
+        import datetime
+        if not self.event_date or not self.event_time:
+            return None
+            
+        # Combine date and time
+        naive_dt = datetime.datetime.combine(self.event_date, self.event_time)
+        
+        # Make it timezone-aware in the chef's timezone
+        chef_tz = self.get_chef_timezone_object()
+        return chef_tz.localize(naive_dt)
+    
+    def get_cutoff_time_in_chef_timezone(self):
+        """
+        Get the order cutoff time in the chef's timezone.
+        """
+        if not self.order_cutoff_time:
+            return None
+            
+        return self.to_chef_timezone(self.order_cutoff_time)
+    
     def save(self, *args, **kwargs):
         # If this is a new event, set the current price to the base price
         if not self.pk:
@@ -861,7 +1007,14 @@ class ChefMealEvent(models.Model):
     
     def is_available_for_orders(self):
         """Check if the event is open for new orders"""
-        now = timezone.now()
+        # Get current time in UTC
+        now_utc = timezone.now()
+        
+        # Get chef's timezone
+        chef_tz = self.get_chef_timezone_object()
+        
+        # Convert current time to chef's timezone
+        now = now_utc.astimezone(chef_tz)
         
         # Make sure order_cutoff_time is a datetime object
         cutoff_time = self.order_cutoff_time
@@ -875,11 +1028,27 @@ class ChefMealEvent(models.Model):
                 # If parsing fails, default to not available
                 return False
         
-        return (
-            self.status in [STATUS_SCHEDULED, STATUS_OPEN] and 
-            now < cutoff_time and
-            self.orders_count < self.max_orders
-        )
+        # Convert cutoff time to chef's timezone for comparison
+        if cutoff_time:
+            cutoff_time = cutoff_time.astimezone(chef_tz)
+        
+        # Explicitly check all conditions that would make the event unavailable
+        if self.status in [STATUS_CLOSED, STATUS_IN_PROGRESS, STATUS_COMPLETED, STATUS_CANCELLED]:
+            return False
+            
+        # Only SCHEDULED and OPEN statuses are valid for ordering
+        if self.status not in [STATUS_SCHEDULED, STATUS_OPEN]:
+            return False
+            
+        # Check time and capacity constraints
+        if now >= cutoff_time:
+            return False
+            
+        if self.orders_count >= self.max_orders:
+            return False
+            
+        # If we passed all checks, the event is available
+        return True
     
     def cancel(self):
         """Cancel the event and all associated orders"""
@@ -917,6 +1086,7 @@ class ChefMealOrder(models.Model):
 
     quantity = models.PositiveIntegerField(default=1)
     # price_paid should store the *total* price paid for the quantity at the time of purchase/confirmation
+    unit_price = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     price_paid = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True) # Allow null initially
     
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='placed')
@@ -934,9 +1104,23 @@ class ChefMealOrder(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     
     class Meta:
-        # Ensure only one ChefMealOrder per meal plan slot within a single order
-        unique_together = ('order', 'meal_plan_meal') 
+        constraints = [
+            UniqueConstraint(
+                fields=['customer', 'meal_event'],
+                condition=Q(status__in=['placed', 'confirmed']),
+                name='uniq_active_order_per_event'
+            )
+        ]
         ordering = ['-created_at']
+    
+    # Add property for backward compatibility with new service code
+    @property
+    def payment_intent_id(self):
+        return self.stripe_payment_intent_id
+    
+    @payment_intent_id.setter
+    def payment_intent_id(self, value):
+        self.stripe_payment_intent_id = value
     
     def __str__(self):
         return f"Order #{self.id} - {self.meal_event.meal.name} by {self.customer.username}"

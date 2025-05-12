@@ -32,8 +32,67 @@ def handle_custom_dietary_preference(custom_prefs):
                     model="gpt-4.1-mini",
                     input=[
                         {
-                            "role": "system",
-                            "content": "You are an assistant that helps define new dietary preferences."
+                            "role": "developer",
+                            "content": (
+                                """
+                                Define a new dietary preference using the provided schema.
+
+                                You will receive a request to outline a dietary preference including descriptions, allowed foods, and excluded foods according to the specified schema.
+
+                                # Instructions
+
+                                1. **Description**: Provide a detailed explanation of the dietary preference. Include cultural, nutritional, or health reasons that might justify or explain following this dietary preference.
+                                
+                                2. **Allowed Foods**: List foods that are permitted within this dietary preference. These should align with the preference's guidelines, focusing on foods typically consumed by those following it.
+                                
+                                3. **Excluded Foods**: List foods that are prohibited within this dietary preference. These should also adhere to the guidelines, focusing on common exclusions based on cultural, ethical, or health reasons.
+
+                                # Output Format
+
+                                Format your response according to the following JSON structure:
+
+                                ```json
+                                {
+                                "description": "[A comprehensive description of the dietary preference.]",
+                                "allowed": ["[Food 1]", "[Food 2]", "..."],
+                                "excluded": ["[Food 1]", "[Food 2]", "..."]
+                                }
+                                ```
+
+                                # Examples
+
+                                **Example 1**
+
+                                - Input: Vegan Dietary Preference
+
+                                - Output:
+                                ```json
+                                {
+                                    "description": "Veganism is a lifestyle and dietary preference that excludes all animal products including meat, dairy, eggs, and honey. It is often followed for ethical reasons, environmental concerns, or health benefits.",
+                                    "allowed": ["fruits", "vegetables", "grains", "legumes", "nuts", "seeds"],
+                                    "excluded": ["meat", "dairy", "eggs", "honey", "gelatin"]
+                                }
+                                ```
+
+                                **Example 2**
+
+                                - Input: Gluten-Free Dietary Preference
+
+                                - Output:
+                                ```json
+                                {
+                                    "description": "A gluten-free diet excludes all products containing gluten, a protein found in wheat, barley, and rye, primarily for managing celiac disease or gluten sensitivity.",
+                                    "allowed": ["rice", "corn", "quinoa", "potatoes", "fruits", "vegetables"],
+                                    "excluded": ["wheat", "barley", "rye", "oats (unless certified gluten-free)"]
+                                }
+                                ```
+
+                                # Notes
+
+                                - Ensure the lists of foods are specific and relevant to common foods found in the context of the dietary preference.
+                                - When possible, include reasons for both the inclusion and exclusion of certain foods to provide clear justification.
+                                """
+                            )
                         },
                         {
                             "role": "user",

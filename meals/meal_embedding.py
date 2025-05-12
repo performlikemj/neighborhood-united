@@ -38,7 +38,7 @@ def prepare_meal_representation(meal: Meal) -> str:
         attributes.append(f"Review Summary: {meal.review_summary}")
     
     if meal.chef:
-        attributes.append(f"Chef: {meal.chef.name}")
+        attributes.append(f"Chef: {meal.chef.user.username}")
     
     return " | ".join(attributes)
 
@@ -93,9 +93,7 @@ def update_embeddings():
 def serialize_data(data):
     """ Helper function to serialize data into JSON-compatible format """
     try:
-        print(f"Attempting to serialize data: {data}")
         serialized_data = JSONRenderer().render(data)
-        print(f"Serialized Data: {serialized_data}")
         return json.loads(serialized_data)
     except Exception as e:
         logger.error(f"Error serializing data: {e}")

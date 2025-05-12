@@ -540,17 +540,23 @@ class ChefMealEventSerializer(serializers.ModelSerializer):
     # user_order might also need simplification if it uses the full ChefMealOrderSerializer
     user_order = serializers.SerializerMethodField() # Check implementation of get_user_order
     pricing_details = serializers.SerializerMethodField()
-
+    meal_name = serializers.CharField(source='meal.name', read_only=True)
+    chef_name = serializers.CharField(source='chef.user.get_full_name', read_only=True)
+    chef_timezone = serializers.SerializerMethodField()
+    localized_event_time = serializers.SerializerMethodField()
+    localized_cutoff_time = serializers.SerializerMethodField()
+    
     class Meta:
         model = ChefMealEvent
         fields = [
-            'id', 'chef', 'meal', 'event_date', 'event_time', 'order_cutoff_time',
-            'max_orders', 'min_orders', 'base_price', 'current_price', 'min_price',
-            'orders_count', 'status', 'description', 'special_instructions',
-            'created_at', 'updated_at', 'is_available', 'reviews_count', 'average_rating',
-            'active_orders', 'chef_earnings', 'fulfillment_stats', 'user_order', 'pricing_details'
+            'id', 'chef', 'meal', 'meal_name', 'chef_name', 'event_date', 'event_time',
+            'order_cutoff_time', 'max_orders', 'min_orders', 'base_price', 'current_price',
+            'min_price', 'orders_count', 'status', 'description', 'special_instructions',
+            'created_at', 'updated_at', 'chef_timezone', 'localized_event_time', 'localized_cutoff_time',
+            'is_available', 'reviews_count', 'average_rating', 'active_orders', 'chef_earnings', 'fulfillment_stats', 'user_order', 'pricing_details'
         ]
-
+        read_only_fields = ['id', 'chef', 'created_at', 'updated_at', 'chef_name', 'meal_name']
+    
     def get_is_available(self, obj):
         return obj.is_available_for_orders()
     
@@ -693,6 +699,24 @@ class ChefMealEventSerializer(serializers.ModelSerializer):
             'cancelled_orders': stats.get('cancelled', 0) + stats.get('refunded', 0),
         }
 
+    def get_chef_timezone(self, obj):
+        """Get the chef's timezone string"""
+        return obj.get_chef_timezone()
+    
+    def get_localized_event_time(self, obj):
+        """Get the event time in the chef's local timezone as a formatted string"""
+        event_dt = obj.get_event_datetime()
+        if not event_dt:
+            return None
+        return event_dt.strftime('%Y-%m-%d %H:%M %Z')
+    
+    def get_localized_cutoff_time(self, obj):
+        """Get the cutoff time in the chef's local timezone as a formatted string"""
+        cutoff_dt = obj.get_cutoff_time_in_chef_timezone()
+        if not cutoff_dt:
+            return None
+        return cutoff_dt.strftime('%Y-%m-%d %H:%M %Z')
+
 # Full ChefMealOrderSerializer now uses SimpleChefMealEventSerializer for nesting
 class ChefMealOrderSerializer(serializers.ModelSerializer):
     # Use the simple serializer here to break the cycle
@@ -708,13 +732,13 @@ class ChefMealOrderSerializer(serializers.ModelSerializer):
             'id', 'order', 'meal_event', 'meal_event_details', 'customer', 'customer_details',
             'meal_plan_meal',
             'quantity', 'price_paid', 'status', 'created_at', 'updated_at',
-            'stripe_payment_intent_id', 'stripe_refund_id', 'price_adjustment_processed',
+            'payment_intent_id', 'stripe_refund_id', 'price_adjustment_processed',
             'special_requests',
             'meal_name', 'total_price', 'unit_price'
         ]
         read_only_fields = [
             'customer', 'status', 'price_paid', 'created_at', 'updated_at',
-            'stripe_payment_intent_id', 'stripe_refund_id', 'price_adjustment_processed'
+            'payment_intent_id', 'stripe_refund_id', 'price_adjustment_processed'
         ]
 
     def get_total_price(self, obj):
@@ -886,21 +910,41 @@ class ChefMealOrderCreateSerializer(serializers.ModelSerializer):
         return value
     
     def create(self, validated_data):
-        # Get quantity from request data or set default to 1
-        quantity = validated_data.get('quantity', 1)
+        # Use the service layer to create the order with idempotency support
+        from meals.services.order_service import create_order
         
-        # Create the order
-        order = ChefMealOrder.objects.create(
-            meal_event=validated_data['meal_event'],
-            customer=validated_data['customer'],
-            quantity=quantity,  # Store the quantity
-            # Calculate total amount based on quantity
-            total_amount=validated_data['meal_event'].current_price * quantity,
-            status='placed',
-            payment_status='pending'
-        )
+        # Get idempotency key from request context
+        request = self.context.get('request')
+        if request and hasattr(request, 'headers'):
+            idem_key = request.headers.get('Idempotency-Key')
+        else:
+            import uuid
+            idem_key = str(uuid.uuid4())
         
-        return order
+        try:
+            # Call the service function
+            order = create_order(
+                user=validated_data['customer'],
+                event=validated_data['meal_event'],
+                qty=validated_data.get('quantity', 1),
+                idem_key=idem_key
+            )
+            
+            # Add special requests if provided
+            if 'special_requests' in validated_data and validated_data['special_requests']:
+                order.special_requests = validated_data['special_requests']
+                order.save(update_fields=['special_requests'])
+                
+            return order
+        except ValueError as e:
+            # Re-raise validation errors
+            raise serializers.ValidationError(str(e))
+        except Exception as e:
+            # Log the error and raise as validation error
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error creating order: {str(e)}")
+            raise serializers.ValidationError("Failed to create order")
 
 class ChefMealReviewSerializer(serializers.ModelSerializer):
     customer = UserSerializer(read_only=True)

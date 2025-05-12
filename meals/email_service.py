@@ -6,7 +6,7 @@ import logging
 import os
 import re
 import traceback
-from datetime import timedelta
+from datetime import timedelta, datetime, time
 from urllib.parse import urlencode
 from collections import defaultdict
 import pytz
@@ -25,7 +25,7 @@ from meals.pydantic_models import MealPlanApprovalEmailSchema, ShoppingList as S
 from meals.pantry_management import get_user_pantry_items, get_expiring_pantry_items, determine_items_to_replenish
 from meals.meal_embedding import serialize_data
 from meals.serializers import MealPlanSerializer
-from customer_dashboard.models import GoalTracking, UserHealthMetrics, CalorieIntake, UserSummary
+from customer_dashboard.models import GoalTracking, UserHealthMetrics, CalorieIntake, UserSummary, UserDailySummary
 from shared.utils import generate_user_context
 from meals.meal_plan_service import is_chef_meal
 from django.template.loader import render_to_string
@@ -131,7 +131,7 @@ def send_meal_plan_approval_email(meal_plan_id):
                 model="gpt-4.1-mini",
                 input=[
                     {
-                        "role": "system",
+                        "role": "developer",
                         "content": "You are a helpful assistant that generates meal plan approval emails."
                     },
                     {
@@ -193,7 +193,7 @@ def send_meal_plan_approval_email(meal_plan_id):
             email_data = {
                 'subject': f'Approve Your Meal Plan for {meal_plan.week_start_date} - {meal_plan.week_end_date}',
                 'html_message': email_body_html,
-                'to': user_email,
+                'to': user_email if not settings.DEBUG else os.getenv('TEST_EMAIL'),
                 'from': 'support@sautai.com',
             }
 
@@ -387,7 +387,7 @@ def generate_shopping_list(meal_plan_id):
                 model="gpt-4.1-mini",
                 input=[
                     {
-                        "role": "system",
+                        "role": "developer",
                         "content": "You are a helpful assistant that generates shopping lists in JSON format."
                     },
                     {
@@ -513,7 +513,7 @@ def generate_shopping_list(meal_plan_id):
     email_data = {
         'subject': f'Your Curated Shopping List for {meal_plan.week_start_date} - {meal_plan.week_end_date}',
         'message': email_body_html,  # or 'html_message' if you want
-        'to': user_email,
+        'to': user_email if not settings.DEBUG else os.getenv('TEST_EMAIL'),
         'from': 'support@sautai.com',
     }
 
@@ -527,70 +527,210 @@ def generate_shopping_list(meal_plan_id):
         logger.error(f"Error sending shopping list to n8n for: {user_email}, error: {str(e)}")
 
 @shared_task
-def generate_user_summary(user_id):
+def generate_user_summary(user_id: int, summary_date=None) -> None:
+    """
+    Build (or rebuild) a high-level daily user summary in the user's
+    preferred language and store it on ``UserDailySummary``.
+    
+    Args:
+        user_id: The ID of the user to generate a summary for
+        summary_date: The date for the summary (defaults to today in user's timezone)
+    """
+    from customer_dashboard.models import UserDailySummary
     from shared.utils import generate_user_context
+    from django.utils import timezone
+    from openai import OpenAI, OpenAIError
+    import hashlib
+    import json
+    
+    print(f"Generating user summary for user {user_id}")
     user = get_object_or_404(CustomUser, id=user_id)
     user_context = generate_user_context(user)
-    user_summary_obj, created = UserSummary.objects.get_or_create(user=user)
-
-    # Set status to 'pending'
-    user_summary_obj.status = 'pending'
-    user_summary_obj.save()
-
-    # Calculate the date one month ago
-    one_month_ago = timezone.now() - timedelta(days=30)
-
-    # Query the models for records related to the user and within the past month, except for goals
-    goal_tracking = GoalTracking.objects.filter(user=user)
-    user_health_metrics = UserHealthMetrics.objects.filter(user=user, date_recorded__gte=one_month_ago)
-    calorie_intake = CalorieIntake.objects.filter(user=user, date_recorded__gte=one_month_ago)
-
-    # Format the queried data
-    formatted_data = {
-        "User Information": {user_context},
-        "Goal Tracking": [f"Goal: {goal.goal_name}, Description: {goal.goal_description}" for goal in goal_tracking] if goal_tracking else ["No goals found."],
-        "User Health Metrics": [
-            f"Date: {metric.date_recorded}, Weight: {metric.weight} kg ({float(metric.weight) * 2.20462} lbs), BMI: {metric.bmi}, Mood: {metric.mood}, Energy Level: {metric.energy_level}" 
-            for metric in user_health_metrics
-        ] if user_health_metrics else ["No health metrics found."],
-        "Calorie Intake": [f"Meal: {intake.meal_name}, Description: {intake.meal_description}, Portion Size: {intake.portion_size}, Date: {intake.date_recorded}" for intake in calorie_intake] if calorie_intake else ["No calorie intake data found."],
-        "Meal Plan Approval Status": "If the user's meal plan is not approved, gently remind them to submit their meal plan for approval."
-    }
     
-    # Define the message for no data
-    message = "No data found for the past month."
-
-    # Initialize OpenAI client
-    OPENAI_API_KEY = settings.OPENAI_KEY
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    # Get or create summary_date (default to today in user's local timezone)
+    if summary_date is None:
+        # Use the user's timezone if available, otherwise use UTC
+        user_timezone = pytz.timezone(user.timezone if user.timezone else 'UTC')
+        summary_date = timezone.now().astimezone(user_timezone).date()
+    elif isinstance(summary_date, str):
+        # If it's a string, parse it as a date
+        summary_date = datetime.strptime(summary_date, '%Y-%m-%d').date()
     
-    # Define the language prompt based on user's preferred language
-    language_prompt = {
-        'en': 'English',
-        'ja': 'Japanese',
-        'es': 'Spanish',
-        'fr': 'French',
-    }
-    preferred_language = language_prompt.get(user.preferred_language, 'English')
-    try:
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            input=[
-                {"role": "system", 
-                 "content": f"Answering in {preferred_language}, Generate a detailed summary based on the following data that gives the user a high-level view of their goals, health data, and how their caloric intake relates to those goals. Start the response off with a friendly welcoming tone. If there is no data, please respond with the following message: {message}\n\n{formatted_data}"
-                 },
-            ],
-            #store=True,
-            #metadata={'tag': 'user_summary'},
+    # Use select_for_update with transaction to prevent race conditions
+    with transaction.atomic():
+        summary, created = UserDailySummary.objects.select_for_update().get_or_create(
+            user=user,
+            summary_date=summary_date,
+            defaults={'status': UserDailySummary.PENDING}
         )
-        summary_text = response.output_text
-        user_summary_obj.summary = summary_text
-        user_summary_obj.status = 'completed'
-    except Exception as e:
-        user_summary_obj.status = 'error'
-        user_summary_obj.summary = f"An error occurred: {str(e)}"
+        
+        # If status is ERROR, allow regeneration
+        if not created and summary.status == UserDailySummary.ERROR:
+            summary.status = UserDailySummary.PENDING
+            summary.save(update_fields=["status"])
+    
+    # For backward compatibility, also update the legacy UserSummary
+    legacy_summary, _ = UserSummary.objects.get_or_create(user=user)
+    legacy_summary.status = "pending"
+    legacy_summary.save(update_fields=["status"])
 
-    user_summary_obj.save()
+    # Gather data for yesterday (if today) or for the specific date
+    if summary_date == timezone.now().date():
+        # For today's summary, get data from yesterday
+        data_start_date = timezone.now() - timedelta(days=1)
+        yesterday = timezone.now().date() - timedelta(days=1)
+        data_end_date = timezone.now()
+        time_period_description = "In the last 24 hours"
+    else:
+        # For historical date, get data for that specific date
+        data_start_date = datetime.combine(summary_date, time.min)
+        data_start_date = timezone.make_aware(data_start_date)
+        data_end_date = datetime.combine(summary_date, time.max)
+        data_end_date = timezone.make_aware(data_end_date)
+        time_period_description = f"On {summary_date.strftime('%A, %B %d')}"
+
+    # Get user data for the specified date range
+    goals = GoalTracking.objects.filter(user=user)
+    metrics = UserHealthMetrics.objects.filter(
+        user=user, 
+        date_recorded__gte=data_start_date,
+        date_recorded__lte=data_end_date
+    )
+    calories = CalorieIntake.objects.filter(
+        user=user, 
+        date_recorded__gte=data_start_date,
+        date_recorded__lte=data_end_date
+    )
+
+    data_bundle = {
+        "user_profile": user_context,
+        "goals": [
+            {"name": g.goal_name, "description": g.goal_description} for g in goals
+        ],
+        "health_metrics": [
+            {
+                "date": m.date_recorded.isoformat(timespec="seconds"),
+                "weight_kg": float(m.weight) if m.weight else None,
+                "weight_lbs": round(float(m.weight) * 2.20462, 1) if m.weight else None,
+                "bmi": m.bmi,
+                "mood": m.mood,
+                "energy_level": m.energy_level,
+            }
+            for m in metrics
+        ],
+        "calorie_intake": [
+            {
+                "meal": c.meal_name,
+                "description": c.meal_description,
+                "portion_size": c.portion_size,
+                "date": c.date_recorded.isoformat(timespec="seconds"),
+            }
+            for c in calories
+        ],
+        "meal_plan_needs_approval": not user.mealplan_set.filter(is_approved=True).exists(),
+    }
+    
+    # Calculate data hash for idempotency check
+    data_hash = hashlib.sha256(json.dumps(data_bundle, sort_keys=True).encode()).hexdigest()
+    
+    # If hash matches and status is completed, no need to regenerate
+    if summary.data_hash == data_hash and summary.status == UserDailySummary.COMPLETED:
+        print(f"Data unchanged for user {user_id} on {summary_date}, skipping generation")
+        return
+    
+    # Update hash and status
+    summary.data_hash = data_hash
+    summary.status = UserDailySummary.PENDING
+    summary.save(update_fields=["data_hash", "status"])
+
+    lang_map = {
+        "en": "English",
+        "jp": "Japanese",
+        "es": "Spanish",
+        "fr": "French",
+    }
+    target_lang = lang_map.get((user.preferred_language or "").lower(), "English")
+
+    system_prompt = (
+        "You are a friendly, motivating wellness assistant named MJ.\n"
+        f"Write a daily summary for the user **in {target_lang}**.\n"
+        f"• Focus on {time_period_description}\n"
+        "• Warm greeting with the user's first name if available.\n"
+        "• Overview ≤ 5 sentences.\n"
+        "• Sections: 1) Goals & Status, 2) Health Metrics trends, 3) Calorie-Intake insights.\n"
+        "• Omit any empty section.\n"
+        "• If meal_plan_needs_approval is true, add one gentle reminder at the end.\n"
+        "• Encouraging, business-casual tone.\n"
+        f"• Respond ONLY in {target_lang}."
+    )
+
+    client = OpenAI(api_key=settings.OPENAI_KEY)
+
+    try:
+        resp = client.responses.create(
+            model="gpt-4.1-nano",
+            input=[
+                {
+                    "role": "developer",
+                    "content": system_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"{time_period_description}, here is the relevant data:\n"
+                        f"{data_bundle}"
+                    ),
+                },
+            ],
+            temperature=0.7,
+            # metadata={"tag": "user_summary"},  # uncomment if you're tagging
+        )
+
+        summary.summary = resp.output_text
+        summary.status = UserDailySummary.COMPLETED
+        
+        # Also update the legacy summary for backward compatibility
+        legacy_summary.summary = resp.output_text
+        legacy_summary.status = "completed"
+        
+    except OpenAIError as err:
+        summary.status = UserDailySummary.ERROR
+        summary.summary = f"OpenAI error: {err}"
+        
+        legacy_summary.status = "error"
+        legacy_summary.summary = f"OpenAI error: {err}"
+    except Exception as exc:
+        summary.status = UserDailySummary.ERROR
+        summary.summary = f"Unhandled error: {exc}"
+        
+        legacy_summary.status = "error"
+        legacy_summary.summary = f"Unhandled error: {exc}"
+
+    summary.save()
+    legacy_summary.save()
+
+def mark_summary_stale(user, date=None):
+    """
+    Mark a user's daily summary as stale and trigger regeneration.
+    
+    Args:
+        user: The user whose summary should be marked as stale
+        date: The date of the summary to mark as stale (defaults to today)
+    """
+    from customer_dashboard.models import UserDailySummary
+    from django.utils import timezone
+    
+    date = date or timezone.localdate()
+    
+    obj, _ = UserDailySummary.objects.get_or_create(
+        user=user, 
+        summary_date=date
+    )
+    obj.status = UserDailySummary.PENDING
+    obj.save(update_fields=["status"])
+    
+    # Trigger regeneration asynchronously
+    generate_user_summary.delay(user.id, date.strftime('%Y-%m-%d'))
 
 @shared_task
 def generate_emergency_supply_list(user_id):
@@ -662,8 +802,102 @@ def generate_emergency_supply_list(user_id):
             model="gpt-4.1-mini",
             input=[
                 {
-                    "role": "system",
-                    "content": "You are a helpful assistant that generates an EMERGENCY SUPPLY list in JSON format."
+                    "role": "developer",
+                    "content": (
+                        """
+                        Generate an emergency supply list in JSON format following a specified schema. Each item should be detailed, without including any default values, and should adhere strictly to the provided JSON schema format.
+
+                        # Steps
+
+                        1. **Identify Supply Items**: Determine the essential items needed for an emergency based on common requirements such as food, water, medical supplies, and other essentials.
+                        2. **Specify Quantities and Units**: Clearly specify the quantity needed for each item and the unit of measurement when applicable.
+                        3. **Include Additional Notes**: Provide any relevant notes for each item or for the entire list if necessary.
+                        4. **Structure According to Schema**: Ensure that the JSON output strictly follows the schema specified, without including any extra properties or default values.
+
+                        # Output Format
+
+                        Ensure the output is in valid JSON format structured as follows:
+
+                        ```json
+                        {
+                        "emergency_list": [
+                            {
+                            "item_name": "string",
+                            "quantity_to_buy": "string",
+                            "unit": "string",
+                            "notes": "string"
+                            }
+                        ],
+                        "notes": "string"
+                        }
+                        ```
+                        - **`emergency_list`**: An array of objects, each describing an item.
+                        - **`item_name`**: Name of the item.
+                        - **`quantity_to_buy`**: The quantity that should be purchased or prepared.
+                        - **`unit`**: The unit of measurement relevant to the item.
+                        - **`notes`**: Any additional notes about the item or overarching comments for the entire list.
+
+                        # Examples
+
+                        **Example 1**
+
+                        Input:
+                        - Determine items for a basic emergency kit.
+
+                        Output:
+                        ```json
+                        {
+                        "emergency_list": [
+                            {
+                            "item_name": "Water",
+                            "quantity_to_buy": "10",
+                            "unit": "liters",
+                            "notes": "At least one gallon per person per day for 3 days"
+                            },
+                            {
+                            "item_name": "Canned Food",
+                            "quantity_to_buy": "15",
+                            "unit": "cans",
+                            "notes": "Ensure they have easy-open lids"
+                            }
+                        ],
+                        "notes": "This list is a starting checklist for a simple emergency kit."
+                        }
+                        ```
+
+                        **Example 2**
+
+                        Input:
+                        - Items for a medical emergency kit.
+
+                        Output:
+                        ```json
+                        {
+                        "emergency_list": [
+                            {
+                            "item_name": "First Aid Kit",
+                            "quantity_to_buy": "1",
+                            "unit": null,
+                            "notes": "Should include bandages, antiseptics, and medications"
+                            },
+                            {
+                            "item_name": "Prescription medication",
+                            "quantity_to_buy": "30",
+                            "unit": "days supply",
+                            "notes": "Ensure extra medication for prolonged emergencies"
+                            }
+                        ],
+                        "notes": "Medical necessities for handling common injuries and health issues."
+                        }
+                        ```
+
+                        # Notes
+
+                        - Avoid including any default values in the JSON output.
+                        - Ensure units are specified where applicable, and `unit` can be null if not relevant.
+                        - Follow the schema strictly, with no additional properties or data beyond what is specified.                        
+                        """
+                    )
                 },
                 {
                     "role": "user",
@@ -729,7 +963,7 @@ def generate_emergency_supply_list(user_id):
         email_data = {
             "subject": f"Emergency Supply List for {days_of_supply} Days",
             "message": email_body_html,
-            "to": user.email,
+            "to": user.email if not settings.DEBUG else os.getenv('TEST_EMAIL'),
             "from": "support@sautai.com",
         }
 
@@ -781,7 +1015,7 @@ def send_system_update_email(subject, message, user_ids=None):
             email_data = {
                 'subject': subject,
                 'html_message': email_body_html,
-                'to': user.email,
+                'to': user.email if not settings.DEBUG else os.getenv('TEST_EMAIL'),
                 'from': 'support@sautai.com'
             }
 
@@ -888,7 +1122,7 @@ def send_meal_plan_reminder_email():
             email_data = {
                 'subject': "Start Your Week Right - Your Meal Plan is Waiting!",
                 'html_message': email_body_html,
-                'to': user.email,
+                'to': user.email if not settings.DEBUG else os.getenv('TEST_EMAIL'),
                 'from': 'support@sautai.com'
             }
 
@@ -951,7 +1185,7 @@ def send_payment_confirmation_email(payment_data):
         email_data = {
             'subject': f'Payment Confirmation - Order #{payment_data["order_id"]}',
             'html_message': email_body_html,
-            'to': payment_data['chef_email'],
+            'to': payment_data['chef_email'] if not settings.DEBUG else os.getenv('TEST_EMAIL'),
             'from': 'payments@sautai.com',
         }
 
@@ -1013,7 +1247,7 @@ def send_refund_notification_email(order_id):
         email_data = {
             'subject': f'Your Refund for Order #{order.id} Has Been Processed',
             'html_message': email_body_html,
-            'to': user.email,
+            'to': user.email if not settings.DEBUG else os.getenv('TEST_EMAIL'),
             'from': 'payments@sautai.com',
         }
         
@@ -1078,7 +1312,7 @@ def send_order_cancellation_email(order_id):
         email_data = {
             'subject': f'Your Order #{order.id} Has Been Cancelled',
             'html_message': email_body_html,
-            'to': user.email,
+            'to': user.email if not settings.DEBUG else os.getenv('TEST_EMAIL'),
             'from': 'orders@sautai.com',
         }
         

@@ -43,12 +43,18 @@ urlpatterns = [
     path('api/replace_meal_plan_meal/', views.api_replace_meal_plan_meal, name='api_replace_meal_plan_meal'),
     path('api/update_meals_with_prompt/', views.api_update_meals_with_prompt, name='api_update_meals_with_prompt'),
     path('api/generate_meal_plan/', views.api_generate_meal_plan, name='api_generate_meal_plan'),
+    path('api/modify_meal_plan/<int:meal_plan_id>/', views.api_modify_meal_plan, name='api_modify_meal_plan'),
     
-    # New Function-based API views for chef meal orders
+    # Function-based API views for chef meal orders
     path('api/chef-meal-orders/', chef_meals_views.api_chef_meal_orders, name='api_chef_meal_orders'),
     path('api/chef-meal-orders/<int:order_id>/', chef_meals_views.api_chef_meal_order_detail, name='api_chef_meal_order_detail'),
     path('api/chef-meal-orders/<int:order_id>/cancel/', chef_meals_views.api_cancel_chef_meal_order, name='api_cancel_chef_meal_order'),
     path('api/chef-meal-orders/<int:order_id>/confirm/', chef_meals_views.api_confirm_chef_meal_order, name='api_confirm_chef_meal_order'),
+    
+    # New API endpoints for the updated chef meal order flow
+    path('api/chef-meal-events/<int:event_id>/order/', chef_meals_views.api_create_chef_meal_order, name='api_create_chef_meal_order'),
+    path('api/chef-meal-orders/<int:order_id>/adjust-quantity/', chef_meals_views.api_adjust_chef_meal_quantity, name='api_adjust_chef_meal_quantity'),
+    
     path('api/debug/order/<int:order_id>/', chef_meals_views.api_debug_order_info, name='api_debug_order_info'),
     
     # New API endpoints for chef meals

@@ -7,22 +7,24 @@ connecting them to the existing pantry management functionality in the applicati
 
 import json
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Union
-
+from shared.utils import generate_user_context
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
-
 from custom_auth.models import CustomUser
 from meals.models import PantryItem, MealPlan
+from meals.pydantic_models import ShoppingList as ShoppingListSchema, ShoppingCategory, ReplenishItemsSchema
 from meals.pantry_management import (
-    get_user_pantry_items,
     get_expiring_pantry_items,
     determine_items_to_replenish,
 )
-from meals.email_service import generate_shopping_list as service_generate_shopping_list
 from meals.serializers import PantryItemSerializer
+from openai import OpenAI
 
+api_key = os.getenv("OPENAI_KEY")
+client = OpenAI(api_key=api_key)
 logger = logging.getLogger(__name__)
 
 # Tool definitions for the OpenAI Responses API
@@ -35,7 +37,7 @@ PANTRY_MANAGEMENT_TOOLS = [
             "type": "object",
             "properties": {
                 "user_id": {
-                    "type": "string",
+                    "type": "integer",
                     "description": "The ID of the user whose pantry to check"
                 },
                 "item_type": {
@@ -55,7 +57,7 @@ PANTRY_MANAGEMENT_TOOLS = [
                 "type": "object",
                 "properties": {
                     "user_id": {
-                        "type": "string",
+                        "type": "integer",
                         "description": "The ID of the user whose pantry to update"
                     },
                     "item_name": {
@@ -64,15 +66,19 @@ PANTRY_MANAGEMENT_TOOLS = [
                     },
                     "item_type": {
                         "type": "string",
-                        "description": "Type of the item (e.g., 'Vegetable', 'Meat', 'Grain')"
+                        "description": "Type of the item being either 'Canned' or 'Dry Goods'"
                     },
                     "quantity": {
                         "type": "number",
-                        "description": "Quantity of the item"
+                        "description": "Number of cans or bags of the item"
+                    },
+                    "weight": {
+                        "type": "number",
+                        "description": "Weight of the item per can or bag"
                     },
                     "weight_unit": {
                         "type": "string",
-                        "description": "Unit of measurement (e.g., 'g', 'kg', 'oz')"
+                        "description": "Unit of measurement (e.g., 'g', 'kg', 'oz', 'lb')"
                     },
                     "expiry_date": {
                         "type": "string",
@@ -91,7 +97,7 @@ PANTRY_MANAGEMENT_TOOLS = [
                 "type": "object",
                 "properties": {
                     "user_id": {
-                        "type": "string",
+                        "type": "integer",
                         "description": "The ID of the user whose pantry to check"
                     },
                     "days": {
@@ -111,27 +117,63 @@ PANTRY_MANAGEMENT_TOOLS = [
                 "type": "object",
                 "properties": {
                     "user_id": {
-                        "type": "string",
+                        "type": "integer",
                         "description": "The ID of the user"
                     },
                     "meal_plan_id": {
-                        "type": "string",
+                        "type": "integer",
                         "description": "The ID of the meal plan to generate the shopping list for"
-                    },
-                    "include_emergency_supplies": {
-                        "type": "boolean",
-                        "description": "Whether to include emergency supplies in the shopping list"
                     }
                 },
                 "required": ["user_id", "meal_plan_id"],
                 "additionalProperties": False
+        }
+    } ,
+    {
+        "type": "function",
+        "name": "determine_items_to_replenish",
+        "description": "Recommend dried or canned goods the user should replenish to meet their emergency supply goal.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "integer",
+                    "description": "The ID of the user"
+                }
+            },
+            "required": ["user_id"],
+            "additionalProperties": False
+        }
+    },
+    {
+        "type": "function",
+        "name": "set_emergency_supply_goal",
+        "description": "Set (or update) the number of days the user wants to keep as an emergency food supply.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "integer",
+                    "description": "The ID of the user"
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "Desired emergency supply goal in days (1–365)"
+                },
+                "preferred_servings": {
+                    "type": "integer",
+                    "description": "Number of servings the user wants emergency supplies scaled to."
+                }
+            },
+            "required": ["user_id", "days", "preferred_servings"],
+            "additionalProperties": False
         }
     }
 ]
 
 # Tool implementation functions
 
-def check_pantry_items(user_id: str, item_type: str = None) -> Dict[str, Any]:
+def check_pantry_items(user_id: int, item_type: str = None) -> Dict[str, Any]:
     """
     Get a list of items in the user's pantry.
     
@@ -144,6 +186,7 @@ def check_pantry_items(user_id: str, item_type: str = None) -> Dict[str, Any]:
     """
     try:
         # Get the user
+        print(f"Checking pantry items for user {user_id}")
         user = get_object_or_404(CustomUser, id=user_id)
         
         # Get the pantry items
@@ -153,10 +196,10 @@ def check_pantry_items(user_id: str, item_type: str = None) -> Dict[str, Any]:
             query_filters['item_type'] = item_type
             
         pantry_items = PantryItem.objects.filter(**query_filters)
-        
+        print(f"Found {len(pantry_items)} pantry item(s)")
         # Serialize the pantry items
         serializer = PantryItemSerializer(pantry_items, many=True)
-        
+        print(f'Serializer data: {serializer.data}')
         return {
             "status": "success",
             "pantry_items": serializer.data,
@@ -170,8 +213,8 @@ def check_pantry_items(user_id: str, item_type: str = None) -> Dict[str, Any]:
             "message": f"Failed to check pantry items: {str(e)}"
         }
 
-def add_pantry_item(user_id: str, item_name: str, quantity: float, item_type: str = None, 
-                   weight_unit: str = None, expiry_date: str = None) -> Dict[str, Any]:
+def add_pantry_item(user_id: int, item_name: str, quantity: float, item_type: str = None, 
+                   weight: float = None, weight_unit: str = None, expiry_date: str = None) -> Dict[str, Any]:
     """
     Add a new item to the user's pantry.
     
@@ -225,8 +268,9 @@ def add_pantry_item(user_id: str, item_name: str, quantity: float, item_type: st
                 item_name=item_name,
                 item_type=item_type or "Other",
                 quantity=quantity,
+                weight_per_unit=weight,
                 weight_unit=weight_unit,
-                expiry_date=parsed_expiry_date
+                expiration_date=parsed_expiry_date
             )
             
             # Serialize the new item
@@ -245,7 +289,7 @@ def add_pantry_item(user_id: str, item_name: str, quantity: float, item_type: st
             "message": f"Failed to add pantry item: {str(e)}"
         }
 
-def get_expiring_items(user_id: str, days: int = 7) -> Dict[str, Any]:
+def get_expiring_items(user_id: int, days: int = 7) -> Dict[str, Any]:
     """
     Get a list of pantry items that will expire soon.
     
@@ -268,10 +312,10 @@ def get_expiring_items(user_id: str, days: int = 7) -> Dict[str, Any]:
         for item in expiring_items:
             formatted_items.append({
                 "name": item.get("name", ""),
-                "expiry_date": item.get("expiry_date", ""),
-                "days_until_expiry": item.get("days_until_expiry", 0),
+                "expiration_date": item.get("expiration_date", ""),
                 "quantity": item.get("quantity", 0),
-                "unit": item.get("unit", "")
+                "type": item.get("item_type", ""),
+                "notes": item.get("notes", "")
             })
         
         return {
@@ -287,55 +331,433 @@ def get_expiring_items(user_id: str, days: int = 7) -> Dict[str, Any]:
             "message": f"Failed to get expiring items: {str(e)}"
         }
 
-def generate_shopping_list(user_id: str, meal_plan_id: str, 
-                          include_emergency_supplies: bool = False) -> Dict[str, Any]:
+def generate_shopping_list(user_id: int, meal_plan_id: int):
     """
-    Generate a shopping list based on a meal plan and pantry items.
-    
-    Args:
-        user_id: The ID of the user
-        meal_plan_id: The ID of the meal plan to generate the shopping list for
-        include_emergency_supplies: Whether to include emergency supplies in the shopping list
-        
-    Returns:
-        Dict containing the generated shopping list
+    Lightweight helper that **only** builds (or retrieves) the shopping‑list JSON for
+    a given `MealPlan`.
+
+    • No email rendering / sending.  
+    • Returns a Python `dict` that conforms to `meals.pydantic_models.ShoppingList`.  
+    • Raises `ValueError` if the list cannot be generated or parsed.
+
+    This is intended for direct use by the MealPlanningAssistant tool‑call so that the
+    caller can decide what to do with the resulting data (display, further processing,
+    etc.).
     """
+    import json
+    from collections import defaultdict
+    from django.db.models import Sum
+    from meals.models import (
+        MealPlan,
+        ShoppingList as ShoppingListModel,
+        MealPlanMealPantryUsage,
+        PantryItem,
+        MealAllergenSafety,
+    )
+    from meals.serializers import MealPlanSerializer
+    from meals.meal_plan_service import is_chef_meal
+    from meals.pantry_management import (
+        get_user_pantry_items,
+        get_expiring_pantry_items,
+        determine_items_to_replenish,
+    )
+    from meals.pydantic_models import ShoppingList as ShoppingListSchema, ShoppingCategory
+    user = get_object_or_404(CustomUser, id=user_id)
+    # --- 0. Fetch objects ----------------------------------------------------
+    meal_plan = get_object_or_404(MealPlan, id=meal_plan_id, user=user)
+    preferred_serving_size = getattr(user, "preferred_servings", 1) or 1
+
+    # Shortcut: if a validated shopping list already exists → return it.
+    existing = ShoppingListModel.objects.filter(meal_plan=meal_plan).first()
+    if existing:
+        try:
+            return json.loads(existing.items)
+        except Exception:
+            # fall through to regeneration
+            pass
+
+    # --- 1. Gather prompt context -------------------------------------------
+    meal_plan_data = MealPlanSerializer(meal_plan).data
+    user_context = generate_user_context(user) or "No additional user context."
+
+    # Chef & substitution info
+    substitution_info = []
+    chef_meals_present = False
+    for meal in meal_plan.meal.all():
+        if is_chef_meal(meal):
+            chef_meals_present = True
+            continue
+        qs = MealAllergenSafety.objects.filter(
+            meal=meal, user=user, is_safe=False
+        ).exclude(substitutions__isnull=True).exclude(substitutions={})
+        for check in qs:
+            for original, subs in (check.substitutions or {}).items():
+                if subs:
+                    substitution_info.append(
+                        {
+                            "meal_name": meal.name,
+                            "original_ingredient": original,
+                            "substitutes": subs,
+                        }
+                    )
+
+    # Pantry & leftovers
+    bridging_qs = (
+        MealPlanMealPantryUsage.objects.filter(meal_plan_meal__meal_plan=meal_plan)
+        .values("pantry_item")
+        .annotate(total_used=Sum("quantity_used"))
+    )
+    bridging_usage = {row["pantry_item"]: float(row["total_used"] or 0.0) for row in bridging_qs}
+    leftover_info = []
+    for pid, used in bridging_usage.items():
+        try:
+            pi = PantryItem.objects.get(id=pid)
+        except PantryItem.DoesNotExist:
+            continue
+        total = pi.quantity * float(pi.weight_per_unit or 1.0)
+        leftover = max(total - used, 0.0)
+        leftover_info.append(f"{pi.item_name} leftover: {leftover} {pi.weight_unit or ''}")
+    bridging_leftover_str = "; ".join(leftover_info) if leftover_info else "No leftover data available"
+
+    # Pantry and expiring items
     try:
-        # Get the user and meal plan
-        user = get_object_or_404(CustomUser, id=user_id)
-        meal_plan = get_object_or_404(MealPlan, id=meal_plan_id, user=user)
-        
-        # Generate the shopping list
-        shopping_list = service_generate_shopping_list(meal_plan.id)
-        
-        # If include_emergency_supplies is True, add emergency supplies to the shopping list
-        if include_emergency_supplies:
-            # Get items to replenish for emergency supplies
-            emergency_items = determine_items_to_replenish(user)
-            
-            # Add emergency items to the shopping list
-            if "items" not in shopping_list:
-                shopping_list["items"] = []
-                
-            for item in emergency_items:
-                shopping_list["items"].append({
-                    "name": item.get("name", ""),
-                    "quantity": item.get("quantity_needed", 0),
-                    "unit": item.get("unit", ""),
-                    "category": "Emergency Supplies",
-                    "is_emergency_item": True
-                })
-        
+        user_pantry_items = get_user_pantry_items(user)
+    except Exception:
+        user_pantry_items = []
+    try:
+        expiring_items = get_expiring_pantry_items(user)
+        expiring_items_str = ", ".join(i["name"] for i in expiring_items) if expiring_items else "None"
+    except Exception:
+        expiring_items_str = "None"
+
+    shopping_category_list = [c.value for c in ShoppingCategory]
+
+    # Format substitution prompt segment
+    substitution_str = ""
+    if substitution_info:
+        substitution_str = "Ingredient substitution information:\n" + "\n".join(
+            f"- In {s['meal_name']}, replace {s['original_ingredient']} with {', '.join(s['substitutes'])}"
+            for s in substitution_info
+        )
+
+    chef_note = (
+        "IMPORTANT: Some meals are chef‑created and must be prepared exactly as specified. "
+        "Include all ingredients for chef meals without alternatives."
+        if chef_meals_present
+        else ""
+    )
+
+    # --- 2. Call OpenAI -------------------------------------------------------
+    try:
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=[
+                {
+                    "role": "developer",
+                    "content": (
+                        """
+                        Generate a shopping list in JSON format according to the defined schema, factoring in a user's preferred serving size for each meal. Follow the structure provided for the `ShoppingList` and include the required fields for each `ShoppingListItem`.
+
+                        - **ShoppingList**: This is the main container that holds a list of `ShoppingListItem` objects.
+                        - **ShoppingListItem**: Each item in the list should have the following attributes:
+                        - **meal_name**: The name of the meal the ingredient is for.
+                        - **ingredient**: The specific ingredient needed.
+                        - **quantity**: The amount of the ingredient required, adjusted for the user's preferred serving size.
+                        - **unit**: The unit of measurement for the quantity.
+                        - **notes**: Any special notes regarding the item (optional).
+                        - **category**: The category to which the item belongs (such as 'vegetables', 'dairy', etc.).
+
+                        # Output Format
+
+                        The output should be a JSON object following the structure of the `ShoppingList`. Ensure that each `ShoppingListItem` contains all the required fields.
+
+                        # Examples
+
+                        **Input:**
+                        Generate a shopping list for two meals with preferred serving sizes.
+
+                        **Output:**
+
+                        ```json
+                        {
+                        "items": [
+                            {
+                            "meal_name": "Spaghetti Bolognese",
+                            "ingredient": "Spaghetti",
+                            "quantity": "300",
+                            "unit": "grams",
+                            "notes": null,
+                            "category": "pasta"
+                            },
+                            {
+                            "meal_name": "Spaghetti Bolognese",
+                            "ingredient": "Ground Beef",
+                            "quantity": "750",
+                            "unit": "grams",
+                            "notes": "Leaner cuts preferred",
+                            "category": "meat"
+                            },
+                            {
+                            "meal_name": "Caesar Salad",
+                            "ingredient": "Romaine Lettuce",
+                            "quantity": "2",
+                            "unit": "heads",
+                            "notes": "Fresh and crisp",
+                            "category": "vegetables"
+                            },
+                            {
+                            "meal_name": "Caesar Salad",
+                            "ingredient": "Parmesan Cheese",
+                            "quantity": "75",
+                            "unit": "grams",
+                            "notes": "Grated",
+                            "category": "dairy"
+                            }
+                        ]
+                        }
+                        ```
+
+                        # Notes
+
+                        - Ensure to forbid any extra fields that are not specified in the schema.
+                        - `notes` field is optional and can be `null` if no special notes are necessary.
+                        - Adhere strictly to the schema provided for compatibility with `ShoppingList`.
+                        """
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Answer in the user's preferred language: {user.preferred_language or 'English'}.\n"
+                        f"Generate a shopping list based on the following meals: {json.dumps(meal_plan_data)}.\n"
+                        f"User context: {user_context}.\n"
+                        f"Bridging leftover info: {bridging_leftover_str}.\n"
+                        f"The user has the following pantry items: {', '.join(user_pantry_items)}.\n"
+                        f"Preferred servings: {preferred_serving_size}.\n"
+                        f"Expiring pantry items: {expiring_items_str}.\n"
+                        f"Available shopping categories: {shopping_category_list}.\n"
+                        f"{substitution_str}\n{chef_note}\n"
+                        "IMPORTANT: For ingredients in non‑chef meals that have substitution options, include BOTH the "
+                        "original ingredient AND its substitutes, clearly marking them as alternatives."
+                    ),
+                },
+            ],
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "shopping_list",
+                    "schema": ShoppingListSchema.model_json_schema(),
+                }
+            },
+            temperature=0.4,
+        )
+        shopping_list_raw = response.output_text
+    except Exception as e:
+        logger.error(f"OpenAI error while generating shopping list for MealPlan {meal_plan_id}: {e}")
+        raise ValueError("Failed to generate shopping list.") from e
+
+    # --- 3. Validate & persist ----------------------------------------------
+    try:
+        shopping_list_dict = json.loads(shopping_list_raw)
+        # validate with Pydantic (raises if invalid)
+        ShoppingListSchema(**shopping_list_dict)
+    except Exception as e:
+        logger.error(f"Invalid shopping list JSON for MealPlan {meal_plan_id}: {e}")
+        raise ValueError("OpenAI returned invalid shopping list JSON.") from e
+
+    # Store (creates or updates) but do *not* email
+    ShoppingListModel.objects.update_or_create(
+        meal_plan=meal_plan, defaults={"items": json.dumps(shopping_list_dict)}
+    )
+
+    return shopping_list_dict
+
+def determine_items_to_replenish(user_id: int):
+    """
+    Recommend pantry items the user should replenish to satisfy their emergency
+    supply goal. Returns a dict matching `ReplenishItemsSchema`.
+    """
+    import json
+    from pydantic import ValidationError
+    from django.shortcuts import get_object_or_404
+    from custom_auth.models import CustomUser
+
+    user = get_object_or_404(CustomUser, id=user_id)
+
+    # Early exit if the user hasn’t set a goal
+    goal_days = user.emergency_supply_goal or 0
+    # Fetch preferred servings (fallback to 1 if missing or mis‑spelled column)
+    preferred_servings = (
+        getattr(user, "preferred_servings", None)
+        or getattr(user, "preffered_servings", None)
+        or 1
+    )
+    if goal_days <= 0:
         return {
             "status": "success",
-            "shopping_list": shopping_list
+            "items_to_replenish": [],
+            "preferred_servings": int(preferred_servings),
+            "message": "No emergency supply goal set."
         }
-        
+
+    # Current pantry snapshot
+    pantry_items = user.pantry_items.all()
+    pantry_summary = ", ".join(f"{pi.item_name} (x{pi.quantity})" for pi in pantry_items) or "None"
+
+    # Prompts for OpenAI
+    sys_prompt = (
+        """
+        Given the user's context, current pantry items, and emergency supply goal, recommend a JSON list of dried or canned goods the user should replenish. Ensure recommendations respect dietary restrictions, allergies, and are suitable for long-term storage.
+
+        - **Contextual Understanding**: Take into account the user's dietary preferences, potential allergies, and the type of storage available.
+        - **Inventory Assessment**: Analyze the current pantry items provided by the user to determine which essential dried or canned goods need replenishment.
+        - **Supply Goals**: Align recommendations with the user's emergency supply goals to ensure there is adequate food available for a specified duration.
+        - **Long-Term Storage Suitability**: Recommend items that are appropriate for long-term storage without significant risk of spoilage.
+        - **Compliance with Schema**: Ensure the output follows the ReplenishItemsSchema provided.
+
+        # Steps
+
+        1. **Assess Current Stock**: Review the current items in the user's pantry and identify any gaps based on emergency supply goals.
+        2. **Dietary Considerations**: Incorporate any dietary restrictions or allergies to ensure safe and suitable recommendations.
+        3. **Item Selection**: Choose dried or canned goods that are suitable for prolonged storage, factoring in nutritional variety.
+        4. **Quantitative Recommendations**: Calculate the quantity of each item needed to reach the emergency supply goal.
+        5. **Schema Alignment**: Format the recommendations into a JSON structure that aligns with the ReplenishItemsSchema.
+
+        # Output Format
+
+        The response should be a JSON following the ReplenishItemsSchema structure, listing items to replenish, each with its name, quantity, and unit of measurement.
+
+        # Examples
+
+        **Input**: 
+        - Current pantry: ["canned beans", "rice"]
+        - Emergency supply goal: "sufficient food for 30 days"
+        - Dietary restrictions: "vegetarian"
+        - Allergies: "peanuts"
+
+        **Output**:
+        ```json
+        {
+        "items_to_replenish": [
+            {"item_name": "canned lentils", "quantity": 10, "unit": "cans"},
+            {"item_name": "dried pasta", "quantity": 5, "unit": "kilograms"},
+            {"item_name": "canned tomatoes", "quantity": 8, "unit": "cans"}
+        ]
+        }
+        ```
+
+        # Notes
+
+        - Verify that suggested items do not conflict with any of the user's allergies or dietary restrictions.
+        - Include a variety of items to ensure nutritional balance in the recommendations.
+        - Ensure long-lasting shelf life is a priority in item selection.
+        """
+    )
+    usr_prompt = (
+        f"The user has an emergency supply goal of {goal_days} days and prefers to prepare meals for "
+        f"{preferred_servings} serving(s).\n"
+        f"User Context:\n{generate_user_context(user)}\n"
+        f"Current Pantry Items:\n{pantry_summary}\n"
+        "When calculating quantities, multiply daily needs by the number of servings.\n"
+        "Respond in JSON adhering to the schema `replenish_items`."
+    )
+
+    try:
+        response = client.responses.create(
+            model="gpt-4o-mini",
+            input=[
+                {"role": "developer", "content": sys_prompt},
+                {"role": "user", "content": usr_prompt},
+            ],
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "replenish_items",
+                    "schema": ReplenishItemsSchema.model_json_schema(),
+                }
+            },
+            temperature=0.3,
+        )
+        raw = response.output_text
     except Exception as e:
-        logger.error(f"Error generating shopping list for user {user_id}: {str(e)}")
+        logger.error(f"OpenAI error (determine_items_to_replenish user {user_id}): {e}")
+        return {"status": "error", "message": "Failed to generate recommendations."}
+
+    # Validate
+    try:
+        parsed = json.loads(raw)
+        validated = ReplenishItemsSchema.model_validate(parsed)
+        validated_dict = {
+            "status": "success",
+            "items_to_replenish": validated.items_to_replenish,
+            "preferred_servings": int(preferred_servings)
+        }
+        return validated_dict
+    except (json.JSONDecodeError, ValidationError) as e:
+        logger.error(f"Invalid JSON for user {user_id}: {e}  -- raw: {raw}")
+        return {"status": "error", "message": "Assistant produced invalid JSON."}
+    
+def set_emergency_supply_goal(user_id: int, days: int, preferred_servings: int) -> Dict[str, Any]:
+    """
+    Update the user's emergency supply goal (number of days of food to keep on hand) and preferred servings.
+
+    Args:
+        user_id: ID of the CustomUser.
+        days: Goal in days (must be 1–365).
+        preferred_servings: Number of servings (must be 1–20).
+
+    Returns:
+        Dict with status and message.
+    """
+    from django.shortcuts import get_object_or_404
+    from custom_auth.models import CustomUser
+
+    # Validate `days`
+    try:
+        days_int = int(days)
+        if days_int < 1 or days_int > 365:
+            raise ValueError("days must be between 1 and 365.")
+    except (ValueError, TypeError) as err:
         return {
             "status": "error",
-            "message": f"Failed to generate shopping list: {str(e)}"
+            "message": f"Invalid 'days' value: {err}"
+        }
+
+    # Validate `preferred_servings`
+    try:
+        servings_int = int(preferred_servings)
+        if servings_int < 1 or servings_int > 20:
+            raise ValueError("preferred_servings must be between 1 and 20.")
+    except (ValueError, TypeError) as err:
+        return {
+            "status": "error",
+            "message": f"Invalid 'preferred_servings' value: {err}"
+        }
+
+    try:
+        user = get_object_or_404(CustomUser, id=user_id)
+        user.emergency_supply_goal = days_int
+        # Update preferred_servings (handle both spelling variants)
+        if hasattr(user, "preferred_servings"):
+            user.preferred_servings = servings_int
+        elif hasattr(user, "preffered_servings"):
+            user.preffered_servings = servings_int
+        user.save(update_fields=["emergency_supply_goal", "preferred_servings" if hasattr(user, "preferred_servings") else "preffered_servings"])
+
+        return {
+            "status": "success",
+            "message": (
+                f"Emergency supply goal set to {days_int} day(s) "
+                f"and preferred servings updated to {servings_int}."
+            ),
+            "emergency_supply_goal": days_int,
+            "preferred_servings": servings_int
+        }
+    except Exception as e:
+        logger.error(f"Error setting emergency supply goal for user {user_id}: {e}")
+        return {
+            "status": "error",
+            "message": "Failed to update emergency supply goal."
         }
 
 # Function to get all pantry management tools

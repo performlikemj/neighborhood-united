@@ -24,6 +24,7 @@ urlpatterns = [
     path('api/history_page/', views.api_history_page, name='api_history_page'),
     path('api/thread_history/', views.api_thread_history, name='api_thread_history'),
     path('api/thread_detail/<str:openai_thread_id>/', views.api_thread_detail_view, name='api_thread_detail'),
+    path('api/debug_threads/', views.debug_threads, name='debug_threads'),
     path('api/goal_management/', views.api_goal_management, name='api_goal_management'),
     path('api/user_goal/', views.api_user_goal_view, name='api_user_goal_view'),
     path('api/adjust_week_shift/', utils.api_adjust_week_shift, name='api_adjust_week_shift'),
@@ -38,7 +39,8 @@ urlpatterns = [
     path('api/delete_calorie_intake/<int:record_id>/', views.api_delete_calorie_intake, name='api_delete_calorie_intake'),
     path('api/calorie_intake/<int:record_id>/', views.api_update_calorie_intake, name='api_update_calorie_intake'),
     path('api/user_summary/', views.api_user_summary, name='api_user_summary'),
-    path('api/user_summary_status/', views.api_user_summary_status, name='api_user_summary'),
+    path('api/user_summary_status/', views.api_user_summary_status, name='api_user_summary_status'),
+    path('api/stream_user_summary/', views.api_stream_user_summary, name='api_stream_user_summary'),
     path('api/recommend_follow_up/', views.api_recommend_follow_up, name='api_recommend_follow_up'),
 
     # Updated Endpoints for the new AI Assistant
@@ -47,6 +49,8 @@ urlpatterns = [
     path('api/assistant/guest-stream-message/', views.guest_stream_message, name='guest_stream_message'),
     path('api/assistant/reset-conversation/', views.reset_conversation, name='reset_conversation'),
     path('api/assistant/conversation/<str:user_id>/history/', views.get_conversation_history, name='get_conversation_history'),
+    path('api/assistant/new-conversation/', views.new_conversation, name='new_conversation'),
+    path('api/assistant/guest-new-conversation/', views.guest_new_conversation, name='guest_new_conversation'),
     path('api/email-assistant/process/', secure_email_integration.process_email, name='process_email')
 
 ]

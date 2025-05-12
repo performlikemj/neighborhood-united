@@ -7,18 +7,37 @@ connecting them to the existing meal planning functionality in the application.
 
 import json
 import logging
+from datetime import date
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Union
-
+from django.http import HttpRequest
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
-
+from django.db import transaction
 from custom_auth.models import CustomUser
 from meals.models import MealPlan, MealPlanMeal, Meal
 from meals.meal_plan_service import create_meal_plan_for_user as service_create_meal_plan_for_user
 from meals.meal_generation import generate_and_create_meal
 from meals.meal_instructions import generate_instructions
 from meals.serializers import MealPlanSerializer, MealPlanMealSerializer
+from shared.utils import (
+    get_user_info as _util_get_user_info,
+    find_nearby_supermarkets as _util_find_nearby_supermarkets,
+    list_upcoming_meals as _util_list_upcoming_meals,
+    create_meal_plan as _util_create_meal_plan,
+    # modify_meal_plan as _util_modify_meal_plan,
+    auth_get_meal_plan as _util_get_meal_plan,
+    # get_meal_details as _util_get_meal_details,
+    # generate_meal_instructions as _util_generate_meal_instructions,
+    list_upcoming_meals as _util_list_upcoming_meals,
+    get_user_info as _util_get_user_info,
+    update_user_info as _util_update_user_info
+)
+import uuid
+from meals.streaming_instructions import generate_streaming_instructions
+from meals.macro_info_retrieval import get_meal_macro_information
+from meals.youtube_api_search import find_youtube_cooking_videos, format_for_structured_output
+from meals.pydantic_models import MealMacroInfo, VideoRankings  # schema validation
 
 logger = logging.getLogger(__name__)
 
@@ -27,17 +46,32 @@ MEAL_PLANNING_TOOLS = [
     {
         "type": "function",
         "name": "create_meal_plan",
-        "description": "Create a new meal plan for a user based on their preferences",
+        "description": "Create a meal plan for a user. By default it covers Monday through Sunday, but callers may specify which days to include and the priority order of meals per day.",
         "parameters": {
             "type": "object",
             "properties": {
                 "user_id": {
-                    "type": "string",
-                    "description": "The ID of the user to create the meal plan for"
-                },
-                "days": {
                     "type": "integer",
-                    "description": "Number of days to plan for (default is 7)"
+                    "description": "ID of the user for whom the plan is being generated"
+                },
+                "days_to_plan": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                    },
+                    "description": "Optional list of weekday names to populate; defaults to the whole week"
+                },
+                "prioritized_meals": {
+                    "type": "object",
+                    "description": "Optional mapping of <weekday> → list of meal types in priority order",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "enum": ["Breakfast", "Lunch", "Dinner"]
+                        }
+                    }
                 },
                 "meal_types": {
                     "type": "array",
@@ -45,15 +79,23 @@ MEAL_PLANNING_TOOLS = [
                         "type": "string",
                         "enum": ["Breakfast", "Lunch", "Dinner"]
                     },
-                    "description": "Types of meals to include in the plan"
+                    "description": "Optional list restricting what meal types can be planned; defaults to all."
                 },
                 "start_date": {
                     "type": "string",
-                    "description": "Start date for the meal plan in YYYY-MM-DD format"
+                    "description": "The ISO date (YYYY‑MM‑DD). The week starting with this date will be used which is always a Monday."
+                },
+                "end_date": {
+                    "type": "string",
+                    "description": "The ISO date (YYYY-MM-DD). The week ending with this date will be used which is always a Sunday."
                 },
                 "user_prompt": {
                     "type": "string",
-                    "description": "Optional user prompt to guide meal generation"
+                    "description": "Raw user prompt to feed downstream generation."
+                },
+                "number_of_days": {
+                    "type": "integer",
+                    "description": "Number of days to plan. Defaults to 7."
                 }
             },
             "required": ["user_id"],
@@ -63,49 +105,49 @@ MEAL_PLANNING_TOOLS = [
     {
         "type": "function",
         "name": "modify_meal_plan",
-        "description": "Modify an existing meal plan by replacing specific meals",
+        "description": "Modify an existing meal plan using natural language prompts. Can modify specific meals or apply changes across the entire plan.",
         "parameters": {
             "type": "object",
             "properties": {
                 "user_id": {
-                    "type": "string",
+                    "type": "integer",
                     "description": "The ID of the user who owns the meal plan"
                 },
                 "meal_plan_id": {
-                    "type": "string",
+                    "type": "integer",
                     "description": "The ID of the meal plan to modify"
                 },
                 "day": {
                     "type": "string",
-                    "description": "The day to modify (e.g., 'Monday', 'Tuesday')"
+                    "description": "Optional day to focus changes on (e.g., 'Monday', 'Tuesday'). If omitted, changes may apply to the entire plan."
                 },
                 "meal_type": {
                     "type": "string",
                     "enum": ["Breakfast", "Lunch", "Dinner"],
-                    "description": "The type of meal to replace"
+                    "description": "Optional meal type to focus changes on. If omitted, changes may apply to all meal types."
                 },
                 "user_prompt": {
                     "type": "string",
-                    "description": "Optional user prompt to guide meal generation for the replacement"
+                    "description": "Natural language description of the requested changes (e.g., 'make all dinners vegan', 'replace Tuesday lunch with pasta', 'no rice in any meals')."
                 }
             },
-            "required": ["user_id", "meal_plan_id", "day", "meal_type"],
+            "required": ["user_id", "meal_plan_id", "user_prompt"],
             "additionalProperties": False
         }
     },
     {
         "type": "function",
         "name": "get_meal_plan",
-        "description": "Get details of an existing meal plan",
+        "description": "Get details of a user's existing meal plan(s)",
         "parameters": {
                 "type": "object",
                 "properties": {
                     "user_id": {
-                        "type": "string",
+                        "type": "integer",
                         "description": "The ID of the user who owns the meal plan"
                     },
                     "meal_plan_id": {
-                        "type": "string",
+                        "type": "integer",
                         "description": "The ID of the meal plan to retrieve (optional, defaults to most recent)"
                     }
                 },
@@ -121,7 +163,7 @@ MEAL_PLANNING_TOOLS = [
                 "type": "object",
                 "properties": {
                     "meal_id": {
-                        "type": "string",
+                        "type": "integer",
                         "description": "The ID of the meal"
                     }
                 },
@@ -131,17 +173,37 @@ MEAL_PLANNING_TOOLS = [
     },
     {
         "type": "function",
-        "name": "generate_meal_instructions",
-        "description": "Generate cooking instructions for meals in a meal plan",
+        "name": "get_meal_plan_meals_info",
+        "description": "Get detailed information about all meals in a meal plan, including meal name, day, meal type, and related meal ID",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "integer",
+                    "description": "The ID of the user who owns the meal plan"
+                },
+                "meal_plan_id": {
+                    "type": "integer",
+                    "description": "The ID of the meal plan"
+                }
+            },
+            "required": ["user_id", "meal_plan_id"],
+            "additionalProperties": False
+        }
+    },
+    {
+        "type": "function",
+        "name": "email_generate_meal_instructions",
+        "description": "Generate cooking instructions for meal(s) in a meal plan and send via email",
         "parameters": {
                 "type": "object",
                 "properties": {
                     "user_id": {
-                        "type": "string",
+                        "type": "integer",
                         "description": "The ID of the user who owns the meal plan"
                     },
                     "meal_plan_id": {
-                        "type": "string",
+                        "type": "integer",
                         "description": "The ID of the meal plan"
                     },
                     "day": {
@@ -157,151 +219,426 @@ MEAL_PLANNING_TOOLS = [
                 "required": ["user_id", "meal_plan_id"],
                 "additionalProperties": False
             }
-    }
+    },
+    {
+        "type": "function",
+        "name": "list_upcoming_meals",
+        "description": "List all upcoming meals for a given user",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": { "type": "integer", "description": "The ID of the user" }
+            },
+            "required": ["user_id"],
+            "additionalProperties": False
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_user_info",
+        "description": "Retrieve essential information about the user (preferences, postal code, allergies, etc.)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": { "type": "integer", "description": "The ID of the user" }
+            },
+            "required": ["user_id"],
+            "additionalProperties": False
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_current_date",
+        "description": "Return the current date in YYYY-MM-DD format",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False
+        }
+    },
+    {
+        "type": "function",
+        "name": "find_nearby_supermarkets",
+        "description": "Find nearby supermarkets by postal code via Google Places API. Only returns the first 10 results. And cannot give directions or other information.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "integer",
+                    "description": "The ID of the user"
+                }
+            },
+            "required": ["user_id"],
+            "additionalProperties": False
+        }
+    },
+    {
+        "type": "function",
+        "name": "update_user_info",
+        "description": "Update user profile information such as postal code, dietary preferences, allergies, week shift, and user goal.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "integer",
+                    "description": "The ID of the user to update"
+                },
+                "postal_code": {
+                    "type": "string",
+                    "description": "New postal code for the user"
+                },
+                "dietary_preferences": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "Updated list of dietary preferences"
+                },
+                "allergies": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "Updated list of allergies"
+                },
+                "user_goal": {
+                    "type": "string",
+                    "description": "Updated user goal description"
+                },
+                "street": { "type": "string", "description": "User's street address" },
+                "city": { "type": "string", "description": "User's city" },
+                "state": { "type": "string", "description": "User's state, prefecture, or country equivalent" },
+                "country": { "type": "string", "description": "User's country code (e.g., 'JP', 'US')" }
+            },
+            "required": ["user_id"],
+            "additionalProperties": False
+        }
+    },
+    {
+        "type": "function",
+        "name": "stream_meal_instructions",
+        "description": "Generate cooking instructions for meals in a meal plan. This function doesn't send emails and is designed for direct display in the UI.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "integer",
+                    "description": "The ID of the user who owns the meal plan"
+                },
+                "meal_plan_id": {
+                    "type": "integer",
+                    "description": "The ID of the meal plan"
+                },
+                "meal_plan_meal_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    },
+                    "description": "List of specific MealPlanMeal IDs that are related to the meal plan, to generate instructions for (not Meal IDs)"
+                }
+            },
+            "required": ["user_id", "meal_plan_id"],
+            "additionalProperties": False
+        }
+    },
+    {
+        "type": "function",
+        "name": "stream_bulk_prep_instructions",
+        "description": "Generate bulk meal prep instructions for a meal plan and stream them back for displaying to the user",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "integer",
+                    "description": "The ID of the user who owns the meal plan"
+                },
+                "meal_plan_id": {
+                    "type": "integer",
+                    "description": "The ID of the meal plan"
+                }
+            },
+            "required": ["user_id", "meal_plan_id"],
+            "additionalProperties": False
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_meal_macro_info",
+        "description": "Return macro-nutrient info (kcal, protein, fat, carbs, fiber, etc.) for a single meal using LLM estimation.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "meal_id": {
+                    "type": "integer",
+                    "description": "ID of the Meal model instance."
+                }
+            },
+            "required": ["meal_id"],
+            "additionalProperties": False
+        }
+    },
+    {
+        "type": "function",
+        "name": "find_related_youtube_videos",
+        "description": "Find & rank relevant YouTube videos that teach how to cook the given meal.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "meal_id": {
+                    "type": "integer",
+                    "description": "ID of the Meal model instance."
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "How many top videos to return (default 5, max 10).",
+                    "minimum": 1,
+                    "maximum": 10
+                }
+            },
+            "required": ["meal_id"],
+            "additionalProperties": False
+        }
+    },
+    # TODO: Add one for obtaining a meals macronutrient breakdown
+    # TODO: Add one for finding youtube videos about a meal
 ]
 
 # Tool implementation functions
-
-def create_meal_plan(user_id: str, days: int = 7, meal_types: List[str] = None, 
-                    start_date: str = None, user_prompt: str = None) -> Dict[str, Any]:
+def get_user_info(user_id: int) -> dict:
     """
-    Create a new meal plan for a user based on their preferences.
-    
-    Args:
-        user_id: The ID of the user to create the meal plan for
-        days: Number of days to plan for (default is 7)
-        meal_types: Types of meals to include in the plan (default is ["Breakfast", "Lunch", "Dinner"])
-        start_date: Start date for the meal plan in YYYY-MM-DD format (default is today)
-        user_prompt: Optional user prompt to guide meal generation
-        
-    Returns:
-        Dict containing the created meal plan details
+    Retrieve essential information about the user (preferences, postal code, allergies, etc.).
     """
     try:
-        # Get the user
-        user = get_object_or_404(CustomUser, id=user_id)
-        
-        # Set default meal types if not provided
-        if not meal_types:
-            meal_types = ["Breakfast", "Lunch", "Dinner"]
-            
-        # Set default start date if not provided
-        if not start_date:
-            start_date = timezone.now().date()
-        else:
-            start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
-            
-        # Calculate end date
-        end_date = start_date + timedelta(days=days-1)
-        
-        # Create the meal plan using the service function
-        meal_plan = service_create_meal_plan_for_user(
-            user=user,
-            start_of_week=start_date,
-            end_of_week=end_date,
-        )
-        
-        # Serialize the meal plan for the response
-        serializer = MealPlanSerializer(meal_plan)
-        
-        return {
-            "status": "success",
-            "message": f"Meal plan created successfully for {days} days starting {start_date}",
-            "meal_plan": serializer.data
-        }
-        
+        # build a minimal request object
+        req = HttpRequest()
+        req.data = {"user_id": user_id}
+        return _util_get_user_info(req)
     except Exception as e:
-        logger.error(f"Error creating meal plan for user {user_id}: {str(e)}")
-        return {
-            "status": "error",
-            "message": f"Failed to create meal plan: {str(e)}"
-        }
+        logger.error(f"get_user_info error for user {user_id}: {e}")
+        return {"status": "error", "message": str(e)}
 
-def modify_meal_plan(user_id: str, meal_plan_id: str, day: str, meal_type: str, 
+def update_user_info(
+    user_id: int,
+    postal_code: Optional[str] = None,
+    dietary_preferences: Optional[List[str]] = None,
+    allergies: Optional[List[str]] = None,
+    user_goal: Optional[str] = None,
+    street: Optional[str] = None,
+    city: Optional[str] = None,
+    state: Optional[str] = None,
+    country: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Update user profile information such as postal code, dietary preferences, allergies, week shift, and user goal.
+    """
+    try:
+        req = HttpRequest()
+        # Prepare data as a dictionary
+        data_dict = {"user_id": user_id}
+        if postal_code is not None:
+            data_dict["postal_code"] = postal_code
+        if dietary_preferences is not None:
+            data_dict["dietary_preferences"] = dietary_preferences
+        if allergies is not None:
+            data_dict["allergies"] = allergies
+        if user_goal is not None:
+            data_dict["user_goal"] = user_goal
+        if street is not None:
+            data_dict["street"] = street
+        if city is not None:
+            data_dict["city"] = city
+        if state is not None:
+            data_dict["state"] = state
+        if country is not None:
+            data_dict["country"] = country
+
+        # Serialize the dictionary to a JSON string and assign to req._body
+        req._body = json.dumps(data_dict).encode('utf-8')
+        req.content_type = "application/json" # Set content type header
+
+        return _util_update_user_info(req)
+    except Exception as e:
+        logger.error(f"update_user_info error for user {user_id}: {e}")
+        return {"status": "error", "message": str(e)}
+
+def create_meal_plan(
+    user_id: int,
+    days_to_plan: Optional[List[str]] = None,
+    prioritized_meals: Optional[Dict[str, List[str]]] = None,
+    meal_types: Optional[List[str]] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    user_prompt: Optional[str] = None,
+    number_of_days: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Create a meal plan by calling `meals.meal_plan_service.create_meal_plan_for_user`
+    with the new flexible arguments (days_to_plan, prioritized_meals, user_prompt, etc.).
+    The default behaviour still creates a full Monday–Sunday plan when no optional
+    parameters are supplied.
+    Callers may specify both `start_date` and `end_date` to target an arbitrary week span;
+    otherwise, the week containing `start_date` (or the current week) is used.
+    """
+    try:
+        with transaction.atomic():
+            # Resolve the user instance
+            user = get_object_or_404(CustomUser, id=user_id)
+
+            # Determine the target week span
+            if start_date and end_date:
+                start_of_week = datetime.fromisoformat(start_date).date()
+                end_of_week   = datetime.fromisoformat(end_date).date()
+                # Ensure start_of_week is the Monday if desired; otherwise trust caller
+            else:
+                # compute this week's Monday and Sunday
+                today = timezone.localdate()
+                start_of_week = (datetime.fromisoformat(start_date).date()
+                                 if start_date else today - timedelta(days=today.weekday()))
+                end_of_week = (datetime.fromisoformat(end_date).date()
+                               if end_date else start_of_week + timedelta(days=6))
+            monday_date = start_of_week
+
+            # Delegate to the service layer
+            meal_plan_obj = service_create_meal_plan_for_user(
+                user=user,
+                start_of_week=start_of_week,
+                end_of_week=end_of_week,
+                monday_date=monday_date,
+                days_to_plan=days_to_plan,
+                prioritized_meals=prioritized_meals,
+                user_prompt=user_prompt,
+                number_of_days=number_of_days,
+            )
+
+            # Serialise result if it's a Django model instance
+            if isinstance(meal_plan_obj, MealPlan):
+                data = MealPlanSerializer(meal_plan_obj).data
+            else:
+                data = meal_plan_obj  # already a dict
+
+            return {"status": "success", "meal_plan": data}
+    except Exception as e:
+        logger.error(f"create_meal_plan error for user {user_id}: {e}")
+        return {"status": "error", "message": str(e)}
+
+def modify_meal_plan(user_id: int, meal_plan_id: int, day: str = None, meal_type: str = None, 
                     user_prompt: str = None) -> Dict[str, Any]:
     """
-    Modify an existing meal plan by replacing specific meals.
+    Modify an existing meal plan using free-form text prompt.
     
     Args:
         user_id: The ID of the user who owns the meal plan
         meal_plan_id: The ID of the meal plan to modify
-        day: The day to modify (e.g., 'Monday', 'Tuesday')
-        meal_type: The type of meal to replace
-        user_prompt: Optional user prompt to guide meal generation for the replacement
+        day: Optional day to focus changes on (e.g., 'Monday', 'Tuesday')
+        meal_type: Optional meal type to focus changes on (e.g., 'Breakfast', 'Lunch', 'Dinner')
+        user_prompt: Free-form text describing the desired changes
         
     Returns:
         Dict containing the modified meal plan details
     """
     try:
+        print(f"DEBUG modify_meal_plan: Starting with params: user_id={user_id}, meal_plan_id={meal_plan_id}, day={day}, meal_type={meal_type}, user_prompt={user_prompt}")
+        
         # Get the user and meal plan
         user = get_object_or_404(CustomUser, id=user_id)
         meal_plan = get_object_or_404(MealPlan, id=meal_plan_id, user=user)
+        print(f"DEBUG modify_meal_plan: Found meal_plan with id={meal_plan.id}, user={user.username}")
         
-        # Find the meal plan meal to replace
-        meal_plan_meal = MealPlanMeal.objects.filter(
-            meal_plan=meal_plan,
-            day=day,
-            meal_type=meal_type
-        ).first()
-        
-        if not meal_plan_meal:
+        # Check if meal plan is from a previous week
+        current_date = timezone.now().date()
+        if meal_plan.week_end_date < current_date:
+            print(f"DEBUG modify_meal_plan: Cannot modify a meal plan from a previous week (ID: {meal_plan_id})")
             return {
                 "status": "error",
-                "message": f"No {meal_type} found for {day} in the meal plan"
+                "message": "Cannot modify a meal plan from a previous week. Only the current week's meal plan can be modified."
             }
+        
+        # Construct a more specific prompt if day and meal_type are provided
+        prompt = user_prompt or ""
+        
+        # Only focus changes on specific day/meal if both are provided
+        prioritized_meals = None
+        days_to_modify = None
+        
+        if day and meal_type:
+            # If day and meal_type are specified, focus the changes on that specific meal
+            if not prompt.lower().startswith(f"change {day.lower()}") and not prompt.lower().startswith(f"modify {day.lower()}"):
+                prompt = f"Change {day}'s {meal_type} to: {prompt}"
             
-        # Get existing meal names and embeddings for context
-        existing_meal_names = set()
-        existing_meal_embeddings = []
+            # Create valid prioritized_meals dictionary
+            prioritized_meals = {day: [meal_type]}
+            days_to_modify = [day]
+            print(f"DEBUG modify_meal_plan: Using prioritized_meals={prioritized_meals}, days_to_modify={days_to_modify}")
         
-        for mpm in MealPlanMeal.objects.filter(meal_plan=meal_plan):
-            if mpm.meal:
-                existing_meal_names.add(mpm.meal.name)
-                if mpm.meal.meal_embedding:
-                    existing_meal_embeddings.append(mpm.meal.meal_embedding)
+        print(f"DEBUG modify_meal_plan: Final prompt: {prompt}")
         
-        # Generate a new meal
-        result = generate_and_create_meal(
-            user=user,
-            meal_plan=meal_plan,
-            meal_type=meal_type,
-            existing_meal_names=existing_meal_names,
-            existing_meal_embeddings=existing_meal_embeddings,
-            user_id=user_id,
-            day_name=day,
-            user_prompt=user_prompt
-        )
+        # Use the new apply_modifications function from meal_plan_service
+        from meals.meal_plan_service import apply_modifications
         
-        if result.get('status') != 'success':
-            return {
-                "status": "error",
-                "message": result.get('message', 'Failed to generate replacement meal')
-            }
+        request_id = str(uuid.uuid4())
+        print(f"DEBUG modify_meal_plan: About to call apply_modifications with request_id={request_id}")
+        
+        try:
+            updated_meal_plan = apply_modifications(
+                user=user,
+                meal_plan=meal_plan,
+                raw_prompt=prompt,
+                request_id=request_id
+            )
             
-        # Get the updated meal plan meal
-        updated_meal_plan_meal = MealPlanMeal.objects.filter(
-            meal_plan=meal_plan,
-            day=day,
-            meal_type=meal_type
-        ).first()
+            if updated_meal_plan is None:
+                print(f"DEBUG modify_meal_plan: apply_modifications returned None, likely because the meal plan is from a previous week")
+                return {
+                    "status": "error",
+                    "message": "Cannot modify a meal plan from a previous week. Only the current week's meal plan can be modified."
+                }
+                
+            print(f"DEBUG modify_meal_plan: Successfully called apply_modifications, updated_meal_plan.id={updated_meal_plan.id}")
+        except Exception as e:
+            import traceback
+            print(f"DEBUG modify_meal_plan: Error in apply_modifications: {str(e)}")
+            print(f"DEBUG modify_meal_plan: Traceback: {traceback.format_exc()}")
+            raise
         
-        # Serialize the updated meal plan meal
-        serializer = MealPlanMealSerializer(updated_meal_plan_meal)
+        # Fetch the updated meal plan meals to return in the response
+        meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=updated_meal_plan).select_related("meal")
+        print(f"DEBUG modify_meal_plan: Found {meal_plan_meals.count()} meals in the updated plan")
         
+        # Format response data
+        meals_data = []
+        for mpm in meal_plan_meals:
+            try:
+                is_chef = mpm.meal.is_chef_created() if hasattr(mpm.meal, 'is_chef_created') else False
+                meals_data.append({
+                    "id": mpm.id,
+                    "day": mpm.day,
+                    "meal_type": mpm.meal_type,
+                    "meal_name": mpm.meal.name,
+                    "meal_description": mpm.meal.description,
+                    "is_chef_meal": is_chef
+                })
+            except Exception as e:
+                print(f"DEBUG modify_meal_plan: Error processing meal {mpm.id}: {str(e)}")
+        
+        print(f"DEBUG modify_meal_plan: Successfully prepared response with {len(meals_data)} meals")
         return {
             "status": "success",
-            "message": f"Successfully replaced {meal_type} for {day}",
-            "meal_plan_meal": serializer.data
+            "message": "Meal plan modified successfully",
+            "meal_plan_id": updated_meal_plan.id,
+            "meals": meals_data
         }
         
     except Exception as e:
+        import traceback
+        print(f"DEBUG modify_meal_plan: Error: {str(e)}")
+        print(f"DEBUG modify_meal_plan: Traceback: {traceback.format_exc()}")
         logger.error(f"Error modifying meal plan {meal_plan_id} for user {user_id}: {str(e)}")
         return {
             "status": "error",
             "message": f"Failed to modify meal plan: {str(e)}"
         }
 
-def get_meal_details(meal_id: str) -> Dict[str, Any]:
+def get_meal_details(meal_id: int) -> Dict[str, Any]:
     """
     Get detailed information about a specific meal.
     
@@ -340,7 +677,40 @@ def get_meal_details(meal_id: str) -> Dict[str, Any]:
             "message": f"Failed to get meal details: {str(e)}"
         }
 
-def get_meal_plan(user_id: str, meal_plan_id: str = None) -> Dict[str, Any]:
+def get_meal_plan_meals_info(user_id: int, meal_plan_id: int) -> Dict[str, Any]:
+    """
+    Get detailed information about all MealPlanMeal entries for a given MealPlan.
+    Includes meal name, day, meal type, and related meal ID.
+    """
+    try:
+        meal_plan = get_object_or_404(MealPlan, id=meal_plan_id, user_id=user_id)
+        meal_plan_meals = MealPlanMeal.objects.select_related('meal').filter(meal_plan=meal_plan)
+
+        meal_plan_meals_info = []
+        for mpm in meal_plan_meals:
+            meal_info = {
+                "meal_plan_meal_id": mpm.id,
+                "meal_id": mpm.meal.id if mpm.meal else None,
+                "meal_name": mpm.meal.name if mpm.meal else "Unknown Meal",
+                "day": mpm.day,
+                "meal_type": mpm.meal_type,
+                "meal_date": mpm.meal_date.isoformat() if mpm.meal_date else None,
+                "already_paid": mpm.already_paid,
+            }
+            meal_plan_meals_info.append(meal_info)
+
+        return {
+            "status": "success",
+            "meal_plan_meals": meal_plan_meals_info
+        }
+    except Exception as e:
+        logger.error(f"Error getting meal plan meals info: {str(e)}")
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+def get_meal_plan(user_id: int, meal_plan_id: int = None) -> Dict[str, Any]:
     """
     Get details of an existing meal plan.
     
@@ -351,42 +721,19 @@ def get_meal_plan(user_id: str, meal_plan_id: str = None) -> Dict[str, Any]:
     Returns:
         Dict containing the meal plan details
     """
+    print(f"DEBUG get_meal_plan: user_id={user_id}, meal_plan_id={meal_plan_id}")
     try:
-        # Get the user
-        user = get_object_or_404(CustomUser, id=user_id)
-        
-        # Get the meal plan
-        if meal_plan_id:
-            meal_plan = get_object_or_404(MealPlan, id=meal_plan_id, user=user)
-        else:
-            # Get the most recent meal plan
-            meal_plan = MealPlan.objects.filter(user=user).order_by('-created_at').first()
-            
-            if not meal_plan:
-                return {
-                    "status": "error",
-                    "message": "No meal plans found for this user"
-                }
-        
-        # Serialize the meal plan
-        serializer = MealPlanSerializer(meal_plan)
-        
-        return {
-            "status": "success",
-            "meal_plan": serializer.data
-        }
-        
+        req = HttpRequest()
+        req.data = {"user_id": user_id}
+        return _util_get_meal_plan(req)
     except Exception as e:
-        logger.error(f"Error retrieving meal plan for user {user_id}: {str(e)}")
-        return {
-            "status": "error",
-            "message": f"Failed to retrieve meal plan: {str(e)}"
-        }
+        logger.error(f"get_meal_plan error for user {user_id}: {e}")
+        return {"status": "error", "message": str(e)}
 
-def generate_meal_instructions(user_id: str, meal_plan_id: str, day: str = None, 
+def email_generate_meal_instructions(user_id: int, meal_plan_id: int, day: str = None, 
                               meal_type: str = None) -> Dict[str, Any]:
     """
-    Generate cooking instructions for meals in a meal plan.
+    Generate cooking instructions for meals in a meal plan and send via email.
     
     Args:
         user_id: The ID of the user who owns the meal plan
@@ -395,7 +742,7 @@ def generate_meal_instructions(user_id: str, meal_plan_id: str, day: str = None,
         meal_type: Optional specific meal type to generate instructions for
         
     Returns:
-        Dict containing the generated instructions
+        Dict containing the generated instructions or confirmation of email delivery
     """
     try:
         # Get the user and meal plan
@@ -439,6 +786,192 @@ def generate_meal_instructions(user_id: str, meal_plan_id: str, day: str = None,
             "status": "error",
             "message": f"Failed to generate instructions: {str(e)}"
         }
+
+def get_current_date() -> dict:
+    """
+    Return the current date in ISO format.
+    """
+    return {"date": date.today().isoformat()}
+
+def list_upcoming_meals(user_id: int) -> dict:
+    """
+    List all meals scheduled for the current week for the given user.
+    """
+    try:
+        req = HttpRequest()
+        req.data = {"user_id": user_id}
+        return _util_list_upcoming_meals(req)
+    except Exception as e:
+        logger.error(f"list_upcoming_meals error for user {user_id}: {e}")
+        return {"status": "error", "message": str(e)}
+
+def find_nearby_supermarkets(user_id: int) -> dict:
+    """
+    Find nearby supermarkets by postal code (via Google Places API).
+    """
+    try:
+        # the shared util ignores request.data, but signature expects two args
+        req = HttpRequest()
+        req.data = {"user_id": user_id}
+        return _util_find_nearby_supermarkets(req)
+    except Exception as e:
+        logger.error(f"find_nearby_supermarkets error for user_id {user_id}: {e}")
+        return {"status": "error", "message": str(e)}
+
+def stream_meal_instructions(
+    user_id: int,
+    meal_plan_id: int,
+    meal_plan_meal_ids: Optional[List[int]] = None
+) -> Dict[str, Any]:
+    """
+    Generate cooking instructions for meals in a meal plan.
+    This function doesn't send emails and is designed for direct display in the UI.
+    
+    Args:
+        user_id: The ID of the user who owns the meal plan
+        meal_plan_id: The ID of the meal plan
+        meal_plan_meal_ids: Optional list of specific MealPlanMeal IDs to generate instructions for (not Meal IDs)
+        
+    Returns:
+        Dict containing the generated instructions
+    """
+    try:
+        # Use generate_streaming_instructions to create the instructions
+        return generate_streaming_instructions(
+            user_id=user_id,
+            meal_plan_id=meal_plan_id,
+            mode="daily",
+            meal_plan_meal_ids=meal_plan_meal_ids
+        )
+    except Exception as e:
+        logger.error(f"Error in stream_meal_instructions for meal plan {meal_plan_id}: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Failed to generate streaming instructions: {str(e)}"
+        }
+
+def stream_bulk_prep_instructions(
+    user_id: int,
+    meal_plan_id: int
+) -> Dict[str, Any]:
+    """Generate bulk meal prep instructions for a meal plan and stream them back for displaying to the user"""
+    try:
+        user = get_object_or_404(CustomUser, id=user_id)
+        meal_plan = get_object_or_404(MealPlan, id=meal_plan_id, user=user)
+
+        # Generate streaming instructions
+        instructions_stream = generate_streaming_instructions(
+            meal_plan=meal_plan,
+            mode="bulk_prep"
+        )
+
+        # Return the stream response
+        return {
+            "status": "success",
+            "instructions_stream": instructions_stream,
+            "message": "Bulk preparation instructions generated successfully."
+        }
+    except Exception as e:
+        logger.error(f"Error generating bulk prep instructions: {str(e)}")
+        return {
+            "status": "error",
+            "message": f"Error generating bulk prep instructions: {str(e)}"
+        }
+
+def get_meal_macro_info(meal_id: int) -> Dict[str, Any]:
+    """
+    Return macro-nutrient info for a single meal using LLM estimation.
+    
+    Args:
+        meal_id: ID of the Meal model instance
+        
+    Returns:
+        Dictionary containing the meal's macro-nutrient information
+    """
+    try:
+        meal = Meal.objects.get(id=meal_id)
+        
+        # Check if we have cached macro info in the meal model
+        if meal.macro_info:
+            logger.info(f"Using cached macro information for meal {meal_id}")
+            return {"status": "success", "macros": meal.macro_info}
+        
+        # If not cached, fetch from the API
+        data = get_meal_macro_information(
+            meal_name=meal.name,
+            meal_description=meal.description,
+            ingredients=[ing.name for ing in meal.ingredients.all()] if hasattr(meal, "ingredients") else None
+        )
+        
+        if not data:
+            return {"status": "error", "message": "Macro lookup failed."}
+            
+        # Validate & coerce into canonical schema
+        validated = MealMacroInfo.model_validate(data)
+        validated_data = validated.model_dump()
+        
+        # Cache the results in the meal model
+        meal.macro_info = validated_data
+        meal.save(update_fields=['macro_info'])
+        
+        return {"status": "success", "macros": validated_data}
+    except Meal.DoesNotExist:
+        return {"status": "error", "message": f"Meal {meal_id} not found."}
+    except Exception as e:
+        logger.error(f"get_meal_macro_info error: {e}")
+        return {"status": "error", "message": str(e)}
+
+def find_related_youtube_videos(meal_id: int, max_results: int = 5) -> Dict[str, Any]:
+    """
+    Find & rank relevant YouTube videos that teach how to cook the given meal.
+    
+    Args:
+        meal_id: ID of the Meal model instance
+        max_results: Maximum number of videos to return (default 5, max 10)
+        
+    Returns:
+        Dictionary containing ranked YouTube video information
+    """
+    try:
+        # Ensure max_results is within bounds
+        max_results = min(max(1, max_results), 10)
+        
+        meal = Meal.objects.get(id=meal_id)
+        
+        # Check if we have cached video data in the meal model
+        if meal.youtube_videos:
+            logger.info(f"Using cached YouTube videos for meal {meal_id}")
+            videos = meal.youtube_videos
+            
+            # If we have more videos than requested, truncate the list
+            if "ranked_videos" in videos and len(videos["ranked_videos"]) > max_results:
+                videos["ranked_videos"] = videos["ranked_videos"][:max_results]
+                
+            return {"status": "success", "videos": videos}
+        
+        # If not cached, fetch from the API
+        raw = find_youtube_cooking_videos(
+            meal_name=meal.name,
+            meal_description=meal.description,
+            limit=max_results
+        )
+        
+        formatted = format_for_structured_output(raw)
+        
+        # Validate
+        validated = VideoRankings.model_validate(formatted)
+        validated_data = validated.model_dump()
+        
+        # Cache the results in the meal model
+        meal.youtube_videos = validated_data
+        meal.save(update_fields=['youtube_videos'])
+        
+        return {"status": "success", "videos": validated_data}
+    except Meal.DoesNotExist:
+        return {"status": "error", "message": f"Meal {meal_id} not found."}
+    except Exception as e:
+        logger.error(f"find_related_youtube_videos error: {e}")
+        return {"status": "error", "message": str(e)}
 
 # Function to get all meal planning tools
 def get_meal_planning_tools():

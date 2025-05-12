@@ -15,6 +15,8 @@ from django.db.models import F
 from decimal import Decimal
 import stripe
 from .models import ChefMealEvent, ChefMealOrder, PaymentLog, STATUS_COMPLETED
+import pytz
+from customer_dashboard.models import CustomUser
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -178,6 +180,129 @@ def process_chef_meal_price_adjustments():
     
     logger.info(f"Price adjustment task completed. Processed {total_processed} refunds totaling ${total_refunded}")
     return {'processed': total_processed, 'total_refunded': str(total_refunded)}
+
+@shared_task
+def generate_daily_user_summaries():
+    """
+    Task to generate daily summaries for all active users.
+    This task runs hourly to catch users in different time zones
+    and generates summaries only when it's 3:00 AM in the user's local timezone.
+    """
+    logger = logging.getLogger(__name__)
+    
+    # Get all users with confirmed emails
+    active_users = CustomUser.objects.filter(
+        email_confirmed=True
+    )
+    
+    eligible_count = 0
+    summary_count = 0
+    
+    logger.info(f"Checking {active_users.count()} users with confirmed emails for daily summary generation")
+    
+    # Process each user
+    for user in active_users:
+        try:
+            # Get the user's timezone
+            user_timezone = pytz.timezone(user.timezone if user.timezone else 'UTC')
+            
+            # Get current time in user's timezone
+            user_local_time = timezone.now().astimezone(user_timezone)
+            user_local_date = user_local_time.date()
+            hour = user_local_time.hour
+            
+            # Only generate summary if it's between 2-4 AM in the user's timezone
+            if 2 <= hour <= 4:
+                # Check if we already generated a summary for this user today
+                from customer_dashboard.models import UserDailySummary
+                
+                # Skip if the user already has a summary for today with completed status
+                existing_summary = UserDailySummary.objects.filter(
+                    user=user,
+                    summary_date=user_local_date,
+                    status=UserDailySummary.COMPLETED
+                ).first()
+                
+                if existing_summary:
+                    logger.debug(f"User {user.id} ({user.username}) already has a summary for today")
+                    continue
+                    
+                # This user is eligible for a summary generation
+                eligible_count += 1
+                
+                logger.info(f"Generating summary for user {user.id} ({user.username}) in timezone {user_timezone}")
+                from meals.email_service import generate_user_summary
+                
+                # Queue the task to generate the summary
+                generate_user_summary.delay(user.id)
+                summary_count += 1
+                
+        except Exception as e:
+            logger.error(f"Error checking/generating summary for user {user.id}: {e}")
+    
+    if eligible_count > 0:
+        logger.info(f"Found {eligible_count} users eligible for summary generation, queued {summary_count} summaries")
+    else:
+        logger.info("No users currently in the 2-4 AM window in their local timezone")
+        
+    return f"Daily summary check complete: found {eligible_count} eligible users, queued {summary_count} summaries"
+
+@shared_task
+def schedule_capture(event_id):
+    """
+    Schedule the capture of payment intents at the event's cutoff time.
+    
+    Args:
+        event_id: ID of the ChefMealEvent to schedule for
+    """
+    from meals.models import ChefMealEvent
+    event = ChefMealEvent.objects.get(id=event_id)
+    eta = event.order_cutoff_time
+    
+    # Schedule the capture task to run at the cutoff time
+    capture_payment_intents.apply_async(args=[event_id], eta=eta)
+
+@shared_task
+def capture_payment_intents(event_id):
+    """
+    Capture all payment intents for a given chef meal event.
+    This task is scheduled to run at the event's cutoff time.
+    
+    Args:
+        event_id: ID of the ChefMealEvent to capture payments for
+    """
+    import stripe
+    from django.conf import settings
+    from meals.models import ChefMealOrder
+    
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    
+    # Get all placed orders for this event
+    orders = ChefMealOrder.objects.filter(
+        meal_event_id=event_id, 
+        status='placed'
+    )
+    
+    for order in orders:
+        if order.stripe_payment_intent_id:
+            try:
+                # Capture the payment intent
+                stripe.PaymentIntent.capture(
+                    order.stripe_payment_intent_id,
+                    idempotency_key=f"capture_{order.stripe_payment_intent_id}"
+                )
+                
+                # Update order status
+                order.status = 'confirmed'
+                order.save(update_fields=['status'])
+                
+                # Log the successful capture
+                logger.info(f"Payment captured for order {order.id}, " 
+                           f"payment intent {order.stripe_payment_intent_id}")
+            except Exception as e:
+                logger.error(f"Failed to capture payment for order {order.id}: {str(e)}")
+        else:
+            logger.warning(f"No payment intent found for order {order.id}")
 
 
 

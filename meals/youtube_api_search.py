@@ -13,6 +13,7 @@ from googleapiclient.errors import HttpError
 from openai import OpenAI
 from django.conf import settings
 import os
+from meals.pydantic_models import VideoRankings
 
 logger = logging.getLogger(__name__)
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
@@ -20,42 +21,6 @@ OPENAI_API_KEY = settings.OPENAI_KEY
 
 # Initialize the OpenAI client
 client = OpenAI(api_key=OPENAI_API_KEY)
-
-# Define the schema for video ranking
-VIDEO_RANKING_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "ranked_videos": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "video_id": {"type": "string"},
-                    "relevance_score": {"type": "number", "minimum": 0, "maximum": 10},
-                    "relevance_explanation": {"type": "string"},
-                    "matching_ingredients": {
-                        "type": "array",
-                        "items": {"type": "string"}
-                    },
-                    "matching_techniques": {
-                        "type": "array",
-                        "items": {"type": "string"}
-                    },
-                    "recommended": {"type": "boolean"}
-                },
-                "required": [
-                    "video_id",
-                    "relevance_score",
-                    "relevance_explanation",
-                    "recommended"
-                ],
-                "additionalProperties": False  # Forbid any extra properties in each video object
-            }
-        }
-    },
-    "required": ["ranked_videos"],
-    "additionalProperties": False  # Forbid any extra properties at the top level
-}
 
 def find_youtube_cooking_videos(meal_name: str, meal_description: str, limit: int = 5) -> Dict[str, Any]:
     """
@@ -196,6 +161,9 @@ def _rank_videos_with_openai(meal_name: str, meal_description: str, videos: List
                 "channel": video["channel"]
             })
         
+        # Get the schema for the VideoRankings model
+        schema = VideoRankings.model_json_schema()
+        
         # Call OpenAI Responses API to analyze and rank videos
         response = client.responses.create(
             model="gpt-4.1-mini",
@@ -215,7 +183,7 @@ def _rank_videos_with_openai(meal_name: str, meal_description: str, videos: List
                 "format": {
                     'type': 'json_schema',
                     'name': 'video_rankings',
-                    'schema': VIDEO_RANKING_SCHEMA
+                    'schema': schema
                 }
             }
         )

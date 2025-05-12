@@ -88,7 +88,7 @@ class Command(BaseCommand):
                     model="gpt-4.1-mini",
                     messages=[
                         {
-                            "role": "system",
+                            "role": "developer",
                             "content": (
                                 "You are a helpful assistant that classifies meals into Breakfast, Lunch, or Dinner based on their names and descriptions."
                             )

@@ -23,7 +23,7 @@ from custom_auth.models import CustomUser, UserRole
 from django.contrib.contenttypes.models import ContentType
 from random import sample
 from collections import defaultdict
-from local_chefs.views import chef_service_areas, service_area_chefs
+from .google_places import nearby_supermarkets
 import os
 import openai
 from openai import OpenAI
@@ -41,6 +41,7 @@ import numpy as np
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 import time
+from decimal import Decimal # Add this import
 
 logger = logging.getLogger(__name__)
 
@@ -217,25 +218,102 @@ def get_access_token(client_id, client_secret):
         # Handle error
         return None
 
-def find_nearby_supermarkets(request, postal_code):
-    url = "https://api-ce.kroger.com/v1/locations"
-    headers = {
-        "Accept": "application/json",
-        "Authorization": f"Bearer {get_access_token(client_id=os.getenv('KROGER_CLIENT_ID'), client_secret=os.getenv('KROGER_CLIENT_SECRET'))}"
-    }
-    params = {
-        "filter.zipCode.near": postal_code,
-        # You can adjust the radius and limit as needed
-        "filter.radiusInMiles": 10,
-        "filter.limit": 10
-    }
-    response = requests.get(url, headers=headers, params=params)
+def _get_user_id_for_ratelimit(group, request):
+    """Helper function to extract user_id for rate limiting."""
+    user_id = request.data.get('user_id')
+    # Return user_id as string, or None if not found (though it should always be present)
+    return str(user_id) if user_id else None
 
-    if response.status_code == 200:
-        return response.json()
-    else:
-        # Handle errors
-        return None
+@ratelimit(key=_get_user_id_for_ratelimit, rate='5/d', block=True)
+def find_nearby_supermarkets(request):
+    """
+    Find nearby supermarkets based on user's address.
+    """
+    user = CustomUser.objects.get(id=request.data.get('user_id'))
+    address = user.address
+    latitude = address.latitude
+    longitude = address.longitude
+    if not latitude or not longitude:
+        try:
+            from shared.pydantic_models import GeoCoordinates
+            user_address_string = f"The user's postal code is {address.input_postalcode} in the country of {address.country}"
+            response = client.responses.create(
+                model="gpt-4.1-nano",
+                input=[
+                    {
+                        "role": "developer",
+                        "content": """
+                            Provide the approximate latitude and longitude coordinates for a given user's address.
+
+                            # Steps
+
+                            1. Analyze the given address to ensure it is properly formatted and complete.
+                            2. Use a geolocation API or database to convert the address into latitude and longitude coordinates.
+                            3. Verify the accuracy of the coordinates obtained if possible.
+
+                            # Output Format
+
+                            The output should be in JSON format, structured as follows:
+                            ```json
+                            {
+                            "latitude": [latitude_value],
+                            "longitude": [longitude_value]
+                            }
+                            ```
+                            Ensure the values are numeric and formatted with a precision of at least four decimal places. 
+
+                            # Notes
+
+                            - If the address is incomplete or cannot be geolocated, return a message indicating the issue.
+                            - Ensure privacy and data protection when handling user addresses.
+                        """
+                    },
+                    {
+                        "role": "user",
+                        "content": user_address_string
+                    }
+                ],
+                tools=[{"type": "web_search_preview"}],
+                text={
+                    "format": {
+                        'type': 'json_schema',
+                        'name': 'GeoCoordinates',
+                        'schema': GeoCoordinates.model_json_schema()
+                    }
+                }
+            )
+            geo_string = response.output_text # Get the JSON string
+            
+            # Parse the JSON string into a Python dictionary
+            geo_data = json.loads(geo_string) 
+
+            # Access latitude and longitude from the dictionary
+            latitude_raw = geo_data.get("latitude") 
+            longitude_raw = geo_data.get("longitude")
+            
+            # Format to 6 decimal places if values exist
+            latitude = round(float(latitude_raw), 6) if latitude_raw is not None else None
+            longitude = round(float(longitude_raw), 6) if longitude_raw is not None else None
+            
+            # Convert to Decimal before assigning
+            user.address.latitude = Decimal(str(latitude)) if latitude is not None else None
+            user.address.longitude = Decimal(str(longitude)) if longitude is not None else None
+
+            user.address.save()
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decoding Geo JSON: {e}")
+            logger.error(f"Received geo string: {geo_string}")
+            return {"status": "error", "message": "Failed to parse location data."}
+        except Exception as e:
+            logger.error(f"Error getting latitude and longitude: {e}")
+            return {"status": "error", "message": str(e)}
+
+    try:
+        supermarkets = nearby_supermarkets(latitude, longitude)
+        return {"status": "success", "data": supermarkets}
+    except Exception as e:
+        logger.error(f"Google Places error: {e}")
+        return {"status": "error", "message": str(e)}
 
 # sautAI functions
 
@@ -368,10 +446,10 @@ def is_question_relevant(question):
     """
 
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4.1-nano",
         messages=[
             {
-                "role": "system",
+                "role": "developer",
                 "content": """
                     Determine if a given question is relevant to the application's functionalities related to food delivery, meal planning, health, nutrition, and diet, and return 'True' for relevant or 'False' for non-relevant questions.
 
@@ -436,7 +514,6 @@ def is_question_relevant(question):
 
     # Interpret the model's response
     response_content = response.choices[0].message.content
-    print(f'Is Question Relevant Response: {response_content}')
     relevant = json.loads(response_content).get('relevant', False)
     return relevant
 
@@ -459,37 +536,56 @@ def recommend_follow_up(request, context):
 
     if user and user.is_authenticated:
         functions = """
-            "auth_search_dishes: Search dishes in the database",
-            "auth_search_chefs: Search chefs in the database and get their info",
-            "auth_get_meal_plan: Get a meal plan for the current week or a future week",
-            "create_meal_plan: Create a new meal plan for the user",
-            "chef_service_areas: Retrieve service areas for a specified chef",
-            "service_area_chefs: Search for chefs serving a user's postal code area",
-            "approve_meal_plan: Approve the meal plan and proceed to payment",
-            "auth_search_ingredients: Search for ingredients in the database",
-            "auth_search_meals_excluding_ingredient: Search for meals excluding an ingredient",
-            "search_meal_ingredients: Search the database for a meal's ingredients",
-            "suggest_alternative_meals: Suggest alternative meals based on meal IDs and days of the week",
-            "add_meal_to_plan: Add a meal to a specified day in the meal plan",
-            "get_date: Get the current date and time",
-            "list_upcoming_meals: List upcoming meals for the current week",
-            "remove_meal_from_plan: Remove a meal from a specified day in the meal plan",
-            "replace_meal_in_plan: Replace a meal with another on a specified day in the meal plan",
-            "post_review: Post a review for a meal or a chef",
-            "update_review: Update an existing review",
-            "delete_review: Delete a review",
-            "generate_review_summary: Generate a summary of all reviews for a meal or chef",
-            "access_past_orders: Retrieve past orders for a user",
-            "get_user_info: Retrieve essential information about the user",
-            "get_goal: Retrieve the user's goal",
-            "update_goal: Update the user's goal",
-            "adjust_week_shift: Adjust the week shift forward for meal planning",
-            "check_allergy_alert: Check for potential allergens in a meal",
-            "track_calorie_intake: Track and log the user's daily calorie intake",
-            "provide_nutrition_advice: Offer personalized nutrition advice",
-            "find_nearby_supermarkets: Find nearby supermarkets based on the user's postal code",
-            "search_healthy_meal_options: Search for healthy meal options at a specified supermarket location",
-            "provide_healthy_meal_suggestions: Provide healthy meal suggestions based on the user's dietary preferences and health goals"
+            # Meal Planning Tools
+            "create_meal_plan": "Create a meal plan for the user",
+            "modify_meal_plan": "Modify a meal plan for the user",
+            "get_meal_plan": "Get a meal plan for the user",
+            "generate_meal_instructions": "Generate meal instructions for the user",
+            "get_user_info": "Get user information",
+            "get_current_date": "Get the current date",
+            "list_upcoming_meals": "List upcoming meals for the user",
+            "find_nearby_supermarkets": "Find nearby supermarkets for the user",
+            "update_user_info": "Update user information",
+            
+            # Pantry Management Tools
+            "check_pantry_items": "Check pantry items for the user",
+            "add_pantry_item": "Add a pantry item for the user",
+            "get_expiring_items": "Get expiring items for the user",
+            "generate_shopping_list": "Generate a shopping list for the user",
+            
+            # Chef Connection Tools
+            "find_local_chefs": "Find local chefs for the user",
+            "get_chef_details": "Get chef details for the user",
+            "view_chef_meal_events": "View chef meal events for the user",
+            "place_chef_meal_event_order": "Place a chef meal event order for the user",
+            "get_order_details": "Get order details for the user",
+            "cancel_order": "Cancel an order for the user",
+            
+            # Payment Processing Tools
+            "create_payment_link": "Create a payment link for the user",
+            "check_payment_status": "Check a payment status for the user",
+            "process_refund": "Process a refund for the user",
+            
+            # Dietary Preference Tools
+            "manage_dietary_preferences": "Manage dietary preferences for the user",
+            "check_meal_compatibility": "Check meal compatibility for the user",
+            "suggest_alternatives": "Suggest alternatives for the user",
+            "check_allergy_alert": "Check an allergy alert for the user",
+
+            # Customer Dashboard Tools
+            "adjust_week_shift": "Adjust a week shift for the user",
+            "reset_current_week": "Reset a current week for the user",
+            "update_goal": "Update a goal for the user",
+            "get_goal": "Get a goal for the user",
+            "access_past_orders": "Access past orders for the user",
+
+            # Guest Tools
+            "guest_search_dishes": "Search dishes in the database",
+            "guest_search_chefs": "Search chefs in the database",
+            "guest_get_meal_plan": "Get a meal plan for the current week",
+            "guest_search_ingredients": "Search ingredients used in dishes",
+            "chef_service_areas": "Get chef service areas"
+        }
     """
     else:
         print("Chatting with Guest GPT")
@@ -497,16 +593,21 @@ def recommend_follow_up(request, context):
             "guest_search_dishes: Search dishes in the database",
             "guest_search_chefs: Search chefs in the database and get their info",
             "guest_get_meal_plan: Get a meal plan for the current week",
-            "guest_search_ingredients: Search ingredients used in dishes and get their info"
+            "guest_search_ingredients: Search ingredients used in dishes and get their info",
+            "get_current_date: Get the current date"    
         """
 
     try:
         response = client.responses.create(
-            model="gpt-4o-mini",
-            messages=[
+            model="gpt-4.1-nano",
+            input=[
                 {
-                    "role": "system",
-                    "content": "You are a helpful assistant that provides the user with the next prompt they should write based on given context and functions."
+                    "role": "developer",
+                    "content": (
+                        "Analyze the full context of the message so far. "
+                        "Given the library of tools available, suggest recommended follow-up questions to ask the meal planning assistant. "
+                        "Ensure that recommendations align strictly with the scope of the available tools, and do not invent anything outside of it."
+                    )
                 },
                 {
                     "role": "user",
@@ -518,17 +619,16 @@ def recommend_follow_up(request, context):
                     )
                 }
             ],
-            response_format={
-                'type': 'json_schema',
-                'json_schema': 
-                    {
-                        "name": "Instructions", 
-                        "schema": FollowUpSchema.model_json_schema()
-                    }
+            text={
+                "format": {
+                    'type': 'json_schema',
+                    'name': 'follow_up',
+                    'schema': FollowUpSchema.model_json_schema()
                 }
+            }
             )
-        # Correct way to access the response content
-        response_content = response.choices[0].message.content
+# Correct way to access the response content
+        response_content = response.output_text
         return response_content.strip().split('\n')
 
     except Exception as e:
@@ -692,7 +792,6 @@ def update_goal(request, goal_name, goal_description):
             return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
 
 
-        print(f'From update_goal: {goal_name}, {goal_description}')
         # Ensure goal_name and goal_description are not empty
         if not goal_name or not goal_description:
             return {
@@ -777,13 +876,86 @@ def get_user_info(request):
             'postal_code': postal_code,
             'allergies': allergies,  
         }
-        print(f'User Info: {user_info}')
         return {'status': 'success', 'user_info': user_info, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     except CustomUser.DoesNotExist:
         return {'status': 'error', 'message': 'User not found.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     except Address.DoesNotExist:
         return {'status': 'error', 'message': 'Address not found for user.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
+def update_user_info(request):
+    """
+    Update the user's information.
+    """
+    from customer_dashboard.models import GoalTracking
+
+    try:
+        data = json.loads(request._body)
+        user_id = data.get('user_id')
+        user = CustomUser.objects.get(id=user_id)
+
+        # Update address information
+        address, created = Address.objects.get_or_create(user=user)
+        postal_code = data.get('postal_code', None)
+        if postal_code:
+            address.input_postalcode = postal_code
+        street = data.get('street', None)
+        if street:
+            address.street = street
+        city = data.get('city', None)
+        if city:
+            address.city = city
+        state = data.get('state', None)
+        if state:
+            address.state = state
+        country = data.get('country', None)
+        if country:
+            address.country = country
+        address.save()
+
+        # Update dietary preferences
+        dietary_preferences = data.get('dietary_preferences', None)
+        if dietary_preferences is not None:
+            user.dietary_preferences.clear()
+            for pref in dietary_preferences:
+                clean_name = pref.strip().strip('"').strip("'")
+                dietary_preference, _ = DietaryPreference.objects.get_or_create(
+                    name__iexact=clean_name,   # exact, case-insensitive
+                    defaults={"name": clean_name}
+                )
+                user.dietary_preferences.add(dietary_preference)
+        # Update allergies
+        allergies = data.get('allergies', None)
+        if allergies is not None:
+            user.allergies = allergies
+
+
+        # Update user goal
+        user_goal = data.get('user_goal', None)
+        user_goal_name = data.get('user_goal_name', None)
+        if user_goal:
+            goal, created = GoalTracking.objects.get_or_create(goal_description=user_goal)
+            user.goal.goal_description = goal
+            # Use responses API to update the goal name
+            if not user_goal_name:
+                response = client.responses.create(
+                    model="gpt-4.1-nano",
+                    instructions="Based on the user's goal description, generate a concise and descriptive goal name.",
+                    input=[{"role":"user","content":user_goal}],
+                )
+                goal_name = response.output_text
+                user.goal.goal_name = goal_name
+            else:
+                user.goal.goal_name = user_goal_name
+
+        user.save()
+        return {'status': 'success', 'message': 'User information updated successfully'}
+
+    except CustomUser.DoesNotExist:
+        return {'status': 'error', 'message': 'User not found'}
+    except Exception as e:
+        traceback.print_exc()
+        return {'status': 'error', 'message': str(e)}
+    
 def access_past_orders(request, user_id):
     try:
         # Check user authorization
@@ -938,11 +1110,11 @@ def generate_review_summary(object_id, category):
 # Function to generate a summarized title
 def generate_summary_title(question):
     try:
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
+        response = client.responses.create(
+            model="gpt-4.1-nano",
             messages=[
                 {
-                    "role": "system",
+                    "role": "developer",
                     "content": "You are a helpful assistant that generates concise titles for chat conversations."
                 },
                 {
@@ -951,52 +1123,54 @@ def generate_summary_title(question):
                 }
             ],
         )
-        summary = response.choices[0].message.content
+        summary = response.output_text
         return summary
     except OpenAIError as e:
-        print(f"Error generating summary: {str(e)}")
         return question[:254]  # Fallback to truncating the question if an error occurs
 
 
 
 def list_upcoming_meals(request):
-    print(f'From list_upcoming_meals: {request.data.get("user_id")}')
-    user = CustomUser.objects.get(id=request.data.get('user_id'))
+    user = CustomUser.objects.get(id=request.data.get("user_id"))
     user_role = UserRole.objects.get(user=user)
-    
     if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
+        return {
+            'status': 'error',
+            'message': 'Chefs in their chef role are not allowed to use the assistant.'
+        }
 
-    # Calculate the current week's start and end dates based on week_shift
-    week_shift = max(int(user.week_shift), 0)
-    current_date = timezone.now().date() + timedelta(weeks=week_shift)
-    start_of_week = current_date - timedelta(days=current_date.weekday())
-    end_of_week = start_of_week + timedelta(days=6)
+    today = timezone.now().date()
 
-    # Filter meals by dietary preferences, postal code, and current week
-    dietary_filtered_meals = Meal.dietary_objects.for_user(user).filter(start_date__range=[start_of_week, end_of_week])
-    postal_filtered_meals = Meal.postal_objects.for_user(user=user).filter(start_date__range=[start_of_week, end_of_week])
+    # Grab all future (or today's) slots across every MealPlan for this user
+    slots = (
+        MealPlanMeal.objects
+        .filter(meal_plan__user=user, meal_date__gte=today)
+        .select_related('meal', 'meal_plan')
+        .order_by('meal_date', 'meal_type')
+    )
 
-    # Combine both filters
-    filtered_meals = dietary_filtered_meals & postal_filtered_meals
+    if not slots.exists():
+        return {
+            'status': 'info',
+            'message': 'You have no upcoming meals scheduled.',
+            'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
 
-    # Compile meal details
     meal_details = [
         {
-            "meal_id": meal.id,
-            "name": meal.name,
-            "start_date": meal.start_date.strftime('%Y-%m-%d') if meal.start_date else 'N/A',
-            "is_available": meal.can_be_ordered(),
-            "chef": meal.chef.user.username if meal.chef else 'User Created Meal',
-            "meal_type": meal.mealplanmeal_set.first().meal_type if meal.mealplanmeal_set.first() else 'N/A',
-            # Add more details as needed
-        } for meal in filtered_meals
+            "meal_id": slot.meal.id,
+            "name": slot.meal.name,
+            "date": slot.meal_date.isoformat(),
+            "meal_type": slot.meal_type,
+            "chef_meals_for_ordering": slot.meal.can_be_ordered(),
+            "chef": slot.meal.chef.user.username if slot.meal.chef else 'User Created Meal'
+        }
+        for slot in slots
     ]
 
-    # Return a dictionary instead of JsonResponse
     return {
         "upcoming_meals": meal_details,
-        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S'),
+        "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')
     }
 
 def create_meal_plan(request):
@@ -1249,7 +1423,7 @@ def create_meal(request=None, user_id=None, name=None, dietary_preference=None, 
                         model="gpt-4.1-mini",
                         messages=[
                             {
-                                "role": "system",
+                                "role": "developer",
                                 "content": "You are a helpful assistant that generates a meal, its description, and dietary preferences based on information about the user."
                             },
                             {
@@ -1475,7 +1649,6 @@ def add_meal_to_plan(request, meal_plan_id, meal_id, day, meal_type, allow_dupli
 
 
 def suggest_alternative_meals(request, meal_ids, days_of_week, meal_types):
-    print(f'From suggest_alternative_meals: {meal_ids}, {days_of_week}, {meal_types}')
     """
     Suggest alternative meals based on a list of meal IDs, corresponding days of the week, and meal types.
     """
@@ -1638,7 +1811,6 @@ def find_similar_meals(query_vector, threshold=0.1):
 
 def search_meal_ingredients(request, query):
     print("From search_meal_ingredients")
-    print(f"Query: {query}")
     
     # Check if the query is valid
     if not query or not isinstance(query, str):
@@ -1667,7 +1839,6 @@ def search_meal_ingredients(request, query):
             "similarity": meal.similarity,  # Include similarity score in the response
             "dishes": []
         }
-        print(f"Meal: {meal}")
         for dish in meal.dishes.all():
             dish_detail = {
                 "dish_name": dish.name,
@@ -2096,7 +2267,6 @@ def guest_search_dishes(request, query):
 
 
 def get_or_create_meal_plan(user, start_of_week, end_of_week):
-    print(f'From get_or_create_meal_plan: {user}, {start_of_week}, {end_of_week}')
     meal_plan, created = MealPlan.objects.get_or_create(
         user=user,
         week_start_date=start_of_week,
@@ -2122,8 +2292,34 @@ def auth_get_meal_plan(request):
     if user_role.current_role == 'chef':
         return {'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'}
 
+    # ---------- NEW SECTION ----------
+    # 1) If the assistant passed a meal_plan_id, use it directly.
+    # 2) Otherwise fall back to "current (or shifted) week".
+    meal_plan_id = request.data.get('meal_plan_id')
+    try:
+        if meal_plan_id:
+            meal_plan = MealPlan.objects.get(id=meal_plan_id, user=user)
+        else:
+            today = timezone.now().date()
+            week_shift = int(user.week_shift) 
+            start_of_week = today + timedelta(days=-today.weekday(), weeks=week_shift)
+            end_of_week   = start_of_week + timedelta(days=6)
+
+            meal_plan = get_or_create_meal_plan(user, start_of_week, end_of_week)
+
+            # Only clean up meals that are in the *current* week
+            if week_shift == 0:
+                cleanup_past_meals(meal_plan, today)
+    except MealPlan.DoesNotExist:
+        return {
+            'status': 'error',
+            'message': 'Meal-plan not found for this user.',
+            'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+    # ---------- END NEW SECTION ----------
+
     today = timezone.now().date()
-    week_shift = max(int(user.week_shift), 0)
+    week_shift = int(user.week_shift)   
     start_of_week = today + timedelta(days=-today.weekday(), weeks=week_shift)
     end_of_week = start_of_week + timedelta(days=6)
 
@@ -2156,7 +2352,7 @@ def auth_get_meal_plan(request):
             "meal_plan_id": meal_plan.id,
         }
         meal_plan_details.append(meal_details)
-
+    print(f"DEBUG auth_get_meal_plan: meal_plan_details={meal_plan_details}")
     return {
         "auth_meal_plan": meal_plan_details,
         "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')

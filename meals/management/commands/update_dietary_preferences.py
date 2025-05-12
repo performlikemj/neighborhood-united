@@ -77,7 +77,7 @@ class Command(BaseCommand):
 
         # The messages array contains a system and a user message
         messages = [
-            {"role": "system", "content": "You are an assistant that assigns dietary preferences to meals."},
+            {"role": "developer", "content": "You are an assistant that assigns dietary preferences to meals."},
             {"role": "user", "content": prompt}
         ]
         return messages

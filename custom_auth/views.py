@@ -385,9 +385,10 @@ def login_api_view(request):
         return JsonResponse({'status': 'error', 'message': 'Only POST method allowed'}, status=405)
 
     try:
-        data = json.loads(request.body)
-    except json.JSONDecodeError as e:
-        return JsonResponse({'status': 'error', 'message': 'Invalid JSON format'}, status=400)
+        # Use request.data instead of parsing request.body directly
+        data = request.data
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'message': f'Error processing request: {str(e)}'}, status=400)
 
     # Extract username and password
     username = data.get('username')

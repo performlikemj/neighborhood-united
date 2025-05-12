@@ -50,6 +50,7 @@ jobs:
           export SECRET_KEY=${SECRET_KEY:-dummy-test-secret}
           # Mock OpenAI API key for tests
           export OPENAI_API_KEY=dummy-key-for-testing
+          export DATABASE_URL=sqlite:///$(pwd)/test.db
           python -m pytest
 
   deploy-prod:

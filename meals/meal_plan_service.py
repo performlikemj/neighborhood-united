@@ -374,7 +374,7 @@ def create_meal_plan_for_all_users():
             # Create meal plan for the user
             meal_plan = create_meal_plan_for_user(user, start_of_week, end_of_week)
             
-            if meal_plan:
+            if meal_plan and not meal_plan.approval_email_sent:
                 try:
                     from meals.email_service import send_meal_plan_approval_email
                     send_meal_plan_approval_email(meal_plan.id)

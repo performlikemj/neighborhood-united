@@ -11,6 +11,20 @@ defaults:
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: test_db
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -50,9 +64,12 @@ jobs:
           export SECRET_KEY=${SECRET_KEY:-dummy-test-secret}
           # Mock OpenAI API key for tests
           export OPENAI_API_KEY=dummy-key-for-testing
-          # ---- Force SQLite for CI ----
-          export DB_ENGINE=django.db.backends.sqlite3
-          export DB_NAME=$(pwd)/test.db
+          # Postgres connection for tests
+          export DB_NAME=test_db
+          export DB_USER=test_user
+          export DB_PASSWORD=test_password
+          export DB_HOST=localhost
+          export DB_PORT=5432
           python -m pytest
 
   deploy-prod:

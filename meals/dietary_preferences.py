@@ -10,7 +10,7 @@ from pydantic import ValidationError
 import traceback
 from meals.models import Meal, DietaryPreference, CustomDietaryPreference
 from meals.pydantic_models import DietaryPreferenceDetail, DietaryPreferencesSchema
-from shared.utils import append_dietary_preference_to_json, get_dietary_preference_info
+from shared.utils import create_or_update_dietary_preference, get_dietary_preference_info
 
 logger = logging.getLogger(__name__)
 
@@ -119,8 +119,8 @@ def handle_custom_dietary_preference(custom_prefs):
                 new_pref_data = json.loads(gpt_output)
                 # Validate the structure using Pydantic
                 validated_pref = DietaryPreferenceDetail.model_validate(new_pref_data)
-                # Step 5: Append to dietary_preferences.json
-                append_dietary_preference_to_json(
+                # Step 5: Store in the database
+                create_or_update_dietary_preference(
                     preference_name=custom_pref,
                     definition=validated_pref.description,
                     allowed=validated_pref.allowed,

@@ -55,24 +55,6 @@ def day_to_offset(day_name: str) -> int:
     }
     return mapping.get(day_name, 0)
 
-def load_dietary_preferences():
-    """Loads dietary preferences from a JSON file."""
-    file_path = os.path.join(settings.BASE_DIR, 'shared', 'dietary_preferences.json')
-    try:
-        with open(file_path, 'r') as f:
-            dietary_prefs = json.load(f)
-        logger.info("Dietary preferences loaded successfully.")
-        return dietary_prefs
-    except FileNotFoundError:
-        logger.error(f"Dietary preferences file not found at {file_path}.")
-        return {}
-    except json.JSONDecodeError as e:
-        logger.error(f"Error decoding dietary preferences JSON: {e}")
-        return {}
-
-# Load dietary preferences once at startup
-DIETARY_PREFERENCES = load_dietary_preferences()
-
 def get_dietary_preference_info(preference_name):
     """Retrieve the definition and details for a given dietary preference."""
     try:
@@ -93,36 +75,32 @@ def get_dietary_preference_info(preference_name):
         logger.error(f"Error retrieving dietary preference info: {e}")
         return None
 
-# shared/utils.py
-
-def append_dietary_preference_to_json(preference_name, definition, allowed, excluded):
+def create_or_update_dietary_preference(preference_name, definition, allowed, excluded):
     """
-    Appends a new dietary preference to the dietary_preferences.json file.
+    Creates or updates a dietary preference in the database.
+    This function replaces the old JSON file approach.
     """
-    file_path = os.path.join(settings.BASE_DIR, 'shared', 'dietary_preferences.json')
     try:
-        with open(file_path, 'r+') as f:
-            data = json.load(f)
-            if preference_name in data:
-                logger.info(f"Dietary preference '{preference_name}' already exists in JSON.")
-                return
-            # Add the new preference
-            data[preference_name] = {
-                "description": definition,
-                "allowed": allowed,
-                "excluded": excluded
+        # Create or update the CustomDietaryPreference in the database
+        custom_pref, created = CustomDietaryPreference.objects.update_or_create(
+            name=preference_name,
+            defaults={
+                'description': definition,
+                'allowed': allowed,
+                'excluded': excluded
             }
-            # Move the file pointer to the beginning and overwrite
-            f.seek(0)
-            json.dump(data, f, indent=4)
-            f.truncate()
-        logger.info(f"Dietary preference '{preference_name}' appended to dietary_preferences.json.")
-    except FileNotFoundError:
-        logger.error(f"Dietary preferences file not found at {file_path}.")
-    except json.JSONDecodeError as e:
-        logger.error(f"Error decoding dietary preferences JSON: {e}")
+        )
+        
+        if created:
+            logger.info(f"Dietary preference '{preference_name}' created in database.")
+        else:
+            logger.info(f"Dietary preference '{preference_name}' updated in database.")
+            
+        return custom_pref
     except Exception as e:
-        logger.error(f"Unexpected error while appending dietary preference: {e}")
+        logger.error(f"Error saving dietary preference '{preference_name}' to database: {e}")
+        logger.error(traceback.format_exc())
+        return None
 
 def append_custom_dietary_preference(request, preference_name):
     """
@@ -159,7 +137,7 @@ def append_custom_dietary_preference(request, preference_name):
 
     except Exception as e:
         return {"status": "error", "message": f"An unexpected error occurred: {str(e)}"}
-    
+
 def get_embedding(text, model="text-embedding-3-small"):
     text = text.replace("\n", " ")
     logger.info(f"Generating embedding with model: {model}, text length: {len(text)}")

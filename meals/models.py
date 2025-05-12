@@ -49,8 +49,7 @@ STATUS_REFUNDED = 'refunded'
 logger = logging.getLogger(__name__)
 
 OPENAI_API_KEY = settings.OPENAI_KEY
-client = OpenAI()
-client.api_key = OPENAI_API_KEY
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 class Migration(migrations.Migration):
     operations = [

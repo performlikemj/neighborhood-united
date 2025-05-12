@@ -37,8 +37,13 @@ jobs:
         env:
           DEV_DOTENV: ${{ secrets.DEV_DOTENV }}
 
-      # 2) Run test suite
-      - run: python -m pytest
+      # 2) Run test suite with explicitly set DJANGO_SETTINGS_MODULE
+      - name: Run tests
+        run: |
+          export DJANGO_SETTINGS_MODULE=hood_united.settings
+          # Mock OpenAI API key for tests
+          export OPENAI_API_KEY=dummy-key-for-testing
+          python -m pytest
 
   deploy-prod:
     needs: build-test

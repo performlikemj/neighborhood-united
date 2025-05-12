@@ -4,7 +4,7 @@ import uuid
 from django.shortcuts import render, redirect
 from django.urls import reverse
 from qa_app.models import FoodQA
-from meals.models import PantryItem, Dish, MealType, Meal, MealPlan, MealPlanMeal, Order, OrderMeal, Ingredient, DietaryPreference
+from meals.models import PantryItem, Dish, MealType, Meal, MealPlan, MealPlanMeal, Order, OrderMeal, Ingredient, DietaryPreference, CustomDietaryPreference
 from django.db import transaction, IntegrityError
 from meals.pydantic_models import MealOutputSchema, RelevantSchema
 from local_chefs.models import ChefPostalCode, PostalCode
@@ -75,7 +75,23 @@ DIETARY_PREFERENCES = load_dietary_preferences()
 
 def get_dietary_preference_info(preference_name):
     """Retrieve the definition and details for a given dietary preference."""
-    return DIETARY_PREFERENCES.get(preference_name, None)
+    try:
+        # First check regular dietary preferences
+        if DietaryPreference.objects.filter(name=preference_name).exists():
+            return {'exists': True}
+        
+        # Then check custom dietary preferences
+        custom_pref = CustomDietaryPreference.objects.filter(name=preference_name).first()
+        if custom_pref:
+            return {
+                'description': custom_pref.description,
+                'allowed': custom_pref.allowed,
+                'excluded': custom_pref.excluded
+            }
+        return None
+    except Exception as e:
+        logger.error(f"Error retrieving dietary preference info: {e}")
+        return None
 
 # shared/utils.py
 

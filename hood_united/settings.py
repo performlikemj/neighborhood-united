@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 
 from pathlib import Path
 import os
+import sys
 from dotenv import load_dotenv
 load_dotenv('dev.env')
 from datetime import timedelta
@@ -119,23 +120,25 @@ ASGI_APPLICATION = 'hood_united.asgi.application'
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
-# if DEBUG:
-#     DATABASES = {
-#         'default': {
-#             'ENGINE': 'django.db.backends.sqlite3',
-#             'NAME': BASE_DIR / 'db.sqlite3',
-#         }
-#     }
-# else:
-if DEBUG:
+# Use an in‑memory/SQLite DB when running tests in CI to avoid the need for Postgres
+USE_SQLITE_FOR_TESTS = os.getenv("CI") or any(arg.endswith("pytest") for arg in sys.argv)
+
+if USE_SQLITE_FOR_TESTS:
     DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.getenv('TEST_DB_NAME'),
-            'USER': os.getenv('TEST_DB_USER'),
-            'PASSWORD': os.getenv('TEST_DB_PASSWORD'),
-            'HOST': os.getenv('TEST_DB_HOST', 'localhost'),
-            'PORT': os.getenv('DB_PORT', '5432'),
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "test.sqlite3",
+        }
+    }
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.getenv("DB_NAME", os.getenv("TEST_DB_NAME")),
+            "USER": os.getenv("DB_USER", os.getenv("TEST_DB_USER")),
+            "PASSWORD": os.getenv("DB_PASSWORD", os.getenv("TEST_DB_PASSWORD")),
+            "HOST": os.getenv("DB_HOST", "localhost"),
+            "PORT": os.getenv("DB_PORT", "5432"),
         }
     }
 

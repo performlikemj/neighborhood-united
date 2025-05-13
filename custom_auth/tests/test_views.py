@@ -60,6 +60,7 @@ class ProfileViewTests(TestCase):
             street='123 test st',
             city='Test city',
             state='TS',
+            country='US',
             input_postalcode='12345'
         )
 

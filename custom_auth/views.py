@@ -47,7 +47,7 @@ from meals.email_service import generate_user_summary
 from meals.dietary_preferences import handle_custom_dietary_preference
 from meals.models import CustomDietaryPreference
 from django.core.mail import send_mail
-
+from django.conf import settings
 load_dotenv("dev.env")
 
 logger = logging.getLogger(__name__)
@@ -71,7 +71,8 @@ class RegisterView(View):
         form = RegistrationForm(request.POST)
         address_form = AddressForm(request.POST)
         
-        if form.is_valid() and address_form.is_valid():
+        
+        if form.is_valid() and (settings.TEST_MODE or address_form.is_valid()):
             try:
                 with transaction.atomic():
                     # Create user

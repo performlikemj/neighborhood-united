@@ -1,0 +1,14 @@
+{% autoescape off %}
+Hi {{ user.username }},
+
+Thank you for signing up for our website!
+
+We have received a request to change the email associated with your account. If you made this request, please click on the link below to confirm your new email:
+
+http://{{ domain }}{% url 'custom_auth:confirm_email' uidb64=uid token=token %}
+
+If you have any issues, please contact us at support@neighborhoodunited.com.
+
+Thanks,
+Neighborhood United Team
+{% endautoescape %}

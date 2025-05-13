@@ -1,0 +1,44 @@
+{% extends 'customer_dashboard/customer_base.html' %}
+
+<!-- meal_plan_details.html -->
+<div class="meal-plan-details">
+    <h3>Meal Plan for {{ meal_plan.week_start_date }} to {{ meal_plan.week_end_date }}</h3>
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Day</th>
+                <th>Meal</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for meal_plan_meal in meal_plan.mealplanmeal_set.all %}
+            <tr id="meal-plan-meal-{{ meal_plan_meal.id }}">
+                <td>{{ meal_plan_meal.day }}</td>
+                <td data-type="meal" data-meal-id="{{ meal_plan_meal.meal.id }}">{{ meal_plan_meal.meal.name }}</td>
+                <td>
+                    <button type="button" onclick="toggleEditState({{ meal_plan_meal.id }})">Edit</button>
+                </td>
+            </tr>
+            {% endfor %}            
+        </tbody>
+    </table>
+</div>
+
+<!-- This is a modal that could be used for editing the meal for a particular day -->
+<div id="editMealModal" class="modal">
+    <!-- Modal content -->
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <form id="editMealForm">
+            <input type="hidden" name="meal_plan_id" id="mealPlanIdInput" value="">
+            <input type="hidden" name="day" id="dayInput" value="">
+            <label for="mealSelect">Choose Meal:</label>
+            <select name="meal_id" id="mealSelect">
+                <!-- Options would be populated based on available meals -->
+            </select>
+            <button type="submit">Update Meal Plan</button>
+        </form>
+    </div>
+</div>
+

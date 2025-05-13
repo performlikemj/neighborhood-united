@@ -1,0 +1,38 @@
+{% extends 'chef_admin/chef_base.html' %}
+
+{% load static %}
+
+{% block javascript %}
+    <script src="{% static 'js/chart.js' %}"></script>
+{% endblock %}
+
+{% block content %}
+  <h1>Chef Dashboard</h1>
+  <div id="week-navigation">
+    <button id="prev-week">Previous Week</button>
+    <span id="current-week">Current Week</span>
+    <button id="next-week">Next Week</button>
+  </div>  
+
+  <div class="chart-container">
+      <div class="chart-card">
+          <h3>Most Popular Dishes</h3>
+          <canvas id="mostPopularDishesChart" width="400" height="400"></canvas>
+      </div>
+
+      <div class="chart-card">
+          <h3>Sales Over Time</h3>
+          <canvas id="salesOverTimeChart" width="400" height="400"></canvas>
+      </div>
+
+      <div class="chart-card">
+          <h3>Active Orders</h3>
+          <canvas id="activeOrdersChart" width="400" height="400"></canvas>
+      </div>
+
+      <div class="chart-card">
+          <h3>Incomplete Orders</h3>
+          <canvas id="incompleteOrdersChart" width="400" height="400"></canvas>
+      </div>
+  </div>
+{% endblock %}

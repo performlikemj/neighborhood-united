@@ -1,0 +1,13 @@
+{% extends 'shared/base.html' %}
+
+{% block content %}
+    <h1>Meals</h1>
+    {% for meal in meals %}
+        <div>
+            <h2><a href="{% url 'meals:meal_detail' meal.id %}">{{ meal.name }}</a></h2>  
+            <!-- Display other meal details here. -->
+        </div>
+    {% empty %}
+        <p>No meals available.</p>
+    {% endfor %}
+{% endblock %}

@@ -1,0 +1,8 @@
+{% extends 'shared/base.html' %}
+
+{% block content %}
+    <h2>{{ dish.name }}</h2>
+    <p>Chef: <a href="{% url 'chefs:chef_detail' dish.chef.id %}">{{ dish.chef.user.username }}</a></p>
+    <p>Ingredients: {% for ingredient in dish.ingredients.all %}{{ ingredient.name }}{% if not forloop.last %}, {% endif %}{% endfor %}</p>
+    <a href="{% url 'meals:meals_with_dish' dish.id %}">See Meals Containing this Dish</a>
+{% endblock %}

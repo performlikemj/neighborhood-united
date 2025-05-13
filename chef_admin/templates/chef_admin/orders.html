@@ -1,0 +1,67 @@
+{% extends 'chef_admin/chef_base.html' %}
+
+{% load static %}
+
+{% block javascript %}
+    <script src="{% static 'js/orders.js' %}"></script>
+{% endblock %}
+
+{% block content %}
+  <h1>Orders Dashboard</h1>
+  {% csrf_token %}
+  <!-- New Active Orders Section -->
+  <div id="active-orders-section">
+    <div id="filter-section">
+        <label for="filter-status">Filter by status:</label>
+        <select id="filter-status">
+          <option value="all">All</option>
+          <option value="Placed">Placed</option>
+          <option value="In Progress">In Progress</option>
+          <option value="Completed">Completed</option>
+          <option value="Cancelled">Cancelled</option>
+          <option value="Refunded">Refunded</option>
+          <option value="Delayed">Delayed</option>
+        </select>
+    </div>
+      
+    <table id="active-orders-table">
+      <thead>
+        <tr>
+          <th>Order ID</th>
+          <th>Order Date</th>
+          <th>Customer</th>
+          <th>Special Requests</th>
+          <th>Status</th>
+          <!-- <th>Action</th> -->
+        </tr>
+      </thead>
+      <tbody id="active-orders-tbody">
+        <!-- Rows will be added here dynamically -->
+        <!-- Here's an example row -->
+        <tr>
+          <td>1</td>
+          <td>2023-09-15</td>
+          <td>John Doe</td>
+          <td>None</td>
+          <td>
+            <!-- Dropdown for status -->
+            <select class="status-dropdown">
+              <option value="Placed">Placed</option>
+              <option value="In Progress">In Progress</option>
+              <option value="Completed">Completed</option>
+              <option value="Cancelled">Cancelled</option>
+              <option value="Refunded">Refunded</option>
+              <option value="Delayed">Delayed</option>
+            </select>
+          </td>
+          <td>
+            <!-- Action button -->
+            <button class="status-update-btn">Update</button>
+          </td>
+        </tr>
+        <!-- End of example row -->
+      </tbody>
+    </table>
+  </div>
+  <!-- End of Active Orders Section -->
+{% endblock %}

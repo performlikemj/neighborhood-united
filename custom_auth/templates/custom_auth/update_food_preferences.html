@@ -1,0 +1,8 @@
+<!-- custom_auth/templates/custom_auth/update_food_preferences.html -->
+
+<form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Save Preferences</button>
+</form>
+

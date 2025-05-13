@@ -1,0 +1,21 @@
+{% extends "shared/base.html" %}
+
+{% block content %}
+{% if show_login_message %}
+    <div class="alert alert-info">
+        Please log in to verify your email address.
+    </div>
+{% elif show_email_verification_message %}
+    <div class="alert alert-info">
+        Your email address has not been confirmed yet. Please check your inbox for an activation link.
+    </div>
+    <form method="post">
+        {% csrf_token %}
+        <div class="form-group">
+            <label for="email">Enter your email address to resend the activation link:</label>
+            <input type="email" class="form-control" id="email" name="email" required>
+        </div>
+        <button type="submit" class="btn btn-primary">Resend activation email</button>
+    </form>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,281 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Chef Meal Dashboard{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row mb-4">
+        <div class="col-md-8">
+            <h1>Chef Meal Dashboard</h1>
+            <p class="lead">Manage your scheduled meal events and track your orders</p>
+        </div>
+        <div class="col-md-4 text-right">
+            <a href="{% url 'meals:create_chef_meal_event' %}" class="btn btn-primary">
+                <i class="fas fa-plus"></i> Create New Meal Event
+            </a>
+        </div>
+    </div>
+
+    {% if messages %}
+    <div class="row">
+        <div class="col-12">
+            {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Stripe Account Status Section -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-info text-white">
+                    <h3 class="card-title mb-0">Payment Account Status</h3>
+                </div>
+                <div class="card-body">
+                    <div id="stripe-account-status">
+                        <div class="text-center">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="sr-only">Loading...</span>
+                            </div>
+                            <p class="mt-2">Checking your payment account status...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upcoming Events Section -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h3 class="card-title mb-0">Upcoming Meal Events</h3>
+                </div>
+                <div class="card-body">
+                    {% if upcoming_events %}
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Meal</th>
+                                    <th>Date & Time</th>
+                                    <th>Order Cutoff</th>
+                                    <th>Price</th>
+                                    <th>Orders</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for event in upcoming_events %}
+                                <tr>
+                                    <td>{{ event.meal.name }}</td>
+                                    <td>
+                                        {{ event.event_date|date:"M d, Y" }} at {{ event.event_time|time:"g:i A" }}
+                                        <small class="d-block text-muted">Timezone: {{ event.get_chef_timezone }}</small>
+                                    </td>
+                                    <td>
+                                        {{ event.order_cutoff_time|date:"M d, Y" }} at {{ event.order_cutoff_time|time:"g:i A" }}
+                                    </td>
+                                    <td>
+                                        ${{ event.current_price }} 
+                                        {% if event.current_price < event.base_price %}
+                                        <span class="badge badge-success">Reduced</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ event.orders_count }} / {{ event.max_orders }}</td>
+                                    <td><span class="badge badge-{{ event.status|lower }}">{{ event.get_status_display }}</span></td>
+                                    <td>
+                                        <div class="btn-group" role="group">
+                                            <a href="{% url 'meals:edit_chef_meal_event' event.id %}" class="btn btn-sm btn-outline-primary">
+                                                <i class="fas fa-edit"></i> Edit
+                                            </a>
+                                            {% if event.status != 'cancelled' and event.event_date >= today %}
+                                            <a href="{% url 'meals:cancel_chef_meal_event' event.id %}" class="btn btn-sm btn-outline-danger"
+                                               onclick="return confirm('Are you sure you want to cancel this event? All customers will be notified and refunded.')">
+                                                <i class="fas fa-times"></i> Cancel
+                                            </a>
+                                            {% endif %}
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="alert alert-info">
+                        You don't have any upcoming meal events. 
+                        <a href="{% url 'meals:create_chef_meal_event' %}">Create your first meal event</a> to get started.
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Past Events Section -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-secondary text-white">
+                    <h3 class="card-title mb-0">Past Meal Events</h3>
+                </div>
+                <div class="card-body">
+                    {% if past_events %}
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Meal</th>
+                                    <th>Date & Time</th>
+                                    <th>Price</th>
+                                    <th>Orders</th>
+                                    <th>Status</th>
+                                    <th>Revenue</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for event in past_events %}
+                                <tr>
+                                    <td>{{ event.meal.name }}</td>
+                                    <td>
+                                        {{ event.event_date|date:"M d, Y" }} at {{ event.event_time|time:"g:i A" }}
+                                        <small class="d-block text-muted">Timezone: {{ event.get_chef_timezone }}</small>
+                                    </td>
+                                    <td>${{ event.current_price }}</td>
+                                    <td>{{ event.orders_count }} / {{ event.max_orders }}</td>
+                                    <td><span class="badge badge-{{ event.status|lower }}">{{ event.get_status_display }}</span></td>
+                                    <td>${{ event.revenue }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="alert alert-info">
+                        You don't have any past meal events.
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Check Stripe account status when page loads
+    document.addEventListener('DOMContentLoaded', function() {
+        checkStripeAccountStatus();
+    });
+
+    function checkStripeAccountStatus() {
+        fetch('/meals/api/stripe-account-status/', {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken')
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            const statusDiv = document.getElementById('stripe-account-status');
+            
+            if (data.has_account && data.is_active) {
+                // Account exists and is active
+                statusDiv.innerHTML = `
+                    <div class="alert alert-success">
+                        <h4><i class="fas fa-check-circle"></i> Your payment account is connected and active</h4>
+                        <p>Your Stripe account is fully set up and ready to receive payments from customers.</p>
+                        <p>Account ID: ${data.account_id}</p>
+                    </div>
+                `;
+            } else if (data.has_account && !data.is_active) {
+                // Account exists but is not fully onboarded
+                statusDiv.innerHTML = `
+                    <div class="alert alert-warning">
+                        <h4><i class="fas fa-exclamation-triangle"></i> Your payment account needs attention</h4>
+                        <p>Your Stripe account is connected but not fully set up. You need to complete the onboarding process before you can receive payments.</p>
+                        <button id="complete-stripe-setup" class="btn btn-warning">Complete Setup</button>
+                    </div>
+                `;
+                
+                // Add event listener to button
+                document.getElementById('complete-stripe-setup').addEventListener('click', createStripeAccountLink);
+            } else {
+                // No account exists
+                statusDiv.innerHTML = `
+                    <div class="alert alert-info">
+                        <h4><i class="fas fa-info-circle"></i> Payment account setup required</h4>
+                        <p>You need to connect a payment account to receive payments from customers. This is a simple process that takes just a few minutes.</p>
+                        <button id="setup-stripe-account" class="btn btn-primary">Set Up Payment Account</button>
+                    </div>
+                `;
+                
+                // Add event listener to button
+                document.getElementById('setup-stripe-account').addEventListener('click', createStripeAccountLink);
+            }
+        })
+        .catch(error => {
+            console.error('Error checking Stripe account status:', error);
+            const statusDiv = document.getElementById('stripe-account-status');
+            statusDiv.innerHTML = `
+                <div class="alert alert-danger">
+                    <h4><i class="fas fa-times-circle"></i> Error checking payment account status</h4>
+                    <p>There was a problem checking your payment account status. Please try refreshing the page or contact support if the issue persists.</p>
+                </div>
+            `;
+        });
+    }
+
+    function createStripeAccountLink() {
+        fetch('/meals/api/stripe-account-link/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken')
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.url) {
+                // Redirect to Stripe onboarding
+                window.location.href = data.url;
+            } else {
+                alert('Error creating Stripe account link. Please try again or contact support.');
+            }
+        })
+        .catch(error => {
+            console.error('Error creating Stripe account link:', error);
+            alert('Error creating Stripe account link. Please try again or contact support.');
+        });
+    }
+
+    // Helper function to get CSRF token from cookies
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+</script>
+{% endblock %} 

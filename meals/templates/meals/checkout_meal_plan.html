@@ -1,0 +1,23 @@
+{% extends 'shared/base.html' %}
+
+{% block content %}
+<div class="meal-plan-checkout">
+    <h1>Checkout</h1>
+    <p>You are checking out the following meal plan:</p>
+
+    <ul>
+        {% for meal in meal_plan.meals.all %}
+            <li>{{ meal.day }}: {{ meal.name }} - {{ meal.description }}</li>
+        {% endfor %}
+    </ul>
+
+    <p>Total Price: {{ meal_plan.total_price }}</p>
+
+    <!-- Here you would have your payment form or payment gateway integration -->
+
+    <form method="post" action="{% url 'meals:order_confirmation' %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-success">Confirm Payment</button>
+    </form>
+</div>
+{% endblock %}

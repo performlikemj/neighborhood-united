@@ -1,0 +1,21 @@
+{% extends 'customer_dashboard/customer_base.html' %}  <!-- Adjust the path to your base template -->
+{% load static %}
+
+{% block content %}
+    <h1>Chat History</h1>
+    <div class="chat-threads">
+        {% if chat_threads %}
+            <ul>
+                {% for thread in chat_threads %}
+                    <li>
+                        <a href="{% url 'customer_dashboard:thread_detail' thread.openai_thread_id %}">
+                            {{ thread.title }} - {{ thread.created_at|date:"M d, Y H:i" }}
+                        </a>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p>No chat history found.</p>
+        {% endif %}
+    </div>
+{% endblock %}

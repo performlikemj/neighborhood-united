@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+{% load meal_filters %}
+<html>
+<head>
+    <meta charset="UTF-8">
+    <!-- Ensures mobile responsiveness in most modern clients -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Your Weekly Meal Plan</title>
+    <style>
+        /* Basic reset & body styling */
+        body { 
+            margin: 0; 
+            padding: 0; 
+            width: 100% !important; 
+            background-color: #f8f8f8; /* Subtle background to distinguish content area */
+        }
+
+        /* Container for the "white card" look */
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #ffffff; /* White background inside the container */
+        }
+
+        /* Typography */
+        h1, h2, h3, p {
+            margin-top: 0;
+            font-family: Arial, sans-serif;
+            color: #333333;
+        }
+        h1 {
+            font-size: 24px; 
+            color: #4CAF50;
+        }
+        h2 {
+            font-size: 20px; 
+            color: #5cb85c; 
+            border-bottom: 1px solid #dddddd; 
+            padding-bottom: 10px;
+        }
+        h3 {
+            font-size: 18px; 
+        }
+        p {
+            font-size: 16px; 
+            line-height: 1.5; 
+            margin: 0 0 10px;
+        }
+
+        /* Card-like option sections */
+        .option {
+            border: 1px solid #dddddd; 
+            border-radius: 5px; 
+            padding: 15px; 
+            margin-bottom: 20px; 
+        }
+        .option h3 {
+            margin-bottom: 10px;
+        }
+
+        /* Bulletproof buttons: We're using table-based code for broad compatibility */
+        .btn-table {
+            border-collapse: collapse;
+            margin: 0 auto;
+        }
+        .btn-table td {
+            border-radius: 5px;
+            text-align: center;
+        }
+        .btn-link {
+            display: inline-block;
+            font-size: 16px;
+            font-family: Arial, sans-serif;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            margin-top: 15px;
+            white-space: nowrap; /* Prevents text wrap in narrow clients */
+        }
+        /* Specific button variations */
+        .bulk-btn {
+            background-color: #4CAF50;
+            color: #ffffff;
+        }
+        .daily-btn {
+            background-color: #2196F3;
+            color: #ffffff;
+        }
+
+        /* Meal item styling */
+        .meal-item {
+            border-bottom: 1px solid #dddddd; 
+            padding: 10px 0; 
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center; 
+            color: #777777; 
+            font-size: 12px; 
+            padding: 10px; 
+            margin-top: 20px; 
+        }
+        .footer a { 
+            color: #007BFF; 
+            text-decoration: none; 
+        }
+
+        /* Logo */
+        .logo { 
+            text-align: center; 
+            margin-bottom: 20px; 
+        }
+        .logo img { 
+            max-width: 200px; 
+            height: auto; 
+        }
+    </style>
+</head>
+<body>
+    <!-- Full-width "wrapper" table to accommodate background color in older email clients -->
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f8f8f8;">
+        <tr>
+            <td align="center" valign="top">
+                <div class="container">
+                    <!-- Logo Section -->
+                    <div class="logo">
+                        <!-- Include descriptive alt text for accessibility -->
+                        <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" />
+                    </div>
+
+                    <!-- Greeting and Personal Touch -->
+                    <p>
+                        We've created a delightful meal plan for you from
+                        {{ meal_plan_week_start }} to {{ meal_plan_week_end }}. 
+                        You can look forward to a balanced, fresh, and worry-free week of meals!
+                    </p>
+
+                    <!-- Options Intro -->
+                    <p>How would you prefer to prepare your meals?</p>
+
+                    <!-- Option 1: Bulk Prep -->
+                    <div class="option">
+                        <h3>📅 Option 1: One-day Bulk Prep</h3>
+                        <p>
+                            Get all your cooking done in one go. We'll provide a 
+                            detailed one-day prep guide for Sunday, so you can enjoy 
+                            stress-free meals throughout the week.
+                        </p>
+                        <!-- Bulletproof button table -->
+                        <table role="presentation" class="btn-table">
+                            <tr>
+                                <td bgcolor="#4CAF50">
+                                    <a href="{{ approval_link_one_day }}" class="btn-link bulk-btn">
+                                        Choose Bulk Prep
+                                    </a>
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
+
+                    <!-- Option 2: Daily Prep -->
+                    <div class="option">
+                        <h3>👩‍🍳 Option 2: Prepare Meals Daily</h3>
+                        <p>
+                            Prefer cooking fresh each day? Choose this option for daily 
+                            meal instructions to keep your kitchen routine dynamic and flexible.
+                        </p>
+                        <!-- Bulletproof button table -->
+                        <table role="presentation" class="btn-table">
+                            <tr>
+                                <td bgcolor="#2196F3">
+                                    <a href="{{ approval_link_daily }}" class="btn-link daily-btn">
+                                        Choose Daily Prep
+                                    </a>
+                                </td>
+                            </tr>
+                        </table>
+                    </div>
+
+                    <!-- Summary Text (Templated) -->
+                    <p>{{ summary_text }}</p>
+
+                    <!-- Weekly Meal Plan Overview -->
+                    <h2>Detailed Weekly Meal Plan</h2>
+                    {% for meal in meals_list %}
+                    <div class="meal-item">
+                        <p><strong>Day:</strong> {{ meal.day }}</p>
+                        <p><strong>Meal Type:</strong> {{ meal.meal_type }}</p>
+                        <p><strong>Meal Name:</strong> {{ meal.meal_name }}</p>
+                        <p><strong>Description:</strong> {{ meal.description }}</p>
+                        
+                        <!-- Macro Information Section -->
+                        {% if meal.meal_obj.macro_info %}
+                        {% with macro_info=meal.meal_obj.macro_info|json_parse %}
+                        <div class="macro-info" style="margin-top: 10px; background-color: #f9f9f9; padding: 10px; border-radius: 5px;">
+                            <h4 style="margin-top: 0; color: #4CAF50;">Nutritional Information</h4>
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <tr>
+                                    <td style="padding: 3px; font-weight: bold;">Calories:</td>
+                                    <td style="padding: 3px;">{{ macro_info.calories }} kcal</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 3px; font-weight: bold;">Protein:</td>
+                                    <td style="padding: 3px;">{{ macro_info.protein }}g</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 3px; font-weight: bold;">Carbs:</td>
+                                    <td style="padding: 3px;">{{ macro_info.carbohydrates }}g</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 3px; font-weight: bold;">Fat:</td>
+                                    <td style="padding: 3px;">{{ macro_info.fat }}g</td>
+                                </tr>
+                                <tr>
+                                    <td style="padding: 3px; font-weight: bold;">Serving Size:</td>
+                                    <td style="padding: 3px;">{{ macro_info.serving_size }}</td>
+                                </tr>
+                            </table>
+                        </div>
+                        {% endwith %}
+                        {% endif %}
+                        
+                        <!-- YouTube Videos Section -->
+                        {% if meal.meal_obj.youtube_videos %}
+                        {% with video_info=meal.meal_obj.youtube_videos|json_parse %}
+                        <div class="youtube-videos" style="margin-top: 10px; background-color: #f9f9f9; padding: 10px; border-radius: 5px;">
+                            <h4 style="margin-top: 0; color: #4CAF50;">Cooking Inspiration</h4>
+                            <ul style="padding-left: 20px; margin-bottom: 0;">
+                                {% for video in video_info.videos %}
+                                <li style="margin-bottom: 5px;">
+                                    <a href="{{ video.url }}" target="_blank" style="color: #2196F3; text-decoration: none;">
+                                        {{ video.title }} ({{ video.channel }})
+                                    </a>
+                                </li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                        {% endwith %}
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+
+                    <p style="text-align: center; margin-top: 20px;">Ready to get started?</p>
+
+                    <!-- Two-button block for final quick selection -->
+                    <div style="text-align: center; margin-bottom: 20px;">
+                      <table role="presentation" style="margin: 0 auto; border-collapse: collapse;">
+                        <tr>
+                          <!-- First Button -->
+                          <td>
+                            <table role="presentation" class="btn-table">
+                              <tr>
+                                <td bgcolor="#4CAF50" style="text-align: center;">
+                                  <a href="{{ approval_link_daily }}" class="btn-link bulk-btn">
+                                    Daily Meal Instructions
+                                  </a>
+                                </td>
+                              </tr>
+                            </table>
+                          </td>
+                    
+                          <!-- Spacer between buttons -->
+                          <td style="width: 20px;">&nbsp;</td>
+                    
+                          <!-- Second Button -->
+                          <td>
+                            <table role="presentation" class="btn-table">
+                              <tr>
+                                <td bgcolor="#2196F3" style="text-align: center;">
+                                  <a href="{{ approval_link_one_day }}" class="btn-link daily-btn">
+                                    One-Day Meal Prep
+                                  </a>
+                                </td>
+                              </tr>
+                            </table>
+                          </td>
+                        </tr>
+                      </table>
+                    </div>
+                    
+                    <p style="text-align: center;">Bon Appétit!</p>
+
+                    <!-- Footer -->
+                    <div class="footer">
+                        <p>You are receiving this email because you opted in for meal plan emails.</p>
+                        <p>
+                            <a href="{{ profile_url }}">
+                                Manage Your Email Preferences
+                            </a>
+                        </p>
+                    </div>
+                    <p style="color: #777; font-size: 12px; margin-top: 20px;">
+                        <strong>Disclaimer:</strong> SautAI uses generative AI for meal planning, 
+                        shopping list generation, and other suggestions, which may produce inaccuracies. 
+                        Always double-check crucial information.
+                    </p>
+                </div>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

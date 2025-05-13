@@ -1,0 +1,11 @@
+{% extends 'shared/base.html' %}
+
+{% block content %}
+    <h2>Update Dish</h2>
+    <form method="post">
+        {% csrf_token %}
+        {{ dish_form.as_p }}
+        <button type="submit" class="btn btn-success">Update</button>
+    </form>
+    <a href="{% url 'meals:dish_detail' dish.id %}" class="btn btn-danger">Cancel</a>
+{% endblock %}

@@ -1,0 +1,43 @@
+<!-- customers/templates/profile.html -->
+{% extends 'shared/base.html' %}
+
+{% block content %}
+{% if not user.customer.chef_request %}
+  <a href="{% url 'chefs:chef_request' %}">Become a Chef</a>
+{% elif user.is_chef %}
+<p>You are part of the chef team.</p>
+{% else %}
+  <p>We'll review your request and get back to you soon.</p>
+{% endif %}
+<h2>Profile</h2>
+<form method="post" action="{% url 'custom_auth:switch_roles' %}">
+  {% csrf_token %}
+  {% if user_role.current_role == 'chef' %}
+      <button type="submit">Switch to Customer Role</button>
+  {% else %}
+      <button type="submit">Switch to Chef Role</button>
+  {% endif %}
+</form>
+{% if pending_email_change %}
+    <p>
+        <a href="{% url 'custom_auth:re_request_email_change' %}">Re-request Email Change Confirmation</a>
+    </p>
+{% endif %}
+<p>Username: {{ customuser.username }}</p>
+<p>First Name: {{ customuser.first_name }}</p>
+<p>Last Name: {{ customuser.last_name }}</p>
+<p>Email: {{ customuser.email }}</p>
+<p>Phone: {{ customuser.phone_number }}</p>
+
+<!-- Show Address Details -->
+<h3>Address</h3>
+{% if address %}
+    <p>Street: {{ address.street }}</p>
+    <p>City: {{ address.city }}</p>
+    <p>State: {{ address.state }}</p>
+    <p>Zipcode: {{ address.input_postalcode }}</p>
+    <p>Country: {{ address.country }}</p>
+{% endif %}
+
+<p><a href="{% url 'custom_auth:update_profile' %}">Update Profile</a></p>
+{% endblock %}

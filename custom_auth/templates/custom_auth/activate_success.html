@@ -1,0 +1,11 @@
+{% extends "shared/base.html" %}
+
+{% block content %}
+    <h2>Account Activation Successful!</h2>
+    <p>
+        Thank you for confirming your email address. Your account is now activated.
+    </p>
+    <p>
+        <a href="{% url 'custom_auth:login' %}">Click here</a> to login to your account.
+    </p>
+{% endblock content %}

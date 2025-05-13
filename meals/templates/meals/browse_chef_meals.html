@@ -1,0 +1,174 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Chef Meal Events{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row mb-4">
+        <div class="col-md-8">
+            <h1>Chef Meal Events</h1>
+            <p class="lead">Browse upcoming meal events from local chefs in your area</p>
+        </div>
+        <div class="col-md-4">
+            <form method="get" class="form-inline justify-content-end">
+                <div class="input-group">
+                    <input type="text" name="postal_code" class="form-control" placeholder="Postal Code" 
+                           value="{{ request.GET.postal_code|default:user_postal_code }}">
+                    <div class="input-group-append">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-search"></i> Find
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    {% if messages %}
+    <div class="row">
+        <div class="col-12">
+            {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if not postal_code %}
+    <div class="row">
+        <div class="col-12">
+            <div class="alert alert-info">
+                Please enter your postal code to see meal events available in your area.
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if postal_code and not meal_events %}
+    <div class="row">
+        <div class="col-12">
+            <div class="alert alert-warning">
+                No upcoming meal events found in your area ({{ postal_code }}). 
+                Try a different postal code or check back later.
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if meal_events %}
+    <div class="row">
+        {% for event in meal_events %}
+        <div class="col-md-6 col-lg-4 mb-4">
+            <div class="card h-100">
+                {% if event.meal.image %}
+                <img src="{{ event.meal.image.url }}" class="card-img-top" alt="{{ event.meal.name }}">
+                {% else %}
+                <img src="{% static 'img/default_meal.jpg' %}" class="card-img-top" alt="Default Meal Image">
+                {% endif %}
+                <div class="card-body">
+                    <h5 class="card-title">{{ event.meal.name }}</h5>
+                    <h6 class="card-subtitle mb-2 text-muted">by Chef {{ event.chef.user.get_full_name }}</h6>
+                    
+                    <p class="card-text">{{ event.description|truncatewords:15 }}</p>
+                    
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span class="badge badge-primary">{{ event.event_date|date:"M d, Y" }}</span>
+                        <span class="badge badge-secondary">{{ event.event_time|time:"g:i A" }}</span>
+                    </div>
+                    
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div>
+                            <span class="font-weight-bold text-success">${{ event.current_price }}</span>
+                            {% if event.current_price < event.base_price %}
+                            <small class="text-muted"><s>${{ event.base_price }}</s></small>
+                            {% endif %}
+                        </div>
+                        <div>
+                            <small class="text-muted">{{ event.orders_count }} / {{ event.max_orders }} orders</small>
+                        </div>
+                    </div>
+                    
+                    {% if event.is_available_for_orders %}
+                    <div class="progress mb-3" style="height: 5px;">
+                        <div class="progress-bar bg-success" role="progressbar" 
+                             style="width: {{ event.orders_count|floatformat:0|divisibleby:event.max_orders }}%" 
+                             aria-valuenow="{{ event.orders_count }}" aria-valuemin="0" aria-valuemax="{{ event.max_orders }}"></div>
+                    </div>
+                    {% endif %}
+                    
+                    <div class="text-center">
+                        <a href="{% url 'meals:chef_meal_detail' event.id %}" class="btn btn-primary">View Details</a>
+                    </div>
+                </div>
+                <div class="card-footer text-muted">
+                    <small>Order by: {{ event.order_cutoff_time|date:"M d, Y" }} at {{ event.order_cutoff_time|time:"g:i A" }}</small>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    
+    <!-- Pagination -->
+    {% if is_paginated %}
+    <div class="row">
+        <div class="col-12">
+            <nav aria-label="Page navigation">
+                <ul class="pagination justify-content-center">
+                    {% if page_obj.has_previous %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page=1{% if postal_code %}&postal_code={{ postal_code }}{% endif %}" aria-label="First">
+                            <span aria-hidden="true">&laquo;&laquo;</span>
+                        </a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ page_obj.previous_page_number }}{% if postal_code %}&postal_code={{ postal_code }}{% endif %}" aria-label="Previous">
+                            <span aria-hidden="true">&laquo;</span>
+                        </a>
+                    </li>
+                    {% endif %}
+                    
+                    {% for num in page_obj.paginator.page_range %}
+                    {% if page_obj.number == num %}
+                    <li class="page-item active"><a class="page-link" href="#">{{ num }}</a></li>
+                    {% elif num > page_obj.number|add:'-3' and num < page_obj.number|add:'3' %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ num }}{% if postal_code %}&postal_code={{ postal_code }}{% endif %}">{{ num }}</a>
+                    </li>
+                    {% endif %}
+                    {% endfor %}
+                    
+                    {% if page_obj.has_next %}
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ page_obj.next_page_number }}{% if postal_code %}&postal_code={{ postal_code }}{% endif %}" aria-label="Next">
+                            <span aria-hidden="true">&raquo;</span>
+                        </a>
+                    </li>
+                    <li class="page-item">
+                        <a class="page-link" href="?page={{ page_obj.paginator.num_pages }}{% if postal_code %}&postal_code={{ postal_code }}{% endif %}" aria-label="Last">
+                            <span aria-hidden="true">&raquo;&raquo;</span>
+                        </a>
+                    </li>
+                    {% endif %}
+                </ul>
+            </nav>
+        </div>
+    </div>
+    {% endif %}
+    
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    $(document).ready(function() {
+        // Any additional JavaScript if needed
+    });
+</script>
+{% endblock %} 

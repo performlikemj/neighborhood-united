@@ -1,0 +1,12 @@
+<h2>Meal List</h2>
+<ul>
+    {% for meal in meals %}
+    <li>
+        <h3>{{ meal.name }}</h3>
+        p><strong>Meals:</strong> {{ meal.name }}</p>
+        p><strong>Chef:</strong> {{ meal.chef }}</p>
+        <p><strong>Embedding:</strong> {{ meal.trimmed_embedding|join:", " }}</p>
+        <!-- Add more meal details here as needed -->
+    </li>
+    {% endfor %}
+</ul>

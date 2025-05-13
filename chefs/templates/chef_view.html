@@ -1,0 +1,41 @@
+{% extends 'shared/base.html' %}
+{% load static %}
+
+{% block content %}
+<h1>My Dishes</h1>
+<ul>
+{% for dish in dishes %}
+    <li>{{ dish.name }}</li>
+{% empty %}
+    <li>You haven't added any dishes yet.</li>
+{% endfor %}
+</ul>
+
+<h2>My Meals</h2>
+{% for meal in meals %}
+    <h3>{{ meal.date }}</h3>
+    <ul>
+    {% for dish in meal.dishes.all %}
+        <li>{{ dish.name }}</li>
+    {% endfor %}
+    </ul>
+{% empty %}
+    <p>You haven't created any meals yet.</p>
+{% endfor %}
+
+<h2>Create a new meal</h2>
+<form method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit">Save</button>
+</form>
+
+<h2>Ingredients</h2>
+<ul>
+{% for ingredient in ingredients %}
+    <li>{{ ingredient.name }}</li>
+{% empty %}
+    <li>You haven't added any ingredients yet.</li>
+    <a href="{% url 'meals:create_ingredient' %}">Add new ingredient</a>
+    {% endfor %}
+{% endblock %}

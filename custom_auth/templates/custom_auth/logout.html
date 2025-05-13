@@ -1,0 +1,11 @@
+{% extends 'shared/base.html' %}
+
+{% block title %}Customer Logout{% endblock %}
+
+{% block content %}
+  <div class="container">
+    <h2>Logout</h2>
+    <p>You have been logged out successfully.</p>
+    <p>Thank you for using our services. You can <a href="{% url 'customer_login' %}">log in</a> again if needed.</p>
+  </div>
+{% endblock %}

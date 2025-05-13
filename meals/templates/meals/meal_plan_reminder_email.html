@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your Meal Plan is Waiting!</title>
+    <style>
+        /* Basic reset & body styling */
+        body { 
+            margin: 0; 
+            padding: 0; 
+            width: 100% !important; 
+            background-color: #f8f8f8; /* Subtle background to distinguish content area */
+        }
+
+        /* Container for the "white card" look */
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #ffffff; /* White background inside the container */
+        }
+
+        /* Typography */
+        h1, h2, h3, p {
+            margin-top: 0;
+            font-family: Arial, sans-serif;
+            color: #333333;
+        }
+        h1 {
+            font-size: 24px; 
+            color: #4CAF50;
+        }
+        h2 {
+            font-size: 20px; 
+            color: #5cb85c; 
+            border-bottom: 1px solid #dddddd; 
+            padding-bottom: 10px;
+        }
+        h3 {
+            font-size: 18px; 
+        }
+        p {
+            font-size: 16px; 
+            line-height: 1.5; 
+            margin: 0 0 10px;
+        }
+
+        /* Card-like option sections */
+        .option {
+            border: 1px solid #dddddd; 
+            border-radius: 5px; 
+            padding: 15px; 
+            margin-bottom: 20px; 
+        }
+        .option h3 {
+            margin-bottom: 10px;
+        }
+
+        /* Bulletproof buttons: We’re using table-based code for broad compatibility */
+        .btn-table {
+            border-collapse: collapse;
+            margin: 0 auto;
+        }
+        .btn-table td {
+            border-radius: 5px;
+            text-align: center;
+        }
+        .btn-link {
+            display: inline-block;
+            font-size: 16px;
+            font-family: Arial, sans-serif;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            margin-top: 15px;
+            white-space: nowrap; /* Prevents text wrap in narrow clients */
+        }
+        /* Specific button variations */
+        .bulk-btn {
+            background-color: #4CAF50;
+            color: #ffffff;
+        }
+        .daily-btn {
+            background-color: #2196F3;
+            color: #ffffff;
+        }
+
+        /* Meal item styling */
+        .meal-item {
+            border-bottom: 1px solid #dddddd; 
+            padding: 10px 0; 
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center; 
+            color: #777777; 
+            font-size: 12px; 
+            padding: 10px; 
+            margin-top: 20px; 
+        }
+        .footer a { 
+            color: #007BFF; 
+            text-decoration: none; 
+        }
+
+        /* Logo */
+        .logo { 
+            text-align: center; 
+            margin-bottom: 20px; 
+        }
+        .logo img { 
+            max-width: 200px; 
+            height: auto; 
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Logo Section -->
+        <div class="logo">
+            <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo">
+        </div>
+        <div class="header">
+            <h1>Don't Forget Your Meal Plan!</h1>
+        </div>
+        
+        <div class="content">
+            <p>Hello {{ user_name }},</p>
+            
+            <p>We noticed you haven't approved your meal plan for the week of {{ meal_plan_week_start }} to {{ meal_plan_week_end }}. We'd love to help you get started with your personalized meal preparation!</p>
+
+            <div class="option">
+                <h3>📅 Option 1: One-day Bulk Prep</h3>
+                <p>Get all your cooking done in one go with our detailed prep guide.</p>
+                <table role="presentation" class="btn-table">
+                    <tr>
+                        <td bgcolor="#4CAF50">
+                            <a href="{{ approval_link_bulk }}" class="btn-link bulk-btn">
+                                Choose Bulk Prep
+                            </a>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+
+            <div class="option">
+                <h3>👩‍🍳 Option 2: Prepare Meals Daily</h3>
+                <p>Keep your kitchen routine flexible with daily cooking instructions.</p>
+                <table role="presentation" class="btn-table">
+                    <tr>
+                        <td bgcolor="#2196F3">
+                            <a href="{{ approval_link_daily }}" class="btn-link daily-btn">
+                                Choose Daily Prep
+                            </a>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>You are receiving this email because you have a pending meal plan.</p>
+            <p><a href="{{ profile_url }}">Manage Your Email Preferences</a></p>
+        </div>
+    </div>
+</body>
+</html> 

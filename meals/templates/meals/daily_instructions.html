@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+{% load meal_filters %}
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>{{ subject }}</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            color: #333333; 
+            margin: 0; 
+            padding: 0; 
+            width: 100% !important; 
+        }
+        .container {
+            max-width: 600px;
+            margin: auto;
+            padding: 20px;
+        }
+        h1, h2, h3 { margin-top: 0; }
+        h1 { font-size: 24px; color: #4CAF50; }
+        h2 { font-size: 20px; color: #5cb85c; border-bottom: 1px solid #dddddd; padding-bottom: 10px; }
+        h3 { font-size: 18px; }
+        p { font-size: 16px; line-height: 1.5; margin: 0 0 10px; }
+        .meal-type-header { font-size: 22px; margin-top: 30px; color: #333; }
+        .meal-item { border-bottom: 1px solid #dddddd; padding: 10px 0; }
+        .footer {
+            text-align: center;
+            color: #777777;
+            font-size: 12px;
+            padding: 10px;
+            margin-top: 20px;
+        }
+        .footer a { color: #007BFF; text-decoration: none; }
+        .logo { text-align: center; margin-bottom: 20px; }
+        .logo img { max-width: 200px; height: auto; }
+    </style>
+</head>
+<body>
+    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+            <td>
+                <div class="container">
+                    <!-- Logo Section -->
+                    <div class="logo">
+                        <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo">
+                    </div>
+
+                    <h2>{{ subject }}</h2>
+                    <p>Dear {{ user_name }},</p>
+                    <p>Here are your cooking instructions for today:</p>
+
+                    <h3>Meals Included</h3>
+                    <ul>
+                      {% for meal_type, meals in grouped_instructions.items %}
+                        <li><strong>{{ meal_type }}</strong></li>
+                        <ul>
+                          {% for meal in meals %}
+                            <li>{{ meal.meal_name }}</li>
+                          {% endfor %}
+                        </ul>
+                      {% endfor %}
+                    </ul>
+
+                    {% for meal_type, meals in ordered_meals %}
+                    {% if meals %}
+                      <h2 class="meal-type-header">{{ meal_type }}</h2>
+                      {% for meal in meals %}
+                        <h3>{{ meal.meal_name }}</h3>
+                        <div class="meal-block">
+                            {{ meal.formatted_instructions|safe }}
+                            
+                            {% with macro_info=meal.macro_info|json_parse youtube_info=meal.youtube_videos|json_parse %}
+                                {% if macro_info %}
+                                <div class="metadata-section" style="margin-top: 10px; background-color: #f9f9f9; padding: 10px; border-radius: 5px; font-size: 14px;">
+                                    <h5 style="margin-top: 0; margin-bottom: 5px; color: #4CAF50;">Estimated Nutrition:</h5>
+                                    <p style="margin: 2px 0;">Calories: {{ macro_info.calories|default:'N/A' }} kcal</p>
+                                    <p style="margin: 2px 0;">Protein: {{ macro_info.protein|default:'N/A' }}g</p>
+                                    <p style="margin: 2px 0;">Carbs: {{ macro_info.carbohydrates|default:'N/A' }}g</p>
+                                    <p style="margin: 2px 0;">Fat: {{ macro_info.fat|default:'N/A' }}g</p>
+                                    <p style="margin: 2px 0;">Serving: {{ macro_info.serving_size|default:'N/A' }}</p>
+                                </div>
+                                {% endif %}
+
+                                {% if youtube_info and youtube_info.videos %}
+                                <div class="metadata-section" style="margin-top: 10px; background-color: #f9f9f9; padding: 10px; border-radius: 5px; font-size: 14px;">
+                                    <h5 style="margin-top: 0; margin-bottom: 5px; color: #4CAF50;">Reference Videos:</h5>
+                                    <ul style="padding-left: 20px; margin: 0;">
+                                        {% for video in youtube_info.videos|slice:":2" %}{# Limit to 2 videos #}
+                                        <li style="margin-bottom: 3px;">
+                                            <a href="{{ video.url }}" target="_blank" style="color: #2196F3; text-decoration: none;">
+                                                {{ video.title|default:'Video Link' }} {% if video.channel %}({{ video.channel }}){% endif %}
+                                            </a>
+                                        </li>
+                                        {% endfor %}
+                                    </ul>
+                                </div>
+                                {% endif %}
+                            {% endwith %}
+                        </div>
+                        <!-- Add the link to review this meal -->
+                        <p>
+                          <a href="{{ streamlit_url }}/meal_plans?action=review_meal&amp;meal_plan_id={{ meal.meal_plan_id }}&amp;meal_id={{ meal.meal_id }}">
+                            Review This Meal
+                          </a>
+                        </p>
+                      {% endfor %}
+                    {% endif %}
+                  {% endfor %}
+
+                    <p>We hope you enjoy every bite. If you need any help or have questions, feel free to reach out!</p>
+                    <p>Bon appétit!</p>
+                    <p>Warm regards,<br>The SautAI Team</p>
+
+                    <div style="text-align: center; margin: 20px 0;">
+                      <p>Be prepared for the unexpected. Generate an emergency pantry plan:</p>
+                      <a href="{{ streamlit_url }}/meal_plans?action=generate_emergency_plan&approval_token={{ approval_token }}&user_id={{ user_id }}"
+                         style="
+                            display: inline-block; 
+                            background-color: #ff4c4c;
+                            color: #ffffff; 
+                            padding: 10px 20px; 
+                            border-radius: 5px; 
+                            text-decoration: none;
+                         ">
+                        Generate Emergency Pantry Plan
+                      </a>
+                    </div>
+                
+                    <div class="footer">
+                        <p>You are receiving this email because you opted in for cooking instructions emails.</p>
+                        <p><a href="{{ profile_url }}">Manage Your Email Preferences</a></p>
+                    </div>
+                    <p style="color: #777; font-size: 12px; margin-top: 20px;">
+                      <strong>Disclaimer:</strong> SautAI uses generative AI for meal planning, 
+                      shopping list generation, and other suggestions, which may produce inaccuracies. 
+                      Always double-check crucial information.
+                  </p>
+                </div>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

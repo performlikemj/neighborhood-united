@@ -1,0 +1,14 @@
+{% extends 'customer_dashboard/customer_base.html' %}
+
+{% block content %}
+    <div class="container mt-4">
+        <h2>Error</h2>
+        <div class="alert alert-danger" role="alert">
+            {% if message %}
+                {{ message }}
+            {% else %}
+                An unexpected error occurred. Please try again later.
+            {% endif %}
+        </div>
+    </div>
+{% endblock %}

@@ -1,0 +1,14 @@
+{% extends 'shared/base.html' %}
+
+{% block content %}
+    <h2>Checkout</h2>
+    <form method="post">
+        {% csrf_token %}
+        <label for="delivery_method">Delivery Method:</label>
+        <select name="delivery_method" id="delivery_method">
+            <option value="Pickup">Pickup</option>
+            <option value="Delivery">Delivery</option>
+        </select>
+        <input type="submit" value="Confirm Order">
+    </form>
+{% endblock %}

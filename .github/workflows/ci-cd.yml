@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: ramsrib/pgvector-15
+        image: ramsrib/pgvector
         env:
           POSTGRES_DB: test_db
           POSTGRES_USER: test_user

@@ -34,6 +34,12 @@ class RegisterViewTest(TestCase):
             'password1': 'testpass123',
             'password2': 'testpass123',
             'email': 'test@test.com',
+            # ---- address fields added for RegisterView -----------------
+            'street': '123 test st',
+            'city': 'Test city',
+            'state': 'TS',
+            'input_postalcode': '12345',
+            'country': 'US',
         })
         user = get_user_model().objects.filter(username='testuser').first()
         self.assertEqual(response.status_code, 302)

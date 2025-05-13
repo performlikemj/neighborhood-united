@@ -1,5 +1,5 @@
 # meals/pydantic_models.py
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 from typing import List, Optional, Dict, Any, ClassVar
 from enum import Enum
 
@@ -669,7 +669,20 @@ class MealSlotDirective(BaseModel):
             "in the original request. Check for *truthiness* instead."
         )
     )
+class MealSlotDirective(BaseModel):
+    meal_plan_meal_id: int
+    meal_name: str
+    change_rules: List[str]
 
+    # ①  make the field optional **without** giving it a default
+    should_remove: bool | None = Field(..., description="True if the slot should be deleted outright.")
+
+    # ②  back-fill the default in a model-level validator
+    @model_validator(mode="before")
+    def set_default_should_remove(cls, data):
+        data.setdefault("should_remove", False)
+        return data
+    
 class MealPlanModificationRequest(BaseModel):
     """Top-level structured output expected from the parser Assistant."""
     model_config = ConfigDict(extra="forbid")

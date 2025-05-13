@@ -31,13 +31,13 @@
 
 <!-- Show Address Details -->
 <h3>Address</h3>
-{% for address in customuser.address_set.all %}
+{% if address %}
     <p>Street: {{ address.street }}</p>
     <p>City: {{ address.city }}</p>
     <p>State: {{ address.state }}</p>
-    <p>Zipcode: {{ address.zipcode }}</p>
+    <p>Zipcode: {{ address.input_postalcode }}</p>
     <p>Country: {{ address.country }}</p>
-{% endfor %}
+{% endif %}
 
 <p><a href="{% url 'custom_auth:update_profile' %}">Update Profile</a></p>
 {% endblock %}

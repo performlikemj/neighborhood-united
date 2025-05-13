@@ -159,6 +159,35 @@ jobs:
           GPT41_MINI_GUEST_LIMIT:   ${{ secrets.GPT41_MINI_GUEST_LIMIT }}
 
       # 2) Push code and config to VM
+      - name: Debug SSH connectivity
+        run: |
+          # Prepare key and known_hosts exactly as in the deploy step
+          echo "$SSH_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+          # Install basic network‑diagnostic tools (traceroute & netcat)
+          sudo apt-get update -y
+          sudo apt-get install -y traceroute netcat-openbsd
+
+          echo "▶️  Attempting verbose SSH connection test…"
+          ssh -vvv -o ConnectTimeout=15 -i /tmp/deploy_key "$SSH_USER@$SSH_HOST" "echo '✅ SSH connection successful'" || echo "❌ SSH connection failed"
+
+          echo "▶️  Testing port 22 with netcat…"
+          nc -vz "$SSH_HOST" 22 || echo "❌ Port 22 unreachable"
+
+          echo "▶️  Traceroute to host…"
+          traceroute -m 20 "$SSH_HOST" || true
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+
       - name: Rsync to Azure VM
         run: |
           echo "$SSH_KEY" > /tmp/deploy_key

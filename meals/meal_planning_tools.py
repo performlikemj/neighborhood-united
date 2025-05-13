@@ -961,8 +961,14 @@ def find_related_youtube_videos(meal_id: int, max_results: int = 5) -> Dict[str,
         formatted = format_for_structured_output(raw)
         
         # Validate
-        validated = VideoRankings.model_validate(formatted)
-        validated_data = validated.model_dump()
+        try:
+            validated = VideoRankings.model_validate(formatted)
+            validated_data = validated.model_dump()
+        except ValidationError as e:
+            logger.error(f"find_related_youtube_videos validation error: {e}")
+            if settings.TEST_MODE:
+                validated_data = formatted
+            return {"status": "error", "message": str(e)}
         
         # Cache the results in the meal model
         meal.youtube_videos = validated_data
@@ -971,11 +977,6 @@ def find_related_youtube_videos(meal_id: int, max_results: int = 5) -> Dict[str,
         return {"status": "success", "videos": validated_data}
     except Meal.DoesNotExist:
         return {"status": "error", "message": f"Meal {meal_id} not found."}
-    except ValidationError as e:
-        logger.error(f"find_related_youtube_videos validation error: {e}")
-        if settings.TEST_MODE:
-            return {"status": "success", "videos": [], "search_query": "test"}
-        return {"status": "error", "message": str(e)}
     except Exception as e:
         logger.error(f"find_related_youtube_videos error: {e}")
         return {"status": "error", "message": str(e)}

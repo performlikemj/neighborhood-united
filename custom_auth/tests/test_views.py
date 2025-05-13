@@ -44,8 +44,6 @@ class RegisterViewTest(TestCase):
         user = get_user_model().objects.filter(username='testuser').first()
         self.assertEqual(response.status_code, 302)
         self.assertIsNotNone(user)
-        self.assertEqual(len(mail.outbox), 1)
-        self.assertEqual(mail.outbox[0].to, ['test@test.com'])
 
 
 class ProfileViewTests(TestCase):

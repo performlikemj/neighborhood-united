@@ -163,13 +163,18 @@ jobs:
         run: |
           echo "$SSH_KEY" > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
-          
+
+          # Ensure the SSH config directory exists for the runner
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
           # Add host key to known_hosts to stop MITM
-          echo "$SSH_KNOWN_HOSTS" >> ~/.ssh/known_hosts
-          
+          echo "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
           rsync -avz --delete -e "ssh -i /tmp/deploy_key" \
             ./ $SSH_USER@$SSH_HOST:/var/www/myapp
-          
+
           ssh -i /tmp/deploy_key $SSH_USER@$SSH_HOST "
             sudo mv /var/www/myapp/build/config.env /etc/myapp/config.env
             sudo chown root:root /etc/myapp/config.env

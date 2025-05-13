@@ -124,7 +124,8 @@ class RegisterView(View):
                 address.full_clean()  # run validators
                 address.save()
 
-            login(request, user)
+            user.backend = "django.contrib.auth.backends.ModelBackend"   # <- guarantee backend attr
+            login(request, user, backend="django.contrib.auth.backends.ModelBackend")
             return redirect("custom_auth:profile")  # 302 expected by the test
 
         except Exception as exc:

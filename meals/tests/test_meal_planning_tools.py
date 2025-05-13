@@ -97,7 +97,7 @@ class TestMealPlanningTools(TestCase):
     @patch('meals.meal_planning_tools.find_youtube_cooking_videos')
     def test_find_related_youtube_videos_success(self, mock_find_videos):
         # Mock the return value of find_youtube_cooking_videos
-        videos_data = {
+        raw_videos_data = {
             "videos": [
                 {
                     "title": "Test Video 1",
@@ -114,16 +114,30 @@ class TestMealPlanningTools(TestCase):
             ],
             "search_query": "Test Meal recipe"
         }
-        mock_find_videos.return_value = videos_data
+        mock_find_videos.return_value = raw_videos_data
         
-        # Mock format_for_structured_output
-        with patch('meals.meal_planning_tools.format_for_structured_output', return_value=videos_data) as mock_format:
+        # Create a properly formatted structure that matches the VideoRankings schema
+        formatted_data = {
+            "ranked_videos": [
+                {
+                    "video_id": "123",
+                    "relevance_score": 9.5,
+                    "relevance_explanation": "Very relevant",
+                    "matching_ingredients": ["ingredient1", "ingredient2"],
+                    "matching_techniques": ["technique1", "technique2"],
+                    "recommended": True
+                }
+            ]
+        }
+        
+        # Mock format_for_structured_output to return the properly formatted data
+        with patch('meals.meal_planning_tools.format_for_structured_output', return_value=formatted_data) as mock_format:
             # Call the function
             result = find_related_youtube_videos(self.meal.id)
             
             # Check the result
             self.assertEqual(result["status"], "success")
-            self.assertEqual(result["videos"], videos_data)
+            self.assertEqual(result["videos"], formatted_data)
             
             # Verify the mock was called with the correct arguments
             mock_find_videos.assert_called_once_with(
@@ -131,7 +145,7 @@ class TestMealPlanningTools(TestCase):
                 meal_description=self.meal.description,
                 limit=5
             )
-            mock_format.assert_called_once_with(videos_data)
+            mock_format.assert_called_once_with(raw_videos_data)
     
     def test_find_related_youtube_videos_invalid_meal(self):
         # Call the function with an invalid meal ID
@@ -144,11 +158,14 @@ class TestMealPlanningTools(TestCase):
     @patch('meals.meal_planning_tools.find_youtube_cooking_videos')
     def test_find_related_youtube_videos_with_max_results(self, mock_find_videos):
         # Mock the return value of find_youtube_cooking_videos
-        videos_data = {"videos": [], "search_query": "Test Meal recipe"}
-        mock_find_videos.return_value = videos_data
+        raw_videos_data = {"videos": [], "search_query": "Test Meal recipe"}
+        mock_find_videos.return_value = raw_videos_data
         
-        # Mock format_for_structured_output
-        with patch('meals.meal_planning_tools.format_for_structured_output', return_value=videos_data) as mock_format:
+        # Create a properly formatted structure that matches the VideoRankings schema
+        formatted_data = {"ranked_videos": []}
+        
+        # Mock format_for_structured_output to return the properly formatted data
+        with patch('meals.meal_planning_tools.format_for_structured_output', return_value=formatted_data) as mock_format:
             # Call the function with max_results parameter
             find_related_youtube_videos(self.meal.id, max_results=10)
             

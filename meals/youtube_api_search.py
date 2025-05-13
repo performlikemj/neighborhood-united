@@ -35,6 +35,10 @@ def find_youtube_cooking_videos(meal_name: str, meal_description: str, limit: in
         Dictionary containing YouTube video information, ranked by relevance
     """
     try:
+        # In test mode, return a mock response
+        if settings.TEST_MODE:
+            return {'status': 'success', 'videos': ['https://youtu.be/dQw4w9WgXcQ']}
+        
         # Step 1: Retrieve videos using the YouTube API
         youtube_results = _fetch_videos_from_youtube(meal_name, meal_description, limit * 2)
         

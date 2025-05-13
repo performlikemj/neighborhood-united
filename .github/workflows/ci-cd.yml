@@ -58,6 +58,8 @@ jobs:
 
       # 2) Run test suite with explicitly set DJANGO_SETTINGS_MODULE
       - name: Run tests
+        env:
+          TEST_MODE: "True"
         run: |
           export DJANGO_SETTINGS_MODULE=hood_united.settings
           # Ensure SECRET_KEY is never empty in CI

@@ -17,6 +17,9 @@ from dotenv import load_dotenv
 load_dotenv('dev.env')
 from datetime import timedelta
 
+# Test mode flag for disabling external API calls during tests
+TEST_MODE = os.getenv("TEST_MODE") == "True"
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 

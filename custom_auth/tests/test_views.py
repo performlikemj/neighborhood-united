@@ -60,7 +60,7 @@ class ProfileViewTests(TestCase):
             street='123 test st',
             city='Test city',
             state='TS',
-            zipcode='12345'
+            input_postalcode='12345'
         )
 
         self.profile_url = reverse('custom_auth:profile')

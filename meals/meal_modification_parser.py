@@ -100,6 +100,10 @@ def parse_modification_request(
             parsed = MealPlanModificationRequest.model_validate_json(resp.output_text)
             print(f"DEBUG parse_modification_request: Validated response, got {len(parsed.slots)} slots")
             
+            # Handle missing should_remove values by coercing to False
+            for slot in parsed.slots:
+                slot.should_remove = bool(slot.should_remove)
+                
             # Print details of each slot
             for i, slot in enumerate(parsed.slots):
                 print(f"DEBUG parse_modification_request: Slot {i+1}: id={slot.meal_plan_meal_id}, name={slot.meal_name}, rules={slot.change_rules}")

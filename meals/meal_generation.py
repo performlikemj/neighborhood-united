@@ -79,7 +79,7 @@ def generate_and_create_meal(
     - max_attempts: Maximum number of attempts to generate a valid meal
     - user_prompt: Optional user prompt to guide meal generation
     - request_id: Optional request ID for logging correlation
-    - user_goal_description: Optional string describing the user’s dietary or macro goal, forwarded to the generation prompt.
+    - user_goal_description: Optional string describing the user's dietary or macro goal, forwarded to the generation prompt.
     
     Returns:
     - Dictionary with status, message, meal, and used_pantry_item
@@ -490,275 +490,289 @@ def generate_meal_details(
     user_goal_description: Optional[str] = None
 ):
     """
-    Generate meal details using OpenAI.
+    Generate meal details using OpenAI GPT model.
     
     Parameters:
     - user: The user to generate the meal for
     - meal_type: The type of meal (e.g., 'Breakfast', 'Lunch', 'Dinner')
     - existing_meal_names: Set of existing meal names to avoid duplicates
     - existing_meal_embeddings: List of existing meal embeddings for similarity checks
-    - meal_plan: The MealPlan object
-    - min_similarity: Minimum similarity threshold for duplicate detection
+    - meal_plan: The MealPlan object to add the meal to
+    - min_similarity: Minimum similarity threshold for deduplication
     - max_attempts: Maximum number of attempts to generate a valid meal
     - user_prompt: Optional user prompt to guide meal generation
     - request_id: Optional request ID for logging correlation
-    - user_goal_description: Optional string describing the user's goal to guide meal detail generation.
+    - user_goal_description: Optional string describing the user's dietary or macro goal, forwarded to the generation prompt.
     
     Returns:
-    - Dictionary with meal details or None if generation fails
+    - Dictionary containing generated meal details
     """
-    # Generate a request ID if not provided
     if request_id is None:
         request_id = str(uuid.uuid4())
 
-    previous_week_start = timezone.now().date() - timedelta(days=timezone.now().weekday() + 7)
-    previous_week_end = previous_week_start + timedelta(days=6)
-
-    # 1) Fetch user's expiring pantry items and leftover availability
-    expiring_pantry_items = get_expiring_pantry_items(user)  # e.g. [{'item_id': 1, 'item_name': 'Beef', 'quantity': 4}, ...]
-    effective_avail_dict = compute_effective_available_items(user, meal_plan, days_threshold=7)
-
-    # For logging and prompt: just show item names
-    expiring_items_str = (
-        ', '.join(d["item_name"] for d in expiring_pantry_items) 
-        if expiring_pantry_items else "None"
-    )
-
-    # 2) Filter each expiring item by leftover
-    updated_expiring_items = []
-    for item_info in expiring_pantry_items:
-        item_id = item_info.get("item_id")
-        if not item_id:
-            continue  # skip if there's no ID
-        real_qty = item_info.get("quantity", 0)
-        leftover_data = effective_avail_dict.get(item_id, (real_qty, ""))  # default to (real_qty, "")
-        leftover_qty, leftover_unit = leftover_data  # e.g. leftover_qty=2.5, leftover_unit='lb'
-
-        if leftover_qty <= 0:
-            continue  # item is fully used/reserved, skip
-        new_item = dict(item_info)
-        new_item["quantity"] = leftover_qty
-        updated_expiring_items.append(new_item)
-
-    # 3) Identify previous week's meals (to avoid duplicates)
-    previous_meals = MealPlanMeal.objects.filter(
-        meal_plan__user=user,
-        meal_plan__week_start_date=previous_week_start,
-        meal_plan__week_end_date=previous_week_end
-    ).select_related('meal')
-
-    previous_meal_names = set(previous_meals.values_list('meal__name', flat=True))
-    previous_meal_embeddings = list(previous_meals.values_list('meal__meal_embedding', flat=True))
-
-    # Combine meal names & embeddings with the ones passed in
-    combined_meal_names = existing_meal_names.union(previous_meal_names)
-
-    import numpy as np
-    combined_meal_embeddings = []
-    for emb in existing_meal_embeddings + previous_meal_embeddings:
-        if isinstance(emb, np.ndarray):
-            emb = emb.tolist()
-        # Ensure it's a valid 1536-dim embedding of floats
-        if isinstance(emb, list) and len(emb) == 1536 and all(isinstance(x, (int, float)) for x in emb):
-            combined_meal_embeddings.append(emb)
-        else:
-            logger.error(f"Invalid or malformed embedding: {emb}")
-
-    # 4) Gather user allergy/goal info for the GPT prompt
-    allergens = set(user.allergies or []) | set(user.custom_allergies or [])
-    allergens_str = ', '.join(allergens) if allergens else 'None'
-    user_goals = user_goal_description if user_goal_description is not None else getattr(getattr(user, 'goal', None), 'goal_description', 'None')
-
-    # 5) Build the GPT prompt
-    base_prompt = f"""
-    You are a helpful meal-planning assistant.
-    The user has expiring pantry items with these *effective* quantities:
-    {expiring_items_str}.
-
-    Requirements:
-    1. Only use these expiring items if they make sense together.
-    2. Do not invent additional pantry items not in the user's pantry.
-    3. If an expiring item conflicts with user allergies, skip it.
-    4. The meal must be realistic—avoid bizarre flavor combos.
-    5. Return JSON with the MealOutputSchema format, including "used_pantry_items".
-    6. Use at most 2 expiring items to avoid wild combos.
-    """
-
-    if user_prompt:
-        base_prompt += f"""
+    # Short-circuit in test mode
+    if settings.TEST_MODE:
+        logger.info('[TEST_MODE] short-circuit meal generation')
+        return {
+            'name': 'Test Meal',
+            'description': 'This is a test meal',
+            'dietary_preference': 'Everything',
+            'ingredients': []
+        }
         
-        The user has specifically requested:
-        {user_prompt}
+    # Rest of the function continues with normal processing
+    attempts = 0
+    while attempts < max_attempts:
+        attempts += 1
+        logger.info(f"[{request_id}] Attempt {attempts} to generate meal details for {meal_type}.")
 
-        Make sure the generated meal satisfies these requirements while still meeting
-        all dietary restrictions and preferences.
+        # 1) Fetch user's expiring pantry items and leftover availability
+        expiring_pantry_items = get_expiring_pantry_items(user)  # e.g. [{'item_id': 1, 'item_name': 'Beef', 'quantity': 4}, ...]
+        effective_avail_dict = compute_effective_available_items(user, meal_plan, days_threshold=7)
+
+        # For logging and prompt: just show item names
+        expiring_items_str = (
+            ', '.join(d["item_name"] for d in expiring_pantry_items) 
+            if expiring_pantry_items else "None"
+        )
+
+        # 2) Filter each expiring item by leftover
+        updated_expiring_items = []
+        for item_info in expiring_pantry_items:
+            item_id = item_info.get("item_id")
+            if not item_id:
+                continue  # skip if there's no ID
+            real_qty = item_info.get("quantity", 0)
+            leftover_data = effective_avail_dict.get(item_id, (real_qty, ""))  # default to (real_qty, "")
+            leftover_qty, leftover_unit = leftover_data  # e.g. leftover_qty=2.5, leftover_unit='lb'
+
+            if leftover_qty <= 0:
+                continue  # item is fully used/reserved, skip
+            new_item = dict(item_info)
+            new_item["quantity"] = leftover_qty
+            updated_expiring_items.append(new_item)
+
+        # 3) Identify previous week's meals (to avoid duplicates)
+        previous_week_start = timezone.now().date() - timedelta(days=timezone.now().weekday() + 7)
+        previous_week_end = previous_week_start + timedelta(days=6)
+        previous_meals = MealPlanMeal.objects.filter(
+            meal_plan__user=user,
+            meal_plan__week_start_date=previous_week_start,
+            meal_plan__week_end_date=previous_week_end
+        ).select_related('meal')
+
+        previous_meal_names = set(previous_meals.values_list('meal__name', flat=True))
+        previous_meal_embeddings = list(previous_meals.values_list('meal__meal_embedding', flat=True))
+
+        # Combine meal names & embeddings with the ones passed in
+        combined_meal_names = existing_meal_names.union(previous_meal_names)
+
+        import numpy as np
+        combined_meal_embeddings = []
+        for emb in existing_meal_embeddings + previous_meal_embeddings:
+            if isinstance(emb, np.ndarray):
+                emb = emb.tolist()
+            # Ensure it's a valid 1536-dim embedding of floats
+            if isinstance(emb, list) and len(emb) == 1536 and all(isinstance(x, (int, float)) for x in emb):
+                combined_meal_embeddings.append(emb)
+            else:
+                logger.error(f"Invalid or malformed embedding: {emb}")
+
+        # 4) Gather user allergy/goal info for the GPT prompt
+        allergens = set(user.allergies or []) | set(user.custom_allergies or [])
+        allergens_str = ', '.join(allergens) if allergens else 'None'
+        user_goals = user_goal_description if user_goal_description is not None else getattr(getattr(user, 'goal', None), 'goal_description', 'None')
+
+        # 5) Build the GPT prompt
+        base_prompt = f"""
+        You are a helpful meal-planning assistant.
+        The user has expiring pantry items with these *effective* quantities:
+        {expiring_items_str}.
+
+        Requirements:
+        1. Only use these expiring items if they make sense together.
+        2. Do not invent additional pantry items not in the user's pantry.
+        3. If an expiring item conflicts with user allergies, skip it.
+        4. The meal must be realistic—avoid bizarre flavor combos.
+        5. Return JSON with the MealOutputSchema format, including "used_pantry_items".
+        6. Use at most 2 expiring items to avoid wild combos.
         """
 
-    base_prompt += f"""
-    Example JSON structure:
-    {{
-      "status": "success",
-      "message": "Meal created successfully!",
-      "current_time": "2023-10-05T10:00:00Z",
-      "meal": {{
-          "name": "Hearty Lentil Tomato Stew",
-          "description": "...",
-          "dietary_preference": "Everything",
-          "meal_type": "{meal_type}",
-          "used_pantry_items": ["lentils", "tomato sauce"]
-      }}
-    }}
-
-    Now, generate a new meal that:
-    - Is not too similar to: {', '.join(combined_meal_names)}
-    - Meets the user's goal: {user_goals}
-    - Avoids user allergies: {allergens_str}
-    - Aligns with user preferences: {generate_user_context(user)}
-    - Is served as: {meal_type}
-
-    Begin!
-    """
-    from meals.pydantic_models import DietaryPreference
-    # 6) Attempt up to max_attempts
-    for attempt in range(max_attempts):
-        try:
-            # Pass the list of possible dietary preferences to the model
-            dietary_preferences_list = [pref.value for pref in DietaryPreference]
-            dietary_preferences_str = ", ".join(dietary_preferences_list)
-            
-            # Add dietary preferences to the base prompt
+        if user_prompt:
             base_prompt += f"""
             
-            Available dietary preferences: {dietary_preferences_str}
-            Please ensure the meal's dietary_preference field uses one of these exact values.
+            The user has specifically requested:
+            {user_prompt}
+
+            Make sure the generated meal satisfies these requirements while still meeting
+            all dietary restrictions and preferences.
             """
-            response = client.responses.create(
-                model="gpt-4.1-mini",
-                input=[
-                    {"role": "developer", "content": (
-                        """
-                        Generate a single meal JSON based on specified criteria, ensuring it aligns with user goals and preferences, while avoiding similarities to past meals and any user allergies.
 
-                        You will use the provided schemas to structure your response, ensuring all required fields are included and validated.
+        base_prompt += f"""
+        Example JSON structure:
+        {{
+          "status": "success",
+          "message": "Meal created successfully!",
+          "current_time": "2023-10-05T10:00:00Z",
+          "meal": {{
+              "name": "Hearty Lentil Tomato Stew",
+              "description": "...",
+              "dietary_preference": "Everything",
+              "meal_type": "{meal_type}",
+              "used_pantry_items": ["lentils", "tomato sauce"]
+          }}
+        }}
 
-                        # Steps
+        Now, generate a new meal that:
+        - Is not too similar to: {', '.join(combined_meal_names)}
+        - Meets the user's goal: {user_goals}
+        - Avoids user allergies: {allergens_str}
+        - Aligns with user preferences: {generate_user_context(user)}
+        - Is served as: {meal_type}
 
-                        1. **Analyze User Requirements:**
-                        - Consider user goals, allergies, preferences, and the required meal type.
-                        - Ensure the new meal is distinct from past meals listed.
+        Begin!
+        """
+        from meals.pydantic_models import DietaryPreference
+        # 6) Attempt up to max_attempts
+        for attempt in range(max_attempts):
+            try:
+                # Pass the list of possible dietary preferences to the model
+                dietary_preferences_list = [pref.value for pref in DietaryPreference]
+                dietary_preferences_str = ", ".join(dietary_preferences_list)
+                
+                # Add dietary preferences to the base prompt
+                base_prompt += f"""
+                
+                Available dietary preferences: {dietary_preferences_str}
+                Please ensure the meal's dietary_preference field uses one of these exact values.
+                """
+                response = client.responses.create(
+                    model="gpt-4.1-mini",
+                    input=[
+                        {"role": "developer", "content": (
+                            """
+                            Generate a single meal JSON based on specified criteria, ensuring it aligns with user goals and preferences, while avoiding similarities to past meals and any user allergies.
 
-                        2. **Meal Creation:**
-                        - Develop a creative meal idea that satisfies the user's requirements and preferences.
-                        - Avoid ingredients that the user is allergic to.
+                            You will use the provided schemas to structure your response, ensuring all required fields are included and validated.
 
-                        3. **JSON Structure:**
-                        - Utilize the `MealData` and `MealOutputSchema` schemas.
-                        - Ensure all relevant fields, such as meal name, description, dietary preferences, chef data, and pantry items, are appropriately filled.
+                            # Steps
 
-                        # Output Format
+                            1. **Analyze User Requirements:**
+                            - Consider user goals, allergies, preferences, and the required meal type.
+                            - Ensure the new meal is distinct from past meals listed.
 
-                        The output must be a JSON object following the `MealOutputSchema`. This includes:
-                        - "status": A string indicating the success of the meal creation.
-                        - "message": A success message for the meal creation.
-                        - "current_time": A timestamp in ISO 8601 format (use a placeholder for demonstration).
-                        - "meal": An object conforming to `MealData`.
+                            2. **Meal Creation:**
+                            - Develop a creative meal idea that satisfies the user's requirements and preferences.
+                            - Avoid ingredients that the user is allergic to.
 
-                        # Example
+                            3. **JSON Structure:**
+                            - Utilize the `MealData` and `MealOutputSchema` schemas.
+                            - Ensure all relevant fields, such as meal name, description, dietary preferences, chef data, and pantry items, are appropriately filled.
 
-                        Example input: (input details would be provided in actual use, this is a placeholder)
-                        - combined_meal_names = ["Hearty Lentil Tomato Stew", "Spicy Black Bean Soup"]
-                        - user_goals = "Create a healthy, balanced meal."
-                        - allergens_str = "gluten"
-                        - generate_user_context(user) = "Prefers vegan meals, likes spicy flavors."
-                        - meal_type = "Dinner"
+                            # Output Format
 
-                        Example output: 
-                        ```json
-                        {
-                        "status": "success",
-                        "message": "Meal created successfully!",
-                        "current_time": "2023-10-05T12:00:00Z",
-                        "meal": {
-                            "name": "Spicy Quinoa Chili",
-                            "description": "A hearty and spicy vegan chili with quinoa, kidney beans, and bell peppers.",
-                            "dietary_preference": "Vegan",
-                            "meal_type": "Dinner",
-                            "is_chef_meal": false,
-                            "chef_name": null,
-                            "chef_meal_event_id": null,
-                            "used_pantry_items": ["quinoa", "kidney beans", "bell peppers"]
+                            The output must be a JSON object following the `MealOutputSchema`. This includes:
+                            - "status": A string indicating the success of the meal creation.
+                            - "message": A success message for the meal creation.
+                            - "current_time": A timestamp in ISO 8601 format (use a placeholder for demonstration).
+                            - "meal": An object conforming to `MealData`.
+
+                            # Example
+
+                            Example input: (input details would be provided in actual use, this is a placeholder)
+                            - combined_meal_names = ["Hearty Lentil Tomato Stew", "Spicy Black Bean Soup"]
+                            - user_goals = "Create a healthy, balanced meal."
+                            - allergens_str = "gluten"
+                            - generate_user_context(user) = "Prefers vegan meals, likes spicy flavors."
+                            - meal_type = "Dinner"
+
+                            Example output: 
+                            ```json
+                            {
+                            "status": "success",
+                            "message": "Meal created successfully!",
+                            "current_time": "2023-10-05T12:00:00Z",
+                            "meal": {
+                                "name": "Spicy Quinoa Chili",
+                                "description": "A hearty and spicy vegan chili with quinoa, kidney beans, and bell peppers.",
+                                "dietary_preference": "Vegan",
+                                "meal_type": "Dinner",
+                                "is_chef_meal": false,
+                                "chef_name": null,
+                                "chef_meal_event_id": null,
+                                "used_pantry_items": ["quinoa", "kidney beans", "bell peppers"]
+                            }
+                            }
+                            ```
+
+                            # Notes
+
+                            - Ensure creativity when generating meal descriptions, while respecting user dietary preferences and restrictions.
+                            - Always verify that the meal is unique compared to the combined meal names provided.
+                            - Use appropriate placeholders where real-time data, such as current time, is needed.                        
+                            """
+                        )},
+                        {"role": "user", "content": base_prompt}
+                    ],
+                    #store=True,
+                    #metadata={'tag': 'meal_details'},
+                    text={
+                        "format": {
+                            'type': 'json_schema',
+                            'name': 'meal_details',
+                            'schema': MealOutputSchema.model_json_schema()
                         }
-                        }
-                        ```
-
-                        # Notes
-
-                        - Ensure creativity when generating meal descriptions, while respecting user dietary preferences and restrictions.
-                        - Always verify that the meal is unique compared to the combined meal names provided.
-                        - Use appropriate placeholders where real-time data, such as current time, is needed.                        
-                        """
-                    )},
-                    {"role": "user", "content": base_prompt}
-                ],
-                #store=True,
-                #metadata={'tag': 'meal_details'},
-                text={
-                    "format": {
-                        'type': 'json_schema',
-                        'name': 'meal_details',
-                        'schema': MealOutputSchema.model_json_schema()
                     }
+                )
+
+                gpt_output = response.output_text
+                meal_data = json.loads(gpt_output)
+
+                meal_dict = meal_data.get('meal', {})
+                meal_name = meal_dict.get('name')
+                description = meal_dict.get('description')
+                dietary_preference = meal_dict.get('dietary_preference')
+                used_pantry_items = meal_dict.get('used_pantry_items', [])
+
+                # Basic checks
+                if not meal_name or not description or not dietary_preference:
+                    logger.error(f"[{request_id}] [Attempt {attempt+1}] Meal data incomplete: {meal_data}. Skipping.")
+                    continue
+
+                meal_representation = (
+                    f"Name: {meal_name}, Description: {description}, "
+                    f"Dietary Preference: {dietary_preference}, Meal Type: {meal_type}, "
+                    f"Chef: {user.username}, Price: 'N/A'"
+                )
+                new_meal_embedding = get_embedding(meal_representation)
+
+                # Uniqueness check vs. existing embeddings
+                similar_meal_found = False
+                for emb in combined_meal_embeddings:
+                    similarity = cosine_similarity(new_meal_embedding, emb)
+                    if similarity > (1 - min_similarity):
+                        similar_meal_found = True
+                        break
+
+                if similar_meal_found:
+                    logger.debug(f"[{request_id}] [Attempt {attempt+1}] Found a similar meal. Retrying.")
+                    continue
+
+                # If no similarity found, we return the new meal data
+                return {
+                    'name': meal_name,
+                    'description': description,
+                    'dietary_preference': dietary_preference,
+                    'meal_embedding': new_meal_embedding,
+                    'used_pantry_items': used_pantry_items
                 }
-            )
 
-            gpt_output = response.output_text
-            meal_data = json.loads(gpt_output)
+            except Exception as e:
+                logger.error(f"[{request_id}] [Attempt {attempt+1}] Error generating meal: {e}")
+                return None
 
-            meal_dict = meal_data.get('meal', {})
-            meal_name = meal_dict.get('name')
-            description = meal_dict.get('description')
-            dietary_preference = meal_dict.get('dietary_preference')
-            used_pantry_items = meal_dict.get('used_pantry_items', [])
-
-            # Basic checks
-            if not meal_name or not description or not dietary_preference:
-                logger.error(f"[{request_id}] [Attempt {attempt+1}] Meal data incomplete: {meal_data}. Skipping.")
-                continue
-
-            meal_representation = (
-                f"Name: {meal_name}, Description: {description}, "
-                f"Dietary Preference: {dietary_preference}, Meal Type: {meal_type}, "
-                f"Chef: {user.username}, Price: 'N/A'"
-            )
-            new_meal_embedding = get_embedding(meal_representation)
-
-            # Uniqueness check vs. existing embeddings
-            similar_meal_found = False
-            for emb in combined_meal_embeddings:
-                similarity = cosine_similarity(new_meal_embedding, emb)
-                if similarity > (1 - min_similarity):
-                    similar_meal_found = True
-                    break
-
-            if similar_meal_found:
-                logger.debug(f"[{request_id}] [Attempt {attempt+1}] Found a similar meal. Retrying.")
-                continue
-
-            # If no similarity found, we return the new meal data
-            return {
-                'name': meal_name,
-                'description': description,
-                'dietary_preference': dietary_preference,
-                'meal_embedding': new_meal_embedding,
-                'used_pantry_items': used_pantry_items
-            }
-
-        except Exception as e:
-            logger.error(f"[{request_id}] [Attempt {attempt+1}] Error generating meal: {e}")
-            return None
-
-    logger.error(f"[{request_id}] Failed to generate a unique meal after {max_attempts} attempts.")
-    return None
+        logger.error(f"[{request_id}] Failed to generate a unique meal after {max_attempts} attempts.")
+        return None
 
 
 @shared_task

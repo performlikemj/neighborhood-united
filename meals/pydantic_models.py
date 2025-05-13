@@ -661,12 +661,13 @@ class MealSlotDirective(BaseModel):
             "Empty array ⇒ leave slot untouched."
         ),
     )
-    should_remove: bool = Field(
-        ...,
+    should_remove: Optional[bool] = Field(
+        ..., 
         description=(
-            "Set to true if the meal should be completely removed without being replaced. "
-            "This is used when the user explicitly wants to remove a meal rather than modify it."
-        ),
+            "Whether to delete this meal entirely and not replace it. "
+            "NOTE: must not check for a value of False – it might be missing "
+            "in the original request. Check for *truthiness* instead."
+        )
     )
 
 class MealPlanModificationRequest(BaseModel):

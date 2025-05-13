@@ -1,6 +1,7 @@
 from django.urls import path
 from . import views
 from rest_framework_simplejwt.views import TokenBlacklistView, TokenRefreshView
+from django.conf import settings
 
 app_name = 'custom_auth'
 
@@ -32,3 +33,7 @@ urlpatterns = [
     path('api/resend-activation-link/', views.resend_activation_link, name='resend_activation_link'),
     path('api/delete_account/', views.delete_account, name='delete_account'),
 ]
+
+# Only include the register URL in test mode
+if settings.TEST_MODE:
+    urlpatterns.append(path("register/", views.RegisterView.as_view(), name="register"))

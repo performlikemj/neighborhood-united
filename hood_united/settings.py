@@ -32,7 +32,9 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = ['127.0.0.1', 'localhost', 'nbhdunited.azurewebsites.net', 'www.nbhdunited.com', 'nbhdunited.com', 'www.sautai.com', 'sautai.com', '169.254.131.6:8000', '169.254.131.3:8000', 'hoodunited.org']
+ALLOWED_HOSTS = ['127.0.0.1', 'localhost', 'nbhdunited.azurewebsites.net', 'www.nbhdunited.com', 'nbhdunited.com', 
+                 'www.sautai.com', 'sautai.com', '169.254.131.6:8000', '169.254.131.3:8000', 
+                 'hoodunited.org', 'host.docker.internal']
 
 # Model quota limits
 GPT41_AUTH_LIMIT = int(os.getenv('GPT41_AUTH_LIMIT', 5))  # GPT-4.1 per authenticated user / day
@@ -127,11 +129,11 @@ ASGI_APPLICATION = 'hood_united.asgi.application'
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("DB_NAME", os.getenv("TEST_DB_NAME", "test_db")),
-        "USER": os.getenv("DB_USER", os.getenv("TEST_DB_USER", "test_user")),
+        "NAME": os.getenv("TEST_DB_NAME", os.getenv("TEST_DB_NAME", "test_db")),
+        "USER": os.getenv("TEST_DB_USER", os.getenv("TEST_DB_USER", "test_user")),
         "PASSWORD": os.getenv("DB_PASSWORD", os.getenv("TEST_DB_PASSWORD", "test_password")),
-        "HOST": os.getenv("DB_HOST", "localhost"),
-        "PORT": os.getenv("DB_PORT", "5432"),
+        "HOST": os.getenv("TEST_DB_HOST", "localhost"),
+        "PORT": os.getenv("TEST_DB_PORT", "5432"),
     }
 }
 
@@ -249,6 +251,10 @@ LOGIN_URL = 'custom_auth:login'
 # OpenAI API keys
 OPENAI_KEY = os.getenv('OPENAI_KEY')
 SPOONACULAR_API_KEY = os.getenv('SPOONACULAR_API_KEY')
+
+# Instacart API configuration
+INSTACART_API_KEY = os.getenv('INSTACART_API_KEY')
+INSTACART_API_BASE_URL = os.getenv('INSTACART_API_BASE_URL', 'https://connect.instacart.com')
 
 # Redis configuration for quotas
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')

@@ -191,17 +191,9 @@ CUSTOMER_DASHBOARD_TOOLS: List[Dict[str, Any]] = [
                     "description": "Change the language the assistant will use to communicate with the user. "
                         "The backend will use the language code such as 'en', 'ja', 'es', etc."
                 },
-                "email_daily_instructions":      { 
+                "unsubscribed_from_emails": { 
                     "type": "boolean",
-                    "description": "Toggle email that provides daily instructions to the user"
-                },
-                "email_meal_plan_saved":          { 
-                    "type": "boolean",
-                    "description": "Toggle email that provides the user with a copy of their meal plan once it's saved."
-                },
-                "email_instruction_generation":   { 
-                    "type": "boolean",
-                    "description": "Toggle email that provides the user with a copy of their meal's cooking instructions once generated."
+                    "description": "Set to true to unsubscribe from all emails, false to receive emails"
                 },
                 "preferred_servings":  {
                     "type": "integer",
@@ -430,9 +422,7 @@ def update_user_settings(
     allergies: List[str] = None,
     custom_allergies: List[str] = None,
     preferred_language: str = None,
-    email_daily_instructions: bool = None,
-    email_meal_plan_saved: bool = None,
-    email_instruction_generation: bool = None,
+    unsubscribed_from_emails: bool = None,
     preferred_servings: int = None,
     emergency_supply_goal: int = None,
     phone_number: str = None,
@@ -506,9 +496,7 @@ def update_user_settings(
         # ---- Simple scalar fields --------------------------------------------
         scalar_map = {
             "preferred_language": preferred_language,
-            "email_daily_instructions": email_daily_instructions,
-            "email_meal_plan_saved": email_meal_plan_saved,
-            "email_instruction_generation": email_instruction_generation,
+            "unsubscribed_from_emails": unsubscribed_from_emails,
             "preferred_servings": preferred_servings,
             "emergency_supply_goal": emergency_supply_goal,
             "phone_number": phone_number,

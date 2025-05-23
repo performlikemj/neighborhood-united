@@ -364,7 +364,20 @@ def generate_user_context(user):
     timezone = user.timezone if user.timezone else "UTC"
     
     # Get user's preferred language
-    preferred_language = dict(CustomUser.LANGUAGE_CHOICES).get(user.preferred_language, "English")
+    # Try to get language name from Django's LANG_INFO instead of relying on LANGUAGE_CHOICES
+    from django.conf.locale import LANG_INFO
+    lang_code = user.preferred_language if user.preferred_language else "en"
+    try:
+        # Try to get the language info, first check direct match
+        if lang_code in LANG_INFO:
+            preferred_language = LANG_INFO[lang_code]['name']
+        else:
+            # If we have a composite code like 'en-us', try the base code 'en'
+            base_lang_code = lang_code.split('-')[0]
+            preferred_language = LANG_INFO.get(base_lang_code, {}).get('name', "English")
+    except (KeyError, AttributeError):
+        # Fallback to English if language code isn't found
+        preferred_language = "English"
     
     # Combine all information into a structured context
     user_preferences = (

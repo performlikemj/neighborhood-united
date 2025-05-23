@@ -86,6 +86,10 @@ urlpatterns = [
     # API endpoint for dietary preferences
     path('api/dietary-preferences/', views.api_dietary_preferences, name='api_dietary_preferences'),
     
+    # API endpoints for Instacart integration
+    path('api/generate-instacart-link/', views.api_generate_instacart_link, name='api_generate_instacart_link'),
+    path('api/meal-plans/<int:meal_plan_id>/instacart-url/', views.api_get_instacart_url, name='api_get_instacart_url'),
+    
     # API endpoint for dishes
     path('api/dishes/', chef_meals_views.api_get_dishes, name='api_get_dishes'),
     path('api/dishes/<int:dish_id>/', chef_meals_views.api_get_dish_by_id, name='api_get_dish_by_id'),

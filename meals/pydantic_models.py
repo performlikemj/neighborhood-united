@@ -615,6 +615,14 @@ class UsageList(BaseModel):
             ]
         }
 
+#Ingredients Schema
+class Ingredient(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    item_name: str = Field(..., description="Exact name of the pantry item to use.")
+    quantity_used: float = Field(..., description="How many units the recipe calls for.")
+    unit: str = Field(..., description="Unit of measure, e.g. 'cups', 'pieces', 'grams'")
+    notes: Optional[str] = Field(..., description="Any special notes about the ingredient.")
+
 # YouTube Video Ranking Models
 class VideoRankingItem(BaseModel):
     """Individual video ranking information."""

@@ -87,7 +87,6 @@ def generate_and_create_meal(
     # Import here to avoid circular imports
     from meals.meal_plan_service import perform_comprehensive_sanity_check
     from meals.macro_info_retrieval import get_meal_macro_information
-    from meals.youtube_api_search import find_youtube_cooking_videos
     # Generate a request ID if not provided
     if request_id is None:
         request_id = str(uuid.uuid4())
@@ -196,26 +195,7 @@ def generate_and_create_meal(
             except Exception as e:
                 logger.error(f"[{request_id}] Error adding macro information to meal '{meal.name}': {e}")
                 logger.error(f"[{request_id}] {traceback.format_exc()}")
-                
-            # DIRECT ENHANCEMENT: Add YouTube videos
-            try:
-                logger.info(f"[{request_id}] Finding YouTube videos for meal '{meal.name}'")
-                video_info = find_youtube_cooking_videos(
-                    meal_name=meal.name,
-                    meal_description=meal.description
-                )
-                
-                if video_info and video_info.get("videos"):
-                    logger.info(f"[{request_id}] Saving YouTube videos for meal '{meal.name}': {video_info}")
-                    meal.youtube_videos = json.dumps(video_info)
-                    meal.save()
-                    logger.info(f"[{request_id}] Successfully added YouTube videos to meal '{meal.name}'")
-                else:
-                    logger.warning(f"[{request_id}] No YouTube videos returned for meal '{meal.name}'")
-            except Exception as e:
-                logger.error(f"[{request_id}] Error adding YouTube videos to meal '{meal.name}': {e}")
-                logger.error(f"[{request_id}] {traceback.format_exc()}")
-                
+
             # Verify the data was actually saved
             try:
                 meal.refresh_from_db()

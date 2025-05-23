@@ -310,7 +310,7 @@ class MealPlanSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = MealPlan
-        fields = ['id', 'user', 'meals', 'created_date', 'week_start_date', 'week_end_date', 'order', 'is_approved', 'meal_prep_preference', 'payment_required', 'pending_order_id', 'payment_details']
+        fields = ['id', 'user', 'meals', 'created_date', 'week_start_date', 'week_end_date', 'order', 'is_approved', 'meal_prep_preference', 'payment_required', 'pending_order_id', 'payment_details', 'instacart_url']
 
     def get_payment_required(self, obj):
         """Check if the meal plan has an associated order that is unpaid."""

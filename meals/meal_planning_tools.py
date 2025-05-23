@@ -40,6 +40,7 @@ from meals.youtube_api_search import find_youtube_cooking_videos, format_for_str
 from meals.pydantic_models import MealMacroInfo, VideoRankings  # schema validation
 from pydantic import ValidationError
 from django.conf import settings
+from meals.instacart_service import generate_instacart_link as _util_generate_instacart_link
 
 logger = logging.getLogger(__name__)
 
@@ -398,6 +399,30 @@ MEAL_PLANNING_TOOLS = [
                 }
             },
             "required": ["meal_id"],
+            "additionalProperties": False
+        }
+    },
+    {
+        "type": "function",
+        "name": "generate_instacart_link_tool",
+        "description": "Generate an Instacart shopping list link from the user's meal plan to buy ingredients",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "integer",
+                    "description": "The ID of the user"
+                },
+                "meal_plan_id": {
+                    "type": "integer",
+                    "description": "The ID of the meal plan to generate the shopping list for"
+                },
+                "postal_code": {
+                    "type": "string",
+                    "description": "Optional postal code for location-based store selection. If not provided, the user's saved postal code will be used."
+                }
+            },
+            "required": ["user_id", "meal_plan_id"],
             "additionalProperties": False
         }
     },
@@ -979,6 +1004,18 @@ def find_related_youtube_videos(meal_id: int, max_results: int = 5) -> Dict[str,
         return {"status": "error", "message": f"Meal {meal_id} not found."}
     except Exception as e:
         logger.error(f"find_related_youtube_videos error: {e}")
+        return {"status": "error", "message": str(e)}
+
+def generate_instacart_link_tool(user_id: int, meal_plan_id: int, postal_code: str = None) -> Dict[str, Any]:
+    """
+    Generate an Instacart shopping list link from the user's meal plan to buy ingredients
+    """
+    try:
+        req = HttpRequest()
+        req.data = {"user_id": user_id, "meal_plan_id": meal_plan_id, "postal_code": postal_code}
+        return _util_generate_instacart_link(req)
+    except Exception as e:
+        logger.error(f"generate_instacart_link error: {e}")
         return {"status": "error", "message": str(e)}
 
 # Function to get all meal planning tools

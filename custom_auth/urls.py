@@ -32,6 +32,8 @@ urlpatterns = [
     path('api/switch_role/', views.switch_role_api, name='switch_roles_api'),
     path('api/resend-activation-link/', views.resend_activation_link, name='resend_activation_link'),
     path('api/delete_account/', views.delete_account, name='delete_account'),
+    path('api/email_auth/<uuid:auth_token>/', views.email_authentication_view, name='email_authentication'),
+    path('api/languages/', views.api_available_languages, name='api_available_languages'),
 ]
 
 # Only include the register URL in test mode

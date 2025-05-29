@@ -16,25 +16,29 @@ from django.conf import settings
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.db.models import F, Sum
 from jinja2 import Environment, FileSystemLoader
 from openai import OpenAI
 from pydantic import ValidationError
 from custom_auth.models import CustomUser
 from meals.models import MealPlan, MealPlanMeal, MealPlanInstruction
 from meals.pydantic_models import MealPlanApprovalEmailSchema, ShoppingList as ShoppingListSchema
-from meals.pantry_management import get_user_pantry_items, get_expiring_pantry_items, determine_items_to_replenish
+from meals.pantry_management import get_user_pantry_items, get_expiring_pantry_items
 from meals.meal_embedding import serialize_data
 from meals.serializers import MealPlanSerializer
 from customer_dashboard.models import GoalTracking, UserHealthMetrics, CalorieIntake, UserSummary, UserDailySummary
 from shared.utils import generate_user_context
 from meals.meal_plan_service import is_chef_meal
 from django.template.loader import render_to_string
+from meals.meal_assistant_implementation import MealPlanningAssistant
+from .celery_utils import handle_task_failure
 
 logger = logging.getLogger(__name__)
 OPENAI_API_KEY = settings.OPENAI_KEY
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 @shared_task
+@handle_task_failure
 def send_meal_plan_approval_email(meal_plan_id):
     from meals.models import MealPlan, MealPlanMeal
     from shared.utils import generate_user_context
@@ -62,9 +66,9 @@ def send_meal_plan_approval_email(meal_plan_id):
             user_name = user.username
             user_email = user.email
 
-            # **Check if the user has opted in to receive meal plan emails**
-            if not user.email_meal_plan_saved:
-                logger.info(f"User {user.username} has opted out of meal plan emails.")
+            # **Check if the user has opted out of emails**
+            if user.unsubscribed_from_emails:
+                logger.info(f"User {user.username} has unsubscribed from emails.")
                 return  # Do not send the email
 
             if meal_plan.approval_email_sent:
@@ -112,7 +116,7 @@ def send_meal_plan_approval_email(meal_plan_id):
                 "meal_type": meal.meal_type,
                 "day": meal.day,
                 "description": meal.meal.description or "A delicious meal prepared for you.",
-                "meal_obj": meal.meal  # Add the actual meal object
+                "nutrition": meal.meal.macro_info if hasattr(meal.meal, 'macro_info') else None,
             })
 
         # Sort the meals_list by day and meal type
@@ -125,107 +129,88 @@ def send_meal_plan_approval_email(meal_plan_id):
             meal_type_order_map.get(x['meal_type'], 3)
         ))
 
-        # Call OpenAI to generate the email content
+        # Build a comprehensive, detailed message for the assistant
+        message_content = (
+            f"I need to send a meal plan approval email to {user_name}. Here's all the context you'll need:\n\n"
+            f"USER CONTEXT: {user_context}\n\n"
+            f"MEAL PLAN DETAILS:\n"
+            f"- Week: {meal_plan.week_start_date.strftime('%B %d, %Y')} to {meal_plan.week_end_date.strftime('%B %d, %Y')}\n"
+            f"- Preference: {meal_plan.meal_prep_preference if meal_plan.meal_prep_preference else 'Not specified'}\n"
+            f"- Dietary restrictions: {user.dietary_restrictions if hasattr(user, 'dietary_restrictions') else 'None specified'}\n\n"
+            f"APPROVAL LINKS:\n"
+            f"- Daily prep: {approval_link_daily}\n"
+            f"- One-day bulk prep: {approval_link_one_day}\n\n"
+            f"MEALS (sorted by day and meal type):\n"
+        )
+
+        # Group meals by day for better organization
+        meals_by_day = {}
+        for meal in meals_list:
+            day = meal['day']
+            if day not in meals_by_day:
+                meals_by_day[day] = []
+            meals_by_day[day].append(meal)
+
+        # Add each day's meals to the message
+        for day in day_order:
+            if day in meals_by_day:
+                message_content += f"\n{day}:\n"
+                for meal in meals_by_day[day]:
+                    message_content += f"- {meal['meal_type']}: {meal['meal_name']}"
+                    if meal['description'] and meal['description'] != "A delicious meal prepared for you.":
+                        message_content += f" - {meal['description']}"
+                    message_content += "\n"
+
+        # Add nutrition information if available
+        message_content += "\nNUTRITION INFORMATION:\n"
+        has_nutrition = False
+        for meal in meals_list:
+            if meal.get('nutrition'):
+                has_nutrition = True
+                message_content += f"- {meal['meal_name']}: {meal['nutrition']}\n"
+        
+        if not has_nutrition:
+            message_content += "Detailed nutrition information not available for these meals.\n"
+
+        # Add user goals if available
         try:
-            response = client.responses.create(
-                model="gpt-4.1-mini",
-                input=[
-                    {
-                        "role": "developer",
-                        "content": "You are a helpful assistant that generates meal plan approval emails."
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Generate an email in {preferred_language}, given what you know about the user: {user_context}, that includes the following:\n\n"
-                            f"1. Greet the user by their name: {user_name}.\n"
-                            f"2. Inform them that their meal plan for the week {meal_plan.week_start_date} to {meal_plan.week_end_date} has been created.\n"
-                            f"3. Include a well-formatted and high-level summary of the following list of meals in their plan:\n{meals_list}. Make the summary enticing and engaging with newlines where necessary to avoid a cramped description."
-                        )
-                    }
-                ],
-                #store=True,
-                #metadata={'tag': 'meal_plan_approval_email'},
-                text={
-                    "format": {
-                        'type': 'json_schema',
-                        'name': 'approval_email',
-                        'schema': MealPlanApprovalEmailSchema.model_json_schema()
-                    }
-                }
-            )
-
-            response_content = response.output_text
-            email_data_dict = json.loads(response_content)
-
-            # Modify summary_text to support bold text and newlines
-            if 'summary_text' in email_data_dict:
-                summary_text = email_data_dict['summary_text']
-                # Replace **text** with <strong>text</strong>
-                summary_text = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', summary_text)
-                # Replace newlines with <br>
-                summary_text = summary_text.replace('\n', '<br>')
-                email_data_dict['summary_text'] = summary_text
-
-            email_model = MealPlanApprovalEmailSchema(**email_data_dict)
-
-            # Generate the profile URL
-            profile_url = f"{os.getenv('STREAMLIT_URL')}/profile"
-
-            # --- Replace Jinja2 with Django Template Rendering ---
-            context = {
-                'user_name': user_name,
-                'meal_plan_week_start': meal_plan.week_start_date.strftime('%B %d, %Y'), # Example formatting
-                'meal_plan_week_end': meal_plan.week_end_date.strftime('%B %d, %Y'),   # Example formatting
-                'approval_link_daily': approval_link_daily,
-                'approval_link_one_day': approval_link_one_day,
-                'meals_list': meals_list,
-                'summary_text': email_model.summary_text, # Use summary from model
-                'profile_url': profile_url,
-            }
-
-            # Render the template using Django's engine
-            # Note: The path 'meals/meal_plan_email.html' should be relative to a directory
-            # listed in TEMPLATES['DIRS'] or within an app's 'templates' directory.
-            email_body_html = render_to_string('meals/meal_plan_email.html', context)
-            # --- End of replacement ---
-
-            email_data = {
-                'subject': f'Approve Your Meal Plan for {meal_plan.week_start_date} - {meal_plan.week_end_date}',
-                'html_message': email_body_html,
-                'to': user_email if not settings.DEBUG else os.getenv('TEST_EMAIL'),
-                'from': 'support@sautai.com',
-            }
-
-            try:
-                logger.debug(f"Sending approval email to n8n for: {user_email}")
-                n8n_url = os.getenv("N8N_GENERATE_APPROVAL_EMAIL_URL")
-                response = requests.post(n8n_url, json=email_data)
-                response.raise_for_status() # Check for HTTP errors from n8n
-                logger.info(f"Approval email successfully sent to n8n for: {user_email}")
-                with transaction.atomic():
-                    meal_plan.approval_email_sent = True
-                    meal_plan.save()
-            except Exception as e:
-                logger.error(f"Error sending approval email to n8n for: {user_email}, error: {str(e)}")
-                traceback.print_exc()
-
+            from customer_dashboard.models import GoalTracking
+            goals = GoalTracking.objects.filter(user=user).first()
+            if goals:
+                message_content += f"\nUSER GOALS:\n{goals.goal_description}\n\n"
         except Exception as e:
-            logger.error(f"Error generating or sending approval email: {e}")
-            traceback.print_exc()
-            # Optionally, re-raise the exception if needed
-            # raise
+            logger.error(f"Error retrieving user goals: {e}")
+
+        # Send the notification via the assistant
+        subject = f'Approve Your Meal Plan for {meal_plan.week_start_date.strftime("%b %d")} - {meal_plan.week_end_date.strftime("%b %d")}'
+        
+        result = MealPlanningAssistant.send_notification_via_assistant(
+            user_id=user.id,
+            message_content=message_content,
+            subject=subject
+        )
+        
+        # Mark as sent if successful
+        if result.get('status') == 'success':
+            with transaction.atomic():
+                meal_plan.approval_email_sent = True
+                meal_plan.save()
+            logger.info(f"Meal plan approval email sent via assistant for: {user.email}")
+        else:
+            logger.error(f"Error sending meal plan approval email via assistant for: {user.email}, error: {str(result)}")
 
     except Exception as e:
-        logger.error(f"Transaction failed: {e}")
-        # Handle exception as needed
+        logger.error(f"Error in send_meal_plan_approval_email: {e}")
+        traceback.print_exc()
 
 @shared_task
+@handle_task_failure
 def generate_shopping_list(meal_plan_id):
     from django.db.models import Sum
     from meals.models import MealPlan, ShoppingList as ShoppingListModel, MealPlanMealPantryUsage, PantryItem, MealAllergenSafety
     # Import is_chef_meal locally to avoid circular imports
     from meals.meal_plan_service import is_chef_meal
+    from collections import defaultdict # Ensure defaultdict is imported
     
     meal_plan = get_object_or_404(MealPlan, id=meal_plan_id)
 
@@ -329,19 +314,8 @@ def generate_shopping_list(meal_plan_id):
         expiring_pantry_items = []
         expiring_items_str = 'None'
 
-    # Retrieve emergency supply goal
-    try:
-        emergency_supply_goal = user.emergency_supply_goal
-    except Exception as e:
-        logger.error(f"Error retrieving emergency supply goal for user {user.id}: {e}")
-        emergency_supply_goal = 0
-
     # Determine items to replenish
-    try:
-        items_to_replenish = determine_items_to_replenish(user)
-    except Exception as e:
-        logger.error(f"Error determining items to replenish for user {user.id}: {e}")
-        items_to_replenish = []
+    # (removed)
 
     # Generate user context
     try:
@@ -492,41 +466,111 @@ def generate_shopping_list(meal_plan_id):
         if notes and 'none' not in notes.lower():
             categorized_items[category][ingredient]['notes'].append(f"{meal_name}: {notes} ({quantity_str} {unit})")
 
-    # Format the HTML output
-    project_dir = settings.BASE_DIR
-    env = Environment(loader=FileSystemLoader(os.path.join(project_dir, 'meals', 'templates')))
-    template = env.get_template('meals/shopping_list_email.html')
-
-    # Prepare your context for rendering
-    context = {
-        'user_name': user_name,
-        'meal_plan_week_start': meal_plan.week_start_date,
-        'meal_plan_week_end': meal_plan.week_end_date,
-        'categorized_items': categorized_items,
-        'profile_url': f"{os.getenv('STREAMLIT_URL')}/profile",  # or however you define it
-    }
-
-    # Render the template
-    email_body_html = template.render(**context)
-
-    # Then create email_data just like you do in your existing code
-    email_data = {
-        'subject': f'Your Curated Shopping List for {meal_plan.week_start_date} - {meal_plan.week_end_date}',
-        'message': email_body_html,  # or 'html_message' if you want
-        'to': user_email if not settings.DEBUG else os.getenv('TEST_EMAIL'),
-        'from': 'support@sautai.com',
-    }
-
-    # Then send data to n8n (or wherever) just as before
+    # Build the final message for the assistant (regular shopping list only)
     try:
-        logger.info(f"Sending shopping list to {user_email} => {email_data}")
-        n8n_url = os.getenv("N8N_GENERATE_SHOPPING_LIST_URL")
-        requests.post(n8n_url, json=email_data)
-        logger.info(f"Shopping list sent to n8n for: {user_email}")
+        from meals.meal_assistant_implementation import MealPlanningAssistant
+
+        # Format the safe items into a simpler structure for the template
+        safe_items_data = []
+        for pi in user_pantry_items:
+            # Handle both PantryItem objects and strings
+            if isinstance(pi, str):
+                safe_items_data.append({
+                    "item_name": pi,
+                    "quantity_available": "Unknown",
+                    "unit": "",
+                    "notes": "",
+                })
+            else:
+                # Assume it's a PantryItem object with attributes
+                safe_items_data.append({
+                    "item_name": getattr(pi, 'item_name', str(pi)),
+                    "quantity_available": getattr(pi, 'quantity', "Unknown"),
+                    "unit": getattr(pi, 'weight_unit', "") or "",
+                    "notes": getattr(pi, 'notes', "") or "",
+                })
+
+        # Add information about current safe pantry items
+        if safe_items_data:
+            message_content = "CURRENT SAFE PANTRY ITEMS:\n"
+            for item in safe_items_data:
+                message_content += f"- {item['item_name']}: {item['quantity_available']} {item['unit'] or 'units'}"
+                if item['notes']:
+                    message_content += f" (Note: {item['notes']})"
+                message_content += "\n"
+            message_content += "\n"
+        else:
+            message_content = "CURRENT SAFE PANTRY ITEMS: None available\n\n"
+
+        # Build the final message for the assistant (regular shopping list only)
+        # Inserted block as per instructions
+        # ---------------------------------------------------------------
+        # Build the final message for the assistant (regular shopping list only)
+        message_content = (
+            f"I need to send a shopping list to {user_name} for their meal plan from "
+            f"{meal_plan.week_start_date.strftime('%B %d')} to {meal_plan.week_end_date.strftime('%B %d')}. "
+            "Here's the context you'll need:\n\n"
+            f"USER CONTEXT:\n{user_context}\n\n"
+            f"MEAL PLAN DETAILS:\n"
+            f"- Time period: {meal_plan.week_start_date.strftime('%B %d, %Y')} to "
+            f"{meal_plan.week_end_date.strftime('%B %d, %Y')}\n"
+            f"- Serving size: {preferred_serving_size} "
+            f"{'people' if preferred_serving_size > 1 else 'person'}\n"
+            f"- Dietary restrictions: {user.dietary_restrictions if hasattr(user, 'dietary_restrictions') else 'None specified'}\n\n"
+            f"PANTRY INFORMATION:\n"
+            f"- Expiring items: {expiring_items_str}\n"
+            f"- Inventory: {', '.join(user_pantry_items) if user_pantry_items else 'No items in pantry'}\n"
+            f"- Leftover usage: {bridging_leftover_str}\n\n"
+            f"MEAL SUBSTITUTIONS:\n"
+            f"{substitution_str if substitution_info else 'No substitutions needed for this meal plan.'}\n\n"
+            "SHOPPING LIST ITEMS BY CATEGORY:\n"
+        )
+
+        # Append the categorized items
+        if categorized_items:
+            for category, items_in_category in categorized_items.items():
+                if items_in_category:
+                    message_content += f"\\n{category.upper()}:\\n"
+                    for ingredient, details in items_in_category.items():
+                        qty = details['quantity']
+                        unit = details['unit']
+                        notes_list = details.get('notes', [])
+
+                        # Format quantity nicely
+                        if isinstance(qty, (int, float)):
+                            qty_str = (f"{qty:.1f}".rstrip('0').rstrip('.') 
+                                       if qty % 1 != 0 else f"{int(qty)}")
+                        else:
+                            qty_str = str(qty)
+
+                        message_content += f"- {ingredient}: {qty_str} {unit}"
+                        if notes_list:
+                            message_content += f" (Notes: {'; '.join(notes_list)})"
+                        message_content += "\\n"
+            message_content += "\\n"
+        else:
+            message_content += "No items in shopping list.\\n\\n"
+        # ---------------------------------------------------------------
+
+        subject = f"Your Shopping List for {meal_plan.week_start_date.strftime('%b %d')} - {meal_plan.week_end_date.strftime('%b %d')}"
+
+        result = MealPlanningAssistant.send_notification_via_assistant(
+            user_id=user.id,
+            message_content=message_content,
+            subject=subject
+        )
+
+        if result.get('status') == 'success':
+            logger.info(f"Shopping list sent via assistant for: {user_email}")
+        else:
+            logger.error(f"Error sending shopping list via assistant for: {user_email}, error: {str(result)}")
+
     except Exception as e:
-        logger.error(f"Error sending shopping list to n8n for: {user_email}, error: {str(e)}")
+        logger.error(f"Error sending shopping list via assistant for: {user_email}, error: {str(e)}")
+        traceback.print_exc()
 
 @shared_task
+@handle_task_failure
 def generate_user_summary(user_id: int, summary_date=None) -> None:
     """
     Build (or rebuild) a high-level daily user summary in the user's
@@ -543,7 +587,6 @@ def generate_user_summary(user_id: int, summary_date=None) -> None:
     import hashlib
     import json
     
-    print(f"Generating user summary for user {user_id}")
     user = get_object_or_404(CustomUser, id=user_id)
     user_context = generate_user_context(user)
     
@@ -591,6 +634,7 @@ def generate_user_summary(user_id: int, summary_date=None) -> None:
 
     # Get user data for the specified date range
     goals = GoalTracking.objects.filter(user=user)
+    user = CustomUser.objects.get(id=user_id)
     metrics = UserHealthMetrics.objects.filter(
         user=user, 
         date_recorded__gte=data_start_date,
@@ -635,7 +679,6 @@ def generate_user_summary(user_id: int, summary_date=None) -> None:
     
     # If hash matches and status is completed, no need to regenerate
     if summary.data_hash == data_hash and summary.status == UserDailySummary.COMPLETED:
-        print(f"Data unchanged for user {user_id} on {summary_date}, skipping generation")
         return
     
     # Update hash and status
@@ -645,7 +688,7 @@ def generate_user_summary(user_id: int, summary_date=None) -> None:
 
     lang_map = {
         "en": "English",
-        "jp": "Japanese",
+        "ja": "Japanese",
         "es": "Spanish",
         "fr": "French",
     }
@@ -655,7 +698,7 @@ def generate_user_summary(user_id: int, summary_date=None) -> None:
         "You are a friendly, motivating wellness assistant named MJ.\n"
         f"Write a daily summary for the user **in {target_lang}**.\n"
         f"• Focus on {time_period_description}\n"
-        "• Warm greeting with the user's first name if available.\n"
+        f"• Warm greeting with the user's name {user.username}.\n"
         "• Overview ≤ 5 sentences.\n"
         "• Sections: 1) Goals & Status, 2) Health Metrics trends, 3) Calorie-Intake insights.\n"
         "• Omit any empty section.\n"
@@ -733,6 +776,7 @@ def mark_summary_stale(user, date=None):
     generate_user_summary.delay(user.id, date.strftime('%Y-%m-%d'))
 
 @shared_task
+@handle_task_failure
 def generate_emergency_supply_list(user_id):
     """
     Creates or updates an emergency supply list for the user,
@@ -935,52 +979,150 @@ def generate_emergency_supply_list(user_id):
             notes = f"GPT returned non-JSON output: {gpt_output_str}"
 
         # Format the safe items into a simpler structure for the template
-        safe_items_data = [
-            {
-                "item_name": pi.item_name,
-                "quantity_available": pi.quantity,
-                "unit": pi.weight_unit or "",
-                "notes": pi.notes or "",
-            }
-            for pi in safe_pantry_items
-        ]
-
-        # 5) Render + send
-        project_dir = settings.BASE_DIR
-        env = Environment(loader=FileSystemLoader(os.path.join(project_dir, 'meals', 'templates')))
-        template = env.get_template('meals/emergency_supply_email.html')
-
-        email_body_html = template.render(
-            user_name=user.username,
-            days_of_supply=days_of_supply,
-            servings_per_meal=servings_per_meal,
-            safe_pantry_items=safe_items_data,
-            emergency_list=emergency_list,
-            notes=notes,
-            profile_url=f"{os.getenv('STREAMLIT_URL')}/profile"
-        )
-
-        email_data = {
-            "subject": f"Emergency Supply List for {days_of_supply} Days",
-            "message": email_body_html,
-            "to": user.email if not settings.DEBUG else os.getenv('TEST_EMAIL'),
-            "from": "support@sautai.com",
-        }
-
-        try:
-            n8n_url = os.getenv("N8N_GENERATE_EMERGENCY_LIST_URL")
-            if n8n_url:
-                requests.post(n8n_url, json=email_data)
-                logger.info(f"Sent emergency supply list to n8n for user {user.username}")
+        safe_items_data = []
+        for pi in safe_pantry_items:
+            # Handle both PantryItem objects and strings
+            if isinstance(pi, str):
+                safe_items_data.append({
+                    "item_name": pi,
+                    "quantity_available": "Unknown",
+                    "unit": "",
+                    "notes": "",
+                })
             else:
-                logger.info("No N8N_GENERATE_EMERGENCY_LIST_URL found; skipping external send.")
+                # Assume it's a PantryItem object with attributes
+                safe_items_data.append({
+                    "item_name": getattr(pi, 'item_name', str(pi)),
+                    "quantity_available": getattr(pi, 'quantity', "Unknown"),
+                    "unit": getattr(pi, 'weight_unit', "") or "",
+                    "notes": getattr(pi, 'notes', "") or "",
+                })
+
+        # Send via MealPlanningAssistant instead of n8n
+        try:
+            from meals.meal_assistant_implementation import MealPlanningAssistant
+            
+            # Add information about current safe pantry items
+            if safe_items_data:
+                message_content = "CURRENT SAFE PANTRY ITEMS:\n"
+                for item in safe_items_data:
+                    message_content += f"- {item['item_name']}: {item['quantity_available']} {item['unit'] or 'units'}"
+                    if item['notes']:
+                        message_content += f" (Note: {item['notes']})"
+                    message_content += "\n"
+                message_content += "\n"
+            else:
+                message_content = "CURRENT SAFE PANTRY ITEMS: None available\n\n"
+            
+            # Add recommended emergency supplies to purchase
+            if emergency_list:
+                message_content += "RECOMMENDED EMERGENCY SUPPLIES TO PURCHASE:\n"
+                for item in emergency_list:
+                    try:
+                        # Access attributes safely based on type
+                        if isinstance(item, dict):
+                            item_name = item.get('item_name', 'Unknown item')
+                            quantity = item.get('quantity_to_buy', '')
+                            unit = item.get('unit', '')
+                            notes = item.get('notes', '')
+                        else:
+                            # Assume it's a Pydantic model or similar object with attributes
+                            item_name = getattr(item, 'item_name', 'Unknown item') 
+                            quantity = getattr(item, 'quantity_to_buy', '')
+                            unit = getattr(item, 'unit', '')
+                            notes = getattr(item, 'notes', '')
+                            
+                        message_content += f"- {item_name}: {quantity} {unit or ''}"
+                        if notes:
+                            message_content += f" (Note: {notes})"
+                    except Exception as e:
+                        logger.error(f"Error formatting emergency item: {e}")
+                        message_content += f"- {str(item)}\n"
+                    
+                    message_content += "\n"
+                message_content += "\n"
+            else:
+                message_content += "RECOMMENDED EMERGENCY SUPPLIES: No additional items needed\n\n"
+            
+            # Add overall notes if available
+            if notes:
+                message_content += f"ADDITIONAL NOTES:\n{notes}\n\n"
+            
+            # Get regular shopping list items if available
+            try:
+                from meals.models import MealPlan, ShoppingList as ShoppingListModel # Alias to avoid conflict
+                from collections import defaultdict # Ensure defaultdict is imported
+                recent_meal_plan = MealPlan.objects.filter(
+                    user=user,
+                    # is_active=True # Consider if you only want active meal plans
+                ).order_by('-created_date').first()
+                
+                if recent_meal_plan:
+                    shopping_list_obj = ShoppingListModel.objects.filter(meal_plan=recent_meal_plan).first()
+                    if shopping_list_obj and shopping_list_obj.items:
+                        try:
+                            shopping_data = json.loads(shopping_list_obj.items)
+                            shopping_items = shopping_data.get('items', [])
+                            if shopping_items:
+                                by_category = defaultdict(list)
+                                for item_sl in shopping_items:
+                                    category = item_sl.get('category', 'Miscellaneous')
+                                    by_category[category].append(item_sl)
+                                
+                                message_content += "\nREGULAR SHOPPING LIST (from your latest meal plan):\n"
+                                for category, cat_items in by_category.items():
+                                    message_content += f"\n{category.upper()}:\n"
+                                    for item_detail in cat_items:
+                                        ingredient = item_detail.get('ingredient', 'Unknown item')
+                                        quantity = item_detail.get('quantity', '')
+                                        unit = item_detail.get('unit', '')
+                                        item_notes = item_detail.get('notes', '')
+                                        
+                                        message_content += f"- {ingredient}: {quantity} {unit}"
+                                        if item_notes:
+                                            message_content += f" (Note: {item_notes})"
+                                        message_content += "\n"
+                                message_content += "\n"
+                        except json.JSONDecodeError:
+                            logger.warning(f"Could not parse regular shopping list for user {user.id}: invalid JSON")
+                        except Exception as e_sl_parse:
+                            logger.warning(f"Error processing regular shopping list for user {user.id}: {e_sl_parse}")
+            except Exception as e_sl_fetch:
+                logger.warning(f"Error retrieving regular shopping list data for user {user.id}: {e_sl_fetch}")
+            
+            # Add emergency preparedness tips
+            message_content += (
+                "Please craft a helpful email about emergency food preparedness that includes the list of items the user "
+                "should purchase. Explain why having these emergency supplies is important and include practical tips for "
+                "storage and rotation. Make sure to acknowledge any allergies and explain how the recommended items account "
+                "for those restrictions. The tone should be informative and supportive, not alarmist."
+            )
+            # Ensure the AI is prompted to include BOTH lists
+            message_content += "\n\nPlease also include the REGULAR SHOPPING LIST items if they were provided above, clearly distinguishing them from the emergency supplies."
+            
+            # Send via assistant
+            subject = f"Your Emergency Supply List for {days_of_supply} Days"
+            
+            result = MealPlanningAssistant.send_notification_via_assistant(
+                user_id=user.id,
+                message_content=message_content,
+                subject=subject
+            )
+            
+            if result.get('status') == 'success':
+                logger.info(f"Emergency supply list sent via assistant for user {user.username}")
+            else:
+                logger.error(f"Error sending emergency supply list via assistant for user {user.username}: {str(result)}")
+                
         except Exception as e:
-            logger.error(f"Error sending emergency supply list to n8n: {str(e)}")
+            logger.error(f"Error sending emergency supply list via assistant for user {user.username}: {str(e)}")
+            traceback.print_exc()
 
     except Exception as e:
         logger.error(f"Error generating emergency supply list for {user.username}: {str(e)}")
 
 @shared_task
+@handle_task_failure
 def send_system_update_email(subject, message, user_ids=None):
     """
     Send system updates or apology emails to users.
@@ -990,6 +1132,7 @@ def send_system_update_email(subject, message, user_ids=None):
         user_ids: Optional list of specific user IDs to send to. If None, sends to all active users.
     """
     from custom_auth.models import CustomUser
+    from meals.meal_assistant_implementation import MealPlanningAssistant
     
     try:
         # Get users to send to
@@ -997,40 +1140,72 @@ def send_system_update_email(subject, message, user_ids=None):
             users = CustomUser.objects.filter(id__in=user_ids, is_active=True)
         else:
             users = CustomUser.objects.filter(is_active=True)
-
-        # Load the system update email template
-        project_dir = settings.BASE_DIR
-        env = Environment(loader=FileSystemLoader(os.path.join(project_dir, 'meals', 'templates')))
-        template = env.get_template('meals/system_update_email.html')
         
         for user in users:
-            context = {
-                'user_name': user.username,
-                'message': message,
-                'profile_url': f"{os.getenv('STREAMLIT_URL')}/profile"
-            }
-
-            email_body_html = template.render(context)
-
-            email_data = {
-                'subject': subject,
-                'html_message': email_body_html,
-                'to': user.email if not settings.DEBUG else os.getenv('TEST_EMAIL'),
-                'from': 'support@sautai.com'
-            }
-
             try:
-                n8n_url = os.getenv("N8N_SEND_SYSTEM_UPDATE_EMAIL_URL")
-                response = requests.post(n8n_url, json=email_data)
-                logger.info(f"System update email sent to n8n for: {user.email}")
-            except Exception as e:
-                logger.error(f"Error sending system update email to n8n for: {user.email}, error: {str(e)}")
+                # Skip if user has unsubscribed from emails
+                if hasattr(user, 'unsubscribed_from_emails') and user.unsubscribed_from_emails:
+                    logger.info(f"User {user.username} has unsubscribed from emails. Skipping system update email.")
+                    continue
+                    
+                # Create personalized context for each user
+                account_age_days = (timezone.now().date() - user.date_joined.date()).days
+                account_age_years = account_age_days / 365.25
+                
+                # Get user activity data
+                from django.db.models import Count
+                from customer_dashboard.models import UserMessage
+                message_count = UserMessage.objects.filter(user=user).count()
+                
+                # Get meal plan data
+                meal_plan_count = user.mealplan_set.count() if hasattr(user, 'mealplan_set') else 0
+                recent_meal_plans = user.mealplan_set.filter(
+                    created_date__gte=timezone.now() - timedelta(days=30)
+                ).count() if hasattr(user, 'mealplan_set') else 0
+                
+                # Extract links from the message if present (simplified approach)
+                import re
+                links = re.findall(r'href=[\'"]?([^\'" >]+)', message)
+                links_str = "\n".join([f"- {link}" for link in links]) if links else "No links in the message."
+                
+                # Create detailed context message
+                enhanced_message = (
+                    f"I need to send a system update notification to {user.username}. Here's all the context:\n\n"
+                    f"USER CONTEXT:\n"
+                    f"- Account age: {account_age_days} days ({account_age_years:.1f} years)\n"
+                    f"- Activity level: {'High' if message_count > 100 else 'Medium' if message_count > 20 else 'Low'}\n"
+                    f"- Total meal plans: {meal_plan_count}\n"
+                    f"- Recent meal plans (last 30 days): {recent_meal_plans}\n\n"
+                    f"UPDATE DETAILS:\n"
+                    f"- Title: {subject}\n"
+                    f"- Content: {message}\n"
+                    f"- Relevant links: {links_str}\n\n"
+                    f"Please craft a personalized email that conveys this system update. Use an appropriate tone based on how active the user is. "
+                    f"For highly active users, emphasize how this update builds on their experience. For less active users, explain how this might "
+                    f"make the platform more appealing to them. Include all necessary links from the original message."
+                )
+                
+                # Send via assistant
+                result = MealPlanningAssistant.send_notification_via_assistant(
+                    user_id=user.id,
+                    message_content=enhanced_message,
+                    subject=subject
+                )
+                
+                if result.get('status') == 'success':
+                    logger.info(f"System update email sent via assistant for: {user.email}")
+                else:
+                    logger.error(f"Error sending system update email via assistant for: {user.email}, error: {str(result)}")
+                    
+            except Exception as user_error:
+                logger.error(f"Error processing system update for user {user.id}: {user_error}")
 
     except Exception as e:
         logger.error(f"Error in send_system_update_email: {str(e)}")
         raise
 
 @shared_task
+@handle_task_failure
 def send_meal_plan_reminder_email():
     """
     Send reminders for unapproved meal plans on Monday for the current week's meal plan
@@ -1060,6 +1235,14 @@ def send_meal_plan_reminder_email():
     for meal_plan in pending_meal_plans:
         user = meal_plan.user
         
+        # Skip if user has opted out of emails
+        if hasattr(user, 'unsubscribed_from_emails') and user.unsubscribed_from_emails:
+            logger.info(f"User {user.username} has unsubscribed from emails. Skipping meal plan reminder.")
+            # Mark reminder as sent to avoid future attempts
+            meal_plan.reminder_sent = True
+            meal_plan.save()
+            continue
+            
         # Skip if not user's Monday
         try:
             user_timezone = pytz.timezone(user.timezone)
@@ -1070,10 +1253,6 @@ def send_meal_plan_reminder_email():
 
         # Check if it's a Monday in the user's time zone
         if user_time.weekday() != 0:
-            continue
-         
-        # Skip if user has opted out
-        if not user.email_meal_plan_saved:
             continue
 
         try:
@@ -1103,31 +1282,31 @@ def send_meal_plan_reminder_email():
                     'type': mpm.meal_type
                 })
 
-            context = {
-                'user_name': user.username,
-                'meal_plan_week_start': this_week_start,
-                'meal_plan_week_end': this_week_end,
-                'approval_link_daily': f"{base_approval_url}?{query_params_daily}",
-                'approval_link_bulk': f"{base_approval_url}?{query_params_bulk}",
-                'profile_url': f"{os.getenv('STREAMLIT_URL')}/profile",
-                'goals': goal_description,
-                'meals_by_day': dict(meals_by_day)
-            }
+            # context = {
+            #     'user_name': user.username,
+            #     'meal_plan_week_start': this_week_start,
+            #     'meal_plan_week_end': this_week_end,
+            #     'approval_link_daily': f"{base_approval_url}?{query_params_daily}",
+            #     'approval_link_bulk': f"{base_approval_url}?{query_params_bulk}",
+            #     'profile_url': f"{os.getenv('STREAMLIT_URL')}/profile",
+            #     'goals': goal_description,
+            #     'meals_by_day': dict(meals_by_day)
+            # }
 
-            project_dir = settings.BASE_DIR
-            env = Environment(loader=FileSystemLoader(os.path.join(project_dir, 'meals', 'templates'))) 
-            template = env.get_template('meals/meal_plan_reminder_email.html')
-            email_body_html = template.render(context)
+            # project_dir = settings.BASE_DIR
+            # env = Environment(loader=FileSystemLoader(os.path.join(project_dir, 'meals', 'templates'))) 
+            # template = env.get_template('meals/meal_plan_reminder_email.html')
+            # email_body_html = template.render(context)
 
-            email_data = {
-                'subject': "Start Your Week Right - Your Meal Plan is Waiting!",
-                'html_message': email_body_html,
-                'to': user.email if not settings.DEBUG else os.getenv('TEST_EMAIL'),
-                'from': 'support@sautai.com'
-            }
+            # email_data = {
+            #     'subject': "Start Your Week Right - Your Meal Plan is Waiting!",
+            #     'html_message': email_body_html,
+            #     'to': user.email if not settings.DEBUG else os.getenv('TEST_EMAIL'),
+            #     'from': 'support@sautai.com'
+            # }
 
-            n8n_url = os.getenv("N8N_SEND_REMINDER_EMAIL_URL")
-            response = requests.post(n8n_url, json=email_data)
+            # n8n_url = os.getenv("N8N_SEND_REMINDER_EMAIL_URL")
+            # response = requests.post(n8n_url, json=email_data)
             
             # Mark reminder as sent
             meal_plan.reminder_sent = True
@@ -1135,11 +1314,91 @@ def send_meal_plan_reminder_email():
             
             logger.info(f"Monday reminder email sent to n8n for: {user.email}")
 
+            # Send via MealPlanningAssistant instead of n8n
+            try:
+                from meals.meal_assistant_implementation import MealPlanningAssistant
+                
+                # Get user's health metrics for context if available
+                user_health_metrics = None
+                try:
+                    from customer_dashboard.models import UserHealthMetrics
+                    latest_metrics = UserHealthMetrics.objects.filter(user=user).order_by('-date_recorded').first()
+                    if latest_metrics:
+                        user_health_metrics = {
+                            'weight': latest_metrics.weight,
+                            'bmi': latest_metrics.bmi,
+                            'mood': latest_metrics.mood,
+                            'energy_level': latest_metrics.energy_level,
+                        }
+                except Exception as e:
+                    logger.error(f"Error retrieving health metrics: {e}")
+                
+                # Build comprehensive message with context
+                message_content = (
+                    f"I need to send a meal plan reminder to {user.username} for their meal plan from {this_week_start.strftime('%B %d')} "
+                    f"to {this_week_end.strftime('%B %d')}. This is a Monday reminder for a meal plan that was created on Saturday but hasn't "
+                    f"been approved yet. Here's all the context:\n\n"
+                    
+                    f"USER GOALS:\n{goal_description}\n\n"
+                    
+                    f"MEAL PLAN DETAILS:\n"
+                    f"- Week: {this_week_start.strftime('%B %d, %Y')} to {this_week_end.strftime('%B %d, %Y')}\n"
+                    f"- Current day in user's timezone: {user_time.strftime('%A, %B %d')}\n"
+                    f"- Approval links:\n"
+                    f"  • Daily prep option: {f'{base_approval_url}?{query_params_daily}'}\n"
+                    f"  • One-day bulk prep option: {f'{base_approval_url}?{query_params_bulk}'}\n\n"
+                )
+                
+                # Add meals by day
+                message_content += "MEALS IN THIS PLAN:\n"
+                for day, meals in meals_by_day.items():
+                    message_content += f"\n{day}:\n"
+                    for meal in meals:
+                        message_content += f"- {meal['type']}: {meal['name']}\n"
+                
+                # Add health metrics if available
+                if user_health_metrics:
+                    message_content += "\nUSER HEALTH METRICS:\n"
+                    for metric, value in user_health_metrics.items():
+                        if value is not None:
+                            message_content += f"- {metric}: {value}\n"
+                
+                # Add instructions for the assistant
+                message_content += (
+                    f"\nPlease craft a motivational Monday reminder email encouraging the user to approve their meal plan for the week. "
+                    f"Mention how approving the plan aligns with their health goals. Emphasize that they need to take action today "
+                    f"to properly prepare for the week ahead. Include both meal prep options (daily vs. bulk) and explain the benefits "
+                    f"of each approach. The tone should be motivational and supportive, not pushy."
+                )
+                
+                # Send via assistant
+                subject = "Start Your Week Right - Your Meal Plan is Waiting!"
+                
+                result = MealPlanningAssistant.send_notification_via_assistant(
+                    user_id=user.id,
+                    message_content=message_content,
+                    subject=subject
+                )
+                
+                if result.get('status') == 'success':
+                    # Mark reminder as sent
+                    meal_plan.reminder_sent = True
+                    meal_plan.save()
+                    logger.info(f"Meal plan reminder sent via assistant for: {user.email}")
+                else:
+                    logger.error(f"Error sending meal plan reminder via assistant for: {user.email}, error: {str(result)}")
+                    
+            except Exception as e:
+                logger.error(f"Error sending meal plan reminder via assistant for: {user.email}, error: {str(e)}")
+                traceback.print_exc()
+
         except Exception as e:
             logger.error(f"Error sending reminder email for user {user.email}: {e}")
+            traceback.print_exc()
 
 # TODO: Set up configuration in n8n
 @shared_task
+@handle_task_failure
 def send_payment_confirmation_email(payment_data):
     """
     Send payment confirmation email to Stripe Connect workers (chefs).
@@ -1157,54 +1416,95 @@ def send_payment_confirmation_email(payment_data):
             - net_amount (int): Net amount after fees in cents
             - payment_date (str): Payment date
     """
+    from custom_auth.models import CustomUser
+    from meals.meal_assistant_implementation import MealPlanningAssistant
+    from meals.models import ChefMealOrder, Chef
+    
     try:
-        # Set up Jinja2 environment
-        project_dir = settings.BASE_DIR
-        env = Environment(loader=FileSystemLoader(os.path.join(project_dir, 'meals', 'templates')))
-        template = env.get_template('meals/payment_confirmation_email.html')
-
         # Format monetary values
         amount = payment_data['amount'] / 100  # Convert cents to dollars
         service_fee = payment_data['service_fee'] / 100
         platform_fee = payment_data['platform_fee'] / 100
         net_amount = payment_data['net_amount'] / 100
-
-        # Render the email template
-        email_body_html = template.render(
-            chef_name=payment_data['chef_name'],
-            amount=amount,
-            currency=payment_data['currency'].upper(),
-            order_id=payment_data['order_id'],
-            customer_name=payment_data['customer_name'],
-            service_fee=service_fee,
-            platform_fee=platform_fee,
-            net_amount=net_amount,
-            payment_date=payment_data['payment_date']
-        )
-
-        email_data = {
-            'subject': f'Payment Confirmation - Order #{payment_data["order_id"]}',
-            'html_message': email_body_html,
-            'to': payment_data['chef_email'] if not settings.DEBUG else os.getenv('TEST_EMAIL'),
-            'from': 'payments@sautai.com',
-        }
-
+        
+        # Get the chef's user account
+        chef_user = None
         try:
-            logger.debug(f"Sending payment confirmation email to n8n for: {payment_data['chef_email']}")
-            n8n_url = os.getenv("N8N_PAYMENT_CONFIRMATION_EMAIL_URL")
-            response = requests.post(n8n_url, json=email_data)
-            response.raise_for_status()
-            logger.info(f"Payment confirmation email sent to n8n for: {payment_data['chef_email']}")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error sending payment confirmation email to n8n for: {payment_data['chef_email']}, error: {str(e)}")
-            raise
-
+            chef = Chef.objects.filter(user__email=payment_data['chef_email']).first()
+            if chef:
+                chef_user = chef.user
+            else:
+                chef_user = CustomUser.objects.filter(email=payment_data['chef_email']).first()
+                
+            if not chef_user:
+                logger.error(f"Could not find user account for chef email: {payment_data['chef_email']}")
+                return
+                
+            # Check if chef has unsubscribed from emails
+            if hasattr(chef_user, 'unsubscribed_from_emails') and chef_user.unsubscribed_from_emails:
+                logger.info(f"Chef {chef_user.username} has unsubscribed from emails. Skipping payment confirmation email.")
+                return
+                
+        except Exception as e:
+            logger.error(f"Error finding chef user account: {e}")
+            return
+            
+        # Try to get additional context from the order if possible
+        additional_context = ""
+        try:
+            order = ChefMealOrder.objects.filter(id=payment_data['order_id']).select_related('meal_event', 'meal_event__meal').first()
+            if order:
+                additional_context = (
+                    f"ORDER DETAILS:\n"
+                    f"- Meal: {order.meal_event.meal.name}\n"
+                    f"- Event date: {order.meal_event.date.strftime('%B %d, %Y')}\n"
+                    f"- Event time: {order.meal_event.time.strftime('%I:%M %p')}\n"
+                    f"- Quantity ordered: {order.quantity}\n"
+                    f"- Special instructions: {order.special_instructions if order.special_instructions else 'None'}\n"
+                )
+        except Exception as e:
+            logger.error(f"Error retrieving additional order context: {e}")
+            
+        # Build detailed message for the assistant
+        message_content = (
+            f"I need to send a payment confirmation to Chef {payment_data['chef_name']}. Here's all the context:\n\n"
+            f"TRANSACTION DETAILS:\n"
+            f"- Transaction ID: {payment_data.get('transaction_id', 'Not provided')}\n"
+            f"- Order ID: {payment_data['order_id']}\n"
+            f"- Payment date: {payment_data['payment_date']}\n"
+            f"- Customer: {payment_data['customer_name']}\n\n"
+            f"PAYMENT BREAKDOWN:\n"
+            f"- Total amount: {amount} {payment_data['currency'].upper()}\n"
+            f"- Stripe service fee: {service_fee} {payment_data['currency'].upper()}\n"
+            f"- Platform fee: {platform_fee} {payment_data['currency'].upper()}\n"
+            f"- Net amount: {net_amount} {payment_data['currency'].upper()}\n\n"
+            f"{additional_context}\n\n"
+            f"Please craft a professional and clear payment confirmation email that includes all the transaction details "
+            f"and explains the breakdown of fees in a transparent manner. Thank the chef for their service and confirm "
+            f"that the payment has been processed successfully."
+        )
+        
+        # Send via assistant
+        subject = f'Payment Confirmation - Order #{payment_data["order_id"]}'
+        
+        result = MealPlanningAssistant.send_notification_via_assistant(
+            user_id=chef_user.id,
+            message_content=message_content,
+            subject=subject
+        )
+        
+        if result.get('status') == 'success':
+            logger.info(f"Payment confirmation email sent via assistant for: {payment_data['chef_email']}")
+        else:
+            logger.error(f"Error sending payment confirmation via assistant for: {payment_data['chef_email']}, error: {str(result)}")
+        
     except Exception as e:
         logger.error(f"Error generating or sending payment confirmation email: {e}")
         logger.error(traceback.format_exc())
         raise
 
 @shared_task
+@handle_task_failure
 def send_refund_notification_email(order_id):
     """
     Send a refund notification email to a customer when their order is refunded.
@@ -1213,17 +1513,19 @@ def send_refund_notification_email(order_id):
         order_id (int): ID of the ChefMealOrder that has been refunded
     """
     from meals.models import ChefMealOrder
+    from meals.meal_assistant_implementation import MealPlanningAssistant
     
     try:
         # Get the order
         order = get_object_or_404(ChefMealOrder, id=order_id)
         user = order.customer
-        event = order.meal_event
         
-        # Set up Jinja2 environment
-        project_dir = settings.BASE_DIR
-        env = Environment(loader=FileSystemLoader(os.path.join(project_dir, 'meals', 'templates')))
-        template = env.get_template('meals/refund_notification_email.html')
+        # Check if user has unsubscribed from emails
+        if hasattr(user, 'unsubscribed_from_emails') and user.unsubscribed_from_emails:
+            logger.info(f"User {user.username} has unsubscribed from emails. Skipping refund notification.")
+            return
+            
+        event = order.meal_event
         
         # Format the amount for display
         refund_amount = float(order.price_paid)
@@ -1231,40 +1533,46 @@ def send_refund_notification_email(order_id):
         # Get formatted date for the refund
         refund_date = timezone.now().strftime("%B %d, %Y")
         
-        # Render the email template
-        email_body_html = template.render(
-            user_name=user.get_full_name() or user.username,
-            order_id=order.id,
-            meal_name=event.meal.name,
-            chef_name=event.chef.user.get_full_name(),
-            refund_amount=refund_amount,
-            refund_date=refund_date,
-            cancellation_reason=order.cancellation_reason,
-            event_date=event.date.strftime("%B %d, %Y"),
-            event_time=event.time.strftime("%I:%M %p")
+        # Build detailed message for the assistant
+        message_content = (
+            f"I need to send a refund notification to {user.get_full_name() or user.username}. Here's all the context:\n\n"
+            f"REFUND DETAILS:\n"
+            f"- Order ID: {order.id}\n"
+            f"- Refund amount: {refund_amount} {order.currency if hasattr(order, 'currency') else 'USD'}\n"
+            f"- Refund processed on: {refund_date}\n"
+            f"- Original payment method: {order.payment_method if hasattr(order, 'payment_method') else 'Card payment'}\n"
+            f"- Expected to appear on statement in: 5-10 business days\n\n"
+            f"ORDER DETAILS:\n"
+            f"- Meal: {event.meal.name}\n"
+            f"- Chef: {event.chef.user.get_full_name()}\n"
+            f"- Originally scheduled for: {event.date.strftime('%B %d, %Y')} at {event.time.strftime('%I:%M %p')}\n"
+            f"- Cancellation reason: {order.cancellation_reason or 'Order was canceled'}\n\n"
+            f"Please craft a clear refund confirmation email that reassures the customer their money has been refunded. "
+            f"Include all the relevant details about the refund, like the amount, when it was processed, and when they can "
+            f"expect to see it on their statement. Briefly mention the original order details for context. "
+            f"Use a friendly, professional tone and encourage them to make another order in the future."
         )
         
-        email_data = {
-            'subject': f'Your Refund for Order #{order.id} Has Been Processed',
-            'html_message': email_body_html,
-            'to': user.email if not settings.DEBUG else os.getenv('TEST_EMAIL'),
-            'from': 'payments@sautai.com',
-        }
+        # Send via assistant
+        subject = f'Your Refund for Order #{order.id} Has Been Processed'
         
-        try:
-            logger.debug(f"Sending refund notification email to n8n for: {user.email}")
-            n8n_url = os.getenv("N8N_REFUND_NOTIFICATION_EMAIL_URL")
-            response = requests.post(n8n_url, json=email_data)
-            response.raise_for_status()
-            logger.info(f"Refund notification email sent to n8n for: {user.email}")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error sending refund notification email to n8n for: {user.email}, error: {str(e)}")
-            raise
+        result = MealPlanningAssistant.send_notification_via_assistant(
+            user_id=user.id,
+            message_content=message_content,
+            subject=subject
+        )
+        
+        if result.get('status') == 'success':
+            logger.info(f"Refund notification email sent via assistant for: {user.email}")
+        else:
+            logger.error(f"Error sending refund notification via assistant for: {user.email}, error: {str(result)}")
             
     except Exception as e:
         logger.error(f"Error generating or sending refund notification email for order {order_id}: {e}")
+        traceback.print_exc()
 
 @shared_task
+@handle_task_failure
 def send_order_cancellation_email(order_id):
     """
     Send an order cancellation notification email to a customer.
@@ -1273,17 +1581,19 @@ def send_order_cancellation_email(order_id):
         order_id (int): ID of the ChefMealOrder that has been cancelled
     """
     from meals.models import ChefMealOrder
+    from meals.meal_assistant_implementation import MealPlanningAssistant
     
     try:
         # Get the order
         order = get_object_or_404(ChefMealOrder, id=order_id)
         user = order.customer
-        event = order.meal_event
         
-        # Set up Jinja2 environment
-        project_dir = settings.BASE_DIR
-        env = Environment(loader=FileSystemLoader(os.path.join(project_dir, 'meals', 'templates')))
-        template = env.get_template('meals/order_cancellation_email.html')
+        # Check if user has unsubscribed from emails
+        if hasattr(user, 'unsubscribed_from_emails') and user.unsubscribed_from_emails:
+            logger.info(f"User {user.username} has unsubscribed from emails. Skipping cancellation notification.")
+            return
+            
+        event = order.meal_event
         
         # Format the amount for display if refunded
         order_amount = float(order.price_paid)
@@ -1294,37 +1604,80 @@ def send_order_cancellation_email(order_id):
         # Determine if this was canceled by the chef or the customer
         canceled_by_chef = 'Event canceled by chef' in order.cancellation_reason if order.cancellation_reason else False
         
-        # Render the email template
-        email_body_html = template.render(
-            user_name=user.get_full_name() or user.username,
-            order_id=order.id,
-            meal_name=event.meal.name,
-            chef_name=event.chef.user.get_full_name(),
-            order_amount=order_amount,
-            cancellation_date=cancellation_date,
-            cancellation_reason=order.cancellation_reason,
-            event_date=event.date.strftime("%B %d, %Y"),
-            event_time=event.time.strftime("%I:%M %p"),
-            refund_status=order.refund_status if hasattr(order, 'refund_status') else None,
-            canceled_by_chef=canceled_by_chef
+        # Try to get recommended alternatives for the user
+        alternatives = []
+        try:
+            from meals.models import ChefMealEvent
+            from django.db.models import Q
+            
+            # Find alternative events for the same meal or by the same chef
+            alt_events = ChefMealEvent.objects.filter(
+                Q(meal=event.meal) | Q(chef=event.chef),
+                date__gte=timezone.now().date(),
+                status__in=['scheduled', 'open'],
+                orders_count__lt=F('max_orders')
+            ).exclude(id=event.id).order_by('date', 'time')[:3]
+            
+            for alt in alt_events:
+                alternatives.append({
+                    'meal_name': alt.meal.name,
+                    'chef_name': alt.chef.user.get_full_name() or alt.chef.user.username,
+                    'date': alt.date.strftime("%B %d, %Y"),
+                    'time': alt.time.strftime("%I:%M %p"),
+                    'price': float(alt.current_price),
+                })
+        except Exception as e:
+            logger.error(f"Error finding alternatives for canceled order: {e}")
+        
+        # Build detailed message for the assistant
+        message_content = (
+            f"I need to send an order cancellation notice to {user.get_full_name() or user.username}. Here's all the context:\n\n"
+            f"ORDER DETAILS:\n"
+            f"- Order ID: {order.id}\n"
+            f"- Meal: {event.meal.name}\n"
+            f"- Chef: {event.chef.user.get_full_name()}\n"
+            f"- Originally scheduled for: {event.date.strftime('%B %d, %Y')} at {event.time.strftime('%I:%M %p')}\n"
+            f"- Amount paid: {order_amount} {order.currency if hasattr(order, 'currency') else 'USD'}\n"
+            f"- Cancellation date: {cancellation_date}\n"
+            f"- Cancellation reason: {order.cancellation_reason or 'No specific reason provided'}\n"
+            f"- Canceled by: {'Chef' if canceled_by_chef else 'Customer'}\n"
+            f"- Refund status: {order.refund_status if hasattr(order, 'refund_status') else 'Unknown'}\n\n"
         )
         
-        email_data = {
-            'subject': f'Your Order #{order.id} Has Been Cancelled',
-            'html_message': email_body_html,
-            'to': user.email if not settings.DEBUG else os.getenv('TEST_EMAIL'),
-            'from': 'orders@sautai.com',
-        }
+        if alternatives:
+            message_content += "ALTERNATIVE OPTIONS:\n"
+            for alt in alternatives:
+                message_content += (
+                    f"- {alt['meal_name']} by Chef {alt['chef_name']}\n"
+                    f"  Date: {alt['date']} at {alt['time']}\n"
+                    f"  Price: ${alt['price']:.2f}\n\n"
+                )
+        else:
+            message_content += "No alternative meal events are currently available.\n\n"
+            
+        message_content += (
+            f"Please craft an empathetic order cancellation email that acknowledges the customer's disappointment "
+            f"but maintains a positive tone. Explain the cancellation clearly, including the reason if one was provided. "
+            f"If the order was canceled by the chef, offer a sincere apology. "
+            f"Clearly communicate the refund status if available. "
+            f"If alternatives are available, suggest them as options the customer might consider. "
+            f"End with an upbeat note encouraging them to explore other meal options on the platform."
+        )
         
-        try:
-            logger.debug(f"Sending order cancellation email to n8n for: {user.email}")
-            n8n_url = os.getenv("N8N_CANCELLATION_EMAIL_URL")
-            response = requests.post(n8n_url, json=email_data)
-            response.raise_for_status()
-            logger.info(f"Order cancellation email sent to n8n for: {user.email}")
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error sending order cancellation email to n8n for: {user.email}, error: {str(e)}")
-            raise
+        # Send via assistant
+        subject = f'Your Order #{order.id} Has Been Cancelled'
+        
+        result = MealPlanningAssistant.send_notification_via_assistant(
+            user_id=user.id,
+            message_content=message_content,
+            subject=subject
+        )
+        
+        if result.get('status') == 'success':
+            logger.info(f"Order cancellation email sent via assistant for: {user.email}")
+        else:
+            logger.error(f"Error sending order cancellation via assistant for: {user.email}, error: {str(result)}")
             
     except Exception as e:
         logger.error(f"Error generating or sending order cancellation email for order {order_id}: {e}")
+        traceback.print_exc()

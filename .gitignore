@@ -46,3 +46,7 @@ dump.rdb
 celerybeat-schedule.db
 dump.rdb
 celerybeat-schedule.db
+django_warnings*
+celerybeat*
+sautai_dump*
+celery-celery*

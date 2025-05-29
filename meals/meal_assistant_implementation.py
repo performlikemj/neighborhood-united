@@ -4,8 +4,10 @@ import time
 from typing import Dict, Any, List, Generator, Optional, Union
 import numbers
 from datetime import date, datetime
-
+import re
+from bs4 import BeautifulSoup   
 from django.conf import settings
+from django.conf.locale import LANG_INFO  # Add this import
 from django.core.cache import cache
 from django.utils import timezone
 from openai import OpenAI
@@ -27,8 +29,9 @@ from openai.types.responses import (
     ResponseFunctionCallArgumentsDoneEvent,
 )
 from openai import BadRequestError
+from pydantic import BaseModel, Field, ConfigDict
 from .tool_registration import get_all_tools, get_all_guest_tools, handle_tool_call
-from customer_dashboard.models import ChatThread, UserMessage, WeeklyAnnouncement, UserDailySummary, UserChatSummary
+from customer_dashboard.models import ChatThread, UserMessage, WeeklyAnnouncement, UserDailySummary, UserChatSummary, AssistantEmailToken
 from custom_auth.models import CustomUser
 from shared.utils import generate_user_context
 from utils.model_selection import choose_model
@@ -38,8 +41,42 @@ from django.db.models import F
 from meals.models import ChefMealEvent
 from dotenv import load_dotenv
 import os
+import requests # Added for n8n webhook call
+import traceback
+from django.template.loader import render_to_string # Added for rendering email templates
+
+# Add the translation utility
+from utils.translate_html import translate_paragraphs
+
+# Add helper function for getting language name
+def _get_language_name(language_code):
+    """
+    Returns the full language name for a given language code.
+    Falls back to the code itself if the language is not found.
+    """
+    if language_code in LANG_INFO and 'name' in LANG_INFO[language_code]:
+        return LANG_INFO[language_code]['name']
+    return language_code
 
 load_dotenv()
+
+# Pydantic model for email body formatting
+class EmailBody(BaseModel):
+    """
+    Pydantic model for ensuring consistent email body formatting.
+    """
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+    
+    content: str = Field(..., description="The formatted HTML content for the email body")
+
+# Pydantic model for email responses
+class EmailResponse(BaseModel):
+    """
+    Pydantic model for ensuring consistent email responses.
+    """
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+    
+    message: str = Field(..., description="The response message without any follow-up questions or fluff")
 
 # Global dictionary to maintain guest state across request instances
 GLOBAL_GUEST_STATE: Dict[str, Dict[str, Any]] = {}
@@ -208,6 +245,11 @@ class MealPlanningAssistant:
             )
             
             final_response_id = resp.id
+            # Log the raw response object from OpenAI to understand its structure
+            logger.debug(f"OpenAI API Response object for user {self.user_id} (response_id: {final_response_id}): {resp}")
+            # If the above is too verbose or doesn't show the crucial part, log resp.output directly
+            # logger.debug(f"OpenAI API Response output for user {self.user_id} (response_id: {final_response_id}): {getattr(resp, 'output', 'N/A')}")
+
             final_output_text = self._extract(resp) # Extract text before modifying history
 
             # If the response involved tool calls, OpenAI might implicitly add them to resp.input
@@ -618,6 +660,8 @@ class MealPlanningAssistant:
                 # Generate information about local chefs and meal events
                 local_chef_and_meal_events = self._local_chef_and_meal_events(user)
                 
+                # Ensure AUTH_PROMPT_TEMPLATE has placeholders for all these values
+                # Example: {username}, {user_ctx}, {admin_section}, {all_tools}, {user_chat_summary}, {local_chef_and_meal_events}
                 return AUTH_PROMPT_TEMPLATE.format(
                     username=username,
                     user_ctx=user_ctx,
@@ -626,11 +670,14 @@ class MealPlanningAssistant:
                     user_chat_summary=user_chat_summary,
                     local_chef_and_meal_events=local_chef_and_meal_events
                 )
+            except CustomUser.DoesNotExist:
+                logger.warning(f"User with ID {self.user_id} not found while building prompt. Using fallback.")
+                return f"You are MJ, sautAI's friendly meal-planning consultant. You are currently experiencing issues with your setup and functionality. You cannot help with any of the user's requests at the moment but please let them know the sautAI team has been notified and will look into it as soon as possible."
             except Exception as e:
                 logger.error(f"Error generating prompt for user {self.user_id}: {str(e)}")
                 # Return a simple fallback prompt
-                username = user.username if user else "user"
-                return f"You are MJ, sautAI's friendly meal-planning consultant. You are currently chatting with {username} and experiencing issues with your setup and functionality. You cannot help with any of the user's requests at the moment but please let them know the sautAI team has been notified and will look into it as soon as possible."
+                username_str = user.username if user else f"user ID {self.user_id}"
+                return f"You are MJ, sautAI's friendly meal-planning consultant. You are currently chatting with {username_str} and experiencing issues with your setup and functionality. You cannot help with any of the user's requests at the moment but please let them know the sautAI team has been notified and will look into it as soon as possible."
 
     def _instructions(self, is_guest: bool) -> str:
         """
@@ -758,15 +805,57 @@ class MealPlanningAssistant:
     # ── util
     @staticmethod
     def _extract(response) -> str:
+        """
+        Extract text content from an OpenAI response, handling different response formats.
+        
+        This method is flexible and will extract text from various OpenAI response structures,
+        including direct output_text, message contents, and text delta events.
+        """
+        # Most common case with simple output_text attribute
         if hasattr(response, "output_text"):
-            return response.output_text
-        text = ""
-        for item in getattr(response, "output", []):
-            if item.type == "message":
-                for c in item.content:
-                    if c.type == "output_text":
-                        text += c.text
-        return text
+            formatted_text = response.output_text
+        else:
+            # Fall back to iterating through output items
+            text = ""
+            for item in getattr(response, "output", []):
+                # Handle message type items
+                if getattr(item, "type", None) == "message":
+                    for c in getattr(item, "content", []):
+                        if getattr(c, "type", None) == "output_text":
+                            text += getattr(c, "text", "")
+                # Handle direct text items
+                elif getattr(item, "type", None) == "text":
+                    text += getattr(item, "text", "")
+            formatted_text = text
+
+        # ------------------------------------------------------------------
+        # Strip non‑printable / control characters that sometimes creep in
+        # (e.g. \x1A, \x1F) so the email renders cleanly.
+        import re
+        formatted_text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", formatted_text)
+
+        # ── CRITICAL HEX CODE CLEANING FOR COOKING INSTRUCTIONS ──────────────────
+        # Fix dangerous hex codes that appear in cooking instructions (e.g., "425f" -> "425°F")
+        temp_hex_patterns = [
+            (r'(\d{2,3})f\b', r'\1°F'),                              # 425f -> 425°F
+            (r'(\d{2,3})b0C\b', r'\1°C'),                           # 220b0C -> 220°C  
+            (r'(\d{2,3})[a-fA-F0-9]{1,4}([CF])\b', r'\1°\2'),      # Generic hex temps
+            (r'(\d{1,2})[a-fA-F0-9]{2}(min|hrs?|cups?|tsp|tbsp)\b', r'\1 \2'),  # Measurements
+        ]
+        for pattern, replacement in temp_hex_patterns:
+            formatted_text = re.sub(pattern, replacement, formatted_text)
+        
+        # Clean up common hex symbol corruptions
+        hex_symbol_fixes = {'b0': '°', 'f0': '°', 'a0': ' ', 'c2': '', 'e2': ''}
+        for hex_code, replacement in hex_symbol_fixes.items():
+            formatted_text = re.sub(r'\b' + re.escape(hex_code) + r'(?=[^a-zA-Z]|$)', replacement, formatted_text)
+
+        # Remove any leading "Subject: ..." line the LLM might prepend
+        formatted_text = re.sub(r"^Subject:[^\n\r]*[\n\r]+", "", formatted_text, flags=re.IGNORECASE)
+
+        formatted_text = formatted_text.strip()
+        # ------------------------------------------------------------------
+        return formatted_text
 
     def _fix_function_args(self, function_name: str, args_str: str) -> str:
         """Ensure that user_id is correctly set in function arguments."""
@@ -1084,5 +1173,943 @@ class MealPlanningAssistant:
             logger.error(f"Error retrieving user chat summary: {str(e)}")
             return ""
 
+    # ────────────────────────────────────────────────────────────────────
+    #  Internal Helper for Formatting Email Content
+    # ────────────────────────────────────────────────────────────────────
+    def _format_text_for_email_body(self, raw_text: str) -> str:
+        """
+        Ask the LLM to transform a plain-text assistant reply into
+        tight, semantic HTML (p/ul/ol/li/h3 and table markup only),
+        then run a final sanitation pass so no hidden bytes or weird
+        punctuation break Mail clients.
+
+        It returns **just** the inner-HTML string ready to drop into
+        our Django template.
+        """
+
+        # --------------------------- guard rails ---------------------------
+        if not raw_text.strip():
+            return ""
+
+        if not getattr(self, "client", None):      # Offline fallback
+            safe_fallback = raw_text.replace("\n", "<br>")
+            return f"<p>{safe_fallback}</p>"
+
+        # ── Unicode normalisation & smart‑punctuation clean‑up ──────────────────
+        import unicodedata
+        # 1.  Collapse compatibility forms so fancy quotes / dashes become single code‑points
+        raw_text = unicodedata.normalize("NFKC", raw_text)
+        # 2.  Downgrade common "smart" punctuation to plain ASCII so later ASCII‑only
+        #     paths don't emit stray control bytes ( \u0011, \u0019 → 9, etc.)
+        smart_to_ascii = {
+            "\u2018": "'", "\u2019": "'",
+            "\u201C": '"', "\u201D": '"',
+            "\u2013": "-", "\u2014": "--",
+            "\u2026": "...",
+        }
+        for bad, good in smart_to_ascii.items():
+            raw_text = raw_text.replace(bad, good)
+
+        # ── COMPREHENSIVE HEX CODE CLEANING & TEMPERATURE FORMATTING ────────────
+        # Fix dangerous hex codes that appear in cooking instructions
+        import re
+        
+        # Critical temperature hex patterns that can be dangerous
+        temp_hex_patterns = [
+            # Core temperature patterns
+            (r'(\d{2,3})f\b', r'\1°F'),                              # 425f -> 425°F
+            (r'(\d{2,3})F\b', r'\1°F'),                              # 425F -> 425°F  
+            (r'(\d{2,3})b0C\b', r'\1°C'),                           # 220b0C -> 220°C
+            (r'(\d{2,3})B0C\b', r'\1°C'),                           # 220B0C -> 220°C
+            (r'(\d{2,3})c\b', r'\1°C'),                             # 220c -> 220°C
+            (r'(\d{2,3})C\b', r'\1°C'),                             # 220C -> 220°C
+            # Complex hex temperature patterns 
+            (r'(\d{2,3})[a-fA-F0-9]{1,4}([CF])\b', r'\1°\2'),      # Catches hex sequences before F/C
+            (r'(\d{2,3})[a-fA-F]{1,3}([CF])\b', r'\1°\2'),         # Hex letters only before F/C
+            # Time and measurement corruptions
+            (r'(\d{1,2})[a-fA-F0-9]{2}(min|minutes?|hrs?|hours?)\b', r'\1 \2'),
+            (r'(\d{1,2})[a-fA-F0-9]{2}(cups?|tbsp|tsp|oz|lbs?|kg|g)\b', r'\1 \2'),
+            # Fraction corruptions in measurements  
+            (r'(\d+)\/(\d+)[a-fA-F0-9]+', r'\1/\2'),               # 1/2a0 -> 1/2
+        ]
+        
+        for pattern, replacement in temp_hex_patterns:
+            raw_text = re.sub(pattern, replacement, raw_text)
+        
+        # Comprehensive hex symbol replacements
+        hex_replacements = {
+            # Core symbol corruptions
+            'b0': '°',   # Degree symbol corruption (most critical)
+            'f0': '°',   # Another degree symbol corruption
+            'a0': ' ',   # Non-breaking space corruption
+            # UTF-8 corruption prefixes
+            'c2': '',    # UTF-8 corruption prefix
+            'e2': '',    # UTF-8 corruption prefix  
+            '80': '',    # UTF-8 corruption
+            '99': '',    # UTF-8 corruption
+            # Special character corruptions
+            'a9': '©',   # Copyright symbol
+            'ae': '®',   # Registered trademark
+            'bd': '½',   # Half fraction
+            'bc': '¼',   # Quarter fraction
+            'be': '¾',   # Three quarters fraction
+            'b7': '·',   # Middle dot
+            # Remove hex prefixes
+            '0x': '',    # Hex prefix
+        }
+        
+        # Apply hex replacements with word boundary protection
+        for hex_code, replacement in hex_replacements.items():
+            pattern = r'\b' + re.escape(hex_code) + r'(?=[^a-zA-Z]|$)'
+            raw_text = re.sub(pattern, replacement, raw_text)
+        
+        # Additional cooking-specific hex fixes
+        cooking_specific_fixes = [
+            # Fix corrupted quotes around ingredients
+            (r'[a-fA-F0-9]{2,4}"([^"]+)"[a-fA-F0-9]{2,4}', r'"\1"'),
+            # Fix corrupted apostrophes in contractions
+            (r"(\w+)[a-fA-F0-9]{2}(s|t|re|ve|ll|d)\b", r"\1'\2"),
+            # Fix corrupted hyphens in compound words
+            (r'(\w+)[a-fA-F0-9]{2,4}(\w+)', r'\1-\2'),
+            # Fix temperature format variations
+            (r'(\d+)\s*degrees?\s*([CF])', r'\1°\2'),
+            (r'(\d+)\s*deg\s*([CF])', r'\1°\2'),
+        ]
+        
+        for pattern, replacement in cooking_specific_fixes:
+            raw_text = re.sub(pattern, replacement, raw_text, flags=re.IGNORECASE)
+        
+        # Clean up multiple spaces and trim
+        raw_text = re.sub(r'\s+', ' ', raw_text).strip()
+
+        # ----------------------- build LLM prompt -------------------------
+        html_template = """
+            <!DOCTYPE html>
+            {% load meal_filters %}
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <!-- Ensures mobile responsiveness in most modern clients -->
+                <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+                <title>Assistant Communication</title>
+                <style>
+                    /* Basic reset & body styling */
+                    body { 
+                        margin: 0; 
+                        padding: 0; 
+                        width: 100% !important; 
+                        background-color: #f8f8f8; /* Subtle background to distinguish content area */
+                    }
+
+                    /* Container for the "white card" look */
+                    .container {
+                        max-width: 600px;
+                        margin: 0 auto;
+                        padding: 20px;
+                        background-color: #ffffff; /* White background inside the container */
+                    }
+
+                    /* Typography */
+                    h1, h2, h3, p {
+                        margin-top: 0;
+                        font-family: Arial, sans-serif;
+                        color: #333333;
+                    }
+                    h1 {
+                        font-size: 24px; 
+                        color: #4CAF50;
+                    }
+                    h2 {
+                        font-size: 20px; 
+                        color: #5cb85c; 
+                        border-bottom: 1px solid #dddddd; 
+                        padding-bottom: 10px;
+                    }
+                    h3 {
+                        font-size: 18px; 
+                    }
+                    p {
+                        font-size: 16px; 
+                        line-height: 1.5; 
+                        margin: 0 0 10px;
+                    }
+
+                    /* Card-like option sections */
+                    .option {
+                        border: 1px solid #dddddd; 
+                        border-radius: 5px; 
+                        padding: 15px; 
+                        margin-bottom: 20px; 
+                    }
+                    .option h3 {
+                        margin-bottom: 10px;
+                    }
+
+                    /* Bulletproof buttons: We're using table-based code for broad compatibility */
+                    .btn-table {
+                        border-collapse: collapse;
+                        margin: 0 auto;
+                    }
+                    .btn-table td {
+                        border-radius: 5px;
+                        text-align: center;
+                    }
+                    .btn-link {
+                        display: inline-block;
+                        font-size: 16px;
+                        font-family: Arial, sans-serif;
+                        text-decoration: none;
+                        padding: 12px 24px;
+                        border-radius: 5px;
+                        margin-top: 15px;
+                        white-space: nowrap; /* Prevents text wrap in narrow clients */
+                    }
+                    /* Specific button variations */
+                    .bulk-btn {
+                        background-color: #4CAF50;
+                        color: #ffffff;
+                    }
+                    .daily-btn {
+                        background-color: #2196F3;
+                        color: #ffffff;
+                    }
+
+                    /* email body */
+                    .email-body {
+                        padding: 20px 30px;
+                        line-height: 1.6;
+                        font-size: 16px;
+                    }
+                    .email-body h2 {
+                        color: #4CAF50;
+                        font-size: 20px;
+                        margin-top: 0;
+                    }
+                    .email-body p {
+                        margin-bottom: 15px;
+                    }
+                    .email-body ul, .email-body ol {
+                        margin-bottom: 15px;
+                        padding-left: 20px;
+                    }
+
+                    /* Footer */
+                    .footer {
+                        text-align: center; 
+                        color: #777777; 
+                        font-size: 12px; 
+                        padding: 10px; 
+                        margin-top: 20px; 
+                    }
+                    .footer a { 
+                        color: #007BFF; 
+                        text-decoration: none; 
+                    }
+
+                    /* Logo */
+                    .logo { 
+                        text-align: center; 
+                        margin-bottom: 20px; 
+                    }
+                    .logo img { 
+                        max-width: 200px; 
+                        height: auto; 
+                    }
+                </style>
+            </head>
+            <body>
+                <!-- Full-width "wrapper" table to accommodate background color in older email clients -->
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f8f8f8;">
+                    <tr>
+                        <td align="center" valign="top">
+                            <div class="container">
+                                <!-- Logo Section -->
+                                <div class="logo">
+                                    <!-- Include descriptive alt text for accessibility -->
+                                    <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" />
+                                </div>
+
+                                <div class="email-body">
+                                    <p>Hi {{ user_name|default:'there' }},</p>
+
+
+                                    {% if personal_assistant_email %}
+                                    <div style="background: #f0f8ff; border-left: 4px solid #4CAF50; border-radius: 8px; margin: 24px 0; padding: 20px 16px;">
+                                        <h3 style="margin: 0 0 8px; font-family: Arial, sans-serif; color: #2196F3; font-size: 18px; display: flex; align-items: center;">
+                                            🤖 Contact Your AI Assistant
+                                        </h3>
+                                        <p style="margin: 0 0 12px; color: #333; font-size: 16px; line-height: 1.5;">
+                                            Need something personalized? Just email your assistant directly:
+                                        </p>
+                                        <a href="mailto:{{ personal_assistant_email }}" 
+                                        style="display: inline-block; background: #4CAF50; color: #fff; padding: 12px 28px; border-radius: 5px; text-decoration: none; font-weight: bold; font-size: 16px;">
+                                            {{ personal_assistant_email }}
+                                        </a>
+                                    </div>
+                                    {% endif %}
+                                    <div class="content-section">
+                                        {% autoescape off %}
+                                        {{ email_body_content|safe }}
+                                        {% endautoescape %}
+                                    </div>
+                        
+                                    {% if profile_url %}
+                                    <div class="button-container">
+                                        <a href="{{ profile_url }}" class="button">Access Your Dashboard</a>
+                                            </div>
+                                            {% endif %}
+                                
+                                            <p>If you have any questions, feel free to email your personal assistant at <a href="mailto:{{ personal_assistant_email }}">{{ personal_assistant_email }}</a> or email us at <a href="mailto:support@sautai.com">support@sautai.com</a>.</p>
+                                            <p>Best regards,<br>The SautAI Team</p>
+                                        </div>
+
+                                        </div>
+                                        <!-- Footer -->
+                                        <p style="color: #777; font-size: 12px; margin-top: 20px;">
+                                            <strong>Disclaimer:</strong> SautAI uses generative AI for meal planning, 
+                                            shopping list generation, and other suggestions, which may produce inaccuracies. 
+                                            Always double-check crucial information.
+                                        </p>
+                                    </div>
+                                </td>
+                            </tr>
+                        </table>
+                    </body>
+                    </html>
+        """
+        if not raw_text.strip():
+            return ""
+
+        # Fallback if the OpenAI client is not available
+        if not getattr(self, "client", None):
+            safe_fallback = raw_text.replace("\n", "<br>")
+            return f"<p>{safe_fallback}</p>"
+
+        prompt_content = (
+            "You are a professional, expert email formatter. Convert the AI response text (after --- BEGIN RAW TEXT ---) into clean, accessible HTML.\n\n"
+            "RULES:\n"
+            "1. Use standard HTML tags: <p>, <h3>, <ul>/<li>, <ol>/<li>, and <table> for structured data only.\n"
+            "2. If there's a list, use proper <ul> or <ol> with <li> elements.\n"
+            "3. Create tight, semantic HTML (no <div>s needed).\n"
+            "4. For meal plans or shopping lists, always use appropriate HTML structure.\n"
+            "5. When there's a clear heading (like \"Shopping List:\" or \"Meal Plan:\"), make it an <h3>.\n"
+            "6. Only return the BODY content (don't include <html>, <head>, or <body> tags).\n"
+            "7. Maintain any links (<a href>) but ensure they open in a new tab with target=\"_blank\" rel=\"noopener noreferrer\".\n"
+            "8. Be precise, clean, but leave no words or meaning out from the original text.\n"
+            "9. IMPORTANT: Absolutely DO NOT ask for feedback.\n "
+            "10. If a paragraph ends with \":\", convert it to <h3> and start a new bullet list below it.\n\n"
+            f"--- BEGIN RAW TEXT ---\n{raw_text}\n--- END RAW TEXT ---"
+        )
+
+        try:
+            response = self.client.responses.create(
+                model="gpt-4.1-mini",  
+                input=[
+                    {"role": "developer", "content": "You are a precise HTML email formatter. Return ONLY HTML content without follow-up questions."},
+                    {"role": "user", "content": prompt_content}
+                ],
+                stream=False,
+                text={
+                    "format": {
+                        'type': 'json_schema',
+                        'name': 'email_body',
+                        'schema': EmailBody.model_json_schema()
+                    }
+                }
+            )
+            
+            # Parse the response with Pydantic to ensure format consistency
+            try:
+                # First check if it looks like valid JSON
+                if response.output_text.strip().startswith("{") and "content" in response.output_text:
+                    email_body = EmailBody.model_validate_json(response.output_text)
+                    formatted_text = email_body.content
+                else:
+                    # Try to extract just the HTML content if it's not in expected format
+                    formatted_text = response.output_text.strip()
+                    logger.warning(f"Email body not in expected JSON format, using raw output")
+            except Exception as e:
+                logger.error(f"Failed to validate email body format: {e}")
+                formatted_text = response.output_text.strip()
+            
+            # ------------------- FINAL CLEAN-UP (critical) --------------------
+            import re
+            # strip non-printable/control bytes
+            formatted_text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", formatted_text)
+            formatted_text = re.sub(r"[\x80-\x9F]", "", formatted_text)
+            # normalise stray punctuation / smart quotes / dashes
+            replacements = {
+                "\uFFFD": "",
+                "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u2014": "-",
+                "\u2018": "'",  "\u2019": "'", "\u201B": "'",
+                "\u201C": '"',  "\u201D": '"',
+            }
+            for bad, good in replacements.items():
+                formatted_text = formatted_text.replace(bad, good)
+
+            # ── FINAL HEX CODE PROTECTION (post-LLM safety net) ──────────────────────
+            # Apply critical hex cleaning again in case LLM introduced new hex codes
+            final_temp_patterns = [
+                (r'(\d{2,3})f\b', r'\1°F'),                              # 425f -> 425°F
+                (r'(\d{2,3})b0C\b', r'\1°C'),                           # 220b0C -> 220°C
+                (r'(\d{2,3})[a-fA-F0-9]{1,4}([CF])\b', r'\1°\2'),      # Generic hex temps
+            ]
+            for pattern, replacement in final_temp_patterns:
+                formatted_text = re.sub(pattern, replacement, formatted_text)
+            
+            # Final hex symbol cleanup
+            final_hex_fixes = {'b0': '°', 'f0': '°', 'a0': ' '}
+            for hex_code, replacement in final_hex_fixes.items():
+                pattern = r'\b' + re.escape(hex_code) + r'(?=[^a-zA-Z]|$)'
+                formatted_text = re.sub(pattern, replacement, formatted_text)
+            
+            # Final temperature format cleanup
+            formatted_text = re.sub(r'(\d+)\s*degrees?\s*([CF])', r'\1°\2', formatted_text, flags=re.IGNORECASE)
+            formatted_text = re.sub(r'\s+', ' ', formatted_text)
+
+            # nuke any "Subject: …" line the model accidentally prepends
+            formatted_text = re.sub(r"^Subject:[^\n\r]*[\n\r]+", "", formatted_text, flags=re.IGNORECASE)
+
+            # ------------------- INSTACART BUTTON FORMATTING --------------------
+            # Replace any Instacart links with properly formatted buttons according to brand guidelines
+            
+            # Use BeautifulSoup to properly parse and process the HTML
+            try:
+                # Determine if the content appears to be recipe-related
+                is_recipe = "recipe" in formatted_text.lower()
+                copy_type = "recipe" if is_recipe else "ingredients"
+                
+                # Use the BeautifulSoup helper function to replace Instacart links
+                formatted_text = _replace_instacart_links(formatted_text, copy_type)
+                logger.debug("Successfully processed Instacart links with BeautifulSoup")
+            except Exception as e:
+                logger.error(f"Error processing Instacart links: {e}")
+                # Continue with the original text if there's an error
+
+            return formatted_text.strip()
+            
+        except Exception as e:
+            # Log and fall back to simple formatting
+            logger.error(f"Email body formatting via LLM failed: {e}")
+            safe_fallback = raw_text.replace("\n", "<br>")
+            return f"<p>{safe_fallback}</p>"
+
+    # ────────────────────────────────────────────────────────────────────
+    #  Email Processing Method
+    # ────────────────────────────────────────────────────────────────────
+    def send_message_for_email(self, message_content: str) -> Dict[str, Any]:
+        """
+        Processes a message for email reply, handling iterative tool calls
+        until a final textual response is obtained from the assistant.
+
+        This method is designed for authenticated users and asynchronous processing
+        (e.g., via Celery tasks for email replies). It manages conversation
+        history and state persistence.
+
+        Args:
+            message_content (str): The aggregated message content from the user's email(s).
+
+        Returns:
+            Dict[str, Any]: A dictionary containing:
+                - "status" (str): "success" or "error".
+                - "message" (str): The final textual response from the assistant.
+                                   Can be an empty string if the assistant provides
+                                   no text or a fallback error message.
+                - "response_id" (str, optional): The ID of the *final* OpenAI
+                                                 response in the conversational turn.
+        """
+        # 3.1. Initial Setup & Pre-checks
+        # User Authentication Check
+        if self._is_guest(self.user_id):
+            logger.error(f"send_message_for_email called for a guest user ID: {self.user_id}. This is not supported.")
+            return {"status": "error", "message": "Email processing is for authenticated users only.", "response_id": None}
+            
+        # Model Selection
+        model = choose_model(
+            user_id=self.user_id,
+            is_guest=False, 
+            question=message_content
+        )
+        
+        # Fallback if model selection fails
+        if not model:
+            model = MODEL_AUTH_FALLBACK
+            
+        # History Initialization
+        chat_thread = self._get_or_create_thread(self.user_id)
+        current_history = chat_thread.openai_input_history.copy() if chat_thread.openai_input_history else []
+        if not current_history:
+            current_history.append({"role": "system", "content": self.system_message})
+        current_history.append({"role": "user", "content": message_content})
+            
+        # State Variables
+        final_output_text = ""
+        final_response_id = None
+        prev_resp_id_for_api = None
+        max_tool_iterations = 5
+        iterations = 0
+        # Initialize tool_calls_in_response before the loop
+        tool_calls_in_response = []
+        user = CustomUser.objects.get(id=self.user_id)
+
+        # 3.2. Main Processing Loop (Iterative Tool Calling)
+        try:
+            while iterations < max_tool_iterations:
+                iterations += 1
+                logger.debug(f"send_message_for_email: Iteration {iterations}/{max_tool_iterations} for user {self.user_id}. History length: {len(current_history)}")
+                
+                # OpenAI API Call - Use structured output on final iteration if no tools are called
+                if iterations == max_tool_iterations or not tool_calls_in_response:
+                    try:
+                        resp = self.client.responses.create(
+                            model=model,
+                            input=current_history,
+                            instructions=self._instructions(is_guest=False) + "\n\nIMPORTANT: Do not include any follow-up questions or phrases like 'Is there anything else?' or 'Let me know if you need more help'. Respond only with the relevant information. The user can only reply via their personal assistant email address which is: " + user.personal_assistant_email + " and not by replying to this email.",
+                            tools=self.auth_tools,
+                            parallel_tool_calls=True,
+                            previous_response_id=prev_resp_id_for_api,
+                            text={
+                                "format": {
+                                    'type': 'json_schema',
+                                    'name': 'email_response',
+                                    'schema': EmailResponse.model_json_schema()
+                                }
+                            } if not tool_calls_in_response else None  # Only use structured output when no tools are expected
+                        )
+                    except Exception as structured_error:
+                        logger.error(f"Error using structured output for email: {structured_error}. Falling back to standard format.")
+                        # Fallback to standard format if structured output fails
+                        resp = self.client.responses.create(
+                            model=model,
+                            input=current_history,
+                            instructions=self._instructions(is_guest=False) + "\n\nIMPORTANT: Do not include any follow-up questions.",
+                            tools=self.auth_tools,
+                            parallel_tool_calls=True,
+                            previous_response_id=prev_resp_id_for_api,
+                        )
+                else:
+                    # Standard call for intermediate iterations
+                    resp = self.client.responses.create(
+                        model=model,
+                        input=current_history,
+                        instructions=self._instructions(is_guest=False),
+                        tools=self.auth_tools,
+                        parallel_tool_calls=True,
+                        previous_response_id=prev_resp_id_for_api,
+                    )
+                
+                final_response_id = resp.id
+                prev_resp_id_for_api = final_response_id
+                logger.debug(f"send_message_for_email: OpenAI API Response for user {self.user_id} (iter {iterations}, resp_id: {final_response_id}): {resp}")
+                
+                # Extract Tool Calls
+                tool_calls_in_response = [item for item in getattr(resp, "output", []) if getattr(item, 'type', None) == "function_call"]
+                
+                # Condition: No Tool Calls in Response (End of Turn)
+                if not tool_calls_in_response:
+                    # Try to parse the structured output if it was requested
+                    try:
+                        extracted_text = self._extract(resp)
+                        
+                        # Check if the response is in JSON format from structured output
+                        if extracted_text.strip().startswith('{') and '"message"' in extracted_text:
+                            try:
+                                parsed_response = EmailResponse.model_validate_json(extracted_text)
+                                final_output_text = parsed_response.message
+                                logger.info(f"send_message_for_email: Successfully parsed structured output for user {self.user_id}")
+                            except Exception as parse_error:
+                                logger.warning(f"send_message_for_email: Failed to parse structured output: {parse_error}. Using raw text.")
+                                final_output_text = extracted_text
+                        else:
+                            final_output_text = extracted_text
+                    except Exception as extract_error:
+                        logger.error(f"send_message_for_email: Error extracting text: {extract_error}")
+                        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+                        requests.post(n8n_traceback_url, json={"error": str(extract_error), "source":"send_message_for_email", "traceback": traceback.format_exc()})
+                        final_output_text = "I'm sorry, but I encountered an issue processing your message. Please try again or contact support."
+                    
+                    if final_output_text:
+                        current_history.append({"role": "assistant", "content": final_output_text})
+                    logger.info(f"send_message_for_email: No tool calls. Extracted text: '{final_output_text[:100]}...' for user {self.user_id}")
+                    break
+                    
+                # Condition: Tool Calls Present
+                logger.info(f"send_message_for_email: Found {len(tool_calls_in_response)} tool call(s) for user {self.user_id}.")
+                for tool_call_item in tool_calls_in_response:
+                    # Append function_call to history
+                    call_entry = {
+                        "type": "function_call",
+                        "name": tool_call_item.name,
+                        "arguments": tool_call_item.arguments,
+                        "call_id": tool_call_item.call_id
+                    }
+                    current_history.append(call_entry)
+                    logger.debug(f"send_message_for_email: Appended tool call to history: {tool_call_item.name} (ID: {tool_call_item.call_id}) for user {self.user_id}")
+                    
+                    # Execute Tool
+                    args_json_str = tool_call_item.arguments
+                    fixed_args_json_str = self._fix_function_args(tool_call_item.name, args_json_str)
+                    tool_result_data = None
+                    try:
+                        logger.info(f"send_message_for_email: Executing tool {tool_call_item.name} with args: {fixed_args_json_str} for user {self.user_id}")
+                        mock_call_object = type("Call", (), {
+                            "call_id": tool_call_item.call_id,
+                            "function": type("F", (), {
+                                "name": tool_call_item.name,
+                                "arguments": fixed_args_json_str
+                            })
+                        })
+                        tool_result_data = handle_tool_call(mock_call_object)
+                        logger.info(f"send_message_for_email: Tool {tool_call_item.name} result: {str(tool_result_data)[:200]}... for user {self.user_id}")
+                    except Exception as e_tool:
+                        logger.error(f"send_message_for_email: Error executing tool {tool_call_item.name} for user {self.user_id}: {e_tool}", exc_info=True)
+                        tool_result_data = {"status": "error", "message": f"Error executing tool {tool_call_item.name}: {str(e_tool)}"}
+                        
+                    # Append function_call_output to history
+                    output_entry = {
+                        "type": "function_call_output",
+                        "call_id": tool_call_item.call_id,
+                        "output": json.dumps(tool_result_data)
+                    }
+                    current_history.append(output_entry)
+                    logger.debug(f"send_message_for_email: Appended tool output to history for call_id {tool_call_item.call_id} for user {self.user_id}")
+                
+                # Max Iterations Check
+                if iterations >= max_tool_iterations and tool_calls_in_response:
+                    logger.warning(f"send_message_for_email: Reached max tool iterations ({max_tool_iterations}) for user {self.user_id}. API may still want to call tools.")
+                    final_output_text = "I'm encountering some complexity with your request. Could you please try again, perhaps simplifying it, or use the web interface for a more detailed interaction?"
+                    current_history.append({"role": "assistant", "content": final_output_text})
+                    break
+            
+            # 3.3. Post-Loop Processing & Persistence
+            logger.info(f"send_message_for_email: Loop finished for user {self.user_id}. Final text: '{final_output_text[:100]}...'")
+            
+            # Clean up the output text to ensure it's consistent
+            if final_output_text:
+                # Check for common follow-up questions and remove them
+                follow_up_patterns = [
+                    "How does this look?",
+                    "Is this format acceptable?",
+                    "Does this work for you?",
+                    "Let me know if",
+                    "Is there anything else",
+                    "Do you want me to make any changes",
+                    "Would you like me to",
+                    "I hope this helps",
+                    "I'm here to help",
+                    "Feel free to reach out"
+                ]
+                
+                # Remove any follow-up questions from the end of the text
+                clean_text = final_output_text
+                for pattern in follow_up_patterns:
+                    if pattern.lower() in clean_text.lower():
+                        clean_text = clean_text[:clean_text.lower().find(pattern.lower())].strip()
+                
+                # If we made changes, update the final output
+                if clean_text != final_output_text:
+                    logger.info(f"send_message_for_email: Cleaned up output text for user {self.user_id}, removed follow-up questions")
+                    final_output_text = clean_text
+            
+            # Persist State
+            if final_response_id:
+                self._persist_state(self.user_id, final_response_id, is_guest=False, history=current_history)
+                if chat_thread and message_content and final_output_text:
+                    self._save_turn(self.user_id, message_content, final_output_text, chat_thread)
+            else:
+                logger.warning(f"send_message_for_email: No final_response_id was captured for user {self.user_id}. State may not be fully persisted.")
+                
+            # Return Success
+            return {"status": "success", "message": final_output_text, "response_id": final_response_id}
+            
+        # 3.4. Outer Error Handling
+        except Exception as e_outer:
+            logger.error(f"send_message_for_email: Unhandled error for user {self.user_id}: {e_outer}", exc_info=True)
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+            requests.post(n8n_traceback_url, json={"error": str(e_outer), "source":"send_message_for_email", "traceback": traceback.format_exc()})
+            return {
+                "status": "error", 
+                "message": f"An unexpected error occurred during email processing: {str(e_outer)}", 
+                "response_id": final_response_id
+            }
+
+    def process_and_reply_to_email(
+        self, 
+        message_content: str, 
+        recipient_email: str, 
+        user_email_token: str, 
+        original_subject: str, 
+        in_reply_to_header: Optional[str], 
+        email_thread_id: Optional[str],
+        openai_thread_context_id_initial: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Processes an aggregated email message, gets a response from the assistant,
+        and then triggers n8n to send the reply email.
+        This is a non-streaming method.
+        Assumes self.user_id is already set correctly for an authenticated user.
+        """
+        if self._is_guest(self.user_id):
+            logger.error(f"process_and_reply_to_email called for a guest user ID: {self.user_id}. This should not happen.")
+            return {"status": "error", "message": "Email processing is only for authenticated users."}
+
+        logger.info(f"MealPlanningAssistant: Processing email for user {self.user_id}, to_recipient: {recipient_email}")
+
+        # Get the current active thread for this user
+        chat_thread = self._get_or_create_thread(self.user_id)
+        
+        # 1. Get the assistant's response using send_message_for_email logic
+        # This handles history, model selection, tool calls, iterations, and persistence.
+        print(f"DEBUG: Sending message with content:\n{message_content}")
+        assistant_response_data = self.send_message_for_email(message_content=message_content)
+        print(f"DEBUG: Assistant response data for user {self.user_id}:\n{assistant_response_data}")
+        if assistant_response_data.get("status") == "error":
+            logger.error(f"MealPlanningAssistant: Error getting response from send_message_for_email for user {self.user_id}: {assistant_response_data.get('message')}")
+            # Still attempt to send a generic error reply via email
+            raw_reply_content = "I encountered an issue processing your request. Please try again later or contact support if the problem persists."
+            new_openai_response_id = None
+        else:
+            raw_reply_content = assistant_response_data.get('message', 'Could not process your request at this time. Please try again later via the web interface.')
+            new_openai_response_id = assistant_response_data.get('response_id', None)
+            logger.info(f"MealPlanningAssistant: Received response for user {self.user_id}. OpenAI response ID: {new_openai_response_id}")
+            print(f"DEBUG: Raw reply content from LLM for user {self.user_id}:\n{raw_reply_content}")
+
+        # 2. Format the raw reply content for email body
+        formatted_email_body = self._format_text_for_email_body(raw_reply_content)
+        print(f"DEBUG: Formatted email body for user {self.user_id}:\n{formatted_email_body}")
+
+        # 3. Render the full email using the new template
+        try:
+            user = CustomUser.objects.get(id=self.user_id) # Fetch user for their name
+            user_name = user.get_full_name() or user.username
+            
+            # Check if the user has unsubscribed from emails
+            if getattr(user, 'unsubscribed_from_emails', False):
+                logger.info(f"MealPlanningAssistant: User {self.user_id} has unsubscribed from emails. Skipping email reply.")
+                return {"status": "skipped", "message": "User has unsubscribed from emails."}
+                
+            # Get user's preferred language for translation
+            user_preferred_language = getattr(user, 'preferred_language', 'en')
+        except CustomUser.DoesNotExist:
+            user_name = "there" # Fallback name
+            user_preferred_language = 'en'  # Default to English if user not found
+            logger.warning(f"User {self.user_id} not found when preparing email, using fallback name.")
+        
+        site_domain = os.getenv('STREAMLIT_URL')
+        profile_url = f"{site_domain}/profile" # Adjust if your profile URL is different
+
+        email_html_content = render_to_string(
+            'customer_dashboard/assistant_email_template.html',
+            {
+                'user_name': user_name,
+                'email_body_content': formatted_email_body,
+                'profile_url': profile_url,
+                'personal_assistant_email': user.personal_assistant_email if hasattr(user, 'personal_assistant_email') else None
+            }
+        )
+        
+        # Translate the email content if needed
+        try:
+            email_html_content = translate_paragraphs(
+                email_html_content,
+                user_preferred_language
+            )
+            logger.info(f"Successfully translated email content to {_get_language_name(user_preferred_language)} ({user_preferred_language}) for user {self.user_id}")
+        except Exception as e:
+            logger.error(f"Error translating email content for user {self.user_id} to {_get_language_name(user_preferred_language)} ({user_preferred_language}): {e}")
+            # Continue with the original English content as fallback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"translate_email_content", "traceback": traceback.format_exc()})
+        
+        print(f"DEBUG: Final HTML email content (after translation) for user {self.user_id}:\n{email_html_content}")
+
+        # 4. Trigger n8n to send this reply_content back to recipient_email
+        n8n_webhook_url = os.getenv('N8N_EMAIL_REPLY_WEBHOOK_URL')
+        if not n8n_webhook_url:
+            logger.error(f"MealPlanningAssistant: N8N_EMAIL_REPLY_WEBHOOK_URL not configured. Cannot send email reply for user {self.user_id}.")
+            # Log the intended reply locally if n8n is not configured
+            logger.info(f"Intended email reply for {recipient_email} (User ID: {self.user_id}):\nSubject: Re: {original_subject}\nBody:\n{formatted_email_body}")
+            return {"status": "error", "message": "N8N_EMAIL_REPLY_WEBHOOK_URL not configured."}
+
+        # Ensure original_subject has content
+        if not original_subject or original_subject.strip() == "":
+            logger.warning(f"Empty subject received for user {self.user_id}. Using default subject.")
+            original_subject = "Message from your SautAI Assistant"
+        
+        # Handle reply prefix
+        subject_prefix = "Re: "
+        if original_subject.lower().startswith("re:") or original_subject.lower().startswith("aw:"):
+            subject_prefix = ""
+        final_subject = f"{subject_prefix}{original_subject}"
+
+        payload = {
+            'status': 'success', 
+            'action': 'send_reply', 
+            'reply_content': email_html_content, # Send the fully rendered HTML
+            'recipient_email': recipient_email,
+            'from_email': user.personal_assistant_email if hasattr(user, 'personal_assistant_email') and user.personal_assistant_email else f"mj+{user_email_token}@sautai.com", 
+            'original_subject': final_subject,
+            'in_reply_to_header': in_reply_to_header,
+            'email_thread_id': email_thread_id,
+            'openai_response_id': new_openai_response_id,
+            'chat_thread_id': chat_thread.id if chat_thread else None
+        }
+        print(f"DEBUG: Payload for n8n webhook for user {self.user_id}:\n{json.dumps(payload, indent=2)}")
+
+        try:
+            logger.info(f"MealPlanningAssistant: Posting to n8n webhook for user {self.user_id}. URL: {n8n_webhook_url}")
+            response = requests.post(n8n_webhook_url, json=payload, timeout=15)
+            response.raise_for_status() 
+            logger.info(f"MealPlanningAssistant: Successfully posted assistant reply to n8n for user {self.user_id}. Status: {response.status_code}")
+            return {"status": "success", "message": "Email reply successfully sent to n8n.", "n8n_response_status": response.status_code}
+        except requests.RequestException as e:
+            logger.error(f"MealPlanningAssistant: Failed to post assistant reply to n8n for user {self.user_id}: {e}. Payload: {json.dumps(payload)}")
+            # Log the intended reply if n8n call failed
+            logger.info(f"Failed n8n call. Intended email reply for {recipient_email} (User ID: {self.user_id}):\nSubject: {final_subject}\nBody:\n{formatted_email_body}")
+            return {"status": "error", "message": f"Failed to send email via n8n: {str(e)}"}
+        except Exception as e_general: # Catch any other unexpected errors during payload prep or call
+            logger.error(f"MealPlanningAssistant: Unexpected error during n8n email sending for user {self.user_id}: {e_general}. Payload: {json.dumps(payload if 'payload' in locals() else 'Payload not generated')}", exc_info=True)
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+            requests.post(n8n_traceback_url, json={"error": str(e_general), "source":"process_and_reply_to_email", "traceback": traceback.format_exc()})
+            return {"status": "error", "message": f"Unexpected error during email sending preparation: {str(e_general)}"}
+
+    @classmethod
+    def send_notification_via_assistant(cls, user_id: int, message_content: str, subject: str = None) -> Dict[str, Any]:
+        """
+        Static utility method that wraps process_and_reply_to_email to allow tasks to
+        send emails through the assistant.
+        
+        This method is designed to be called from Celery tasks to route notifications 
+        through the assistant rather than sending them directly.
+        
+        Args:
+            user_id: The ID of the user to notify
+            message_content: The message content to send
+            subject: Optional subject line (defaults to "Update from your meal assistant")
+            
+        Returns:
+            Dict with status and result information
+        """
+        try:
+            # Get user
+            user = CustomUser.objects.get(id=user_id)
+            
+            # Skip if email not confirmed
+            if not user.email_confirmed:
+                logger.warning(f"Skipping notification for user {user_id} with unconfirmed email")
+                return {"status": "skipped", "reason": "email_not_confirmed"}
+                
+            # Skip if user has unsubscribed from emails
+            if getattr(user, 'unsubscribed_from_emails', False):
+                logger.warning(f"Skipping notification for user {user_id} who has unsubscribed from emails")
+                return {"status": "skipped", "reason": "user_unsubscribed"}
+                
+            # Initialize assistant
+            assistant = cls(user_id=user_id)
+            
+            # Use user's email, fallback to a default
+            recipient_email = user.email
+            
+            # Build the subject line
+            if not subject:
+                subject = "Update from your meal assistant"
+                
+            # Call process_and_reply_to_email (most params are None for first-contact emails)
+            result = assistant.process_and_reply_to_email(
+                message_content=message_content,
+                recipient_email=recipient_email,
+                user_email_token=str(user.email_token) if hasattr(user, 'email_token') else None,
+                original_subject=subject,
+                in_reply_to_header=None,
+                email_thread_id=None
+            )
+            
+            return result
+        except CustomUser.DoesNotExist:
+            logger.error(f"User with ID {user_id} not found when sending notification")
+            return {"status": "error", "reason": "user_not_found"}
+        except Exception as e:
+            logger.error(f"Error sending notification via assistant for user {user_id}: {e}")
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"send_notification_via_assistant", "traceback": traceback.format_exc()})
+            return {"status": "error", "reason": str(e)}
+
 def generate_guest_id() -> str:
     return f"guest_{uuid.uuid4().hex[:8]}"
+
+# ────────────────────────────────────────────────────────────────────
+#  Helper: build branded Instacart CTA button
+# ────────────────────────────────────────────────────────────────────
+def _format_instacart_button(url: str, text: str) -> str:
+    """
+    Return the Instacart call‑to‑action HTML that meets the latest
+    partner‑branding specifications.
+
+    • Height: 46px (div container)
+    • Dynamic width: grows with text
+    • Padding: 16px vertical × 18px horizontal
+    • Logo: 22px tall
+    • Border: #E8E9EB solid 0.5px
+    • Background: #FFFFFF
+    • Text color: #000000, 16px, semi-bold
+    
+    Button text options:
+    • "Get Recipe Ingredients" (for recipe context)
+    • "Get Ingredients" (when recipes are not included)
+    • "Shop with Instacart" (legal approved)
+    • "Order with Instacart" (legal approved)
+    """
+    # Validate button text is one of the approved options
+    approved_texts = [
+        "Get Recipe Ingredients", 
+        "Get Ingredients", 
+        "Shop with Instacart", 
+        "Order with Instacart"
+    ]
+    
+    if text not in approved_texts:
+        # Default to "Shop with Instacart" if not an approved text
+        text = "Shop with Instacart"
+    
+    return (
+        f'<a href="{url}" target="_blank" style="text-decoration:none;">'
+        f'<div style="height:46px;display:inline-flex;align-items:center;'
+        f'padding:16px 18px;background:#FFFFFF;border:0.5px solid #E8E9EB;'
+        f'border-radius:8px;">'
+        f'<img src="https://live.staticflickr.com/65535/54538897116_fb233f397f_m.jpg" '
+        f'alt="Instacart" style="height:22px;width:auto;margin-right:10px;">'
+        f'<span style="font-family:Arial,sans-serif;font-size:16px;'
+        f'font-weight:500;color:#000000;white-space:nowrap;">{text}</span>'
+        f'</div></a>'
+    )
+
+# ────────────────────────────────────────────────────────────────────
+#  Helper: replace Instacart hyperlinks with branded CTA (BeautifulSoup)
+# ────────────────────────────────────────────────────────────────────
+def _replace_instacart_links(html: str, copy_type: str = "recipe") -> str:
+    """
+    Scan the HTML for <a> tags pointing to Instacart and replace each with
+    our branded CTA button.
+
+    Args:
+        html:      Raw HTML fragment.
+        copy_type: Not used anymore, always uses "Get Ingredients"
+
+    Returns:
+        Modified HTML with Instacart links swapped out.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if "instacart.com" in href or "instacart.tools" in href or "instacart.tool" in href:
+            # Always use "Get Ingredients" as the button text
+            btn_text = "Get Ingredients"
+            cta_html = _format_instacart_button(href, btn_text)
+            a.replace_with(BeautifulSoup(cta_html, "html.parser"))
+    
+    return str(soup)

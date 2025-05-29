@@ -299,7 +299,7 @@ def event_handler(request):
         # Retrieve the event type from the payload
         event_type = event_data.get('event_type')
         if not event_type:
-            return Response({'error': 'Missing event_type in payload'}, status=400)
+            pass
         
         # Process the event based on its type
         # You could create a separate service function, e.g., process_event(user, event_data),

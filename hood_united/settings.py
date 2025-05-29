@@ -14,7 +14,7 @@ from pathlib import Path
 import os
 import sys
 from dotenv import load_dotenv
-load_dotenv('dev.env')
+load_dotenv('/etc/myapp/config.env')
 from datetime import timedelta
 
 # Test mode flag for disabling external API calls during tests
@@ -30,13 +30,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
+DEBUG = False
 
-ALLOWED_HOSTS = ['127.0.0.1', 'localhost', 'nbhdunited.azurewebsites.net', 'www.nbhdunited.com', 'nbhdunited.com', 'www.sautai.com', 'sautai.com', '169.254.131.6:8000', '169.254.131.3:8000', 'hoodunited.org']
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '').split(',')
 
 # Model quota limits
 GPT41_AUTH_LIMIT = int(os.getenv('GPT41_AUTH_LIMIT', 5))  # GPT-4.1 per authenticated user / day
 GPT41_MINI_GUEST_LIMIT = int(os.getenv('GPT41_MINI_GUEST_LIMIT', 10))  # GPT-4.1-mini per guest / day
+# Application definition
 # Application definition
 
 INSTALLED_APPS = [
@@ -57,14 +58,13 @@ INSTALLED_APPS = [
     'chef_admin',
     'customer_dashboard',
     'local_chefs',
+    'gamification',
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'stripe',
     'storages',
-    'pgvector',
-    'shared',
-    'gamification',
+    'django_celery_beat',
 ]
 
 MIDDLEWARE = [
@@ -76,25 +76,12 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'corsheaders.middleware.CorsMiddleware', # CORS middleware
-    'utils.middleware.ModelSelectionMiddleware', # Model selection middleware
 ]
 
-# CORS settings
-CORS_ALLOW_CREDENTIALS = True
-CORS_ORIGIN_ALLOW_ALL = False
 CORS_ALLOWED_ORIGINS = [
-    os.getenv('STREAMLIT_URL'),  
+    os.getenv('STREAMLIT_URL'),  # Add your Streamlit app's origin here
+    # "https://example.com",  # Add other origins as needed
 ]
-
-# Cookie settings for cross-origin requests
-if DEBUG:
-    SESSION_COOKIE_SAMESITE = 'Lax'
-    SESSION_COOKIE_SECURE = False
-else:
-    SESSION_COOKIE_SAMESITE = 'None'
-    SESSION_COOKIE_SECURE = True
-
-SESSION_COOKIE_HTTPONLY = True
 
 ROOT_URLCONF = 'hood_united.urls'
 
@@ -120,21 +107,27 @@ TEMPLATES = [
 ASGI_APPLICATION = 'hood_united.asgi.application'
 
 
-# ------------------------------------------------------------------
-# Database ‑ always Postgres (even in CI) so that PG‑specific fields
-# such as ArrayField work during tests.
-# ------------------------------------------------------------------
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("DB_NAME", os.getenv("TEST_DB_NAME", "test_db")),
-        "USER": os.getenv("DB_USER", os.getenv("TEST_DB_USER", "test_user")),
-        "PASSWORD": os.getenv("DB_PASSWORD", os.getenv("TEST_DB_PASSWORD", "test_password")),
-        "HOST": os.getenv("DB_HOST", "localhost"),
-        "PORT": os.getenv("DB_PORT", "5432"),
-    }
-}
+# Database
+# https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
+if DEBUG == 'True':
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.getenv('DB_NAME'),
+            'USER': os.getenv('DB_USER'),
+            'PASSWORD': os.getenv('DB_PASSWORD'),
+            'HOST': os.getenv('DB_HOST'),
+            'PORT': os.getenv('DB_PORT'),
+        }
+    }
 
 # Password validation
 # https://docs.djangoproject.com/en/4.2/ref/settings/#auth-password-validators
@@ -158,23 +151,17 @@ AUTH_PASSWORD_VALIDATORS = [
 REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
-        'rest_framework.throttling.UserRateThrottle',
-        'api.throttles.GPT4DailyThrottle',
-        'api.throttles.GuestGPT4MiniThrottle',
+        'rest_framework.throttling.UserRateThrottle'
     ],
     'DEFAULT_THROTTLE_RATES': {
         'anon': '100/day',
-        'user': '1000/day',
-        'gpt4': f'{GPT41_AUTH_LIMIT}/day',
-        'gpt4_mini_guest': f'{GPT41_MINI_GUEST_LIMIT}/day',
+        'user': '1000/day'
     },
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
-        'utils.authentication.GuestIDAuthentication',  # Add custom guest authentication
     ),
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 10,
-    'EXCEPTION_HANDLER': 'api.views.custom_exception_handler',
 }
 
 SIMPLE_JWT = {
@@ -228,7 +215,7 @@ else:
 
     AZURE_ACCOUNT_NAME = os.getenv('AZURE_ACCOUNT_NAME')  # your azure account name
     AZURE_ACCOUNT_KEY = os.getenv('AZURE_ACCOUNT_KEY')  # your azure account key
-    AZURE_CONTAINER = os.getenv('AZURE_CONTAINER', 'media')  # the default container
+    AZURE_CONTAINER = os.getenv('AZURE_CONTAINER')  # the default container
     AZURE_CUSTOM_DOMAIN = f'{AZURE_ACCOUNT_NAME}.blob.core.windows.net'
     MEDIA_URL = f'https://{AZURE_CUSTOM_DOMAIN}/{AZURE_CONTAINER}/'
 
@@ -247,16 +234,9 @@ LOGIN_URL = 'custom_auth:login'
 
 
 # OpenAI API keys
+# OpenAI API keys
 OPENAI_KEY = os.getenv('OPENAI_KEY')
 SPOONACULAR_API_KEY = os.getenv('SPOONACULAR_API_KEY')
-
-# Redis configuration for quotas
-REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-
-# Session settings
-SESSION_ENGINE = 'django.contrib.sessions.backends.db'
-SESSION_COOKIE_AGE = 60 * 60 * 24 * 30  # 30 days in seconds
-SESSION_SAVE_EVERY_REQUEST = True  # Ensure sessions are saved for every request
 
 # OpenAI prompt
 OPENAI_PROMPT = os.getenv('OPENAI_PROMPT')
@@ -264,17 +244,58 @@ OPENAI_PROMPT = os.getenv('OPENAI_PROMPT')
 # Stripe API keys
 STRIPE_PUBLIC_KEY = os.getenv('STRIPE_PUBLIC_KEY')
 STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
-STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET')
+STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET') #TODO: Add this to the config file
+
 
 # Email settings
-EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = os.getenv('EMAIL_HOST')
 EMAIL_PORT = os.getenv('EMAIL_PORT')
 EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS')
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
+
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL')
 
+
+# Redis connection details
+REDIS_URL = os.getenv('REDIS_URL')
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD')
+
+
+
+DJANGO_REDIS_LOG_IGNORED_EXCEPTIONS = True
+DJANGO_REDIS_LOGGER = 'django.request'
+
+CACHE = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        # If REDIS_URL already contains a scheme (`rediss://`) just use it;
+        # otherwise fall back to adding one. This keeps both utils.quotas and Django‑redis happy.
+        'LOCATION': f"{REDIS_URL if REDIS_URL.startswith(('rediss://')) else 'rediss://'+REDIS_URL+':6380/0'}?ssl_cert_reqs=required",
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            'PASSWORD': REDIS_PASSWORD,
+            'SOCKET_CONNECT_TIMEOUT': 15,  # Try increasing to 15 seconds
+            'SOCKET_TIMEOUT': 15,  # Similarly increase to 15 seconds
+            'RETRY_ON_TIMEOUT': True,  # Retry on timeout
+            'SOCKET_KEEPALIVE': True,  # Keep the connection alive
+        }
+    }
+}
+
+# Celery settings
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL')
+CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+CELERY_REDIS_MAX_CONNECTIONS = 10
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    'visibility_timeout': 3600,  # Task visibility timeout
+    'ssl': {
+        'ssl_cert_reqs': 'CERT_REQUIRED',  # You can also set this to 'CERT_OPTIONAL' or 'CERT_NONE'
+        'ssl_ca_certs': '/etc/ssl/certs/ca-certificates.crt',  # Path to your CA certificates
+    }
+}
+CELERYD_LOG_FILE = "/var/log/celery/celery.log"
+CELERYD_LOG_LEVEL = "DEBUG"
 
 LOGGING = {
     'version': 1,
@@ -287,37 +308,40 @@ LOGGING = {
     },
     'handlers': {
         'console': {
-            'level': 'INFO',  # Set to INFO for more concise output
+            'level': 'WARNING',
             'class': 'logging.StreamHandler',
             'formatter': 'verbose',
         },
         'file': {
-            'level': 'DEBUG',  # Keep DEBUG level for detailed output in file
-            'class': 'logging.FileHandler',
-            'filename': os.path.join(BASE_DIR, 'django_debug.log'),
+            'level': 'WARNING',
+            'class': 'logging.FileHandler',  # Use FileHandler instead of RotatingFileHandler
+            'filename': os.path.join(BASE_DIR, 'django_warnings.log'),
             'formatter': 'verbose',
         },
     },
     'loggers': {
         'django': {
             'handlers': ['console', 'file'],
-            'level': 'INFO',  # Set to INFO to reduce verbosity in console
+            'level': 'WARNING',
             'propagate': True,
         },
         'customer_dashboard': {
             'handlers': ['console', 'file'],
-            'level': 'INFO',  # Set to INFO to reduce verbosity in console
+            'level': 'WARNING',
             'propagate': True,
         },
-        'meals': {
-            'handlers': ['console', 'file'],
-            'level': 'DEBUG',  # Keep DEBUG level for detailed output in file
+        'django_redis': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
             'propagate': True,
         },
-    },
+        'celery': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+    }
 }
-
-
 if DEBUG == False:
 # Cookie settings
     SESSION_COOKIE_SECURE = True
@@ -336,6 +360,7 @@ if DEBUG == False:
 
     # SSL
     SECURE_SSL_REDIRECT = True
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
     # Clickjacking Protection
     X_FRAME_OPTIONS = 'DENY'
@@ -344,11 +369,8 @@ if DEBUG == False:
     SECURE_BROWSER_XSS_FILTER = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
 
-
-    # Celery settings
-    # Celery settings
-    CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL')
-    CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND')
-
 # Webhook URL for n8n order events
 N8N_ORDER_EVENTS_WEBHOOK_URL = os.getenv('N8N_ORDER_EVENTS_WEBHOOK_URL', '')
+
+# Webhook URL for n8n traceback
+N8N_TRACEBACK_URL = os.getenv('N8N_TRACEBACK_URL', '')

@@ -1,5 +1,6 @@
 from django.contrib import admin
-from .models import GoalTracking, ChatThread, AssistantEmailToken, WeeklyAnnouncement, ChatSessionSummary, UserChatSummary
+from .models import GoalTracking, ChatThread, AssistantEmailToken, WeeklyAnnouncement, ChatSessionSummary, UserChatSummary, UserEmailSession, EmailAggregationSession, PreAuthenticationMessage
+from django.utils import timezone
 
 # Admin class for GoalTracking
 class GoalTrackingAdmin(admin.ModelAdmin):
@@ -23,25 +24,79 @@ admin.site.register(ChatThread, ChatThreadAdmin)
 
 # Register AssistantEmailToken model
 class AssistantEmailTokenAdmin(admin.ModelAdmin):
-    list_display = ('user', 'token', 'created_at', 'last_used_at', 'is_active')
-    list_filter = ('is_active', 'created_at', 'last_used_at')
-    search_fields = ('user__email', 'user__username', 'token')
-    readonly_fields = ('token', 'created_at')
-    
+    list_display = ('user', 'auth_token', 'created_at', 'get_is_active', 'expires_at')
+    list_filter = ('created_at', 'expires_at', 'used')
+    search_fields = ('user__email', 'user__username', 'auth_token')
+    readonly_fields = ('auth_token', 'created_at', 'expires_at')
+
     actions = ['deactivate_tokens', 'generate_new_tokens']
-    
+
+    def get_is_active(self, obj):
+        from django.utils import timezone
+        return not obj.used and obj.expires_at > timezone.now()
+    get_is_active.short_description = 'Active'
+    get_is_active.boolean = True
+
     def deactivate_tokens(self, request, queryset):
-        queryset.update(is_active=False)
+        queryset.update(used=True)
     deactivate_tokens.short_description = "Deactivate selected tokens"
     
     def generate_new_tokens(self, request, queryset):
         for token_obj in queryset:
-            if not token_obj.is_active:
+            if token_obj.used:
                 new_token = AssistantEmailToken.create_for_user(token_obj.user)
-                self.message_user(request, f"Generated new token for {token_obj.user.email}: {new_token.token}")
+                self.message_user(request, f"Generated new token for {token_obj.user.email}: {new_token.auth_token}")
     generate_new_tokens.short_description = "Generate new tokens for selected users"
 
 admin.site.register(AssistantEmailToken, AssistantEmailTokenAdmin)
+
+# Admin class for UserEmailSession
+class UserEmailSessionAdmin(admin.ModelAdmin):
+    list_display = ('user', 'get_is_active', 'created_at', 'expires_at')
+    list_filter = ('created_at', 'expires_at')
+    search_fields = ('user__email', 'user__username')
+    readonly_fields = ('created_at',)
+    
+    actions = ['expire_sessions']
+    
+    def get_is_active(self, obj):
+        return obj.expires_at > timezone.now()
+    get_is_active.short_description = 'Active'
+    get_is_active.boolean = True
+    
+    def expire_sessions(self, request, queryset):
+        """Expire selected email sessions immediately"""
+        count = queryset.filter(expires_at__gt=timezone.now()).update(expires_at=timezone.now() - timezone.timedelta(seconds=1))
+        self.message_user(request, f"Expired {count} email sessions.")
+    expire_sessions.short_description = "Expire selected sessions"
+
+admin.site.register(UserEmailSession, UserEmailSessionAdmin)
+
+# Admin class for EmailAggregationSession
+class EmailAggregationSessionAdmin(admin.ModelAdmin):
+    list_display = ('user', 'session_identifier', 'is_active', 'created_at')
+    list_filter = ('is_active', 'created_at')
+    search_fields = ('user__email', 'user__username', 'session_identifier')
+    readonly_fields = ('session_identifier', 'created_at')
+    
+    actions = ['deactivate_sessions']
+    
+    def deactivate_sessions(self, request, queryset):
+        """Deactivate selected aggregation sessions"""
+        count = queryset.filter(is_active=True).update(is_active=False)
+        self.message_user(request, f"Deactivated {count} aggregation sessions.")
+    deactivate_sessions.short_description = "Deactivate selected sessions"
+
+admin.site.register(EmailAggregationSession, EmailAggregationSessionAdmin)
+
+# Admin class for PreAuthenticationMessage
+class PreAuthenticationMessageAdmin(admin.ModelAdmin):
+    list_display = ('user', 'auth_token', 'created_at')
+    list_filter = ('created_at',)
+    search_fields = ('user__email', 'user__username', 'auth_token__auth_token')
+    readonly_fields = ('created_at',)
+
+admin.site.register(PreAuthenticationMessage, PreAuthenticationMessageAdmin)
 
 # Admin class for WeeklyAnnouncement
 class WeeklyAnnouncementAdmin(admin.ModelAdmin):

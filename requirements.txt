@@ -48,6 +48,7 @@ django-celery-beat==2.5.0
 django-cors-headers==4.3.1
 django-countries==7.5.1
 django-ratelimit==4.0.0
+django-redis==5.4.0
 django-storages==1.14.2
 django-storages-azure==1.6.8
 django-timezone-field==6.1.0

@@ -8,6 +8,8 @@ connecting them to the existing pantry management functionality in the applicati
 import json
 import logging
 import os
+import requests
+import traceback
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Union
 from shared.utils import generate_user_context
@@ -26,7 +28,7 @@ from openai import OpenAI
 api_key = os.getenv("OPENAI_KEY")
 client = OpenAI(api_key=api_key)
 logger = logging.getLogger(__name__)
-
+n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
 # Tool definitions for the OpenAI Responses API
 PANTRY_MANAGEMENT_TOOLS = [
     {
@@ -207,10 +209,11 @@ def check_pantry_items(user_id: int, item_type: str = None) -> Dict[str, Any]:
         }
         
     except Exception as e:
-        logger.error(f"Error checking pantry items for user {user_id}: {str(e)}")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"check_pantry_items", "traceback": traceback.format_exc()})
         return {
             "status": "error",
-            "message": f"Failed to check pantry items: {str(e)}"
+            "message": f"Failed to check pantry items"
         }
 
 def add_pantry_item(user_id: int, item_name: str, quantity: float, item_type: str = None, 
@@ -283,10 +286,11 @@ def add_pantry_item(user_id: int, item_name: str, quantity: float, item_type: st
             }
             
     except Exception as e:
-        logger.error(f"Error adding pantry item for user {user_id}: {str(e)}")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"add_pantry_item", "traceback": traceback.format_exc()})
         return {
             "status": "error",
-            "message": f"Failed to add pantry item: {str(e)}"
+            "message": f"Failed to add pantry item"
         }
 
 def get_expiring_items(user_id: int, days: int = 7) -> Dict[str, Any]:
@@ -325,10 +329,11 @@ def get_expiring_items(user_id: int, days: int = 7) -> Dict[str, Any]:
         }
         
     except Exception as e:
-        logger.error(f"Error getting expiring items for user {user_id}: {str(e)}")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"get_expiring_items", "traceback": traceback.format_exc()})
         return {
             "status": "error",
-            "message": f"Failed to get expiring items: {str(e)}"
+            "message": f"Failed to get expiring items"
         }
 
 def generate_shopping_list(user_id: int, meal_plan_id: int):
@@ -553,7 +558,9 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
         )
         shopping_list_raw = response.output_text
     except Exception as e:
-        logger.error(f"OpenAI error while generating shopping list for MealPlan {meal_plan_id}: {e}")
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_shopping_list", "traceback": traceback.format_exc()})
         raise ValueError("Failed to generate shopping list.") from e
 
     # --- 3. Validate & persist ----------------------------------------------
@@ -562,7 +569,8 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
         # validate with Pydantic (raises if invalid)
         ShoppingListSchema(**shopping_list_dict)
     except Exception as e:
-        logger.error(f"Invalid shopping list JSON for MealPlan {meal_plan_id}: {e}")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_shopping_list", "traceback": traceback.format_exc()})
         raise ValueError("OpenAI returned invalid shopping list JSON.") from e
 
     # Store (creates or updates) but do *not* email
@@ -680,7 +688,8 @@ def determine_items_to_replenish(user_id: int):
         )
         raw = response.output_text
     except Exception as e:
-        logger.error(f"OpenAI error (determine_items_to_replenish user {user_id}): {e}")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"determine_items_to_replenish", "traceback": traceback.format_exc()})
         return {"status": "error", "message": "Failed to generate recommendations."}
 
     # Validate
@@ -754,7 +763,8 @@ def set_emergency_supply_goal(user_id: int, days: int, preferred_servings: int) 
             "preferred_servings": servings_int
         }
     except Exception as e:
-        logger.error(f"Error setting emergency supply goal for user {user_id}: {e}")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"set_emergency_supply_goal", "traceback": traceback.format_exc()})
         return {
             "status": "error",
             "message": "Failed to update emergency supply goal."

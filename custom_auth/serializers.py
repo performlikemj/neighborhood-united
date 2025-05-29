@@ -44,11 +44,11 @@ class CustomUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = get_user_model()
         fields = [
-            'id', 'username', 'email', 'email_daily_instructions', 'email_meal_plan_saved',
-            'email_instruction_generation', 'password', 'phone_number', 'dietary_preferences',
-            'custom_dietary_preferences', 'allergies', 'custom_allergies', 'week_shift', 
-            'email_confirmed', 'preferred_language', 'timezone', 'emergency_supply_goal',
-            'preferred_servings'
+            'id', 'username', 'email', 'unsubscribed_from_emails', 'password', 
+            'phone_number', 'dietary_preferences', 'custom_dietary_preferences', 
+            'allergies', 'custom_allergies', 'week_shift', 'email_confirmed', 
+            'preferred_language', 'timezone', 'emergency_supply_goal',
+            'preferred_servings', 'personal_assistant_email'
         ]
         extra_kwargs = {
             'password': {'write_only': True},
@@ -56,6 +56,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'email': {},
             'phone_number': {'required': False},  # Make phone_number not required
             'custom_dietary_preferences': {'required': False},  # Optional field
+            'personal_assistant_email': {'read_only': True}  # Mark as read-only
         }
 
     def __init__(self, *args, **kwargs):

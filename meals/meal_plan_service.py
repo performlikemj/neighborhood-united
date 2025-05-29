@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from random import shuffle
 from typing import List, Set, Optional, Tuple, Dict
 from celery import shared_task
+from meals.celery_utils import handle_task_failure
 from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
@@ -24,7 +25,7 @@ from meals.meal_generation import generate_and_create_meal, perform_openai_sanit
 from meals.models import Meal, MealPlan, MealPlanMeal, MealPlanInstruction, ChefMealEvent
 from meals.tasks import MAX_ATTEMPTS
 from meals.pydantic_models import (MealsToReplaceSchema, MealPlanApprovalEmailSchema, BulkPrepInstructions,
-                                  MealPlanModificationRequest, PromptMealMap)
+                                  MealPlanModificationRequest, PromptMealMap, ModifiedMealSchema)
 from meals.meal_modification_parser import parse_modification_request
 from shared.utils import (generate_user_context, get_embedding, cosine_similarity, replace_meal_in_plan,
                           remove_meal_from_plan)
@@ -164,7 +165,7 @@ def analyze_meal_compatibility(meal, dietary_preference):
                     f"Even if it's not explicitly labeled as {dietary_preference}, "
                     f"determine if its ingredients and preparation would satisfy that dietary requirement."
                 )
-        }
+            }
         ]
 
         # Make API call
@@ -309,6 +310,7 @@ def get_compatible_meals_for_user(user, meal_pool=None):
     return compatible_meals
 
 @shared_task
+@handle_task_failure
 def create_meal_plan_for_new_user(user_id):
     try:
         user = CustomUser.objects.get(id=user_id)
@@ -342,6 +344,7 @@ def create_meal_plan_for_new_user(user_id):
         logger.error(f"User with id {user_id} does not exist.")
 
 @shared_task
+@handle_task_failure
 def create_meal_plan_for_all_users():
     """
     Create meal plans for all users, respecting their local timezones.
@@ -747,20 +750,32 @@ def create_meal_plan_for_user(
                     # Proceed only if basic sanity check passes AND (it's not a chef meal OR it's a chef meal with a valid event for the date)
                     if perform_comprehensive_sanity_check(meal_found, user, request_id) and is_valid_chef_meal_for_date:
                         try:
-                            # meal_date is now target_meal_date calculated above
-                            MealPlanMeal.objects.create(
+                            # Use get_or_create to handle potential race conditions atomically
+                            meal_plan_meal, created = MealPlanMeal.objects.get_or_create(
                                 meal_plan=meal_plan,
-                                meal=meal_found,
                                 day=day_name,
-                                meal_date=target_meal_date, 
                                 meal_type=meal_type,
+                                defaults={
+                                    'meal': meal_found,
+                                    'meal_date': target_meal_date,
+                                }
                             )
+                            
+                            if created:
+                                logger.info(f"[{request_id}] Added new meal '{meal_found.name}' for {day_name} {meal_type} on {target_meal_date}.")
+                            else:
+                                # Update the existing meal
+                                logger.warning(f"[{request_id}] Meal already exists for {day_name} {meal_type}. Updating existing meal.")
+                                meal_plan_meal.meal = meal_found
+                                meal_plan_meal.meal_date = target_meal_date
+                                meal_plan_meal.save()
+                                logger.info(f"[{request_id}] Updated existing meal for {day_name} {meal_type} with '{meal_found.name}'.")
+                            
                             existing_meal_names.add(meal_found.name)
                             existing_meal_embeddings.append(meal_found.meal_embedding)
-                            logger.info(f"[{request_id}] Added existing meal '{meal_found.name}' for {day_name} {meal_type} on {target_meal_date}.")
                             meal_added = True
                         except Exception as e:
-                            logger.error(f"[{request_id}] Error adding meal '{meal_found.name}' to meal plan: {e}")
+                            logger.error(f"[{request_id}] Error adding/updating meal '{meal_found.name}' to meal plan: {e}")
                             skipped_meal_ids.add(meal_found.id)
                     else:
                          # Log reason for skipping
@@ -2357,27 +2372,7 @@ def apply_substitutions_to_meal(meal, substitutions, user):
                 "format": {
                     'type': 'json_schema',
                     'name': 'modified_meal',
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "modified_name": {"type": "string"},
-                            "modified_description": {"type": "string"},
-                            "modified_instructions": {"type": "string"},
-                            "ingredient_changes": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "original": {"type": "string"},
-                                        "substitute": {"type": "string"}
-                                    },
-                                    "required": ["original", "substitute"]
-                                }
-                            }
-                        },
-                        "required": ["modified_name", "modified_description", "modified_instructions", "ingredient_changes"],
-                        "additionalProperties": False
-                    }
+                    'schema': ModifiedMealSchema.model_json_schema()
                 }
             }
         )

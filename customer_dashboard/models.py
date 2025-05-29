@@ -7,47 +7,70 @@ from .helper_functions import get_current_week
 from meals.models import Meal  
 import secrets
 import string
+import uuid
+from datetime import timedelta
 from django_countries.fields import CountryField
 from django.contrib.auth import get_user_model
 from datetime import date
+from django.conf import settings
 
 User = get_user_model()
 
-class AssistantEmailToken(models.Model):
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='email_tokens')
-    token = models.CharField(max_length=64, unique=True, db_index=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    last_used_at = models.DateTimeField(null=True, blank=True)
-    is_active = models.BooleanField(default=True)
+class EmailAggregationSession(models.Model):
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='email_aggregation_sessions')
+    session_identifier = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
     
-    @classmethod
-    def generate_token(cls, length=32):
-        """Generate a secure random token."""
-        alphabet = string.ascii_letters + string.digits
-        return ''.join(secrets.choice(alphabet) for _ in range(length))
-    
-    @classmethod
-    def create_for_user(cls, user):
-        """Create a new token for a user."""
-        token = cls.generate_token()
-        return cls.objects.create(user=user, token=token)
-    
-    @classmethod
-    def validate_and_update_token(cls, token):
-        """
-        Validate a token and update its last_used_at timestamp.
-        
-        Returns:
-            Tuple of (is_valid, user, token_obj)
-        """
-        try:
-            token_obj = cls.objects.get(token=token, is_active=True)
-            token_obj.last_used_at = timezone.now()
-            token_obj.save(update_fields=['last_used_at'])
-            return True, token_obj.user, token_obj
-        except cls.DoesNotExist:
-            return False, None, None
+    # Metadata from the first email that started this session
+    recipient_email = models.EmailField(help_text="The original sender's email to reply to.")
+    user_email_token = models.CharField(max_length=255, help_text="The user's token from mj+<token>@sautai.com")
+    original_subject = models.CharField(max_length=1024, blank=True, null=True)
+    in_reply_to_header = models.TextField(null=True, blank=True)
+    email_thread_id = models.CharField(max_length=255, null=True, blank=True, help_text="e.g., Gmail's thread ID")
+    openai_thread_context_id_initial = models.CharField(max_length=255, null=True, blank=True, help_text="OpenAI thread ID if passed with the first email")
 
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_active = models.BooleanField(default=True, db_index=True, help_text="Set to False after Celery task processes it.")
+    # We can add a scheduled_processing_time if we want to track when Celery task is due
+
+    def __str__(self):
+        return f"Aggregation for {self.user.username} ({self.session_identifier}) created at {self.created_at.strftime('%Y-%m-%d %H:%M')}"
+
+class AggregatedMessageContent(models.Model):
+    session = models.ForeignKey(EmailAggregationSession, on_delete=models.CASCADE, related_name='messages')
+    content = models.TextField()
+    timestamp = models.DateTimeField(auto_now_add=True)
+    # Add any other per-message specific metadata if needed, though most should be on the session
+
+    class Meta:
+        ordering = ['timestamp']
+
+    def __str__(self):
+        return f"Message for session {self.session.session_identifier} at {self.timestamp.strftime('%Y-%m-%d %H:%M')}"
+    
+class AssistantEmailToken(models.Model):
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='email_auth_tokens')
+    # auth_token = models.UUIDField(default=uuid.uuid4, unique=True, db_index=True)
+    auth_token = models.UUIDField(default=uuid.uuid4, max_length=255, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    used = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"Token {self.auth_token} for {self.user.username}"
+
+class UserEmailSession(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    session_token = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        if not self.expires_at:
+            self.expires_at = timezone.now() + timezone.timedelta(hours=settings.EMAIL_SESSION_EXPIRY_HOURS if hasattr(settings, 'EMAIL_SESSION_EXPIRY_HOURS') else 24) # Default to 24 hours
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Email session for {self.user.username} - Expires at {self.expires_at.strftime('%Y-%m-%d %H:%M')}"
 
 class GoalTracking(models.Model):
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='goal')  # One-to-One
@@ -309,3 +332,31 @@ class UserChatSummary(models.Model):
     
     def __str__(self):
         return f"Consolidated chat summary for {self.user.username}"
+
+class PreAuthenticationMessage(models.Model):
+    # Link to the specific auth token that was generated for this message
+    # When this token is used or expires and is cleaned up, this message can be handled.
+    auth_token = models.OneToOneField(
+        AssistantEmailToken,
+        on_delete=models.CASCADE, # If the token is deleted, this pending message is also deleted.
+        related_name='pending_message_for_token'
+    )
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name='pre_auth_pending_messages'
+    )
+    content = models.TextField()
+    original_subject = models.CharField(max_length=1024, null=True, blank=True)
+    
+    # Metadata needed to start an EmailAggregationSession if auth is successful
+    # These would be copied from the initial email.
+    sender_email = models.EmailField() # The user's actual email address
+    in_reply_to_header = models.TextField(null=True, blank=True)
+    email_thread_id = models.CharField(max_length=255, null=True, blank=True)
+    openai_thread_context_id = models.CharField(max_length=255, null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Pending message for user {self.user.username} (Token: {self.auth_token.auth_token}) at {self.created_at.strftime('%Y-%m-%d %H:%M')}"

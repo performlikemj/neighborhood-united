@@ -17,6 +17,7 @@ from .dietary_preference_tools import get_dietary_preference_tools
 from .customer_dashboard_tools import get_customer_dashboard_tools
 from .guest_tools import get_guest_tools
 from local_chefs.views import chef_service_areas
+# from .instacart_service import INSTACART_TOOL, instacart_tool_handler
 
 # Import all tool implementation functions
 from .meal_planning_tools import (
@@ -33,7 +34,8 @@ from .meal_planning_tools import (
     stream_bulk_prep_instructions,
     get_meal_plan_meals_info,
     get_meal_macro_info,
-    find_related_youtube_videos
+    find_related_youtube_videos,
+    # generate_instacart_link_tool
 )
 
 from .pantry_management_tools import (
@@ -106,6 +108,7 @@ TOOL_FUNCTION_MAP = {
     "get_meal_plan_meals_info": get_meal_plan_meals_info,
     "get_meal_macro_info": get_meal_macro_info,
     "find_related_youtube_videos": find_related_youtube_videos,
+    # "generate_instacart_link_tool": generate_instacart_link_tool,
     # Pantry Management Tools
     "check_pantry_items": check_pantry_items,
     "add_pantry_item": add_pantry_item,
@@ -150,6 +153,15 @@ TOOL_FUNCTION_MAP = {
     "chef_service_areas": chef_service_areas
 }
 
+# def get_instacart_tools():
+#     """
+#     Get Instacart integration tools for the OpenAI Responses API.
+    
+#     Returns:
+#         List of Instacart tools in the format required by the OpenAI Responses API
+#     """
+#     return [INSTACART_TOOL]
+
 def get_all_tools():
     """
     Get all tools for the OpenAI Responses API.
@@ -180,6 +192,9 @@ def get_all_tools():
     # Add guest tools
     all_tools.extend(get_guest_tools())
     
+    # Add Instacart tools
+    # all_tools.extend(get_instacart_tools())
+    
     return all_tools
 
 def get_all_guest_tools():
@@ -201,7 +216,7 @@ def get_tools_by_category(category: str):
     
     Args:
         category: The category of tools to get (meal_planning, pantry_management, 
-                 chef_connection, payment_processing, dietary_preference)
+                 chef_connection, payment_processing, dietary_preference, instacart)
                  
     Returns:
         List of tools in the specified category in the format required by the OpenAI Responses API
@@ -218,6 +233,8 @@ def get_tools_by_category(category: str):
         return get_dietary_preference_tools()
     elif category == "guest":
         return get_guest_tools()
+    # elif category == "instacart":
+    #     return get_instacart_tools()
     else:
         logger.warning(f"Unknown tool category: {category}")
         return []
@@ -273,6 +290,11 @@ def handle_tool_call(tool_call):
         # Parse the arguments
         import json
         args = json.loads(arguments)
+        
+        # # Special handling for the Instacart tool
+        # if tool_name == "create_instacart_shopping_list":
+        #     result = instacart_tool_handler(args)
+        #     return result
         
         # Execute the tool
         result = execute_tool(tool_name, **args)

@@ -7,9 +7,19 @@ from datetime import timedelta
 import json
 import hashlib
 import pytz
+from django.core.cache import cache
+import requests
+import traceback
+import uuid
 
-from .models import ChatThread, ChatSessionSummary, UserChatSummary
+from .models import ChatThread, ChatSessionSummary, UserChatSummary, EmailAggregationSession, AggregatedMessageContent
 from custom_auth.models import CustomUser
+from meals.meal_assistant_implementation import MealPlanningAssistant
+
+# Define constants for cache keys. These should ideally match those in secure_email_integration.py
+EMAIL_AGGREGATION_MESSAGES_KEY_PREFIX = "email_aggregation_messages_user_"
+EMAIL_AGGREGATION_WINDOW_KEY_PREFIX = "email_aggregation_window_user_"
+ACTIVE_DB_AGGREGATION_SESSION_FLAG_PREFIX = "active_db_aggregation_session_user_"
 
 logger = logging.getLogger(__name__)
 
@@ -505,3 +515,93 @@ def generate_consolidated_user_summary(user_id):
     except Exception as e:
         logger.error(f"Error generating consolidated summary for user {user_id}: {e}", exc_info=True)
         return f"Error for user summary {user_id}: {str(e)}"
+
+@shared_task
+def process_aggregated_emails(session_identifier_str: str):
+    """
+    Processes aggregated emails for a user from a DB-backed EmailAggregationSession.
+    Args:
+        session_identifier_str: The UUID string of the EmailAggregationSession.
+    """
+    task_id_str = process_aggregated_emails.request.id if process_aggregated_emails.request else 'N/A'
+    logger.info(f"Task {task_id_str}: Starting to process aggregated emails for DB session identifier {session_identifier_str}.")
+
+    active_session_flag_key = None # Will be set if session is found
+    db_session = None
+
+    try:
+        session_uuid = uuid.UUID(session_identifier_str)
+        db_session = EmailAggregationSession.objects.select_related('user').get(session_identifier=session_uuid)
+
+        if not db_session.is_active:
+            logger.warning(f"Task {task_id_str}: EmailAggregationSession {session_identifier_str} is already marked inactive. Skipping.")
+            return
+
+        user = db_session.user
+        active_session_flag_key = f"{ACTIVE_DB_AGGREGATION_SESSION_FLAG_PREFIX}{user.id}"
+
+        # Retrieve all messages for this session, ordered by timestamp
+        aggregated_messages = db_session.messages.all().order_by('timestamp')
+        print(f"DEBUG: Aggregated messages for user {user.id} (DB session {session_identifier_str}):\n{aggregated_messages}")
+        if not aggregated_messages:
+            logger.warning(f"Task {task_id_str}: No messages found in DB for EmailAggregationSession {session_identifier_str} for user {user.id}. Marking session inactive.")
+            db_session.is_active = False
+            db_session.save()
+            cache.delete(active_session_flag_key)
+            return
+
+        # Combine message content
+        # Consider if subjects of individual messages need to be part of combined_content
+        combined_content = "\n\n---\n\n".join([item.content for item in aggregated_messages])
+        print(f"DEBUG: Combined content for user {user.id} (DB session {session_identifier_str}):\n{combined_content}")
+        logger.info(f"Task {task_id_str}: Processing {len(aggregated_messages)} aggregated email(s) from DB for user {user.id}. Session: {session_identifier_str}. Combined content length: {len(combined_content)}.")
+
+        assistant = MealPlanningAssistant(user_id=user.id)
+        print(f"DEBUG: Processing aggregated emails for user {user.id} (DB session {session_identifier_str}).")
+        # Call the method in MealPlanningAssistant to handle processing and n8n reply
+        # Pass metadata from the db_session object
+        email_reply_result = assistant.process_and_reply_to_email(
+            message_content=combined_content,
+            recipient_email=db_session.recipient_email, # From the first email that started the session
+            user_email_token=db_session.user_email_token, # User's main token stored in session
+            original_subject=db_session.original_subject, # From the first email
+            in_reply_to_header=db_session.in_reply_to_header, # From the first email
+            email_thread_id=db_session.email_thread_id, # From the first email
+            openai_thread_context_id_initial=db_session.openai_thread_context_id_initial # From the first email
+        )
+
+        if email_reply_result.get("status") == "success":
+            logger.info(f"Task {task_id_str}: Successfully processed and triggered email reply for user {user.id} (DB session {session_identifier_str}). Result: {email_reply_result.get('message')}")
+        else:
+            logger.error(f"Task {task_id_str}: Failed to process/send email reply for user {user.id} (DB session {session_identifier_str}). Error: {email_reply_result.get('message')}")
+            # Decide on retry logic or if session should remain active for a manual check
+
+        # Mark session as processed (inactive)
+        db_session.is_active = False
+        db_session.save()
+        logger.info(f"Task {task_id_str}: Marked EmailAggregationSession {session_identifier_str} as inactive.")
+
+    except EmailAggregationSession.DoesNotExist:
+        logger.error(f"Task {task_id_str}: EmailAggregationSession with identifier {session_identifier_str} not found in DB. Cannot process.")
+        # No specific user ID to clear a flag if session not found by identifier alone
+    except ValueError: # Invalid UUID format
+        logger.error(f"Task {task_id_str}: Invalid UUID format for session identifier '{session_identifier_str}'. Cannot process.")
+    except CustomUser.DoesNotExist: # Should not happen if session exists and has a user
+        logger.error(f"Task {task_id_str}: User not found for DB session {session_identifier_str}. Session might be corrupted.")
+    except Exception as e:
+        logger.error(f"Task {task_id_str}: Error processing aggregated emails for DB session {session_identifier_str}: {str(e)}\nTraceback: {traceback.format_exc()}.")
+        # Consider if db_session should be marked inactive on general error, or if it should be retried.
+        # If db_session was fetched, it might be good to mark it inactive to prevent re-processing of a failing task unless retries are configured.
+        if db_session and db_session.is_active:
+            # db_session.is_active = False # Potentially mark as inactive on failure too
+            # db_session.save()
+            pass # Decide on error handling strategy for is_active
+    finally:
+        # Clean up cache flag for this user if we identified the user and session
+        if active_session_flag_key: # This key is set if db_session was found and user identified
+            cache.delete(active_session_flag_key)
+            logger.info(f"Task {task_id_str}: Cleaned up cache flag {active_session_flag_key} for user after DB aggregation task for session {session_identifier_str}.")
+        else:
+            # This case can happen if EmailAggregationSession.DoesNotExist or ValueError on UUID occurred early.
+            # We don't have a user.id to construct the cache key for cleanup in that scenario.
+            logger.info(f"Task {task_id_str}: No cache flag to clean as user/session was not fully identified for session_id {session_identifier_str}.")

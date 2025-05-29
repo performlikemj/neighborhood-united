@@ -7,6 +7,9 @@ connecting them to the existing dietary preference functionality in the applicat
 
 import json
 import logging
+import requests
+import traceback
+import os
 from typing import Dict, List, Optional, Any, Union
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
@@ -27,6 +30,7 @@ api_key = settings.OPENAI_KEY
 client = OpenAI(api_key=api_key)
 logger = logging.getLogger(__name__)
 
+n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
 # Tool definitions for the OpenAI Responses API
 DIETARY_PREFERENCE_TOOLS = [
     {
@@ -340,10 +344,11 @@ def manage_dietary_preferences(user_id: int, action: str, preference: str = None
             }
             
     except Exception as e:
-        logger.error(f"Error managing dietary preferences for user {user_id}: {str(e)}")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"manage_dietary_preferences", "traceback": traceback.format_exc()})
         return {
             "status": "error",
-            "message": f"Failed to manage dietary preferences: {str(e)}"
+            "message": f"Failed to manage dietary preferences"
         }
 
 def check_meal_compatibility(user_id: int, meal_id: int) -> dict:
@@ -433,7 +438,6 @@ def check_meal_compatibility(user_id: int, meal_id: int) -> dict:
 
         # Parse JSON then load into the Pydantic model so we can use attribute access
         result_data = json.loads(response.output_text)
-        print(f'compatibility result: {result_data}')
 
         try:
             result = MealCompatibility(**result_data)
@@ -459,8 +463,9 @@ def check_meal_compatibility(user_id: int, meal_id: int) -> dict:
         return legacy_rule_based_check(user, meal)
 
     except Exception as e:
-        logger.error(f"Error checking compatibility: {e}")
-        return { "status": "error", "message": str(e) }
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"check_meal_compatibility", "traceback": traceback.format_exc()})
+        return { "status": "error", "message": f"Failed to check meal compatibility" }
 
 def suggest_alternatives(user_id: int, meal_id: int, meal_type: str = None, count: int = 3) -> Dict[str, Any]:
     """
@@ -532,10 +537,11 @@ def suggest_alternatives(user_id: int, meal_id: int, meal_type: str = None, coun
         }
         
     except Exception as e:
-        logger.error(f"Error suggesting alternatives for user {user_id}: {str(e)}")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"suggest_alternatives", "traceback": traceback.format_exc()})
         return {
             "status": "error",
-            "message": f"Failed to suggest alternatives: {str(e)}"
+            "message": f"Failed to suggest alternatives"
         }
 
 
@@ -606,8 +612,9 @@ def legacy_rule_based_check(user_id: int, meal_id: int) -> Dict[str, Any]:
         }
 
     except Exception as e:
-        logger.error(f"Legacy compatibility check error for user {user_id}: {e}")
-        return {"status": "error", "message": str(e)}
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"legacy_rule_based_check", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": f"Failed to check meal compatibility"}
 
 
 def check_allergy_alert(user_id: int, description: str = None) -> dict:
@@ -708,8 +715,9 @@ def check_allergy_alert(user_id: int, description: str = None) -> dict:
                 "message": check
             }
     except Exception as e:
-        logger.error(f"check_allergy_alert error for user {user_id}: {e}")
-        return {"status": "error", "message": str(e)}
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"check_allergy_alert", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": f"Failed to check allergy alert"}
 
 def list_dietary_preferences() -> Dict[str, Any]:
     """
@@ -745,11 +753,11 @@ def list_dietary_preferences() -> Dict[str, Any]:
         }
         
     except Exception as e:
-        logger.error(f"Error listing dietary preferences: {str(e)}")
-        traceback.print_exc()
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"list_dietary_preferences", "traceback": traceback.format_exc()})
         return {
             "status": "error",
-            "message": f"Failed to list dietary preferences"
+            "message": f"Failed to list dietary preferences" 
         }
     
 # Function to get all dietary preference tools

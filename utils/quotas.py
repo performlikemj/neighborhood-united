@@ -6,9 +6,13 @@ import redis
 import pytz
 from django.conf import settings
 from custom_auth.models import CustomUser
+import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Initialize Redis connection
-r = redis.Redis.from_url(settings.REDIS_URL)
+r = redis.Redis.from_url(f"rediss://:{os.getenv('REDIS_PASSWORD')}@{os.getenv('REDIS_URL')}:6380/0?ssl_cert_reqs=required")
 
 def _key(user_id: str, model: str) -> str:
     """
@@ -25,7 +29,6 @@ def _key(user_id: str, model: str) -> str:
         user = CustomUser.objects.get(id=int(user_id))
         user_timezone = pytz.timezone(user.timezone if user.timezone else 'UTC')
         today = datetime.datetime.now(user_timezone).date().isoformat()
-        print(f"QUOTA_KEY: User {user_id} - Using timezone {user_timezone} - Date: {today}")
     except (ValueError, CustomUser.DoesNotExist):
         # Fallback to server time if user not found
         today = datetime.date.today().isoformat()
@@ -41,7 +44,6 @@ def hit_quota(user_id: str, model: str, limit: int) -> bool:
     k = _key(user_id, model)
     n = r.incr(k)  # Atomic increment
     
-    print(f"QUOTA_CHECK: {user_id} usage of {model}: {n}/{limit}")
     
     if n == 1:  # First hit today, set expiration to midnight in user's timezone
         try:
@@ -61,7 +63,6 @@ def hit_quota(user_id: str, model: str, limit: int) -> bool:
                 ).replace(tzinfo=user_timezone)
                 
                 seconds_till_midnight = int((midnight - now).total_seconds())
-                print(f"QUOTA_RESET: User {user_id} - Will reset in {seconds_till_midnight}s at midnight in {user_timezone}")
             else:
                 # For guests, use server time
                 seconds_till_midnight = (
@@ -83,7 +84,7 @@ def hit_quota(user_id: str, model: str, limit: int) -> bool:
     
     quota_exceeded = n > limit
     if quota_exceeded:
-        print(f"QUOTA_EXCEEDED: {user_id} has used {n}/{limit} of {model}")
+        logger.info(f"QUOTA_EXCEEDED: {user_id} has used {n}/{limit} of {model}")
     
     return quota_exceeded 
 
@@ -95,8 +96,6 @@ def hit_quota_request(request, model_complexity="medium", tokens_used=None, gues
     # Get guest ID from request or use provided one
     request_guest_id = guest_id or request.session.get('guest_id')
     
-    # Log session and guest ID information
-    print(f"QUOTA: Session key: {session_key}, Guest ID: {request_guest_id}")
     
     is_guest = not user.is_authenticated
     
@@ -106,15 +105,12 @@ def hit_quota_request(request, model_complexity="medium", tokens_used=None, gues
     elif is_guest and request_guest_id:
         # Use guest ID from session or parameter
         user_id = f"guest:{request_guest_id}"
-        print(f"QUOTA: Using guest ID: {user_id}")
     elif is_guest and session_key:
         # Fallback to session key if no guest ID is found
         user_id = f"guest:{session_key}"
-        print(f"QUOTA: Falling back to session key: {user_id}")
     else:
         # Last resort, create a temporary ID
         user_id = "guest:unknown"
-        print(f"QUOTA: Using temporary unknown guest ID")
     
     # Determine model and limit based on complexity and user type
     if model_complexity == "high":

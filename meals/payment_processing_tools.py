@@ -8,6 +8,9 @@ connecting them to the existing payment processing functionality in the applicat
 import json
 import logging
 import uuid
+import requests
+import traceback
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Union
 from django.utils import timezone
@@ -23,7 +26,7 @@ from decimal import Decimal
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 logger = logging.getLogger(__name__)
-
+n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
 # Helper function to convert Decimal values to float
 def decimal_to_float(obj):
     if isinstance(obj, Decimal):
@@ -324,9 +327,9 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
         return {"status": "error", "message": f"Stripe error: {se}"}
     except Exception as e:
         print(f"[generate_payment_link] General exception occurred: {e}")
-        logger.error(f"generate_payment_link failed for order {order_id}: {e}",
-                     exc_info=True)
-        return {"status": "error", "message": str(e)}
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_payment_link", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": f"Failed to generate payment link"}
     
 def cancel_order(user_id: int, order_id: int, reason: str = None) -> Dict[str, Any]:
     """
@@ -425,10 +428,11 @@ def cancel_order(user_id: int, order_id: int, reason: str = None) -> Dict[str, A
     except Order.DoesNotExist:
         return { "status": "error", "message": f"Order with ID {order_id} not found for user {user_id}."}
     except Exception as e:
-        logger.error(f"Error cancelling order for user {user_id}, order {order_id}: {str(e)}")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"cancel_order", "traceback": traceback.format_exc()})
         return {
             "status": "error",
-            "message": f"Failed to cancel order: {str(e)}"
+            "message": f"Failed to cancel order"
         }
 
 def check_payment_status(user_id: int, order_id: int) -> Dict[str, Any]:
@@ -488,7 +492,8 @@ def check_payment_status(user_id: int, order_id: int) -> Dict[str, Any]:
             "message": f"Stripe error: {str(e)}"
         }
     except Exception as e:
-        logger.error(f"Error checking payment status for user {user_id}: {str(e)}")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"check_payment_status", "traceback": traceback.format_exc()})
         return {
             "status": "error",
             "message": f"Failed to check payment status: {str(e)}"
@@ -583,10 +588,11 @@ def process_refund(user_id: int, order_id: int, reason: str, amount: float = Non
             "message": f"Stripe error: {str(e)}"
         }
     except Exception as e:
-        logger.error(f"Error processing refund for user {user_id}: {str(e)}")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"process_refund", "traceback": traceback.format_exc()})
         return {
             "status": "error",
-            "message": f"Failed to process refund: {str(e)}"
+            "message": f"Failed to process refund"
         }
 
 # Function to get all payment processing tools

@@ -11,6 +11,9 @@ This module implements the tools available to authenticated customer users:
 """
 
 import logging
+import requests
+import traceback
+import os
 from typing import Any, Dict, List
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -26,6 +29,8 @@ from customer_dashboard.serializers import GoalTrackingSerializer
 from customer_dashboard.models import UserSummary
 
 logger = logging.getLogger(__name__)
+
+n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
 
 # -----------------------------------------------------------------------------
 # Tool metadata definitions (as required by the OpenAI Responses API)
@@ -191,17 +196,9 @@ CUSTOMER_DASHBOARD_TOOLS: List[Dict[str, Any]] = [
                     "description": "Change the language the assistant will use to communicate with the user. "
                         "The backend will use the language code such as 'en', 'ja', 'es', etc."
                 },
-                "email_daily_instructions":      { 
+                "unsubscribed_from_emails": { 
                     "type": "boolean",
-                    "description": "Toggle email that provides daily instructions to the user"
-                },
-                "email_meal_plan_saved":          { 
-                    "type": "boolean",
-                    "description": "Toggle email that provides the user with a copy of their meal plan once it's saved."
-                },
-                "email_instruction_generation":   { 
-                    "type": "boolean",
-                    "description": "Toggle email that provides the user with a copy of their meal's cooking instructions once generated."
+                    "description": "Set to true to unsubscribe from all emails, false to receive emails"
                 },
                 "preferred_servings":  {
                     "type": "integer",
@@ -301,7 +298,8 @@ def adjust_week_shift(user_id: int, week_shift_increment: int) -> Dict[str, Any]
             "current_time": f"Understand the current time is {timezone.now().strftime('%Y-%m-%d %H:%M:%S')}"
         }
     except Exception as e:
-        logger.error(f"adjust_week_shift error for {user_id}: {e}", exc_info=True)
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"adjust_week_shift", "traceback": traceback.format_exc()})
         return {"status": "error", "message": str(e)}
 
 
@@ -323,7 +321,8 @@ def reset_current_week(user_id: int) -> Dict[str, Any]:
             "current_time": timezone.now().strftime("%Y-%m-%d %H:%M:%S")
         }
     except Exception as e:
-        logger.error(f"reset_current_week error for {user_id}: {e}", exc_info=True)
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"reset_current_week", "traceback": traceback.format_exc()})
         return {"status": "error", "message": str(e)}
 
 
@@ -360,7 +359,8 @@ def update_goal(user_id: int, goal_name: str = None, goal_description: str = Non
             "current_time": timezone.now().strftime("%Y-%m-%d %H:%M:%S")
         }
     except Exception as e:
-        logger.error(f"update_goal error for {user_id}: {e}", exc_info=True)
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"update_goal", "traceback": traceback.format_exc()})
         return {"status": "error", "message": str(e)}
 
 
@@ -382,7 +382,8 @@ def get_goal(user_id: int) -> Dict[str, Any]:
             "current_time": timezone.now().strftime("%Y-%m-%d %H:%M:%S")
         }
     except Exception as e:
-        logger.error(f"get_goal error for {user_id}: {e}", exc_info=True)
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"get_goal", "traceback": traceback.format_exc()})
         return {"status": "error", "message": str(e)}
 
 def access_past_orders(user_id: int) -> Dict[str, Any]:
@@ -416,7 +417,8 @@ def access_past_orders(user_id: int) -> Dict[str, Any]:
             "current_time": timezone.now().strftime("%Y-%m-%d %H:%M:%S")
         }
     except Exception as e:
-        logger.error(f"access_past_orders error for {user_id}: {e}", exc_info=True)
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"access_past_orders", "traceback": traceback.format_exc()})
         return {"status": "error", "message": str(e)}
 
 
@@ -430,9 +432,7 @@ def update_user_settings(
     allergies: List[str] = None,
     custom_allergies: List[str] = None,
     preferred_language: str = None,
-    email_daily_instructions: bool = None,
-    email_meal_plan_saved: bool = None,
-    email_instruction_generation: bool = None,
+    unsubscribed_from_emails: bool = None,
     preferred_servings: int = None,
     emergency_supply_goal: int = None,
     phone_number: str = None,
@@ -506,9 +506,7 @@ def update_user_settings(
         # ---- Simple scalar fields --------------------------------------------
         scalar_map = {
             "preferred_language": preferred_language,
-            "email_daily_instructions": email_daily_instructions,
-            "email_meal_plan_saved": email_meal_plan_saved,
-            "email_instruction_generation": email_instruction_generation,
+            "unsubscribed_from_emails": unsubscribed_from_emails,
             "preferred_servings": preferred_servings,
             "emergency_supply_goal": emergency_supply_goal,
             "phone_number": phone_number,
@@ -536,8 +534,9 @@ def update_user_settings(
             "current_time": timezone.now().strftime("%Y-%m-%d %H:%M:%S")
         }
     except Exception as e:
-        logger.error(f"update_user_settings error for {user_id}: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"update_user_settings", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": f"Failed to update user settings"}
 
 
 def get_user_settings(user_id: int) -> Dict[str, Any]:
@@ -557,8 +556,9 @@ def get_user_settings(user_id: int) -> Dict[str, Any]:
             "current_time": timezone.now().strftime("%Y-%m-%d %H:%M:%S")
         }
     except Exception as e:
-        logger.error(f"get_user_settings error for {user_id}: {e}", exc_info=True)
-        return {"status": "error", "message": str(e)}
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"get_user_settings", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": f"Failed to get user settings"}
 
 
 # -----------------------------------------------------------------------------

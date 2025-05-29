@@ -10,6 +10,9 @@ This module implements the tools available to guest users:
 
 import json
 import logging
+import requests
+import traceback
+import os
 from datetime import date, timedelta
 from typing import Any, Dict, List
 
@@ -20,6 +23,8 @@ from meals.models import Dish, MealPlan, MealPlanMeal, Ingredient
 from chefs.models import Chef
 
 logger = logging.getLogger(__name__)
+
+n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
 
 # -----------------------------------------------------------------------------
 # Tool metadata definitions (as required by the OpenAI Responses API)
@@ -107,8 +112,9 @@ def guest_search_dishes(query: str) -> Dict[str, Any]:
         ]
         return {"status": "success", "query": query, "dishes": results}
     except Exception as e:
-        logger.error(f"guest_search_dishes error: {e}")
-        return {"status": "error", "message": str(e)}
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"guest_search_dishes", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": f"Failed to search dishes"}
 
 
 def guest_search_chefs(query: str) -> Dict[str, Any]:
@@ -123,8 +129,9 @@ def guest_search_chefs(query: str) -> Dict[str, Any]:
         ]
         return {"status": "success", "query": query, "chefs": results}
     except Exception as e:
-        logger.error(f"guest_search_chefs error: {e}")
-        return {"status": "error", "message": str(e)}
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"guest_search_chefs", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": f"Failed to search chefs"}
 
 
 def guest_get_meal_plan(user_id: int) -> Dict[str, Any]:
@@ -172,8 +179,9 @@ def guest_get_meal_plan(user_id: int) -> Dict[str, Any]:
             }
         }
     except Exception as e:
-        logger.error(f"guest_get_meal_plan error: {e}")
-        return {"status": "error", "message": str(e)}
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"guest_get_meal_plan", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": f"Failed to get meal plan"}
 
 
 def guest_search_ingredients(query: str) -> Dict[str, Any]:
@@ -188,8 +196,9 @@ def guest_search_ingredients(query: str) -> Dict[str, Any]:
         ]
         return {"status": "success", "query": query, "ingredients": results}
     except Exception as e:
-        logger.error(f"guest_search_ingredients error: {e}")
-        return {"status": "error", "message": str(e)}
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"guest_search_ingredients", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": f"Failed to search ingredients"}
 
 
 # -----------------------------------------------------------------------------

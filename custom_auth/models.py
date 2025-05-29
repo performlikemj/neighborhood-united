@@ -8,6 +8,8 @@ from django_countries.fields import CountryField
 from local_chefs.models import PostalCode, ChefPostalCode
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
+from django.conf.locale import LANG_INFO
+import uuid
 
 # Create your models here.
 class CustomUser(AbstractUser):
@@ -68,12 +70,17 @@ class CustomUser(AbstractUser):
     ('None', 'None'),
     ]
 
-    LANGUAGE_CHOICES = [
-        ('en', 'English'),
-        ('ja', 'Japanese'),
-        ('es', 'Spanish'),
-        ('fr', 'French'),
-    ]
+    # Get language choices from Django's built-in language info
+    @staticmethod
+    def get_language_choices():
+        """
+        Returns a list of tuples (language_code, language_name) for all languages
+        supported by Django, sorted by language name.
+        """
+        # Filter out languages without a name or name_local for stability
+        choices = [(code, info['name']) for code, info in LANG_INFO.items() 
+                  if 'name' in info and 'name_local' in info]
+        return sorted(choices, key=lambda x: x[1])  # Sort by language name
 
     email = models.EmailField(unique=True, blank=False, null=False)
     email_confirmed = models.BooleanField(default=False)
@@ -83,6 +90,7 @@ class CustomUser(AbstractUser):
     initial_email_confirmed = models.BooleanField(default=False)
     # Field to store week_shift for context when chatting with assistant
     week_shift = models.IntegerField(default=0)
+    email_token = models.UUIDField(editable=False, unique=True, db_index=True)
     dietary_preferences = models.ManyToManyField(
         'meals.DietaryPreference',  # Use the app name and model name as a string
         blank=True,
@@ -93,7 +101,7 @@ class CustomUser(AbstractUser):
         blank=True,
         related_name='users'
     )
-    preferred_language = models.CharField(max_length=2, choices=LANGUAGE_CHOICES, default='en')
+    preferred_language = models.CharField(max_length=10, default='en')  # Increased max_length to accommodate longer language codes
     allergies = ArrayField(
         models.CharField(max_length=20, choices=ALLERGY_CHOICES),
         default=list,
@@ -105,10 +113,8 @@ class CustomUser(AbstractUser):
         blank=True,
     )
     timezone = models.CharField(max_length=100, default='UTC')
-    # Email preferences fields
-    email_daily_instructions = models.BooleanField(default=True)
-    email_meal_plan_saved = models.BooleanField(default=True)
-    email_instruction_generation = models.BooleanField(default=True)
+    # Email preference field
+    unsubscribed_from_emails = models.BooleanField(default=False)
     emergency_supply_goal = models.PositiveIntegerField(default=0)  # Number of days of supplies the user wants
     # Family size field
     preferred_servings = models.PositiveIntegerField(
@@ -116,8 +122,16 @@ class CustomUser(AbstractUser):
         help_text="Number of servings the user wants meals scaled to."
     )
     
+    @property
+    def personal_assistant_email(self):
+        if self.email_token:
+            return f"mj+{self.email_token}@sautai.com"
+        return None
+
     def save(self, *args, **kwargs):
         self.username = self.username.lower()
+        if not self.pk and not self.email_token:  # If creating a new user and token isn't set
+            self.email_token = uuid.uuid4()
         super().save(*args, **kwargs)
 
 class Address(models.Model):

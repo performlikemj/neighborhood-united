@@ -9,7 +9,7 @@ from django.utils.encoding import force_bytes, force_str
 from django.core.mail import EmailMessage
 from .tokens import account_activation_token
 from .models import CustomUser, Address, UserRole
-from customer_dashboard.models import GoalTracking
+from customer_dashboard.models import GoalTracking, AssistantEmailToken, UserEmailSession, EmailAggregationSession, AggregatedMessageContent, PreAuthenticationMessage
 from chefs.models import ChefRequest
 from .forms import RegistrationForm, UserProfileForm, EmailChangeForm, AddressForm
 from django.urls import reverse
@@ -36,7 +36,7 @@ from django.http import HttpRequest, HttpResponse, JsonResponse
 import json
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 import logging
 from django.contrib.auth.hashers import check_password
@@ -48,9 +48,182 @@ from meals.dietary_preferences import handle_custom_dietary_preference
 from meals.models import CustomDietaryPreference
 from django.core.mail import send_mail
 from django.conf import settings
-load_dotenv("dev.env")
+from uuid import UUID
+from django.core.cache import cache
+from customer_dashboard.tasks import process_aggregated_emails
+from utils.translate_html import translate_paragraphs  # Import the translation utility
+from bs4 import BeautifulSoup
+from django.conf.locale import LANG_INFO
 
 logger = logging.getLogger(__name__)
+
+# Constants from secure_email_integration.py (or define them in a shared place)
+ACTIVE_DB_AGGREGATION_SESSION_FLAG_PREFIX = "active_db_aggregation_session_user_"
+AGGREGATION_WINDOW_MINUTES = 5
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def email_authentication_view(request, auth_token):
+    """
+    Handles the email authentication link clicked by the user.
+    Validates the token, creates a UserEmailSession, processes any pending message,
+    and logs the user in.
+    """
+    logger.info(f"Email authentication view called with auth_token: {auth_token}")
+    try:
+        token_obj = AssistantEmailToken.objects.select_related('user', 'pending_message_for_token').get(auth_token=auth_token)
+    except AssistantEmailToken.DoesNotExist:
+        logger.warning(f"Token object not found for auth_token: {auth_token}")
+        return Response({'status': 'error', 'message': 'Invalid or expired authentication link. Please request a new one if needed.'}, status=400)
+
+    if token_obj.used:
+        logger.warning(f"Token object found but already used for auth_token: {auth_token}")
+        return Response({'status': 'error', 'message': 'This authentication link has already been used.'}, status=400)
+
+    if token_obj.expires_at < timezone.now():
+        logger.warning(f"Token object found but expired for auth_token: {auth_token}")
+        return Response({'status': 'error', 'message': 'This authentication link has expired. Please try initiating the email conversation again.'}, status=400)
+
+    user = token_obj.user
+
+    # Mark token as used BEFORE processing pending message to avoid race conditions
+    token_obj.used = True
+    token_obj.save()
+    logger.info(f"Successfully validated and marked auth_token {auth_token} as used for user {user.username}.")
+
+    # Create or update UserEmailSession
+    session_duration_hours = getattr(settings, 'EMAIL_ASSISTANT_SESSION_DURATION_HOURS', 24)
+    session_expires_at = timezone.now() + timedelta(hours=session_duration_hours)
+    
+    # Invalidate any other active email sessions for this user
+    UserEmailSession.objects.filter(user=user, expires_at__gt=timezone.now()).update(expires_at=timezone.now() - timedelta(seconds=1))
+
+    UserEmailSession.objects.create(
+        user=user,
+        expires_at=session_expires_at
+    )
+    logger.info(f"Created new UserEmailSession for user {user.username} expiring at {session_expires_at}.")
+
+    # Check for and process pending message
+    try:
+        pending_message = getattr(token_obj, 'pending_message_for_token', None)
+        if pending_message:
+            logger.info(f"Found pending message for user {user.username} (token {auth_token}). Processing it.")
+            
+            # Start a new DB-backed email aggregation session with this pending message
+            db_aggregation_session = EmailAggregationSession.objects.create(
+                user=user,
+                recipient_email=pending_message.sender_email, # Use sender from pending message
+                user_email_token=str(user.email_token), # User's main email token
+                original_subject=pending_message.original_subject,
+                in_reply_to_header=pending_message.in_reply_to_header,
+                email_thread_id=pending_message.email_thread_id,
+                openai_thread_context_id_initial=pending_message.openai_thread_context_id,
+                is_active=True
+            )
+
+            AggregatedMessageContent.objects.create(
+                session=db_aggregation_session,
+                content=pending_message.content
+            )
+            logger.info(f"Created EmailAggregationSession {db_aggregation_session.session_identifier} and first AggregatedMessageContent from pending message.")
+
+            active_session_flag_key = f"{ACTIVE_DB_AGGREGATION_SESSION_FLAG_PREFIX}{user.id}"
+            cache.set(active_session_flag_key, str(db_aggregation_session.session_identifier), timeout=AGGREGATION_WINDOW_MINUTES * 60)
+            logger.info(f"Set cache flag {active_session_flag_key} for new aggregation window.")
+
+            process_aggregated_emails.apply_async(
+                args=[str(db_aggregation_session.session_identifier)],
+                countdown=AGGREGATION_WINDOW_MINUTES * 60
+            )
+            logger.info(f"Scheduled process_aggregated_emails task for session {db_aggregation_session.session_identifier}.")
+
+            # Optionally, send an acknowledgment for the processed pending message
+            ack_subject = f"Re: {pending_message.original_subject}" if pending_message.original_subject else "Your SautAI Assistant is Ready"
+            ack_message_raw = (
+                "<p>Thank you for authenticating! Your previous message has now been received and is being processed by MJ. "
+                "If you have more details to add, feel free to send another email within the next 5 minutes. "
+                "All messages received in this window will be processed together.</p><p>Best,<br>The sautAI Team</p>"
+            )
+            user_name_for_template = user.get_full_name() or user.username
+            site_domain_for_template = os.getenv('STREAMLIT_URL') # Ensure STREAMLIT_URL is available
+            profile_url_for_template = f"{site_domain_for_template}/profile"
+            personal_assistant_email_for_template = user.personal_assistant_email if hasattr(user, 'personal_assistant_email') and user.personal_assistant_email else f"mj+{user.email_token}@sautai.com"
+
+            # Get user's preferred language and translate the email content
+            user_preferred_language = getattr(user, 'preferred_language', 'en')
+            unsubscribed = getattr(user, 'unsubscribed_from_emails', False)
+            # Create a soup with just the raw message to translate the paragraphs directly
+            raw_soup = BeautifulSoup(f"<div>{ack_message_raw}</div>", "html.parser")
+            try:
+                # Translate the message directly using our improved translate_paragraphs function
+                raw_soup_translated = BeautifulSoup(translate_paragraphs(str(raw_soup), user_preferred_language), "html.parser")
+                # Extract the translated content from the div
+                ack_message_translated = "".join(str(c) for c in raw_soup_translated.div.contents)
+                logger.info(f"Successfully translated acknowledgment message to {_get_language_name(user_preferred_language)} ({user_preferred_language})")
+            except Exception as e:
+                logger.error(f"Error directly translating acknowledgment message: {e}")
+                ack_message_translated = ack_message_raw  # Fallback to original
+            
+            # Now render the email template with the pre-translated content
+            ack_email_html_content = render_to_string(
+                'customer_dashboard/assistant_email_template.html',
+                {
+                    'user_name': user_name_for_template,
+                    'email_body_content': ack_message_translated,  # Already translated content
+                    'profile_url': profile_url_for_template,
+                    'personal_assistant_email': personal_assistant_email_for_template
+                }
+            )
+            
+            # Final pass to ensure all template content is translated
+            try:
+                ack_email_html_content = translate_paragraphs(
+                    ack_email_html_content,
+                    user_preferred_language
+                )
+                logger.info(f"Successfully translated full email HTML to {_get_language_name(user_preferred_language)} ({user_preferred_language})")
+            except Exception as e:
+                logger.error(f"Error translating full email HTML: {e}")
+                # Continue with partially translated content
+            
+            if not unsubscribed:
+                n8n_webhook_url = os.getenv('N8N_EMAIL_REPLY_WEBHOOK_URL')
+                if n8n_webhook_url:
+                    payload = {
+                        'status': 'success', 'action': 'send_pending_message_ack', 
+                        'reply_content': ack_email_html_content,
+                        'recipient_email': pending_message.sender_email,
+                        'from_email': personal_assistant_email_for_template,
+                        'original_subject': ack_subject,
+                        'in_reply_to_header': pending_message.in_reply_to_header,
+                        'email_thread_id': pending_message.email_thread_id
+                    }
+                    try:
+                        requests.post(n8n_webhook_url, json=payload, timeout=10)
+                        logger.info(f"Sent acknowledgment for processed pending message to user {user.id} (recipient: {pending_message.sender_email}).")
+                    except requests.RequestException as e_n8n:
+                        logger.error(f"Failed to send ack for pending message to n8n for user {user.id}: {e_n8n}")
+                else:
+                    logger.warning("N8N_EMAIL_REPLY_WEBHOOK_URL not configured. Cannot send ack for pending message.")
+            else:
+                logger.info(f"User {user.username} has unsubscribed from emails. Skipping acknowledgment email.")
+                
+            # Delete the pending message as it's now processed
+            pending_message.delete()
+            logger.info(f"Deleted processed pending message for token {auth_token}.")
+
+        else:
+            logger.info(f"No pending message found for user {user.username} (token {auth_token}).")
+
+    except Exception as e_pending:
+        # Log error during pending message processing but don't fail the auth if session was created
+        logger.error(f"Error processing pending message for user {user.username} (token {auth_token}): {e_pending}", exc_info=True)
+
+    return Response({
+        'status': 'success',
+        'message': 'Email session activated successfully. If you had a pending message, it is now being processed.'
+    }, status=200)
 
 # Minimal RegisterView to satisfy the test case which expects a 'custom_auth:register' URL
 class RegisterView(View):
@@ -148,21 +321,17 @@ class RegisterView(View):
 def switch_role_api(request):
     # Get the user's role, or create a new one with 'customer' as the default
     user_role, _ = UserRole.objects.get_or_create(user=request.user, defaults={'current_role': 'customer'})
-    print(f"User role: {user_role.current_role}")  # Debug print
     new_role = 'chef' if user_role.current_role == 'customer' and user_role.is_chef else 'customer'
 
-    print(f"User {request.user.username} is trying to switch role to {new_role}.")
 
     # Check if the user can switch to chef
     if new_role == 'chef' and not user_role.is_chef:
-        print(f"User {request.user.username} tried to switch to chef role but is not a chef.")
         return Response({'error': 'You are not a chef.'}, status=400)
 
     # Update the user role
     user_role.current_role = new_role
     user_role.save()
 
-    print(f"User {request.user.username} switched role to {new_role}.")
 
     # Serialize and return the new user role
     serializer = UserRoleSerializer(user_role)
@@ -408,14 +577,8 @@ def update_profile_api(request):
         if 'preferred_language' in user_serializer.validated_data:
             user.preferred_language = user_serializer.validated_data['preferred_language']
 
-        if 'email_daily_instructions' in user_serializer.validated_data:
-            user.email_daily_instructions = user_serializer.validated_data['email_daily_instructions']
-        
-        if 'email_meal_plan_saved' in user_serializer.validated_data:
-            user.email_meal_plan_saved = user_serializer.validated_data['email_meal_plan_saved']
-        
-        if 'email_instruction_generation' in user_serializer.validated_data:
-            user.email_instruction_generation = user_serializer.validated_data['email_instruction_generation']
+        if 'unsubscribed_from_emails' in user_serializer.validated_data:
+            user.unsubscribed_from_emails = user_serializer.validated_data['unsubscribed_from_emails']
 
         if 'emergency_supply_goal' in user_serializer.validated_data:
             user.emergency_supply_goal = user_serializer.validated_data['emergency_supply_goal']
@@ -452,15 +615,51 @@ def update_profile_api(request):
         address_serializer = AddressSerializer(instance=address, data=address_data, partial=True)
         print(f"Address serializer data: {address_serializer.initial_data}")  # Debug print
         if address_serializer.is_valid():
-            address = address_serializer.save(user=user)
-            is_served = address.is_postalcode_served()
+            try:
+                address = address_serializer.save(user=user)
+                is_served = address.is_postalcode_served()
+                return Response(
+                    {
+                        'status': 'success',
+                        'message': 'Profile updated successfully',
+                        'is_served': is_served,
+                    }
+                )
+            except ValidationError as ve:
+                # Build a user‑friendly error payload
+                logger.warning(f"Address validation error during profile update: {ve}")
+                if getattr(ve, "message_dict", None):
+                    # If only non‑field errors (usually under "__all__"), flatten to a plain string
+                    non_field_keys = {"__all__", ""}
+                    if set(ve.message_dict.keys()).issubset(non_field_keys):
+                        flat_msg = " ".join(sum(ve.message_dict.values(), []))
+                        friendly_msg = flat_msg
+                    else:
+                        # Field‑specific errors – return the dict so the UI can highlight fields
+                        friendly_msg = ve.message_dict
+                else:
+                    # .messages is already a list of strings
+                    friendly_msg = " ".join(getattr(ve, "messages", [str(ve)]))
 
-            return Response({'status': 'success', 'message': 'Profile updated successfully', 'is_served': is_served})
+                return Response(
+                    {
+                        "status": "failure",
+                        "message": friendly_msg,
+                    },
+                    status=400,
+                )
         else:
             print(f"Address serializer errors: {address_serializer.errors}")  # Debug print
             return Response({'status': 'failure', 'message': address_serializer.errors}, status=400)
     else:
         return Response({'status': 'success', 'message': 'Profile updated successfully without address data'})
+
+def get_country_code(country_name):
+    # Search through the country dictionary and find the corresponding country code
+    for code, name in countries:
+        if name.lower() == country_name.lower():  # Match ignoring case
+            return code
+    return None  # Return None if the country is not found
 
 def get_country_code(country_name):
     # Search through the country dictionary and find the corresponding country code
@@ -523,6 +722,7 @@ def login_api_view(request):
             'goal_name': goal_name,
             'goal_description': goal_description,
             'country': country,
+            'personal_assistant_email': user.personal_assistant_email,
             'status': 'success',
             'message': 'Logged in successfully'
         }
@@ -994,4 +1194,37 @@ class EmailChangeView(LoginRequiredMixin, View):
         else:
             messages.error(request, "Please correct the error below.")
         return render(request, 'custom_auth/change_email.html', {'form': form})
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def api_available_languages(request):
+    """
+    Returns a list of all languages supported by Django.
+    Each language includes code, name, name_local, and bidi (right-to-left) information.
+    """
+    languages = []
+    
+    for code, info in LANG_INFO.items():
+        # Only include languages with required info
+        if 'name' in info and 'name_local' in info:
+            languages.append({
+                'code': code,
+                'name': info['name'],
+                'name_local': info['name_local'],
+                'bidi': info.get('bidi', False)
+            })
+    
+    # Sort languages by name for easier selection
+    languages.sort(key=lambda x: x['name'])
+    
+    return Response(languages)
+
+def _get_language_name(language_code):
+    """
+    Returns the full language name for a given language code.
+    Falls back to the code itself if the language is not found.
+    """
+    if language_code in LANG_INFO and 'name' in LANG_INFO[language_code]:
+        return LANG_INFO[language_code]['name']
+    return language_code
 

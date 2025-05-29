@@ -7,6 +7,9 @@ connecting them to the existing chef connection functionality in the application
 
 import json
 import logging
+import requests
+import traceback
+import os
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Dict, List, Optional, Any, Union
@@ -23,6 +26,7 @@ from django.core.exceptions import ObjectDoesNotExist
 
 logger = logging.getLogger(__name__)
 
+n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
 # Tool definitions for the OpenAI Responses API
 CHEF_CONNECTION_TOOLS = [
     {
@@ -257,7 +261,8 @@ def find_local_chefs(
         }
 
     except Exception as e:
-        logger.error(f"find_local_chefs({user_id}, {postal_code}) failed: {e}")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"find_local_chefs", "traceback": traceback.format_exc()})
         return {"status": "error", "message": str(e)}
 
 def get_chef_details(chef_id: int) -> Dict[str, Any]:
@@ -301,10 +306,11 @@ def get_chef_details(chef_id: int) -> Dict[str, Any]:
         }
         
     except Exception as e:
-        logger.error(f"Error getting chef details for chef {chef_id}: {str(e)}")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"get_chef_details", "traceback": traceback.format_exc()})
         return {
             "status": "error",
-            "message": f"Failed to get chef details: {str(e)}"
+            "message": f"Failed to get chef details"
         }
 
 def view_chef_meal_events(
@@ -445,13 +451,11 @@ def view_chef_meal_events(
             "message": f"Chef with ID {chef_id} not found"
         }
     except Exception as e:
-        print(f"Unexpected error: {e}")
-        import traceback
-        traceback.print_exc()
-        logger.error(f"Error viewing meal events for chef {chef_id}: {str(e)}")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"view_chef_meal_events", "traceback": traceback.format_exc()})
         return {
             "status": "error",
-            "message": f"Failed to view chef meal events: {str(e)}"
+            "message": f"Failed to view chef meal events"
         }
 
 def place_chef_meal_event_order(
@@ -570,10 +574,11 @@ def place_chef_meal_event_order(
         }
         
     except Exception as e:
-        logger.error(f"Error placing order for user {user_id}, event {meal_event_id}: {str(e)}")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"place_chef_meal_event_order", "traceback": traceback.format_exc()})
         return {
             "status": "error",
-            "message": f"Failed to place order: {str(e)}"
+            "message": f"Failed to place order"
         }
 
 def get_order_details(user_id: int, order_id: int) -> Dict[str, Any]:
@@ -632,7 +637,8 @@ def get_order_details(user_id: int, order_id: int) -> Dict[str, Any]:
     except Order.DoesNotExist:
         return { "status": "error", "message": f"Order with ID {order_id} not found for user {user_id}."}
     except Exception as e:
-        logger.error(f"Error getting order details for user {user_id}, order {order_id}: {str(e)}")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"get_order_details", "traceback": traceback.format_exc()})
         return {
             "status": "error",
             "message": f"Failed to get order details: {str(e)}"
@@ -685,8 +691,9 @@ def update_chef_meal_order(
             }
         }
     except Exception as e:
-        logger.error(f"update_chef_meal_order failed: {e}")
-        return {"status": "error", "message": str(e)}
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"update_chef_meal_order", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": f"Failed to update chef meal order"}
 
 
 # New tool: replace_meal_plan_meal
@@ -830,8 +837,9 @@ def replace_meal_plan_meal(
     except Meal.DoesNotExist:
         return {"status": "error", "message": "Chef meal not found"}
     except Exception as e:
-        logger.error(f"replace_meal_plan_meal failed: {e}")
-        return {"status": "error", "message": str(e)}
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"replace_meal_plan_meal", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": f"Failed to replace meal plan meal"}
 
 # Function to get all chef connection tools
 def get_chef_connection_tools():

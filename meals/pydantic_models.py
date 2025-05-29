@@ -615,6 +615,14 @@ class UsageList(BaseModel):
             ]
         }
 
+#Ingredients Schema
+class Ingredient(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    item_name: str = Field(..., description="Exact name of the pantry item to use.")
+    quantity_used: float = Field(..., description="How many units the recipe calls for.")
+    unit: str = Field(..., description="Unit of measure, e.g. 'cups', 'pieces', 'grams'")
+    notes: Optional[str] = Field(..., description="Any special notes about the ingredient.")
+
 # YouTube Video Ranking Models
 class VideoRankingItem(BaseModel):
     """Individual video ranking information."""
@@ -670,12 +678,12 @@ class MealSlotDirective(BaseModel):
         )
     )
 class MealSlotDirective(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     meal_plan_meal_id: int
     meal_name: str
     change_rules: List[str]
 
-    # ①  make the field optional **without** giving it a default
-    should_remove: bool | None = Field(..., description="True if the slot should be deleted outright.")
+    should_remove: Optional[bool] = Field(..., description="True if the slot should be deleted outright.")
 
     # ②  back-fill the default in a model-level validator
     @model_validator(mode="before")
@@ -713,3 +721,42 @@ class PaymentInfoSchema(BaseModel):
     checkout_url: str = Field(..., description="Checkout URL")
     session_id: str = Field(..., description="Stripe session ID")
     html_button: str = Field(..., description="HTML button containing the full checkout url")
+
+ # --- Meal Modification Schemas ----------------------------------------------
+
+class IngredientChange(BaseModel):
+    """
+    Represents a single ingredient substitution pair.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    original: str = Field(..., description="Original ingredient name that needs substitution")
+    substitute: str = Field(..., description="Chosen substitute ingredient name")
+
+
+class ModifiedMealSchema(BaseModel):
+    """
+    Schema describing a meal that has been adapted with ingredient substitutions.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    modified_name: str = Field(..., description="New name of the adapted meal")
+    modified_description: str = Field(..., description="Updated description of the adapted meal")
+    modified_instructions: str = Field(..., description="Full cooking instructions incorporating substitutions")
+    ingredient_changes: List[IngredientChange] = Field(
+        ..., description="List of ingredient substitution mappings"
+    )
+
+    example: ClassVar[Dict[str, Any]] = {
+        "modified_name": "Gluten‑Free Pancakes",
+        "modified_description": (
+            "Fluffy pancakes adapted to be gluten‑free by replacing wheat flour with oat flour."
+        ),
+        "modified_instructions": (
+            "Combine oat flour, baking powder, milk, and eggs. Cook on a greased skillet "
+            "over medium heat until bubbles form and edges are set, then flip and finish."
+        ),
+        "ingredient_changes": [
+            {"original": "wheat flour", "substitute": "oat flour"}
+        ],
+    }

@@ -6,6 +6,8 @@ connecting them to the existing meal planning functionality in the application.
 """
 
 import json
+import requests
+import os
 import logging
 from datetime import date
 from datetime import datetime, timedelta
@@ -40,6 +42,8 @@ from meals.youtube_api_search import find_youtube_cooking_videos, format_for_str
 from meals.pydantic_models import MealMacroInfo, VideoRankings  # schema validation
 from pydantic import ValidationError
 from django.conf import settings
+from meals.instacart_service import generate_instacart_link as _util_generate_instacart_link
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -401,6 +405,30 @@ MEAL_PLANNING_TOOLS = [
             "additionalProperties": False
         }
     },
+    {
+        "type": "function",
+        "name": "generate_instacart_link_tool",
+        "description": "Generate an Instacart shopping list link from the user's meal plan to buy ingredients",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "integer",
+                    "description": "The ID of the user"
+                },
+                "meal_plan_id": {
+                    "type": "integer",
+                    "description": "The ID of the meal plan to generate the shopping list for"
+                },
+                "postal_code": {
+                    "type": "string",
+                    "description": "Optional postal code for location-based store selection. If not provided, the user's saved postal code will be used."
+                }
+            },
+            "required": ["user_id", "meal_plan_id"],
+            "additionalProperties": False
+        }
+    },
     # TODO: Add one for obtaining a meals macronutrient breakdown
     # TODO: Add one for finding youtube videos about a meal
 ]
@@ -417,6 +445,9 @@ def get_user_info(user_id: int) -> dict:
         return _util_get_user_info(req)
     except Exception as e:
         logger.error(f"get_user_info error for user {user_id}: {e}")
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"get_user_info", "traceback": traceback.format_exc()})
         return {"status": "error", "message": str(e)}
 
 def update_user_info(
@@ -461,6 +492,9 @@ def update_user_info(
         return _util_update_user_info(req)
     except Exception as e:
         logger.error(f"update_user_info error for user {user_id}: {e}")
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"update_user_info", "traceback": traceback.format_exc()})
         return {"status": "error", "message": str(e)}
 
 def create_meal_plan(
@@ -521,6 +555,9 @@ def create_meal_plan(
             return {"status": "success", "meal_plan": data}
     except Exception as e:
         logger.error(f"create_meal_plan error for user {user_id}: {e}")
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"create_meal_plan", "traceback": traceback.format_exc()})
         return {"status": "error", "message": str(e)}
 
 def modify_meal_plan(user_id: int, meal_plan_id: int, day: str = None, meal_type: str = None, 
@@ -600,7 +637,13 @@ def modify_meal_plan(user_id: int, meal_plan_id: int, day: str = None, meal_type
             import traceback
             print(f"DEBUG modify_meal_plan: Error in apply_modifications: {str(e)}")
             print(f"DEBUG modify_meal_plan: Traceback: {traceback.format_exc()}")
-            raise
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"modify_meal_plan", "traceback": traceback.format_exc()})
+            return {
+                "status": "error",
+                "message": f"Failed to modify meal plan"
+            }
         
         # Fetch the updated meal plan meals to return in the response
         meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=updated_meal_plan).select_related("meal")
@@ -631,13 +674,13 @@ def modify_meal_plan(user_id: int, meal_plan_id: int, day: str = None, meal_type
         }
         
     except Exception as e:
-        import traceback
-        print(f"DEBUG modify_meal_plan: Error: {str(e)}")
-        print(f"DEBUG modify_meal_plan: Traceback: {traceback.format_exc()}")
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"modify_meal_plan", "traceback": traceback.format_exc()})
         logger.error(f"Error modifying meal plan {meal_plan_id} for user {user_id}: {str(e)}")
         return {
             "status": "error",
-            "message": f"Failed to modify meal plan: {str(e)}"
+            "message": f"Failed to modify meal plan"
         }
 
 def get_meal_details(meal_id: int) -> Dict[str, Any]:
@@ -674,9 +717,12 @@ def get_meal_details(meal_id: int) -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"Error getting meal details: {str(e)}")
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"get_meal_details", "traceback": traceback.format_exc()})
         return {
             "status": "error",
-            "message": f"Failed to get meal details: {str(e)}"
+            "message": f"Failed to get meal details"
         }
 
 def get_meal_plan_meals_info(user_id: int, meal_plan_id: int) -> Dict[str, Any]:
@@ -707,9 +753,12 @@ def get_meal_plan_meals_info(user_id: int, meal_plan_id: int) -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"Error getting meal plan meals info: {str(e)}")
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"get_meal_plan_meals_info", "traceback": traceback.format_exc()})
         return {
             "status": "error",
-            "message": str(e)
+            "message": f"Failed to get meal plan meals info"
         }
 
 def get_meal_plan(user_id: int, meal_plan_id: int = None) -> Dict[str, Any]:
@@ -730,7 +779,10 @@ def get_meal_plan(user_id: int, meal_plan_id: int = None) -> Dict[str, Any]:
         return _util_get_meal_plan(req)
     except Exception as e:
         logger.error(f"get_meal_plan error for user {user_id}: {e}")
-        return {"status": "error", "message": str(e)}
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"get_meal_plan", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": f"Failed to get meal plan"}
 
 def email_generate_meal_instructions(user_id: int, meal_plan_id: int, day: str = None, 
                               meal_type: str = None) -> Dict[str, Any]:
@@ -784,9 +836,12 @@ def email_generate_meal_instructions(user_id: int, meal_plan_id: int, day: str =
         
     except Exception as e:
         logger.error(f"Error generating instructions for meal plan {meal_plan_id}: {str(e)}")
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"email_generate_meal_instructions", "traceback": traceback.format_exc()})
         return {
             "status": "error",
-            "message": f"Failed to generate instructions: {str(e)}"
+            "message": f"Failed to generate instructions"
         }
 
 def get_current_date() -> dict:
@@ -805,7 +860,10 @@ def list_upcoming_meals(user_id: int) -> dict:
         return _util_list_upcoming_meals(req)
     except Exception as e:
         logger.error(f"list_upcoming_meals error for user {user_id}: {e}")
-        return {"status": "error", "message": str(e)}
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"list_upcoming_meals", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": f"Failed to list upcoming meals"}
 
 def find_nearby_supermarkets(user_id: int) -> dict:
     """
@@ -818,7 +876,10 @@ def find_nearby_supermarkets(user_id: int) -> dict:
         return _util_find_nearby_supermarkets(req)
     except Exception as e:
         logger.error(f"find_nearby_supermarkets error for user_id {user_id}: {e}")
-        return {"status": "error", "message": str(e)}
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"find_nearby_supermarkets", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": f"Failed to find nearby supermarkets"}
 
 def stream_meal_instructions(
     user_id: int,
@@ -847,9 +908,12 @@ def stream_meal_instructions(
         )
     except Exception as e:
         logger.error(f"Error in stream_meal_instructions for meal plan {meal_plan_id}: {str(e)}")
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"stream_meal_instructions", "traceback": traceback.format_exc()})
         return {
             "status": "error",
-            "message": f"Failed to generate streaming instructions: {str(e)}"
+            "message": f"Failed to generate streaming instructions"
         }
 
 def stream_bulk_prep_instructions(
@@ -875,9 +939,12 @@ def stream_bulk_prep_instructions(
         }
     except Exception as e:
         logger.error(f"Error generating bulk prep instructions: {str(e)}")
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"stream_bulk_prep_instructions", "traceback": traceback.format_exc()})
         return {
             "status": "error",
-            "message": f"Error generating bulk prep instructions: {str(e)}"
+            "message": f"Failed to generate bulk prep instructions"
         }
 
 def get_meal_macro_info(meal_id: int) -> Dict[str, Any]:
@@ -921,7 +988,10 @@ def get_meal_macro_info(meal_id: int) -> Dict[str, Any]:
         return {"status": "error", "message": f"Meal {meal_id} not found."}
     except Exception as e:
         logger.error(f"get_meal_macro_info error: {e}")
-        return {"status": "error", "message": str(e)}
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"get_meal_macro_info", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": f"Failed to get meal macro info"}
 
 def find_related_youtube_videos(meal_id: int, max_results: int = 5) -> Dict[str, Any]:
     """
@@ -979,7 +1049,25 @@ def find_related_youtube_videos(meal_id: int, max_results: int = 5) -> Dict[str,
         return {"status": "error", "message": f"Meal {meal_id} not found."}
     except Exception as e:
         logger.error(f"find_related_youtube_videos error: {e}")
-        return {"status": "error", "message": str(e)}
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"find_related_youtube_videos", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": f"Failed to find related youtube videos"}
+
+def generate_instacart_link_tool(user_id: int, meal_plan_id: int, postal_code: str = None) -> Dict[str, Any]:
+    """
+    Generate an Instacart shopping list link from the user's meal plan to buy ingredients
+    """
+    try:
+        req = HttpRequest()
+        req.data = {"user_id": user_id, "meal_plan_id": meal_plan_id, "postal_code": postal_code}
+        return _util_generate_instacart_link(req)
+    except Exception as e:
+        logger.error(f"generate_instacart_link error: {e}")
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_instacart_link_tool", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": f"Failed to generate instacart link"}
 
 # Function to get all meal planning tools
 def get_meal_planning_tools():

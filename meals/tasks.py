@@ -17,37 +17,39 @@ import stripe
 from .models import ChefMealEvent, ChefMealOrder, PaymentLog, STATUS_COMPLETED
 import pytz
 from customer_dashboard.models import CustomUser
+from openai import OpenAI
+import time
+from .celery_utils import handle_task_failure
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 @shared_task
+@handle_task_failure
 def queue_system_update_email(system_update_id, test_mode=False, admin_id=None):
     """
     Queue system update emails through Celery
     """
     print(f"Queueing system update email for {system_update_id}")
     from meals.email_service import send_system_update_email
-    try:
-        system_update = SystemUpdate.objects.get(id=system_update_id)
-        
-        if test_mode and admin_id:
-            # Send test email only to admin
-            send_system_update_email.delay(
-                subject=system_update.subject,
-                message=system_update.message,
-                user_ids=[admin_id]
-            )
-        else:
-            # Send to all users
-            send_system_update_email.delay(
-                subject=system_update.subject,
-                message=system_update.message
-            )
-            print(f"System update email queued for all users!")
-        return True
-    except SystemUpdate.DoesNotExist:
-        return False
+    
+    system_update = SystemUpdate.objects.get(id=system_update_id)
+    
+    if test_mode and admin_id:
+        # Send test email only to admin
+        send_system_update_email.delay(
+            subject=system_update.subject,
+            message=system_update.message,
+            user_ids=[admin_id]
+        )
+    else:
+        # Send to all users
+        send_system_update_email.delay(
+            subject=system_update.subject,
+            message=system_update.message
+        )
+        print(f"System update email queued for all users!")
+    return True
 
 @shared_task
 def sync_all_chef_payments():
@@ -182,6 +184,7 @@ def process_chef_meal_price_adjustments():
     return {'processed': total_processed, 'total_refunded': str(total_refunded)}
 
 @shared_task
+@handle_task_failure
 def generate_daily_user_summaries():
     """
     Task to generate daily summaries for all active users.
@@ -303,6 +306,372 @@ def capture_payment_intents(event_id):
                 logger.error(f"Failed to capture payment for order {order.id}: {str(e)}")
         else:
             logger.warning(f"No payment intent found for order {order.id}")
+
+@shared_task
+@handle_task_failure
+def create_weekly_chat_threads():
+    """
+    Task to create new chat threads for all active users at the start of each week.
+    
+    This should be scheduled to run every Monday morning.
+    """
+    from customer_dashboard.models import ChatThread, WeeklyAnnouncement, UserMessage
+    from custom_auth.models import CustomUser
+    from meals.meal_assistant_implementation import MealPlanningAssistant
+    from django.utils import timezone
+    from datetime import timedelta, date
+    
+    logger = logging.getLogger(__name__)
+    
+    # Get all authenticated users with email confirmed
+    active_users = CustomUser.objects.filter(email_confirmed=True)
+    today = timezone.localdate()
+    
+    # Only run on Mondays
+    if today.weekday() != 0:  # 0 = Monday
+        logger.info(f"create_weekly_chat_threads: Today is not Monday, skipping")
+        return
+    
+    logger.info(f"Creating new weekly chat threads for {active_users.count()} active users")
+    threads_created = 0
+    threads_with_announcements = 0
+    
+    for user in active_users:
+        try:
+            # Mark old threads as inactive
+            ChatThread.objects.filter(user=user, is_active=True).update(is_active=False)
+            
+            # Create a new thread for this week
+            week_end = today + timedelta(days=6)
+            thread = ChatThread.objects.create(
+                user=user,
+                title=f"Conversation for week of {today.strftime('%b %d')} - {week_end.strftime('%b %d')}",
+                is_active=True
+            )
+            threads_created += 1
+            
+            # Add initial context about weekly announcements if available
+            today_iso = today.isocalendar()
+            week_start = date.fromisocalendar(today_iso[0], today_iso[1], 1)  # Monday
+            
+            # Get global and country-specific announcements
+            country_code = user.address.country.code if hasattr(user, 'address') and user.address and user.address.country else ""
+            announcements = []
+            
+            global_announcement = WeeklyAnnouncement.objects.filter(
+                week_start=week_start,
+                country__isnull=True
+            ).first()
+            
+            if global_announcement:
+                announcements.append(global_announcement.content)
+                
+            if country_code:
+                country_announcement = WeeklyAnnouncement.objects.filter(
+                    week_start=week_start,
+                    country=country_code
+                ).first()
+                
+                if country_announcement:
+                    announcements.append(country_announcement.content)
+            
+            # If we have announcements, add context to the thread history
+            if announcements:
+                threads_with_announcements += 1
+                # Initialize the thread with system message and announcement context
+                assistant = MealPlanningAssistant(user_id=user.id)
+                
+                announcements_text = '\n\n'.join(announcements)
+                history = [
+                    {"role": "system", "content": assistant.system_message},
+                    {"role": "system", "content": f"Weekly Announcements:\n{announcements_text}"}
+                ]
+                
+                thread.openai_input_history = history
+                thread.save(update_fields=['openai_input_history'])
+                
+                # Add the announcement as an assistant message
+                announcement_text = '\n\n'.join(announcements)
+                formatted_announcement = (
+                    f"Hi {user.first_name},\n\n"
+                    f"Welcome to a new week! Here are some important announcements:\n\n"
+                    f"{announcement_text}\n\n"
+                    f"Let me know if you need any assistance with your meal planning this week!"
+                )
+                
+                UserMessage.objects.create(
+                    user=user,
+                    thread=thread,
+                    message="",  # Empty user message since this is assistant-initiated
+                    response=formatted_announcement
+                )
+        except Exception as e:
+            logger.error(f"Error creating weekly chat thread for user {user.id}: {str(e)}")
+    
+    logger.info(f"Weekly chat thread creation completed. Created {threads_created} new threads, {threads_with_announcements} with announcements.")
+    return {
+        "threads_created": threads_created,
+        "threads_with_announcements": threads_with_announcements
+    }
+
+@shared_task
+@handle_task_failure
+def generate_user_chat_summaries():
+    """
+    Generate or update consolidated chat summaries for all active users.
+    
+    This task consolidates individual chat session summaries into a comprehensive user
+    chat summary that provides context for the assistant in future conversations.
+    Should be run once a day or after weekly chat thread reset.
+    """
+    from customer_dashboard.models import UserChatSummary, ChatSessionSummary, CustomUser
+    from meals.meal_assistant_implementation import MealPlanningAssistant
+    import time
+    
+    logger = logging.getLogger(__name__)
+    
+    # Get all users with confirmed emails
+    active_users = CustomUser.objects.filter(email_confirmed=True)
+    logger.info(f"Generating chat summaries for {active_users.count()} active users")
+    
+    updated_count = 0
+    created_count = 0
+    error_count = 0
+    
+    for user in active_users:
+        try:
+            # First check if we should update this user's summary
+            existing_summary = UserChatSummary.objects.filter(user=user).first()
+            
+            # Get the latest session summaries for this user
+            session_summaries = ChatSessionSummary.objects.filter(
+                user=user,
+                status=ChatSessionSummary.COMPLETED
+            ).order_by('-summary_date')[:5]  # Get up to 5 most recent session summaries
+            
+            # If no session summaries, skip
+            if not session_summaries.exists():
+                logger.debug(f"No session summaries found for user {user.id}, skipping")
+                continue
+            
+            # Check if summary exists and is up to date
+            if existing_summary:
+                latest_session_date = session_summaries.first().summary_date
+                if existing_summary.last_summary_date and existing_summary.last_summary_date >= latest_session_date:
+                    logger.debug(f"User {user.id} chat summary is already up to date")
+                    continue
+            
+            # Need to generate or update summary
+            # Extract the content from each session summary
+            session_texts = [f"{s.summary_date.strftime('%Y-%m-%d')}: {s.summary}" 
+                            for s in session_summaries if s.summary]
+            
+            if not session_texts:
+                continue
+                
+            # Create a prompt for OpenAI to consolidate these summaries
+            client = OpenAI(api_key=settings.OPENAI_KEY)
+            
+            # Create a prompt that asks to create a consolidated user summary
+            prompt = (
+                "Create a comprehensive summary of user's chat history and behaviors based on these session summaries. "
+                "Focus on providing a concise, clear understanding of the user's food preferences, dietary habits, "
+                "meal planning patterns, goals, and conversations with the assistant.\n\n"
+                "This should be no longer than 500 words.\n\n"
+                "Session summaries:\n" + "\n\n".join(session_texts)
+            )
+            
+            # Call OpenAI API to generate consolidated summary
+            try:
+                response = client.responses.create(
+                    model="gpt-4.1-mini",
+                    input=[
+                        {"role": "system", "content": "You are an assistant that creates concise user summaries from chat data."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    stream=False
+                )
+                
+                # Extract the generated summary
+                consolidated_summary = getattr(response, "output_text", "").strip()
+                
+                if not consolidated_summary:
+                    logger.warning(f"Empty summary generated for user {user.id}")
+                    error_count += 1
+                    continue
+                
+                # Create or update the user's chat summary
+                if existing_summary:
+                    existing_summary.summary = consolidated_summary
+                    existing_summary.status = UserChatSummary.COMPLETED
+                    existing_summary.last_summary_date = session_summaries.first().summary_date
+                    existing_summary.save()
+                    updated_count += 1
+                    logger.info(f"Updated chat summary for user {user.id}")
+                else:
+                    UserChatSummary.objects.create(
+                        user=user,
+                        summary=consolidated_summary,
+                        status=UserChatSummary.COMPLETED,
+                        last_summary_date=session_summaries.first().summary_date
+                    )
+                    created_count += 1
+                    logger.info(f"Created new chat summary for user {user.id}")
+                
+                # Sleep briefly to avoid rate limits
+                time.sleep(0.5)
+                
+            except Exception as e:
+                logger.error(f"Error generating consolidated summary for user {user.id}: {str(e)}")
+                error_count += 1
+                
+        except Exception as e:
+            logger.error(f"Error processing chat summaries for user {user.id}: {str(e)}")
+            error_count += 1
+    
+    logger.info(f"Chat summary generation completed: {created_count} created, {updated_count} updated, {error_count} errors")
+    return {
+        "created": created_count,
+        "updated": updated_count,
+        "errors": error_count
+    }
+
+@shared_task
+def generate_chat_session_summaries():
+    """
+    Generate summaries for individual chat sessions.
+    
+    This task should run daily to create summaries of active chat threads.
+    These session summaries are then used to build the comprehensive user chat summary.
+    """
+    from customer_dashboard.models import ChatSessionSummary, ChatThread, UserMessage
+    from django.db.models import Max, Q
+    from openai import OpenAI
+    import time
+    from datetime import timedelta
+    
+    logger = logging.getLogger(__name__)
+    
+    # Get the date for yesterday (to ensure complete conversations)
+    yesterday = timezone.localdate() - timedelta(days=1)
+    
+    # Get active chat threads from yesterday that don't have summaries yet
+    chat_threads = ChatThread.objects.filter(
+        Q(created_at__date=yesterday) | Q(is_active=True)
+    ).exclude(
+        # Exclude threads that already have summaries for yesterday
+        summaries__summary_date=yesterday,
+        summaries__status=ChatSessionSummary.COMPLETED
+    )
+    
+    logger.info(f"Found {chat_threads.count()} chat threads to summarize")
+    
+    summaries_created = 0
+    errors = 0
+    
+    client = OpenAI(api_key=settings.OPENAI_KEY)
+    
+    for thread in chat_threads:
+        try:
+            # Get messages for this thread from yesterday
+            messages = UserMessage.objects.filter(
+                thread=thread,
+                created_at__date=yesterday
+            ).order_by('created_at')
+            
+            # Skip if no messages were found
+            if not messages.exists():
+                logger.debug(f"No messages found for thread {thread.id} on {yesterday}, skipping")
+                continue
+            
+            # Check if we already have a pending summary
+            existing_summary = ChatSessionSummary.objects.filter(
+                thread=thread,
+                summary_date=yesterday
+            ).first()
+            
+            if existing_summary and existing_summary.status == ChatSessionSummary.COMPLETED:
+                logger.debug(f"Summary already exists for thread {thread.id} on {yesterday}")
+                continue
+            
+            # Format the conversation into a string for the model
+            conversation = []
+            for msg in messages:
+                if msg.message:  # User message
+                    conversation.append(f"User: {msg.message}")
+                if msg.response:  # Assistant response
+                    conversation.append(f"Assistant: {msg.response}")
+            
+            # Skip if the conversation is too short
+            if len(conversation) < 2:  # Need at least a message and response
+                logger.debug(f"Conversation too short for thread {thread.id}, skipping")
+                continue
+            
+            conversation_text = "\n\n".join(conversation)
+            
+            # Prepare prompt for OpenAI
+            prompt = (
+                "Create a concise but comprehensive summary of this conversation between a user and the meal planning assistant. "
+                "Focus on key points discussed, any meal preferences mentioned, dietary needs, requests made, "
+                "and decisions or actions taken. This summary will be used to maintain context across conversations. "
+                "Keep the summary between 150-300 words.\n\n"
+                f"Conversation:\n{conversation_text}\n\n"
+                "Summary:"
+            )
+            
+            # Call OpenAI API
+            try:
+                response = client.responses.create(
+                    model="gpt-4.1-mini", # Use a smaller model for summaries
+                    input=[
+                        {"role": "system", "content": "You are an assistant that summarizes conversations accurately and concisely."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    stream=False
+                )
+                
+                # Extract the summary
+                summary_text = getattr(response, "output_text", "").strip()
+                
+                if not summary_text:
+                    logger.warning(f"Empty summary generated for thread {thread.id}")
+                    continue
+                
+                # Create or update the summary
+                if existing_summary:
+                    existing_summary.summary = summary_text
+                    existing_summary.status = ChatSessionSummary.COMPLETED
+                    existing_summary.last_message_processed = messages.last().created_at
+                    existing_summary.save()
+                else:
+                    ChatSessionSummary.objects.create(
+                        user=thread.user,
+                        thread=thread,
+                        summary_date=yesterday,
+                        summary=summary_text,
+                        status=ChatSessionSummary.COMPLETED,
+                        last_message_processed=messages.last().created_at
+                    )
+                
+                summaries_created += 1
+                logger.info(f"Created summary for thread {thread.id}, user {thread.user.id}")
+                
+                # Sleep briefly to avoid rate limits
+                time.sleep(0.5)
+                
+            except Exception as e:
+                logger.error(f"Error generating summary for thread {thread.id}: {str(e)}")
+                errors += 1
+                
+        except Exception as e:
+            logger.error(f"Error processing thread {thread.id}: {str(e)}")
+            errors += 1
+    
+    logger.info(f"Chat session summary generation completed: {summaries_created} created, {errors} errors")
+    return {
+        "summaries_created": summaries_created,
+        "errors": errors
+    }
 
 
 

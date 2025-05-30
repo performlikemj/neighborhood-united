@@ -837,10 +837,18 @@ class MealPlanningAssistant:
         # ── CRITICAL HEX CODE CLEANING FOR COOKING INSTRUCTIONS ──────────────────
         # Fix dangerous hex codes that appear in cooking instructions (e.g., "425f" -> "425°F")
         temp_hex_patterns = [
-            (r'(\d{2,3})f\b', r'\1°F'),                              # 425f -> 425°F
-            (r'(\d{2,3})b0C\b', r'\1°C'),                           # 220b0C -> 220°C  
-            (r'(\d{2,3})[a-fA-F0-9]{1,4}([CF])\b', r'\1°\2'),      # Generic hex temps
-            (r'(\d{1,2})[a-fA-F0-9]{2}(min|hrs?|cups?|tsp|tbsp)\b', r'\1 \2'),  # Measurements
+            # ONLY keep the most specific and safe temperature patterns
+            (r'(\d{3})f\b', r'\1°F'),                               # 425f -> 425°F (only 3 digits)
+            (r'(\d{3})F\b', r'\1°F'),                               # 425F -> 425°F (only 3 digits)
+            (r'(\d{3})b0C\b', r'\1°C'),                            # 220b0C -> 220°C (very specific)
+            (r'(\d{3})B0C\b', r'\1°C'),                            # 220B0C -> 220°C (very specific)
+            # Disable aggressive patterns that corrupt normal words:
+            # (r'(\d{2,3})[a-fA-F0-9]{1,4}([CF])\b', r'\1°\2'),  # DISABLED - too aggressive
+            # (r'(\d{2,3})[a-fA-F]{1,3}([CF])\b', r'\1°\2'),     # DISABLED - too aggressive
+            # (r'(\d{1,2})[a-fA-F0-9]{2}(min|minutes?|hrs?|hours?)\b', r'\1 \2'),  # DISABLED
+            # (r'(\d{1,2})[a-fA-F0-9]{2}(cups?|tbsp|tsp|oz|lbs?|kg|g)\b', r'\1 \2'),  # DISABLED
+            # Only very specific fraction fix
+            (r'(\d+)\/(\d+)a0\b', r'\1/\2'),                       # 1/2a0 -> 1/2 (very specific)
         ]
         for pattern, replacement in temp_hex_patterns:
             formatted_text = re.sub(pattern, replacement, formatted_text)
@@ -1216,21 +1224,18 @@ class MealPlanningAssistant:
         
         # Critical temperature hex patterns that can be dangerous
         temp_hex_patterns = [
-            # Core temperature patterns
-            (r'(\d{2,3})f\b', r'\1°F'),                              # 425f -> 425°F
-            (r'(\d{2,3})F\b', r'\1°F'),                              # 425F -> 425°F  
-            (r'(\d{2,3})b0C\b', r'\1°C'),                           # 220b0C -> 220°C
-            (r'(\d{2,3})B0C\b', r'\1°C'),                           # 220B0C -> 220°C
-            (r'(\d{2,3})c\b', r'\1°C'),                             # 220c -> 220°C
-            (r'(\d{2,3})C\b', r'\1°C'),                             # 220C -> 220°C
-            # Complex hex temperature patterns 
-            (r'(\d{2,3})[a-fA-F0-9]{1,4}([CF])\b', r'\1°\2'),      # Catches hex sequences before F/C
-            (r'(\d{2,3})[a-fA-F]{1,3}([CF])\b', r'\1°\2'),         # Hex letters only before F/C
-            # Time and measurement corruptions
-            (r'(\d{1,2})[a-fA-F0-9]{2}(min|minutes?|hrs?|hours?)\b', r'\1 \2'),
-            (r'(\d{1,2})[a-fA-F0-9]{2}(cups?|tbsp|tsp|oz|lbs?|kg|g)\b', r'\1 \2'),
-            # Fraction corruptions in measurements  
-            (r'(\d+)\/(\d+)[a-fA-F0-9]+', r'\1/\2'),               # 1/2a0 -> 1/2
+            # ONLY keep the most specific and safe temperature patterns
+            (r'(\d{3})f\b', r'\1°F'),                               # 425f -> 425°F (only 3 digits)
+            (r'(\d{3})F\b', r'\1°F'),                               # 425F -> 425°F (only 3 digits)
+            (r'(\d{3})b0C\b', r'\1°C'),                            # 220b0C -> 220°C (very specific)
+            (r'(\d{3})B0C\b', r'\1°C'),                            # 220B0C -> 220°C (very specific)
+            # Disable aggressive patterns that corrupt normal words:
+            # (r'(\d{2,3})[a-fA-F0-9]{1,4}([CF])\b', r'\1°\2'),  # DISABLED - too aggressive
+            # (r'(\d{2,3})[a-fA-F]{1,3}([CF])\b', r'\1°\2'),     # DISABLED - too aggressive
+            # (r'(\d{1,2})[a-fA-F0-9]{2}(min|minutes?|hrs?|hours?)\b', r'\1 \2'),  # DISABLED
+            # (r'(\d{1,2})[a-fA-F0-9]{2}(cups?|tbsp|tsp|oz|lbs?|kg|g)\b', r'\1 \2'),  # DISABLED
+            # Only very specific fraction fix
+            (r'(\d+)\/(\d+)a0\b', r'\1/\2'),                       # 1/2a0 -> 1/2 (very specific)
         ]
         
         for pattern, replacement in temp_hex_patterns:
@@ -1265,13 +1270,14 @@ class MealPlanningAssistant:
         
         # Additional cooking-specific hex fixes
         cooking_specific_fixes = [
-            # Fix corrupted quotes around ingredients
-            (r'[a-fA-F0-9]{2,4}"([^"]+)"[a-fA-F0-9]{2,4}', r'"\1"'),
-            # Fix corrupted apostrophes in contractions
-            (r"(\w+)[a-fA-F0-9]{2}(s|t|re|ve|ll|d)\b", r"\1'\2"),
-            # Fix corrupted hyphens in compound words
-            (r'(\w+)[a-fA-F0-9]{2,4}(\w+)', r'\1-\2'),
-            # Fix temperature format variations
+            # Fix ONLY obvious hex corruptions with specific patterns
+            # Fix quotes ONLY when surrounded by clear hex patterns (2+ hex chars)
+            (r'[a-fA-F0-9]{3,}"([^"]+)"[a-fA-F0-9]{3,}', r'"\1"'),
+            # Fix apostrophes ONLY in very specific contractions with obvious hex corruption
+            (r"(\w{3,})[a-fA-F0-9]{3,}(t|re|ve|ll|d)\b", r"\1'\2"),
+            # Fix hyphens ONLY when there are obvious hex sequences (3+ chars) between words
+            (r'(\w{3,})[a-fA-F0-9]{3,}(\w{3,})', r'\1-\2'),
+            # Fix temperature format variations (these are safe)
             (r'(\d+)\s*degrees?\s*([CF])', r'\1°\2'),
             (r'(\d+)\s*deg\s*([CF])', r'\1°\2'),
         ]

@@ -266,22 +266,32 @@ REDIS_PASSWORD = os.getenv('REDIS_PASSWORD')
 DJANGO_REDIS_LOG_IGNORED_EXCEPTIONS = True
 DJANGO_REDIS_LOGGER = 'django.request'
 
-CACHES = {
-    'default': {
-        'BACKEND': 'django_redis.cache.RedisCache',
-        # If REDIS_URL already contains a scheme (`rediss://`) just use it;
-        # otherwise fall back to adding one. This keeps both utils.quotas and Django‑redis happy.
-        'LOCATION': f"{REDIS_URL if REDIS_URL.startswith(('rediss://')) else 'rediss://'+REDIS_URL+':6380/0'}?ssl_cert_reqs=required",
-        'OPTIONS': {
-            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
-            'PASSWORD': REDIS_PASSWORD,
-            'SOCKET_CONNECT_TIMEOUT': 15,  # Try increasing to 15 seconds
-            'SOCKET_TIMEOUT': 15,  # Similarly increase to 15 seconds
-            'RETRY_ON_TIMEOUT': True,  # Retry on timeout
-            'SOCKET_KEEPALIVE': True,  # Keep the connection alive
+# Cache configuration - handle missing Redis URL for CI/testing
+if REDIS_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django_redis.cache.RedisCache',
+            # If REDIS_URL already contains a scheme (`rediss://`) just use it;
+            # otherwise fall back to adding one. This keeps both utils.quotas and Django‑redis happy.
+            'LOCATION': f"{REDIS_URL if REDIS_URL.startswith(('rediss://')) else 'rediss://'+REDIS_URL+':6380/0'}?ssl_cert_reqs=required",
+            'OPTIONS': {
+                'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+                'PASSWORD': REDIS_PASSWORD,
+                'SOCKET_CONNECT_TIMEOUT': 15,  # Try increasing to 15 seconds
+                'SOCKET_TIMEOUT': 15,  # Similarly increase to 15 seconds
+                'RETRY_ON_TIMEOUT': True,  # Retry on timeout
+                'SOCKET_KEEPALIVE': True,  # Keep the connection alive
+            }
         }
     }
-}
+else:
+    # Fallback cache for CI/testing when Redis is not available
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'unique-snowflake',
+        }
+    }
 
 # Celery settings
 CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL')

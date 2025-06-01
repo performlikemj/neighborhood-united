@@ -4,7 +4,7 @@ import traceback
 import requests
 from django.conf import settings
 from celery import shared_task
-
+import os
 logger = logging.getLogger(__name__)
 
 def handle_task_failure(task_func):
@@ -24,7 +24,7 @@ def handle_task_failure(task_func):
             logger.error(f"Task {task_func.__name__} failed: {str(e)}\nTraceback:\n{tb}")
             
             # Send traceback to N8N webhook if configured
-            n8n_traceback_url = getattr(settings, 'N8N_TRACEBACK_URL', None)
+            n8n_traceback_url = os.getenv('N8N_TRACEBACK_URL', '')
             if n8n_traceback_url:
                 try:
                     requests.post(n8n_traceback_url, json={

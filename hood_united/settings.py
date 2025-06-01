@@ -266,7 +266,7 @@ REDIS_PASSWORD = os.getenv('REDIS_PASSWORD')
 DJANGO_REDIS_LOG_IGNORED_EXCEPTIONS = True
 DJANGO_REDIS_LOGGER = 'django.request'
 
-CACHE = {
+CACHES = {
     'default': {
         'BACKEND': 'django_redis.cache.RedisCache',
         # If REDIS_URL already contains a scheme (`rediss://`) just use it;

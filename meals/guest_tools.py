@@ -195,7 +195,7 @@ def guest_search_ingredients(query: str) -> Dict[str, Any]:
             for ingr in matches
         ]
         return {"status": "success", "query": query, "ingredients": results}
-    except Exception as e:
+    except Exception as e: 
         # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
         requests.post(n8n_traceback_url, json={"error": str(e), "source":"guest_search_ingredients", "traceback": traceback.format_exc()})
         return {"status": "error", "message": f"Failed to search ingredients"}

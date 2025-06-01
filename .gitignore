@@ -50,3 +50,4 @@ django_warnings*
 celerybeat*
 sautai_dump*
 celery-celery*
+/.hood/

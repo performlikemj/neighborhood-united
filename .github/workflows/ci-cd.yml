@@ -201,7 +201,8 @@ jobs:
           echo "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
-          rsync -avz --delete -e "ssh -i /tmp/deploy_key" \
+          rsync -avz --delete --compare-dest=$REMOTE_COMPARE_PATH \
+            -e "ssh -i /tmp/deploy_key" \
             ./ $SSH_USER@$SSH_HOST:/var/www/myapp
 
           ssh -i /tmp/deploy_key $SSH_USER@$SSH_HOST "
@@ -215,3 +216,4 @@ jobs:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_KEY: ${{ secrets.SSH_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          REMOTE_COMPARE_PATH: ${{ secrets.REMOTE_COMPARE_PATH }}

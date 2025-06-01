@@ -488,319 +488,320 @@ def create_meal_plan_for_user(
             logger.error(f"[{request_id}] Error creating meal plan for user {user.username}: {str(e)}")
             return None
 
-    user_id = user.id
-    
-    # These operations can be outside the transaction since we now have a valid meal plan
-    meal_types = ['Breakfast', 'Lunch', 'Dinner']
+        user_id = user.id
+        
+        # These operations need to be inside the same transaction to prevent race conditions
+        meal_types = ['Breakfast', 'Lunch', 'Dinner']
 
-    # parse prompt into structured map 
-    allowed_map = None
-    if user_prompt:
-        input = [
-            {
-                "role": "developer",
-                "content": (
-                    "You are responsible for understanding a user's request and turning it into a mapped list of meal day and meal type where applicable. Do not include meal days or types where the user did not specify. "
-                )
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Please use my prompt to create a list of meal days and meal types that I should plan for the week. "
-                    f"Prompt: {user_prompt} and days to plan: {days_to_plan if days_to_plan else 'None'} and number of days: {number_of_days if number_of_days else 'None'}"
-                )
-            }
-        ]
-        call = client.responses.create(
-            model="gpt-4.1-mini",
-            input=input,
-            text={
-                "format": {
-                    'type': 'json_schema',
-                    'name': 'meal_map',
-                    'schema': PromptMealMap.model_json_schema()
+        # parse prompt into structured map 
+        allowed_map = None
+        if user_prompt:
+            input = [
+                {
+                    "role": "developer",
+                    "content": (
+                        "You are responsible for understanding a user's request and turning it into a mapped list of meal day and meal type where applicable. Do not include meal days or types where the user did not specify. "
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Please use my prompt to create a list of meal days and meal types that I should plan for the week. "
+                        f"Prompt: {user_prompt} and days to plan: {days_to_plan if days_to_plan else 'None'} and number of days: {number_of_days if number_of_days else 'None'}"
+                    )
                 }
+            ]
+            call = client.responses.create(
+                model="gpt-4.1-mini",
+                input=input,
+                text={
+                    "format": {
+                        'type': 'json_schema',
+                        'name': 'meal_map',
+                        'schema': PromptMealMap.model_json_schema()
+                    }
+                }
+            )
+            parsed = PromptMealMap.model_validate_json(call.output_text)
+            allowed_map = {(s.day, s.meal_type.value): True for s in parsed.slots}
+                
+        existing_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan).select_related('meal')
+        existing_meal_names = set(existing_meals.values_list('meal__name', flat=True))
+        existing_meal_embeddings = list(existing_meals.values_list('meal__meal_embedding', flat=True))
+
+        skipped_meal_ids = set()
+        used_pantry_item = False  # ADDED
+
+        # Determine and normalize the valid days to plan for
+        if start_of_week and end_of_week:
+            # 1) Build the set of actual weekdays in the span
+            valid_week_days = {
+                (start_of_week + timedelta(days=i)).strftime("%A")
+                for i in range((end_of_week - start_of_week).days + 1)
             }
-        )
-        parsed = PromptMealMap.model_validate_json(call.output_text)
-        allowed_map = {(s.day, s.meal_type.value): True for s in parsed.slots}
-            
-    existing_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan).select_related('meal')
-    existing_meal_names = set(existing_meals.values_list('meal__name', flat=True))
-    existing_meal_embeddings = list(existing_meals.values_list('meal__meal_embedding', flat=True))
+        else:
+            logger.error(f"[{request_id}] Cannot determine planning days. Need start/end dates or explicit days_to_plan.")
+            meal_plan.delete()
+            return None
 
-    skipped_meal_ids = set()
-    used_pantry_item = False  # ADDED
-
-    # Determine and normalize the valid days to plan for
-    if start_of_week and end_of_week:
-        # 1) Build the set of actual weekdays in the span
-        valid_week_days = {
-            (start_of_week + timedelta(days=i)).strftime("%A")
-            for i in range((end_of_week - start_of_week).days + 1)
-        }
-    else:
-        logger.error(f"[{request_id}] Cannot determine planning days. Need start/end dates or explicit days_to_plan.")
-        meal_plan.delete()
-        return None
-
-    # 2) Select source days based on prompt, UI, or default
-    if allowed_map:
-        candidate_days = sorted({d for d, _ in allowed_map})
-    elif days_to_plan:
-        candidate_days = [d.capitalize() for d in days_to_plan]
-    else:
-        candidate_days = sorted(valid_week_days)
-
-    # 3) Filter to only days that actually fall within this week
-    planning_days = [day for day in candidate_days if day in valid_week_days]
-
-    # 4) Fallback to full week if none matched
-    if not planning_days:
-        logger.warning(
-            f"[{request_id}] No valid planning days found from candidate_days {candidate_days} "
-            f"in the week {start_of_week} to {end_of_week}. Falling back to full week."
-        )
-        planning_days = sorted(valid_week_days)
-
-    logger.info(f"[{request_id}] Planning meals for days: {', '.join(planning_days)}")
-    print(f"[DEBUG] planning_days = {planning_days}")
-
-    # Map planning days to their offset from the start_of_week for date calculation
-    day_offset_map = {
-        day: offset
-        for offset, day in enumerate(
-            (start_of_week + timedelta(days=i)).strftime("%A")
-            for i in range((end_of_week - start_of_week).days + 1)
-        ) if day in planning_days
-    }
-    
-    for day_name in planning_days:
-        day_offset = day_offset_map[day_name]
-        meal_date = start_of_week + timedelta(days=day_offset)
-        print(f"[DEBUG] Processing day: {day_name} (date={meal_date})")
-        logger.debug(f"[{request_id}] Processing day: {day_name} ({meal_date})")
-
-        # Determine meal type order for the current day
-        day_meal_types = meal_types.copy()  # Default order
-        if prioritized_meals:
-            day_priorities = prioritized_meals.get(day_name)
-            if day_priorities:
-                # Filter priorities to valid meal types and create sorted list
-                prios = [m for m in day_priorities if m in meal_types]
-                # Append remaining meal types in their original order
-                day_meal_types = prios + [m for m in meal_types if m not in prios]
-                logger.debug(f"[{request_id}] Using prioritized meal types for {day_name}: {day_meal_types}")
-
-        # If user_prompt produced an allowed_map, restrict meal_types to only requested ones for this day
+        # 2) Select source days based on prompt, UI, or default
         if allowed_map:
-            # Collect the meal types requested by the user for this day
-            requested_meals = [mt for (d, mt) in allowed_map.keys() if d == day_name]
-            # Filter the default/prioritized list to only those requested
-            day_meal_types = [mt for mt in day_meal_types if mt in requested_meals]
-            if not day_meal_types:
-                logger.info(f"[{request_id}] No meal types requested for {day_name}. Skipping day.")
-                continue
+            candidate_days = sorted({d for d, _ in allowed_map})
+        elif days_to_plan:
+            candidate_days = [d.capitalize() for d in days_to_plan]
+        else:
+            candidate_days = sorted(valid_week_days)
 
-        for meal_type in day_meal_types:
-            print(f"[DEBUG] Checking existing MealPlanMeal for {day_name} {meal_type}")
-            # Check if a meal already exists for this day and meal type
-            if MealPlanMeal.objects.filter(
-                meal_plan=meal_plan,
-                meal_date=meal_date,
-                day=day_name,
-                meal_type=meal_type
-            ).exists():
-                logger.debug(f"[{request_id}] Meal already exists for {day_name} {meal_type}. Skipping.")
-                continue
+        # 3) Filter to only days that actually fall within this week
+        planning_days = [day for day in candidate_days if day in valid_week_days]
 
-            attempt = 0
-            meal_added = False
+        # 4) Fallback to full week if none matched
+        if not planning_days:
+            logger.warning(
+                f"[{request_id}] No valid planning days found from candidate_days {candidate_days} "
+                f"in the week {start_of_week} to {end_of_week}. Falling back to full week."
+            )
+            planning_days = sorted(valid_week_days)
 
-            while attempt < MAX_ATTEMPTS and not meal_added:
-                print(f"[DEBUG] Attempt {attempt+1} for {day_name} {meal_type}")
-                attempt += 1
-                logger.debug(f"[{request_id}] Attempt {attempt} to add meal for {day_name} {meal_type}")
+        logger.info(f"[{request_id}] Planning meals for days: {', '.join(planning_days)}")
+        print(f"[DEBUG] planning_days = {planning_days}")
 
-                # If we have soon-to-expire items, prefer generating new meal 
-                # rather than reusing an existing one
-                expiring_items = get_expiring_pantry_items(user, days_threshold=7)
-                if expiring_items:
-                    logger.info(f"[{request_id}] Found {len(expiring_items)} expiring pantry items. Will generate new meal.")
-                    meal_found = None
-                else:
-                    meal_found = find_existing_meal(
-                        user,
-                        meal_type,
-                        existing_meal_embeddings,
-                        existing_meal_names,
-                        skipped_meal_ids
-                    )
+        # Map planning days to their offset from the start_of_week for date calculation
+        day_offset_map = {
+            day: offset
+            for offset, day in enumerate(
+                (start_of_week + timedelta(days=i)).strftime("%A")
+                for i in range((end_of_week - start_of_week).days + 1)
+            ) if day in planning_days
+        }
+        
+        for day_name in planning_days:
+            day_offset = day_offset_map[day_name]
+            meal_date = start_of_week + timedelta(days=day_offset)
+            print(f"[DEBUG] Processing day: {day_name} (date={meal_date})")
+            logger.debug(f"[{request_id}] Processing day: {day_name} ({meal_date})")
+    
+            # Determine meal type order for the current day
+            day_meal_types = meal_types.copy()  # Default order
+            if prioritized_meals:
+                day_priorities = prioritized_meals.get(day_name)
+                if day_priorities:
+                    # Filter priorities to valid meal types and create sorted list
+                    prios = [m for m in day_priorities if m in meal_types]
+                    # Append remaining meal types in their original order
+                    day_meal_types = prios + [m for m in meal_types if m not in prios]
+                    logger.debug(f"[{request_id}] Using prioritized meal types for {day_name}: {day_meal_types}")
+    
+            # If user_prompt produced an allowed_map, restrict meal_types to only requested ones for this day
+            if allowed_map:
+                # Collect the meal types requested by the user for this day
+                requested_meals = [mt for (d, mt) in allowed_map.keys() if d == day_name]
+                # Filter the default/prioritized list to only those requested
+                day_meal_types = [mt for mt in day_meal_types if mt in requested_meals]
+                if not day_meal_types:
+                    logger.info(f"[{request_id}] No meal types requested for {day_name}. Skipping day.")
+                    continue
 
-                if meal_found is None:
-                    # Create new meal
-                    logger.info(f"[{request_id}] No suitable existing meal found. Generating new meal for {day_name} {meal_type}.")
-                    result = generate_and_create_meal(
-                        user=user,
-                        meal_plan=meal_plan,
-                        meal_type=meal_type,
-                        existing_meal_names=existing_meal_names,
-                        existing_meal_embeddings=existing_meal_embeddings,
-                        user_id=user_id,
-                        day_name=day_name,
-                        request_id=request_id,
-                        user_goal_description=user_goal_description,
-                        user_prompt=user_prompt
-                    )
-                    print(f"[DEBUG] generate_and_create_meal result: {result}")
-                    if result['status'] == 'success':
-                        meal = result['meal']
+            for meal_type in day_meal_types:
+                print(f"[DEBUG] Checking existing MealPlanMeal for {day_name} {meal_type}")
+                # Check if a meal already exists for this day and meal type
+                if MealPlanMeal.objects.filter(
+                    meal_plan=meal_plan,
+                    meal_date=meal_date,
+                    day=day_name,
+                    meal_type=meal_type
+                ).exists():
+                    logger.debug(f"[{request_id}] Meal already exists for {day_name} {meal_type}. Skipping.")
+                    continue
+    
+                attempt = 0
+                meal_added = False
+    
+                while attempt < MAX_ATTEMPTS and not meal_added:
+                    print(f"[DEBUG] Attempt {attempt+1} for {day_name} {meal_type}")
+                    attempt += 1
+                    logger.debug(f"[{request_id}] Attempt {attempt} to add meal for {day_name} {meal_type}")
+    
+                    # If we have soon-to-expire items, prefer generating new meal 
+                    # rather than reusing an existing one
+                    expiring_items = get_expiring_pantry_items(user, days_threshold=7)
+                    if expiring_items:
+                        logger.info(f"[{request_id}] Found {len(expiring_items)} expiring pantry items. Will generate new meal.")
+                        meal_found = None
+                    else:
+                        meal_found = find_existing_meal(
+                            user,
+                            meal_type,
+                            existing_meal_embeddings,
+                            existing_meal_names,
+                            skipped_meal_ids
+                        )
+    
+                    if meal_found is None:
+                        # Create new meal
+                        logger.info(f"[{request_id}] No suitable existing meal found. Generating new meal for {day_name} {meal_type}.")
+                        result = generate_and_create_meal(
+                            user=user,
+                            meal_plan=meal_plan,
+                            meal_type=meal_type,
+                            existing_meal_names=existing_meal_names,
+                            existing_meal_embeddings=existing_meal_embeddings,
+                            user_id=user_id,
+                            day_name=day_name,
+                            request_id=request_id,
+                            user_goal_description=user_goal_description,
+                            user_prompt=user_prompt
+                        )
+                        print(f"[DEBUG] generate_and_create_meal result: {result}")
+                        if result['status'] == 'success':
+                            meal = result['meal']
+                            
+                            # Check if the generated meal is allergen-safe
+                            is_safe, flagged_ingredients, substitutions = check_meal_for_allergens_gpt(meal, user)
+                            
+                            if not is_safe:
+                                logger.warning(f"[{request_id}] Generated meal '{meal.name}' contains potential allergens: {', '.join(flagged_ingredients)}.")
+                                
+                                # If we have substitutions, try to create a modified version
+                                if substitutions and len(substitutions) > 0:
+                                    logger.info(f"[{request_id}] Found substitutions for {len(substitutions)} ingredients. Attempting to create a modified version.")
+                                    modified_meal = apply_substitutions_to_meal(meal, substitutions, user)
+                                    
+                                    if modified_meal:
+                                        # Successfully created a modified version, use it instead
+                                        logger.info(f"[{request_id}] Successfully created modified meal '{modified_meal.name}'. Using it instead.")
+                                        meal = modified_meal
+                                        meal_added = True
+                                    else:
+                                        # Failed to create a modified version, skip this meal
+                                        logger.warning(f"[{request_id}] Failed to create a modified version of meal '{meal.name}'. Skipping.")
+                                        skipped_meal_ids.add(meal.id)
+                                        continue
+                                else:
+                                    # No substitutions available, skip this meal
+                                    logger.warning(f"[{request_id}] No substitutions available for meal '{meal.name}'. Skipping.")
+                                    skipped_meal_ids.add(meal.id)
+                                    continue
+                            else:
+                                # Meal is safe, add it
+                                meal_added = True
+                                
+                            logger.info(f"[{request_id}] Successfully added meal '{meal.name}' for {day_name} {meal_type}")
+                            
+                            # If that meal used pantry items, keep track of it
+                            if result.get('used_pantry_item'):
+                                used_pantry_item = True
+                                logger.info(f"[{request_id}] Meal '{meal.name}' used pantry items")
+                        else:
+                            logger.warning(f"[{request_id}] Attempt {attempt}: {result['message']}")
+                            continue
+                    else:
+                        # existing meal found, do a sanity check
+                        logger.info(f"[{request_id}] Found existing meal '{meal_found.name}' for {day_name} {meal_type}. Performing sanity check.")
                         
-                        # Check if the generated meal is allergen-safe
-                        is_safe, flagged_ingredients, substitutions = check_meal_for_allergens_gpt(meal, user)
+                        # Check if the found meal is allergen-safe
+                        is_safe, flagged_ingredients, substitutions = check_meal_for_allergens_gpt(meal_found, user)
                         
                         if not is_safe:
-                            logger.warning(f"[{request_id}] Generated meal '{meal.name}' contains potential allergens: {', '.join(flagged_ingredients)}.")
+                            logger.warning(f"[{request_id}] Existing meal '{meal_found.name}' contains potential allergens: {', '.join(flagged_ingredients)}.")
                             
                             # If we have substitutions, try to create a modified version
                             if substitutions and len(substitutions) > 0:
                                 logger.info(f"[{request_id}] Found substitutions for {len(substitutions)} ingredients. Attempting to create a modified version.")
-                                modified_meal = apply_substitutions_to_meal(meal, substitutions, user)
+                                modified_meal = apply_substitutions_to_meal(meal_found, substitutions, user)
                                 
                                 if modified_meal:
                                     # Successfully created a modified version, use it instead
                                     logger.info(f"[{request_id}] Successfully created modified meal '{modified_meal.name}'. Using it instead.")
-                                    meal = modified_meal
-                                    meal_added = True
+                                    meal_found = modified_meal
                                 else:
                                     # Failed to create a modified version, skip this meal
-                                    logger.warning(f"[{request_id}] Failed to create a modified version of meal '{meal.name}'. Skipping.")
-                                    skipped_meal_ids.add(meal.id)
+                                    logger.warning(f"[{request_id}] Failed to create a modified version of meal '{meal_found.name}'. Skipping.")
+                                    skipped_meal_ids.add(meal_found.id)
                                     continue
                             else:
                                 # No substitutions available, skip this meal
-                                logger.warning(f"[{request_id}] No substitutions available for meal '{meal.name}'. Skipping.")
-                                skipped_meal_ids.add(meal.id)
-                                continue
-                        else:
-                            # Meal is safe, add it
-                            meal_added = True
-                            
-                        logger.info(f"[{request_id}] Successfully added meal '{meal.name}' for {day_name} {meal_type}")
-                        
-                        # If that meal used pantry items, keep track of it
-                        if result.get('used_pantry_item'):
-                            used_pantry_item = True
-                            logger.info(f"[{request_id}] Meal '{meal.name}' used pantry items")
-                    else:
-                        logger.warning(f"[{request_id}] Attempt {attempt}: {result['message']}")
-                        continue
-                else:
-                    # existing meal found, do a sanity check
-                    logger.info(f"[{request_id}] Found existing meal '{meal_found.name}' for {day_name} {meal_type}. Performing sanity check.")
-                    
-                    # Check if the found meal is allergen-safe
-                    is_safe, flagged_ingredients, substitutions = check_meal_for_allergens_gpt(meal_found, user)
-                    
-                    if not is_safe:
-                        logger.warning(f"[{request_id}] Existing meal '{meal_found.name}' contains potential allergens: {', '.join(flagged_ingredients)}.")
-                        
-                        # If we have substitutions, try to create a modified version
-                        if substitutions and len(substitutions) > 0:
-                            logger.info(f"[{request_id}] Found substitutions for {len(substitutions)} ingredients. Attempting to create a modified version.")
-                            modified_meal = apply_substitutions_to_meal(meal_found, substitutions, user)
-                            
-                            if modified_meal:
-                                # Successfully created a modified version, use it instead
-                                logger.info(f"[{request_id}] Successfully created modified meal '{modified_meal.name}'. Using it instead.")
-                                meal_found = modified_meal
-                            else:
-                                # Failed to create a modified version, skip this meal
-                                logger.warning(f"[{request_id}] Failed to create a modified version of meal '{meal_found.name}'. Skipping.")
+                                logger.warning(f"[{request_id}] No substitutions available for meal '{meal_found.name}'. Skipping.")
                                 skipped_meal_ids.add(meal_found.id)
                                 continue
-                        else:
-                            # No substitutions available, skip this meal
-                            logger.warning(f"[{request_id}] No substitutions available for meal '{meal_found.name}'. Skipping.")
-                            skipped_meal_ids.add(meal_found.id)
-                            continue
-                    
-                    # Calculate the target date for this meal slot
-                    offset = day_to_offset(day_name)
-                    target_meal_date = meal_plan.week_start_date + timedelta(days=offset)
-                    
-                    # If it's a chef meal, verify event availability for this specific date
-                    is_valid_chef_meal_for_date = True # Assume valid unless proven otherwise
-                    if meal_found.chef is not None:
-                        logger.debug(f"[{request_id}] Meal '{meal_found.name}' is a chef meal. Verifying event for date {target_meal_date}...")
-                        event_exists = ChefMealEvent.objects.filter(
-                            meal=meal_found,
-                            chef=meal_found.chef,
-                            event_date=target_meal_date, 
-                            status__in=[STATUS_SCHEDULED, STATUS_OPEN],
-                            order_cutoff_time__gt=timezone.now()
-                        ).exists()
                         
-                        if not event_exists:
-                            logger.warning(f"[{request_id}] No active ChefMealEvent found for meal '{meal_found.name}' on {target_meal_date}. Skipping for this day/type.")
-                            is_valid_chef_meal_for_date = False
-                            skipped_meal_ids.add(meal_found.id) # Add to skipped so we don't keep finding it for wrong dates
-                        else:
-                             logger.debug(f"[{request_id}] Verified active ChefMealEvent exists for meal '{meal_found.name}' on {target_meal_date}.")
-                    # Proceed only if basic sanity check passes AND (it's not a chef meal OR it's a chef meal with a valid event for the date)
-                    if perform_comprehensive_sanity_check(meal_found, user, request_id) and is_valid_chef_meal_for_date:
-                        try:
-                            # Use get_or_create to handle potential race conditions atomically
-                            meal_plan_meal, created = MealPlanMeal.objects.get_or_create(
-                                meal_plan=meal_plan,
-                                day=day_name,
-                                meal_type=meal_type,
-                                defaults={
-                                    'meal': meal_found,
-                                    'meal_date': target_meal_date,
-                                }
-                            )
+                        # Calculate the target date for this meal slot
+                        offset = day_to_offset(day_name)
+                        target_meal_date = meal_plan.week_start_date + timedelta(days=offset)
+                        
+                        # If it's a chef meal, verify event availability for this specific date
+                        is_valid_chef_meal_for_date = True # Assume valid unless proven otherwise
+                        if meal_found.chef is not None:
+                            logger.debug(f"[{request_id}] Meal '{meal_found.name}' is a chef meal. Verifying event for date {target_meal_date}...")
+                            event_exists = ChefMealEvent.objects.filter(
+                                meal=meal_found,
+                                chef=meal_found.chef,
+                                event_date=target_meal_date, 
+                                status__in=[STATUS_SCHEDULED, STATUS_OPEN],
+                                order_cutoff_time__gt=timezone.now()
+                            ).exists()
                             
-                            if created:
-                                logger.info(f"[{request_id}] Added new meal '{meal_found.name}' for {day_name} {meal_type} on {target_meal_date}.")
+                            if not event_exists:
+                                logger.warning(f"[{request_id}] No active ChefMealEvent found for meal '{meal_found.name}' on {target_meal_date}. Skipping for this day/type.")
+                                is_valid_chef_meal_for_date = False
+                                skipped_meal_ids.add(meal_found.id) # Add to skipped so we don't keep finding it for wrong dates
                             else:
-                                # Update the existing meal
-                                logger.warning(f"[{request_id}] Meal already exists for {day_name} {meal_type}. Updating existing meal.")
-                                meal_plan_meal.meal = meal_found
-                                meal_plan_meal.meal_date = target_meal_date
-                                meal_plan_meal.save()
-                                logger.info(f"[{request_id}] Updated existing meal for {day_name} {meal_type} with '{meal_found.name}'.")
-                            
-                            existing_meal_names.add(meal_found.name)
-                            existing_meal_embeddings.append(meal_found.meal_embedding)
-                            meal_added = True
-                        except Exception as e:
-                            logger.error(f"[{request_id}] Error adding/updating meal '{meal_found.name}' to meal plan: {e}")
-                            skipped_meal_ids.add(meal_found.id)
-                    else:
-                         # Log reason for skipping
-                        if not is_valid_chef_meal_for_date:
-                            # Already logged the event missing warning
-                            pass # No need to log again
-                        else: # Must have failed sanity check
-                             logger.warning(f"[{request_id}] Meal '{meal_found.name}' failed comprehensive sanity check. Skipping.")
-                             skipped_meal_ids.add(meal_found.id)
-                        meal_found = None  # Force retry finding/generating a different meal
+                                 logger.debug(f"[{request_id}] Verified active ChefMealEvent exists for meal '{meal_found.name}' on {target_meal_date}.")
+                        # Proceed only if basic sanity check passes AND (it's not a chef meal OR it's a chef meal with a valid event for the date)
+                        if perform_comprehensive_sanity_check(meal_found, user, request_id) and is_valid_chef_meal_for_date:
+                            try:
+                                # Use get_or_create to handle potential race conditions atomically
+                                meal_plan_meal, created = MealPlanMeal.objects.get_or_create(
+                                    meal_plan=meal_plan,
+                                    day=day_name,
+                                    meal_type=meal_type,
+                                    defaults={
+                                        'meal': meal_found,
+                                        'meal_date': target_meal_date,
+                                    }
+                                )
+                                
+                                if created:
+                                    logger.info(f"[{request_id}] Added new meal '{meal_found.name}' for {day_name} {meal_type} on {target_meal_date}.")
+                                else:
+                                    # Update the existing meal
+                                    logger.warning(f"[{request_id}] Meal already exists for {day_name} {meal_type}. Updating existing meal.")
+                                    meal_plan_meal.meal = meal_found
+                                    meal_plan_meal.meal_date = target_meal_date
+                                    meal_plan_meal.save()
+                                    logger.info(f"[{request_id}] Updated existing meal for {day_name} {meal_type} with '{meal_found.name}'.")
+                                
+                                existing_meal_names.add(meal_found.name)
+                                existing_meal_embeddings.append(meal_found.meal_embedding)
+                                meal_added = True
+                            except Exception as e:
+                                logger.error(f"[{request_id}] Error adding/updating meal '{meal_found.name}' to meal plan: {e}")
+                                skipped_meal_ids.add(meal_found.id)
+                        else:
+                             # Log reason for skipping
+                            if not is_valid_chef_meal_for_date:
+                                # Already logged the event missing warning
+                                pass # No need to log again
+                            else: # Must have failed sanity check
+                                 logger.warning(f"[{request_id}] Meal '{meal_found.name}' failed comprehensive sanity check. Skipping.")
+                                 skipped_meal_ids.add(meal_found.id)
+                            meal_found = None  # Force retry finding/generating a different meal
 
-                if attempt >= MAX_ATTEMPTS and not meal_added:
-                    logger.error(f"[{request_id}] Failed to add meal for {day_name} {meal_type} after {MAX_ATTEMPTS} attempts.")
+                    if attempt >= MAX_ATTEMPTS and not meal_added:
+                        logger.error(f"[{request_id}] Failed to add meal for {day_name} {meal_type} after {MAX_ATTEMPTS} attempts.")
 
-        print(f"[DEBUG] Total meals added so far: {MealPlanMeal.objects.filter(meal_plan=meal_plan).count()}")
+            print(f"[DEBUG] Total meals added so far: {MealPlanMeal.objects.filter(meal_plan=meal_plan).count()}")
 
-    # Check if we added any meals
-    meal_count = MealPlanMeal.objects.filter(meal_plan=meal_plan).count()
-    if meal_count == 0:
-        logger.error(f"[{request_id}] No meals were added to meal plan (ID: {meal_plan.id}). Deleting it.")
-        meal_plan.delete()
-        return None
+        # Check if we added any meals - still inside the transaction
+        meal_count = MealPlanMeal.objects.filter(meal_plan=meal_plan).count()
+        if meal_count == 0:
+            logger.error(f"[{request_id}] No meals were added to meal plan (ID: {meal_plan.id}). Deleting it.")
+            meal_plan.delete()
+            return None
 
-    logger.info(f"[{request_id}] Meal plan created successfully for {user.username} with {meal_count} meals across {len(planning_days)} day(s)")
+        logger.info(f"[{request_id}] Meal plan created successfully for {user.username} with {meal_count} meals across {len(planning_days)} day(s)")
 
+    # These operations can be outside the transaction since we now have a validated meal plan with meals
     # If any meal used pantry items, skip replacements
     if used_pantry_item:
         logger.info(f"[{request_id}] At least one meal used soon-to-expire pantry items; skipping replacements.")

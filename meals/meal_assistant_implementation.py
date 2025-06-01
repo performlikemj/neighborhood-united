@@ -829,40 +829,40 @@ class MealPlanningAssistant:
             formatted_text = text
 
         # ------------------------------------------------------------------
-        # Strip non‑printable / control characters that sometimes creep in
-        # (e.g. \x1A, \x1F) so the email renders cleanly.
+        # PHASE 1: PROPER UNICODE NORMALIZATION AT SOURCE
+        # This prevents hex corruption from occurring in the first place
+        # ------------------------------------------------------------------
+        import unicodedata
         import re
+        
+        try:
+            # Ensure proper UTF-8 encoding/decoding to prevent hex corruption
+            formatted_text = formatted_text.encode('utf-8', errors='replace').decode('utf-8')
+            # Normalize Unicode characters (NFC = canonical composition)
+            formatted_text = unicodedata.normalize('NFC', formatted_text)
+        except (UnicodeEncodeError, UnicodeDecodeError) as e:
+            # Fallback: just normalize what we can if encoding fails
+            formatted_text = unicodedata.normalize('NFC', formatted_text)
+            logger.warning(f"Unicode encoding issue in _extract: {e}")
+
+        # Strip non‑printable / control characters that sometimes creep in
         formatted_text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", formatted_text)
 
-        # ── CRITICAL HEX CODE CLEANING FOR COOKING INSTRUCTIONS ──────────────────
-        # Fix dangerous hex codes that appear in cooking instructions (e.g., "425f" -> "425°F")
-        temp_hex_patterns = [
-            # ONLY keep the most specific and safe temperature patterns
-            (r'(\d{3})f\b', r'\1°F'),                               # 425f -> 425°F (only 3 digits)
-            (r'(\d{3})F\b', r'\1°F'),                               # 425F -> 425°F (only 3 digits)
-            (r'(\d{3})b0C\b', r'\1°C'),                            # 220b0C -> 220°C (very specific)
-            (r'(\d{3})B0C\b', r'\1°C'),                            # 220B0C -> 220°C (very specific)
-            # Disable aggressive patterns that corrupt normal words:
-            # (r'(\d{2,3})[a-fA-F0-9]{1,4}([CF])\b', r'\1°\2'),  # DISABLED - too aggressive
-            # (r'(\d{2,3})[a-fA-F]{1,3}([CF])\b', r'\1°\2'),     # DISABLED - too aggressive
-            # (r'(\d{1,2})[a-fA-F0-9]{2}(min|minutes?|hrs?|hours?)\b', r'\1 \2'),  # DISABLED
-            # (r'(\d{1,2})[a-fA-F0-9]{2}(cups?|tbsp|tsp|oz|lbs?|kg|g)\b', r'\1 \2'),  # DISABLED
-            # Only very specific fraction fix
-            (r'(\d+)\/(\d+)a0\b', r'\1/\2'),                       # 1/2a0 -> 1/2 (very specific)
+        # ------------------------------------------------------------------
+        # PHASE 3: MINIMAL SAFETY NET FOR EXTREME EDGE CASES
+        # Only keep the most critical patterns as backup
+        # ------------------------------------------------------------------
+        critical_patterns = [
+            (r'(\d{3})b0C\b', r'\1°C'),     # Only 220b0C -> 220°C (very specific)
+            (r'(\d{3})f\b', r'\1°F'),       # Only 425f -> 425°F (3 digits only)
         ]
-        for pattern, replacement in temp_hex_patterns:
+        for pattern, replacement in critical_patterns:
             formatted_text = re.sub(pattern, replacement, formatted_text)
-        
-        # Clean up common hex symbol corruptions
-        hex_symbol_fixes = {'b0': '°', 'f0': '°', 'a0': ' ', 'c2': '', 'e2': ''}
-        for hex_code, replacement in hex_symbol_fixes.items():
-            formatted_text = re.sub(r'\b' + re.escape(hex_code) + r'(?=[^a-zA-Z]|$)', replacement, formatted_text)
 
         # Remove any leading "Subject: ..." line the LLM might prepend
         formatted_text = re.sub(r"^Subject:[^\n\r]*[\n\r]+", "", formatted_text, flags=re.IGNORECASE)
 
         formatted_text = formatted_text.strip()
-        # ------------------------------------------------------------------
         return formatted_text
 
     def _fix_function_args(self, function_name: str, args_str: str) -> str:
@@ -1218,74 +1218,8 @@ class MealPlanningAssistant:
         for bad, good in smart_to_ascii.items():
             raw_text = raw_text.replace(bad, good)
 
-        # ── COMPREHENSIVE HEX CODE CLEANING & TEMPERATURE FORMATTING ────────────
-        # Fix dangerous hex codes that appear in cooking instructions
+        # Clean up multiple spaces and trim (moved from end of removed section)
         import re
-        
-        # Critical temperature hex patterns that can be dangerous
-        temp_hex_patterns = [
-            # ONLY keep the most specific and safe temperature patterns
-            (r'(\d{3})f\b', r'\1°F'),                               # 425f -> 425°F (only 3 digits)
-            (r'(\d{3})F\b', r'\1°F'),                               # 425F -> 425°F (only 3 digits)
-            (r'(\d{3})b0C\b', r'\1°C'),                            # 220b0C -> 220°C (very specific)
-            (r'(\d{3})B0C\b', r'\1°C'),                            # 220B0C -> 220°C (very specific)
-            # Disable aggressive patterns that corrupt normal words:
-            # (r'(\d{2,3})[a-fA-F0-9]{1,4}([CF])\b', r'\1°\2'),  # DISABLED - too aggressive
-            # (r'(\d{2,3})[a-fA-F]{1,3}([CF])\b', r'\1°\2'),     # DISABLED - too aggressive
-            # (r'(\d{1,2})[a-fA-F0-9]{2}(min|minutes?|hrs?|hours?)\b', r'\1 \2'),  # DISABLED
-            # (r'(\d{1,2})[a-fA-F0-9]{2}(cups?|tbsp|tsp|oz|lbs?|kg|g)\b', r'\1 \2'),  # DISABLED
-            # Only very specific fraction fix
-            (r'(\d+)\/(\d+)a0\b', r'\1/\2'),                       # 1/2a0 -> 1/2 (very specific)
-        ]
-        
-        for pattern, replacement in temp_hex_patterns:
-            raw_text = re.sub(pattern, replacement, raw_text)
-        
-        # Comprehensive hex symbol replacements
-        hex_replacements = {
-            # Core symbol corruptions
-            'b0': '°',   # Degree symbol corruption (most critical)
-            'f0': '°',   # Another degree symbol corruption
-            'a0': ' ',   # Non-breaking space corruption
-            # UTF-8 corruption prefixes
-            'c2': '',    # UTF-8 corruption prefix
-            'e2': '',    # UTF-8 corruption prefix  
-            '80': '',    # UTF-8 corruption
-            '99': '',    # UTF-8 corruption
-            # Special character corruptions
-            'a9': '©',   # Copyright symbol
-            'ae': '®',   # Registered trademark
-            'bd': '½',   # Half fraction
-            'bc': '¼',   # Quarter fraction
-            'be': '¾',   # Three quarters fraction
-            'b7': '·',   # Middle dot
-            # Remove hex prefixes
-            '0x': '',    # Hex prefix
-        }
-        
-        # Apply hex replacements with word boundary protection
-        for hex_code, replacement in hex_replacements.items():
-            pattern = r'\b' + re.escape(hex_code) + r'(?=[^a-zA-Z]|$)'
-            raw_text = re.sub(pattern, replacement, raw_text)
-        
-        # Additional cooking-specific hex fixes
-        cooking_specific_fixes = [
-            # Fix ONLY obvious hex corruptions with specific patterns
-            # Fix quotes ONLY when surrounded by clear hex patterns (2+ hex chars)
-            (r'[a-fA-F0-9]{3,}"([^"]+)"[a-fA-F0-9]{3,}', r'"\1"'),
-            # Fix apostrophes ONLY in very specific contractions with obvious hex corruption
-            (r"(\w{3,})[a-fA-F0-9]{3,}(t|re|ve|ll|d)\b", r"\1'\2"),
-            # Fix hyphens ONLY when there are obvious hex sequences (3+ chars) between words
-            (r'(\w{3,})[a-fA-F0-9]{3,}(\w{3,})', r'\1-\2'),
-            # Fix temperature format variations (these are safe)
-            (r'(\d+)\s*degrees?\s*([CF])', r'\1°\2'),
-            (r'(\d+)\s*deg\s*([CF])', r'\1°\2'),
-        ]
-        
-        for pattern, replacement in cooking_specific_fixes:
-            raw_text = re.sub(pattern, replacement, raw_text, flags=re.IGNORECASE)
-        
-        # Clean up multiple spaces and trim
         raw_text = re.sub(r'\s+', ' ', raw_text).strip()
 
         # ----------------------- build LLM prompt -------------------------
@@ -1553,23 +1487,7 @@ class MealPlanningAssistant:
             for bad, good in replacements.items():
                 formatted_text = formatted_text.replace(bad, good)
 
-            # ── FINAL HEX CODE PROTECTION (post-LLM safety net) ──────────────────────
-            # Apply critical hex cleaning again in case LLM introduced new hex codes
-            final_temp_patterns = [
-                (r'(\d{2,3})f\b', r'\1°F'),                              # 425f -> 425°F
-                (r'(\d{2,3})b0C\b', r'\1°C'),                           # 220b0C -> 220°C
-                (r'(\d{2,3})[a-fA-F0-9]{1,4}([CF])\b', r'\1°\2'),      # Generic hex temps
-            ]
-            for pattern, replacement in final_temp_patterns:
-                formatted_text = re.sub(pattern, replacement, formatted_text)
-            
-            # Final hex symbol cleanup
-            final_hex_fixes = {'b0': '°', 'f0': '°', 'a0': ' '}
-            for hex_code, replacement in final_hex_fixes.items():
-                pattern = r'\b' + re.escape(hex_code) + r'(?=[^a-zA-Z]|$)'
-                formatted_text = re.sub(pattern, replacement, formatted_text)
-            
-            # Final temperature format cleanup
+            # Clean up common temperature formats that might still appear
             formatted_text = re.sub(r'(\d+)\s*degrees?\s*([CF])', r'\1°\2', formatted_text, flags=re.IGNORECASE)
             formatted_text = re.sub(r'\s+', ' ', formatted_text)
 

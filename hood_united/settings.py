@@ -368,8 +368,8 @@ if DEBUG == False:
     SECURE_HSTS_PRELOAD = True
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 
-    # SSL
-    SECURE_SSL_REDIRECT = True
+    # SSL - disable redirect during testing
+    SECURE_SSL_REDIRECT = not TEST_MODE  # Only redirect to SSL when not in test mode
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
     # Clickjacking Protection

@@ -9,7 +9,6 @@ from local_chefs.models import PostalCode, ChefPostalCode
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
 from django.conf.locale import LANG_INFO
-from meals.models import DietaryPreference
 import uuid
 
 # Create your models here.
@@ -254,7 +253,7 @@ class HouseholdMember(models.Model):
     name = models.CharField(max_length=100)
     age = models.PositiveIntegerField(blank=True, null=True)
     dietary_preferences = models.ManyToManyField(
-        DietaryPreference,
+        'meals.DietaryPreference',
         blank=True,
         related_name='household_members'
     )

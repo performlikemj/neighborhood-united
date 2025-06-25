@@ -1,7 +1,7 @@
 # custom_auth/serializers.py
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import Address, CustomUser, UserRole
+from .models import Address, CustomUser, UserRole, HouseholdMember
 from meals.models import CustomDietaryPreference
 from local_chefs.models import PostalCode, ChefPostalCode
 from meals.models import DietaryPreference
@@ -12,6 +12,34 @@ from django.core.exceptions import ValidationError
 import logging
 
 logger = logging.getLogger(__name__)
+
+class HouseholdMemberSerializer(serializers.ModelSerializer):
+    dietary_preferences = serializers.SlugRelatedField(
+        many=True,
+        slug_field='name',
+        queryset=DietaryPreference.objects.all(),
+        required=False,
+    )
+
+    class Meta:
+        model = HouseholdMember
+        fields = ['id', 'name', 'age', 'dietary_preferences', 'notes']
+
+    def create(self, validated_data):
+        prefs = validated_data.pop('dietary_preferences', [])
+        member = HouseholdMember.objects.create(**validated_data)
+        if prefs:
+            member.dietary_preferences.set(prefs)
+        return member
+
+    def update(self, instance, validated_data):
+        prefs = validated_data.pop('dietary_preferences', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        if prefs is not None:
+            instance.dietary_preferences.set(prefs)
+        return instance
 
 class CustomUserSerializer(serializers.ModelSerializer):
     allergies = serializers.ListField(
@@ -41,14 +69,16 @@ class CustomUserSerializer(serializers.ModelSerializer):
         required=False
     )
 
+    household_members = HouseholdMemberSerializer(many=True, read_only=True)
+
     class Meta:
         model = get_user_model()
         fields = [
-            'id', 'username', 'email', 'unsubscribed_from_emails', 'password', 
-            'phone_number', 'dietary_preferences', 'custom_dietary_preferences', 
-            'allergies', 'custom_allergies', 'week_shift', 'email_confirmed', 
+            'id', 'username', 'email', 'unsubscribed_from_emails', 'password',
+            'phone_number', 'dietary_preferences', 'custom_dietary_preferences',
+            'allergies', 'custom_allergies', 'week_shift', 'email_confirmed',
             'preferred_language', 'timezone', 'emergency_supply_goal',
-            'preferred_servings', 'personal_assistant_email'
+            'household_member_count', 'household_members', 'personal_assistant_email'
         ]
         extra_kwargs = {
             'password': {'write_only': True},
@@ -81,13 +111,13 @@ class CustomUserSerializer(serializers.ModelSerializer):
         user = get_user_model()(
             username=validated_data.get('username'),
             email=validated_data.get('email'),
-            phone_number=validated_data.get('phone_number', ''),  
+            phone_number=validated_data.get('phone_number', ''),
             preferred_language=validated_data.get('preferred_language', 'en'),
             timezone=validated_data.get('timezone', 'UTC'),
             allergies=validated_data.get('allergies', []),
             custom_allergies=validated_data.get('custom_allergies', ''),
-            emergency_supply_goal=validated_data.get('emergency_supply_goal', 0), 
-            preferred_servings=validated_data.get('preferred_servings', 1), 
+            emergency_supply_goal=validated_data.get('emergency_supply_goal', 0),
+            household_member_count=validated_data.get('household_member_count', 1),
         )
         user.set_password(validated_data['password'])
         user.save()
@@ -105,10 +135,6 @@ class CustomUserSerializer(serializers.ModelSerializer):
                 instance.dietary_preferences.set(value)  # Update ManyToMany field
             elif attr == 'allergies':
                 instance.allergies = value
-            elif attr == 'preferred_servings':
-                if value < 1:
-                    raise ValidationError("Preferred servings must be greater than 0.")
-                setattr(instance, attr, value)
             elif attr == 'custom_allergies':
                 instance.custom_allergies = value
             else:

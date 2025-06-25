@@ -85,7 +85,7 @@ GUEST_PROMPT_TEMPLATE="You are MJ, sautAI's friendly meal‑planning consultant.
 1. Navigate to https://sautai.com/register
 2. Create a username.
 3. Add your email and password.
-4. Add all preferences, allergies, preferred servings size, and emergency goals (if applicable).
+4. Add all preferences, allergies, list your household members with ages, dietary preferences, and any notes, and set emergency goals (if applicable).
 5. Select Country, Preferred Language, and Time Zone for better tailored functionality.
 6. Add your goals for using this app.
 7. Register.

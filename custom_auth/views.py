@@ -8,7 +8,7 @@ from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from django.core.mail import EmailMessage
 from .tokens import account_activation_token
-from .models import CustomUser, Address, UserRole
+from .models import CustomUser, Address, UserRole, HouseholdMember
 from customer_dashboard.models import GoalTracking, AssistantEmailToken, UserEmailSession, EmailAggregationSession, AggregatedMessageContent, PreAuthenticationMessage
 from chefs.models import ChefRequest
 from .forms import RegistrationForm, UserProfileForm, EmailChangeForm, AddressForm
@@ -24,7 +24,13 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from django.contrib.sites.shortcuts import get_current_site
 from django.template.loader import render_to_string
-from .serializers import CustomUserSerializer, AddressSerializer, PostalCodeSerializer, UserRoleSerializer
+from .serializers import (
+    CustomUserSerializer,
+    AddressSerializer,
+    PostalCodeSerializer,
+    UserRoleSerializer,
+    HouseholdMemberSerializer,
+)
 from rest_framework import serializers
 import requests
 from local_chefs.models import PostalCode
@@ -485,6 +491,40 @@ def address_details_view(request):
     serializer = AddressSerializer(address)
     return Response(serializer.data)
 
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def household_members_list_create(request):
+    if request.method == 'GET':
+        members = request.user.household_members.all()
+        serializer = HouseholdMemberSerializer(members, many=True)
+        return Response(serializer.data)
+
+    serializer = HouseholdMemberSerializer(data=request.data)
+    if serializer.is_valid():
+        serializer.save(user=request.user)
+        return Response(serializer.data, status=201)
+    return Response(serializer.errors, status=400)
+
+
+@api_view(['PUT', 'PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def household_member_detail(request, member_id):
+    try:
+        member = HouseholdMember.objects.get(id=member_id, user=request.user)
+    except HouseholdMember.DoesNotExist:
+        return Response({'detail': 'Household member not found.'}, status=404)
+
+    if request.method == 'DELETE':
+        member.delete()
+        return Response(status=204)
+
+    serializer = HouseholdMemberSerializer(member, data=request.data, partial=(request.method == 'PATCH'))
+    if serializer.is_valid():
+        serializer.save()
+        return Response(serializer.data)
+    return Response(serializer.errors, status=400)
+
 @api_view(['GET'])
 def get_countries(request):
     country_list = [{"code": code, "name": name} for code, name in list(countries)]
@@ -583,8 +623,8 @@ def update_profile_api(request):
         if 'emergency_supply_goal' in user_serializer.validated_data:
             user.emergency_supply_goal = user_serializer.validated_data['emergency_supply_goal']
 
-        if 'preferred_servings' in user_serializer.validated_data:
-            user.preferred_servings = user_serializer.validated_data['preferred_servings']
+        if 'household_member_count' in user_serializer.validated_data:
+            user.household_member_count = user_serializer.validated_data['household_member_count']
 
         user_serializer.save()
 
@@ -715,8 +755,9 @@ def login_api_view(request):
             'custom_allergies': user.custom_allergies,
             'dietary_preferences': list(user.dietary_preferences.values_list('name', flat=True)),
             'custom_dietary_preferences': list(user.custom_dietary_preferences.values_list('name', flat=True)),
-            'preferred_servings': user.preferred_servings,
             'emergency_supply_goal': user.emergency_supply_goal,
+            'household_member_count': user.household_member_count,
+            'household_members': HouseholdMemberSerializer(user.household_members.all(), many=True).data,
             'is_chef': user_role.is_chef,
             'current_role': user_role.current_role,
             'goal_name': goal_name,
@@ -785,10 +826,6 @@ def register_api_view(request):
                 user.emergency_supply_goal = user_serializer.validated_data['emergency_supply_goal']
                 user.save()
 
-            # Handle the preferred_servings during user creation
-            if 'preferred_servings' in user_serializer.validated_data:
-                user.preferred_servings = user_serializer.validated_data['preferred_servings']
-                user.save() 
 
             address_data = request.data.get('address')
             # Check if any significant address data is provided

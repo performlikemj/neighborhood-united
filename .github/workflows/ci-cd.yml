@@ -187,6 +187,13 @@ jobs:
           SSH_KEY: ${{ secrets.SSH_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
 
+      - name: Get changed files
+        id: changed
+        run: |
+          git fetch --depth=2 origin $GITHUB_REF
+          git diff --name-only "$GITHUB_SHA" "${{ github.event.before }}" > changed_files.txt
+          echo build/config.env >> changed_files.txt
+
       - name: Rsync to Azure VM
         run: |
           echo "$SSH_KEY" > /tmp/deploy_key
@@ -200,7 +207,7 @@ jobs:
           echo "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
-          rsync -avz --delete --compare-dest=$REMOTE_COMPARE_PATH \
+          rsync -avz --files-from=changed_files.txt \
             -e "ssh -i /tmp/deploy_key" \
             ./ $SSH_USER@$SSH_HOST:/var/www/myapp
 
@@ -215,4 +222,3 @@ jobs:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_KEY: ${{ secrets.SSH_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
-          REMOTE_COMPARE_PATH: ${{ secrets.REMOTE_COMPARE_PATH }}

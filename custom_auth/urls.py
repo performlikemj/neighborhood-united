@@ -34,6 +34,8 @@ urlpatterns = [
     path('api/delete_account/', views.delete_account, name='delete_account'),
     path('api/email_auth/<uuid:auth_token>/', views.email_authentication_view, name='email_authentication'),
     path('api/languages/', views.api_available_languages, name='api_available_languages'),
+    path('api/household_members/', views.household_members_list_create, name='household_members'),
+    path('api/household_members/<int:member_id>/', views.household_member_detail, name='household_member_detail'),
 ]
 
 # Only include the register URL in test mode

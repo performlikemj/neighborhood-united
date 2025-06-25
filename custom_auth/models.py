@@ -9,6 +9,7 @@ from local_chefs.models import PostalCode, ChefPostalCode
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
 from django.conf.locale import LANG_INFO
+from meals.models import DietaryPreference
 import uuid
 
 # Create your models here.
@@ -116,10 +117,10 @@ class CustomUser(AbstractUser):
     # Email preference field
     unsubscribed_from_emails = models.BooleanField(default=False)
     emergency_supply_goal = models.PositiveIntegerField(default=0)  # Number of days of supplies the user wants
-    # Family size field
-    preferred_servings = models.PositiveIntegerField(
+    # Number of household members (replaces preferred_servings)
+    household_member_count = models.PositiveIntegerField(
         default=1,
-        help_text="Number of servings the user wants meals scaled to."
+        help_text="Total number of people in the user's household."
     )
     
     @property
@@ -246,6 +247,21 @@ class Address(models.Model):
         self.full_clean()  # This ensures that the model is validated before saving
         super().save(*args, **kwargs)
 
+
+
+class HouseholdMember(models.Model):
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='household_members')
+    name = models.CharField(max_length=100)
+    age = models.PositiveIntegerField(blank=True, null=True)
+    dietary_preferences = models.ManyToManyField(
+        DietaryPreference,
+        blank=True,
+        related_name='household_members'
+    )
+    notes = models.TextField(blank=True, null=True)
+
+    def __str__(self):
+        return f"{self.name} ({self.user.username})"
 
 
 class UserRole(models.Model):

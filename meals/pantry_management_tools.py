@@ -162,12 +162,12 @@ PANTRY_MANAGEMENT_TOOLS = [
                     "type": "integer",
                     "description": "Desired emergency supply goal in days (1–365)"
                 },
-                "preferred_servings": {
+                "household_member_count": {
                     "type": "integer",
-                    "description": "Number of servings the user wants emergency supplies scaled to."
+                    "description": "Total number of people in the household."
                 }
             },
-            "required": ["user_id", "days", "preferred_servings"],
+            "required": ["user_id", "days", "household_member_count"],
             "additionalProperties": False
         }
     }
@@ -370,7 +370,11 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
     user = get_object_or_404(CustomUser, id=user_id)
     # --- 0. Fetch objects ----------------------------------------------------
     meal_plan = get_object_or_404(MealPlan, id=meal_plan_id, user=user)
-    preferred_serving_size = getattr(user, "preferred_servings", 1) or 1
+    household_member_count = (
+        getattr(user, "household_member_count", None)
+        or getattr(user, "preferred_servings", None)
+        or 1
+    )
 
     # Shortcut: if a validated shopping list already exists → return it.
     existing = ShoppingListModel.objects.filter(meal_plan=meal_plan).first()
@@ -538,7 +542,7 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
                         f"User context: {user_context}.\n"
                         f"Bridging leftover info: {bridging_leftover_str}.\n"
                         f"The user has the following pantry items: {', '.join(user_pantry_items)}.\n"
-                        f"Preferred servings: {preferred_serving_size}.\n"
+                        f"Household size: {household_member_count}.\n"
                         f"Expiring pantry items: {expiring_items_str}.\n"
                         f"Available shopping categories: {shopping_category_list}.\n"
                         f"{substitution_str}\n{chef_note}\n"
@@ -594,17 +598,17 @@ def determine_items_to_replenish(user_id: int):
 
     # Early exit if the user hasn’t set a goal
     goal_days = user.emergency_supply_goal or 0
-    # Fetch preferred servings (fallback to 1 if missing or mis‑spelled column)
-    preferred_servings = (
-        getattr(user, "preferred_servings", None)
-        or getattr(user, "preffered_servings", None)
+    # Fetch household member count (fallback to any older serving size field)
+    household_member_count = (
+        getattr(user, "household_member_count", None)
+        or getattr(user, "preferred_servings", None)
         or 1
     )
     if goal_days <= 0:
         return {
             "status": "success",
             "items_to_replenish": [],
-            "preferred_servings": int(preferred_servings),
+            "household_member_count": int(household_member_count),
             "message": "No emergency supply goal set."
         }
 
@@ -662,8 +666,8 @@ def determine_items_to_replenish(user_id: int):
         """
     )
     usr_prompt = (
-        f"The user has an emergency supply goal of {goal_days} days and prefers to prepare meals for "
-        f"{preferred_servings} serving(s).\n"
+        f"The user has an emergency supply goal of {goal_days} days and has "
+        f"{household_member_count} household member(s).\n"
         f"User Context:\n{generate_user_context(user)}\n"
         f"Current Pantry Items:\n{pantry_summary}\n"
         "When calculating quantities, multiply daily needs by the number of servings.\n"
@@ -699,21 +703,21 @@ def determine_items_to_replenish(user_id: int):
         validated_dict = {
             "status": "success",
             "items_to_replenish": validated.items_to_replenish,
-            "preferred_servings": int(preferred_servings)
+            "household_member_count": int(household_member_count)
         }
         return validated_dict
     except (json.JSONDecodeError, ValidationError) as e:
         logger.error(f"Invalid JSON for user {user_id}: {e}  -- raw: {raw}")
         return {"status": "error", "message": "Assistant produced invalid JSON."}
     
-def set_emergency_supply_goal(user_id: int, days: int, preferred_servings: int) -> Dict[str, Any]:
+def set_emergency_supply_goal(user_id: int, days: int, household_member_count: int) -> Dict[str, Any]:
     """
-    Update the user's emergency supply goal (number of days of food to keep on hand) and preferred servings.
+    Update the user's emergency supply goal (number of days of food to keep on hand) and household member count.
 
     Args:
         user_id: ID of the CustomUser.
         days: Goal in days (must be 1–365).
-        preferred_servings: Number of servings (must be 1–20).
+        household_member_count: Number of household members (must be 1–20).
 
     Returns:
         Dict with status and message.
@@ -732,35 +736,35 @@ def set_emergency_supply_goal(user_id: int, days: int, preferred_servings: int) 
             "message": f"Invalid 'days' value: {err}"
         }
 
-    # Validate `preferred_servings`
+    # Validate `household_member_count`
     try:
-        servings_int = int(preferred_servings)
+        servings_int = int(household_member_count)
         if servings_int < 1 or servings_int > 20:
-            raise ValueError("preferred_servings must be between 1 and 20.")
+            raise ValueError("household_member_count must be between 1 and 20.")
     except (ValueError, TypeError) as err:
         return {
             "status": "error",
-            "message": f"Invalid 'preferred_servings' value: {err}"
+            "message": f"Invalid 'household_member_count' value: {err}"
         }
 
     try:
         user = get_object_or_404(CustomUser, id=user_id)
         user.emergency_supply_goal = days_int
-        # Update preferred_servings (handle both spelling variants)
-        if hasattr(user, "preferred_servings"):
+        # Update household_member_count (handle legacy preferred_servings field)
+        if hasattr(user, "household_member_count"):
+            user.household_member_count = servings_int
+        elif hasattr(user, "preferred_servings"):
             user.preferred_servings = servings_int
-        elif hasattr(user, "preffered_servings"):
-            user.preffered_servings = servings_int
-        user.save(update_fields=["emergency_supply_goal", "preferred_servings" if hasattr(user, "preferred_servings") else "preffered_servings"])
+        user.save(update_fields=["emergency_supply_goal", "household_member_count" if hasattr(user, "household_member_count") else "preferred_servings"])
 
         return {
             "status": "success",
             "message": (
                 f"Emergency supply goal set to {days_int} day(s) "
-                f"and preferred servings updated to {servings_int}."
+                f"and household member count updated to {servings_int}."
             ),
             "emergency_supply_goal": days_int,
-            "preferred_servings": servings_int
+            "household_member_count": servings_int
         }
     except Exception as e:
         # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 

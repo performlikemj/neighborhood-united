@@ -1,8 +1,7 @@
 name: CI / CD (no third-party actions)
 
 on:
-  push:
-    branches: [ main ]
+  workflow_dispatch:
 
 defaults:
   run:
@@ -206,9 +205,9 @@ jobs:
             ./ $SSH_USER@$SSH_HOST:/var/www/myapp
 
           ssh -i /tmp/deploy_key $SSH_USER@$SSH_HOST "
-            sudo mv /var/www/myapp/build/config.env /etc/myapp/config.env
-            sudo chown root:root /etc/myapp/config.env
-            sudo chmod 600 /etc/myapp/config.env
+            sudo cp /var/www/myapp/build/config.env /var/www/myapp/config.env
+            sudo chown $SSH_USER:$SSH_USER /var/www/myapp/config.env
+            sudo chmod 600 /var/www/myapp/config.env
             sudo systemctl restart apache2
           "
         env:

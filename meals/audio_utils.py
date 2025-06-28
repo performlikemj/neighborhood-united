@@ -14,14 +14,8 @@ from meals.pydantic_models import PantryItemSchema
 from django.conf import settings
 from openai import OpenAI
 from pydantic import BaseModel, Field
-
+from shared.utils import get_openai_client
 logger = logging.getLogger(__name__)
-
-# Initialize OpenAI client
-OPENAI_API_KEY = settings.OPENAI_KEY
-client = OpenAI(api_key=OPENAI_API_KEY)
-
-
 
 def transcribe_audio(audio_file) -> str:
     """
@@ -43,7 +37,7 @@ def transcribe_audio(audio_file) -> str:
             
             # Use the temporary file for the API call
             with open(temp_file.name, 'rb') as file:
-                transcription = client.audio.transcriptions.create(
+                transcription = get_openai_client().audio.transcriptions.create(
                     model="whisper-1",
                     file=file,  # Pass the opened file object
                     response_format="text"
@@ -81,7 +75,7 @@ def extract_pantry_item_info(transcription: str) -> Dict[str, Any]:
     """
     # Use GPT to extract structured information from the transcription
     try:
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-mini",
             input=[
                 {"role": "developer", "content": ("""

@@ -6,9 +6,8 @@ from openai import OpenAI
 from django.conf import settings
 from meals.models import MealPlan, MealPlanMeal
 from meals.pydantic_models import MealPlanModificationRequest
-
+from shared.utils import get_openai_client
 logger = logging.getLogger(__name__)
-client = OpenAI(api_key=settings.OPENAI_KEY)
 
 def parse_modification_request(
     raw_prompt: str,
@@ -77,7 +76,7 @@ def parse_modification_request(
         # 3. Call Responses API with Structured Outputs
         print(f"DEBUG parse_modification_request: About to call OpenAI")
         try:
-            resp = client.responses.create(
+            resp = get_openai_client().responses.create(
                 model=model,
                 input=messages,
                 text={

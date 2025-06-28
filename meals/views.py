@@ -893,29 +893,32 @@ def api_pantry_item_detail(request, pk):
 # Emergency pantry item API
 @api_view(['POST'])
 def api_generate_emergency_plan(request):
-    approval_token = request.data.get('approval_token')
-
-    if not approval_token:
-        return Response({"error": "Approval token is required."}, status=400)
-
-    try:
-        # Retrieve the MealPlan or user associated with that token
-        # or store the token on the user object—whatever logic fits your design.
-        # For example, maybe you store the token on the `User` or `MealPlan`:
-
-        meal_plan = MealPlan.objects.get(approval_token=approval_token)
-        user = meal_plan.user  # The associated user
-    except MealPlan.DoesNotExist:
-        return Response({"error": "Invalid or expired approval token."}, status=400)
-
-    # Great, we found a valid user from the token. Now let's generate the plan:
     from meals.email_service import generate_emergency_supply_list
-
+    """
+    API endpoint to generate emergency supply list for users.
+    """
     try:
-        generate_emergency_supply_list(user.id)
-        return Response({"message": "Emergency supply list generated successfully."}, status=200)
+        approval_token = request.data.get('approval_token')
+        
+        if not approval_token:
+            return Response({'error': 'Approval token is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get the meal plan associated with this approval token
+        try:
+            meal_plan = MealPlan.objects.get(approval_token=approval_token)
+            user = meal_plan.user
+        except MealPlan.DoesNotExist:
+            return Response({'error': 'Invalid or expired approval token'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # Generate emergency supply list via email
+        try:
+            generate_emergency_supply_list(user.id)
+            return Response({'message': 'Emergency supply list generated and sent via email'}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': f'Failed to generate emergency supply list: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
     except Exception as e:
-        return Response({"error": str(e)}, status=400)
+        return Response({'error': f'Unexpected error: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])

@@ -20,7 +20,7 @@ from meals.models import MealPlanMeal, MealPlan, MealPlanInstruction, Instructio
 from meals.pydantic_models import Instructions as InstructionsSchema
 from meals.serializers import MealPlanMealSerializer
 from custom_auth.models import CustomUser
-from shared.utils import generate_user_context
+from shared.utils import generate_user_context, get_openai_client
 from meals.pantry_management import get_expiring_pantry_items
 from meals.pydantic_models import BulkPrepInstructions, DailyTask
 from django.template.loader import render_to_string
@@ -30,9 +30,6 @@ import traceback
 from .celery_utils import handle_task_failure
 
 logger = logging.getLogger(__name__)
-
-OPENAI_API_KEY = settings.OPENAI_KEY
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 @shared_task
@@ -124,7 +121,9 @@ def send_daily_meal_instructions():
                         # Format each task by meal type
                         tasks_by_meal_type = defaultdict(list)
                         for task in daily_task.tasks:
-                            tasks_by_meal_type[task.meal_type].append(task)
+                            # Handle cases where task might not have meal_type attribute
+                            meal_type = getattr(task, 'meal_type', 'Other')
+                            tasks_by_meal_type[meal_type].append(task)
                         
                         meal_types_order = ['Breakfast', 'Lunch', 'Dinner', 'Snack']
                         
@@ -165,6 +164,11 @@ def generate_instructions(meal_plan_meal_ids):
     Generate cooking instructions for a list of MealPlanMeal IDs and send a consolidated email to the user.
     Includes fetching/generating macro info using existing functions.
     """
+    logger.info(f"=== MEAL INSTRUCTIONS DEBUG: generate_instructions called for meal_plan_meal_ids={meal_plan_meal_ids}")
+    print(f"=== MEAL INSTRUCTIONS DEBUG: generate_instructions called for meal_plan_meal_ids={meal_plan_meal_ids}")
+    print(f"=== MEAL INSTRUCTIONS DEBUG: THIS IS NOT THE EMERGENCY PANTRY PLAN FUNCTION!")
+    logger.info(f"MEAL INSTRUCTIONS DEBUG: THIS IS NOT THE EMERGENCY PANTRY PLAN FUNCTION!")
+    
     from meals.models import MealAllergenSafety
     from meals.meal_assistant_implementation import MealPlanningAssistant
     if not isinstance(meal_plan_meal_ids, list):
@@ -188,7 +192,7 @@ def generate_instructions(meal_plan_meal_ids):
     from meals.meal_plan_service import is_chef_meal
 
     # Retrieve user preferences
-    preferred_servings = getattr(user, 'preferred_servings', 1)
+    household_member_count = getattr(user, 'household_member_count', 1)
     user_preferred_language = user.preferred_language or 'English'
 
     try:
@@ -295,7 +299,7 @@ def generate_instructions(meal_plan_meal_ids):
                 metadata_prompt_part += f"\\\\n- Estimated Nutrition: {macro_info_str}"
                 # --- End Metadata Prompt ---
 
-                response = client.responses.create(
+                response = get_openai_client().responses.create(
                     model="gpt-4.1-mini",
                     input=[
                         {
@@ -359,6 +363,7 @@ def generate_instructions(meal_plan_meal_ids):
                             "content": (
                                 f"Generate cooking instructions in {user_preferred_language} for the following meal: {meal_data_json}. "
                                 f"The user's context is: {user_context}. "
+                                f"Pay special attention to individual household member dietary needs, preferences, and ages when adjusting cooking methods, portion guidance, and ingredient handling. "
                                 f"The user has these pantry items expiring soon: {expiring_items_str}. Prioritize using these if applicable. "
                                 f"{metadata_prompt_part}" # Include the metadata context here
                                 f"\\\\n\\\\n{substitution_str}\\\\n"
@@ -534,6 +539,23 @@ def generate_instructions(meal_plan_meal_ids):
 @shared_task
 @handle_task_failure
 def generate_bulk_prep_instructions(meal_plan_id):
+    """
+    Generate bulk meal prep instructions for a given meal plan.
+    """
+    logger.info(f"=== MEAL INSTRUCTIONS DEBUG: generate_bulk_prep_instructions called for meal_plan_id={meal_plan_id}")
+    print(f"=== MEAL INSTRUCTIONS DEBUG: generate_bulk_prep_instructions called for meal_plan_id={meal_plan_id}")
+    print(f"=== MEAL INSTRUCTIONS DEBUG: THIS IS NOT THE EMERGENCY PANTRY PLAN FUNCTION!")
+    logger.info(f"MEAL INSTRUCTIONS DEBUG: THIS IS NOT THE EMERGENCY PANTRY PLAN FUNCTION!")
+
+    from meals.models import Meal, MealPlan, MealPlanMeal, MealPlanInstruction, PantryItem
+    from django.db import transaction
+    from collections import defaultdict
+    import uuid
+    from meals.pydantic_models import BulkPrepInstructions
+    import json
+    import requests
+    import os
+
     from meals.models import MealPlan, MealPlanInstruction, MealAllergenSafety, Ingredient, Meal, MealPlanMeal
     from meals.serializers import MealPlanSerializer
     from meals.meal_assistant_implementation import MealPlanningAssistant
@@ -570,7 +592,7 @@ def generate_bulk_prep_instructions(meal_plan_id):
     # meal_plan_data = serializer.data
 
     # Get user preferences
-    preferred_servings = getattr(user, 'preferred_servings', 1)
+    household_member_count = getattr(user, 'household_member_count', 1)
     user_preferred_language = user.preferred_language or 'English'
 
     # --- Collect Metadata and Substitution Info for ALL meals --- 
@@ -693,7 +715,7 @@ def generate_bulk_prep_instructions(meal_plan_id):
         all_meals_json_for_prompt = json.dumps(all_meals_data_for_prompt, indent=2)
 
         # Generate the bulk prep instructions using OpenAI
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-mini", # Or gpt-4-turbo if more complexity needed
             input=[
                 {
@@ -746,7 +768,7 @@ def generate_bulk_prep_instructions(meal_plan_id):
                     "role": "user",
                     "content": (
                         f"Generate a comprehensive bulk meal prep plan in {user_preferred_language} for the following weekly meals (nutrition/video info is context, may be JSON strings): {all_meals_json_for_prompt}. "
-                        f"The plan is for {preferred_servings} servings per meal. Adjust quantities. "
+                        f"The plan serves {household_member_count} household members total. Pay special attention to individual household member dietary needs, preferences, and ages listed in the user context when planning quantities, preparation methods, and storage considerations. Adjust portions and cooking methods to accommodate different dietary requirements within the household. "
                         f"User Context: {user_context}. "
                         f"Expiring Pantry Items (prioritize using these): {expiring_items_str}. "
                         f"Goal: Prepare as much as possible in one session (e.g., Sunday) for the week. "
@@ -830,7 +852,9 @@ def generate_bulk_prep_instructions(meal_plan_id):
                         if tasks:
                             daily_tasks_formatted += f"\n{day_name}:\n"
                             for task in tasks:
-                                daily_tasks_formatted += f"- {task.meal_type}: {task.description}\n"
+                                # Handle cases where task might not have meal_type attribute
+                                meal_type = getattr(task, 'meal_type', 'Other')
+                                daily_tasks_formatted += f"- {meal_type}: {task.description}\n"
                                 if task.notes:
                                     daily_tasks_formatted += f"  Note: {task.notes}\n"
                     
@@ -884,6 +908,11 @@ def send_bulk_prep_instructions(meal_plan_id):
     """
     Send a generated bulk prep instructions to the user via the meal planning assistant.
     """
+    logger.info(f"=== MEAL INSTRUCTIONS DEBUG: send_bulk_prep_instructions called for meal_plan_id={meal_plan_id}")
+    print(f"=== MEAL INSTRUCTIONS DEBUG: send_bulk_prep_instructions called for meal_plan_id={meal_plan_id}")
+    print(f"=== MEAL INSTRUCTIONS DEBUG: THIS IS NOT THE EMERGENCY PANTRY PLAN FUNCTION!")
+    logger.info(f"MEAL INSTRUCTIONS DEBUG: THIS IS NOT THE EMERGENCY PANTRY PLAN FUNCTION!")
+    
     from meals.models import MealPlan, MealPlanInstruction
     from meals.meal_assistant_implementation import MealPlanningAssistant
     
@@ -950,7 +979,9 @@ def send_bulk_prep_instructions(meal_plan_id):
             if tasks:
                 daily_tasks_formatted += f"\n{day_name}:\n"
                 for task in tasks:
-                    daily_tasks_formatted += f"- {task.meal_type}: {task.description}\n"
+                    # Handle cases where task might not have meal_type attribute
+                    meal_type = getattr(task, 'meal_type', 'Other')
+                    daily_tasks_formatted += f"- {meal_type}: {task.description}\n"
                     if task.notes:
                         daily_tasks_formatted += f"  Note: {task.notes}\n"
         
@@ -994,7 +1025,9 @@ def format_follow_up_instructions(daily_task: DailyTask, user_name: str):
     # Group tasks by meal_type
     tasks_by_meal_type = defaultdict(list)
     for task in daily_task.tasks:
-        tasks_by_meal_type[task.meal_type].append(task)
+        # Handle cases where task might not have meal_type attribute
+        meal_type = getattr(task, 'meal_type', 'Other')
+        tasks_by_meal_type[meal_type].append(task)
 
     # Define meal type order and colors
     meal_types_order = ['Breakfast', 'Lunch', 'Dinner', 'Snack']
@@ -1083,7 +1116,9 @@ def send_follow_up_instructions(meal_plan_id):
             # Format task details
             tasks_by_meal_type = defaultdict(list)
             for task in daily_task.tasks:
-                tasks_by_meal_type[task.meal_type].append(task)
+                # Handle cases where task might not have meal_type attribute
+                meal_type = getattr(task, 'meal_type', 'Other')
+                tasks_by_meal_type[meal_type].append(task)
             
             formatted_message = f"Follow-up instructions for {daily_task.day}:\n\n"
             meal_types_order = ['Breakfast', 'Lunch', 'Dinner', 'Snack']

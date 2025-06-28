@@ -6,7 +6,7 @@ from utils.openai_helpers import token_length
 from utils.quotas import hit_quota
 
 # Available models in order of capability/cost
-MODEL_GPT41 = "gpt-4.1"
+MODEL_GPTo4_MINI = "o4-mini-2025-04-16"
 MODEL_GPT41_MINI = "gpt-4.1-mini"
 MODEL_GPT41_NANO = "gpt-4.1-nano"
 
@@ -62,7 +62,7 @@ def choose_model(user_id, is_guest: bool, question: str, history_tokens: int = 0
         print(f"MODEL_SELECTION: Upgrading due to token complexity: {total} >= {COMPLEXITY_THRESHOLD}")
     
     # 1) Decide "ideal" model based on upgrade criteria
-    ideal = MODEL_GPT41 if upgrade else MODEL_GPT41_MINI
+    ideal = MODEL_GPTo4_MINI if upgrade else MODEL_GPT41_MINI
     
     # 2) Apply per-user quotas
     if is_guest:
@@ -73,10 +73,10 @@ def choose_model(user_id, is_guest: bool, question: str, history_tokens: int = 0
                 return MODEL_GPT41_NANO
         else:
             # Guests never get full GPT-4.1, downgrade to mini
-            print(f"MODEL_SELECTION: Guest {user_id} - Using {MODEL_GPT41_MINI} (downgraded from {MODEL_GPT41})")
+            print(f"MODEL_SELECTION: Guest {user_id} - Using {MODEL_GPT41_MINI} (downgraded from {MODEL_GPTo4_MINI})")
             return MODEL_GPT41_MINI
     else:
-        if ideal == MODEL_GPT41:
+        if ideal == MODEL_GPTo4_MINI:
             quota_exhausted = hit_quota(user_id, "gpt41_daily", settings.GPT41_AUTH_LIMIT)
             if quota_exhausted:
                 print(f"MODEL_SELECTION: User {user_id} quota exhausted - Using {MODEL_GPT41_MINI}")

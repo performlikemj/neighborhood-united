@@ -10,13 +10,9 @@ from pydantic import ValidationError
 import traceback
 from meals.models import Meal, DietaryPreference, CustomDietaryPreference
 from meals.pydantic_models import DietaryPreferenceDetail, DietaryPreferencesSchema
-from shared.utils import create_or_update_dietary_preference, get_dietary_preference_info
+from shared.utils import create_or_update_dietary_preference, get_dietary_preference_info, get_openai_client
 
 logger = logging.getLogger(__name__)
-
-OPENAI_API_KEY = settings.OPENAI_KEY
-client = OpenAI(api_key=OPENAI_API_KEY)
-
 
 @shared_task
 def handle_custom_dietary_preference(custom_prefs):
@@ -28,7 +24,7 @@ def handle_custom_dietary_preference(custom_prefs):
         if custom_pref and not get_dietary_preference_info(custom_pref):
             try:
                 # Step 4: Use OpenAI to generate structured JSON
-                response = client.responses.create(
+                response = get_openai_client().responses.create(
                     model="gpt-4.1-mini",
                     input=[
                         {
@@ -154,7 +150,7 @@ def assign_dietary_preferences(meal_id):
     try:
         meal = Meal.objects.get(id=meal_id)
         messages = meal.generate_messages()
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-mini",
             input=messages,
             #store=True,

@@ -13,7 +13,7 @@ from googleapiclient.errors import HttpError
 from openai import OpenAI
 from django.conf import settings
 import os
-from meals.pydantic_models import VideoRankings
+from meals.pydantic_models import VideoRankings, YouTubeVideoResults
 
 logger = logging.getLogger(__name__)
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
@@ -237,22 +237,17 @@ def format_for_structured_output(youtube_results: Dict[str, Any]) -> Dict[str, A
         youtube_results: Results from the YouTube API search with OpenAI ranking
         
     Returns:
-        Dictionary formatted for structured output
+        Dictionary formatted for YouTubeVideoResults structured output
     """
     formatted_videos = []
     
     for video in youtube_results.get("videos", []):
         formatted_video = {
-            "title": video["title"],
-            "url": video["url"],
-            "channel": video["channel"],
+            "title": video.get("title", ""),
+            "url": video.get("url", ""),
+            "channel": video.get("channel", ""),
             "description": video.get("description", ""),
-            "duration": video.get("duration", ""),
-            "relevance_score": video.get("relevance_score", 0),
-            "relevance_explanation": video.get("relevance_explanation", ""),
-            "recommended": video.get("recommended", False),
-            "matching_ingredients": video.get("matching_ingredients", []),
-            "matching_techniques": video.get("matching_techniques", [])
+            "duration": video.get("duration", "")
         }
         formatted_videos.append(formatted_video)
     

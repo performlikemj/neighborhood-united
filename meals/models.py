@@ -48,9 +48,6 @@ STATUS_REFUNDED = 'refunded'
 
 logger = logging.getLogger(__name__)
 
-OPENAI_API_KEY = getattr(settings, 'OPENAI_KEY', None)
-client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-
 class Migration(migrations.Migration):
     operations = [
         VectorExtension()

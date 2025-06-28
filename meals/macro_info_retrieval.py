@@ -5,16 +5,13 @@ import json
 import logging
 import traceback
 from typing import Dict, List, Optional, Any, ClassVar
-
 from django.conf import settings
 from openai import OpenAI, OpenAIError
 from pydantic import ValidationError
-
+from shared.utils import get_openai_client
 from meals.pydantic_models import MealMacroInfo
 
 logger = logging.getLogger(__name__)
-OPENAI_API_KEY = settings.OPENAI_KEY
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 def get_meal_macro_information(meal_name: str, meal_description: str, ingredients: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
     """
@@ -33,7 +30,7 @@ def get_meal_macro_information(meal_name: str, meal_description: str, ingredient
         ingredients_text = "Ingredients:\n" + "\n".join([f"- {ingredient}" for ingredient in ingredients])
     
     try:
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-mini",
             input=f"""
             Analyze the following meal and provide detailed macro nutritional information:

@@ -6,14 +6,9 @@ import json
 import logging
 import traceback
 from typing import List, Dict, Any
-
-from django.conf import settings
-from openai import OpenAI
+from shared.utils import get_openai_client
 
 logger = logging.getLogger(__name__)
-
-# Initialize OpenAI client
-client = OpenAI(api_key=settings.OPENAI_KEY)
 
 def get_macro_info(meal_name: str, meal_description: str, ingredients: List[str]) -> Dict[str, Any]:
     """
@@ -49,7 +44,7 @@ def get_macro_info(meal_name: str, meal_description: str, ingredients: List[str]
         
         # Call OpenAI API
         logger.debug(f"Sending request to OpenAI for macro info")
-        response = client.chat.completions.create(
+        response = get_openai_client().chat.completions.create(
             model="gpt-4.1-mini",
             messages=[
                 {"role": "developer", "content": "You are a nutritionist who provides accurate macro information for meals."},
@@ -120,7 +115,7 @@ def find_youtube_videos(meal_name: str, meal_description: str) -> Dict[str, Any]
         
         # Call OpenAI API
         logger.debug(f"Sending request to OpenAI for YouTube videos")
-        response = client.chat.completions.create(
+        response = get_openai_client().chat.completions.create(
             model="gpt-4.1-mini",
             messages=[
                 {"role": "developer", "content": "You are a helpful assistant that finds cooking videos."},

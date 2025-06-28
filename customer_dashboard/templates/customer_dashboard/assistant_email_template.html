@@ -1,278 +1,83 @@
 <!DOCTYPE html>
-{% load meal_filters %}
+{% load meal_filters i18n %}
 <html>
 <head>
-    <meta charset="UTF-8">
-    <!-- Ensures mobile responsiveness in most modern clients -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Assistant Communication</title>
-    <style>
-        /* Basic reset & body styling */
-        body { 
-            margin: 0; 
-            padding: 0; 
-            width: 100% !important; 
-            background-color: #f8f8f8; /* Subtle background to distinguish content area */
-        }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>{% blocktrans %}Message from your sautAI assistant{% endblocktrans %}</title>
 
-        /* Container for the "white card" look */
-        .container {
-            max-width: 600px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #ffffff; /* White background inside the container */
-        }
-
-        /* Typography */
-        h1, h2, h3, p {
-            margin-top: 0;
-            font-family: Arial, sans-serif;
-            color: #333333;
-        }
-        h1 {
-            font-size: 24px; 
-            color: #4CAF50;
-        }
-        h2 {
-            font-size: 20px; 
-            color: #5cb85c; 
-            border-bottom: 1px solid #dddddd; 
-            padding-bottom: 10px;
-        }
-        h3 {
-            font-size: 18px; 
-        }
-        p {
-            font-size: 16px; 
-            line-height: 1.5; 
-            margin: 0 0 10px;
-        }
-
-        /* Card-like option sections */
-        .option {
-            border: 1px solid #dddddd; 
-            border-radius: 5px; 
-            padding: 15px; 
-            margin-bottom: 20px; 
-        }
-        .option h3 {
-            margin-bottom: 10px;
-        }
-
-        /* Bulletproof buttons: We're using table-based code for broad compatibility */
-        .btn-table {
-            border-collapse: collapse;
-            margin: 0 auto;
-        }
-        .btn-table td {
-            border-radius: 5px;
-            text-align: center;
-        }
-        .btn-link {
-            display: inline-block;
-            font-size: 16px;
-            font-family: Arial, sans-serif;
-            text-decoration: none;
-            padding: 12px 24px;
-            border-radius: 5px;
-            margin-top: 15px;
-            white-space: nowrap; /* Prevents text wrap in narrow clients */
-        }
-        /* Specific button variations */
-        .bulk-btn {
-            background-color: #4CAF50;
-            color: #ffffff;
-        }
-        .daily-btn {
-            background-color: #2196F3;
-            color: #ffffff;
-        }
-
-        /* Re‑usable primary button */
-        .button {
-            display: inline-block;
-            background-color: #2196F3;
-            color: #ffffff;
-            padding: 12px 28px;
-            border-radius: 5px;
-            text-decoration: none;
-            font-weight: bold;
-            font-size: 16px;
-            white-space: nowrap;
-        }
-
-        /* Bottom assistant contact button – subtle variant */
-        .assistant-btn-bottom {
-            display: inline-block;
-            background-color: #ffffff;
-            color: #4CAF50;
-            padding: 12px 28px;
-            border: 2px solid #4CAF50;
-            border-radius: 5px;
-            text-decoration: none;
-            font-weight: bold;
-            font-size: 16px;
-            white-space: nowrap;
-        }
-
-        /* Container for centered buttons with breathing room */
-        .button-container {
-            text-align: center;
-            margin: 24px 0;
-        }
-
-        /* email body */
-        .email-body {
-            padding: 20px 30px;
-            line-height: 1.6;
-            font-size: 16px;
-        }
-        .email-body h2 {
-            color: #4CAF50;
-            font-size: 20px;
-            margin-top: 0;
-        }
-        .email-body p {
-            margin-bottom: 15px;
-        }
-        /*  ✱ Tighter, left‑aligned bullet lists for meal‑plan summaries */
-        .email-body ul {
-            margin: 0 0 12px;            /* no extra gap above the list   */
-            padding-left: 22px;           /* modest indent for bullets     */
-            list-style-position: outside; /* keeps bullets in left gutter  */
-        }
-        .email-body li {
-            margin: 0 0 4px;              /* tighter row spacing           */
-            line-height: 1.4;
-        }
-
-        /* Footer */
-        .footer {
-            text-align: center; 
-            color: #777777; 
-            font-size: 12px; 
-            padding: 10px; 
-            margin-top: 20px; 
-        }
-        .footer a { 
-            color: #007BFF; 
-            text-decoration: none; 
-        }
-
-        /* Logo */
-        .logo { 
-            text-align: center; 
-            margin-bottom: 20px; 
-        }
-        .logo img { 
-            max-width: 200px; 
-            height: auto; 
-        }
-        /* Shopping‑list table */
-        .table-slim {
-            width: 100%;
-            border-collapse: collapse;
-            table-layout: fixed;
-        }
-        .table-slim td {
-            padding: 4px 0;
-            font-size: 16px;
-            line-height: 1.4;
-            word-wrap: break-word;
-            white-space: normal;
-        }
-        .table-slim td.qty {
-            text-align: right;
-            font-weight: bold;
-            white-space: nowrap;
-        }
-        .content-section {
-            overflow-x: auto;
-            max-width: 100%;
-        }
-        /*  ✱ NEW: Tighten up bullet lists used in meal-plan summaries */
-        .email-body ul {
-            margin: 8px 0 16px;      /* pull list closer to heading */
-            padding-left: 18px;      /* indent so bullets don't hug the edge  */
-            list-style-position: inside;  /* keeps bullets aligned in narrow clients */
-        }
-        .email-body li {
-            margin: 0 0 6px;         /* shrink the huge default li gap */
-            line-height: 1.4;
-        }
-    </style>
+<!-- 📧  Inline‑safe CSS  -->
+<style>
+body{margin:0;padding:0;width:100%!important;background:#f8f8f8;}
+.container{max-width:600px;margin:0 auto;padding:20px;background:#ffffff;}
+h1,h2,h3,p{margin-top:0;font-family:Arial,sans-serif;color:#333;}
+h1{font-size:24px;color:#4CAF50;}
+h2{font-size:20px;color:#5cb85c;border-bottom:1px solid #ddd;padding-bottom:10px;}
+h3{font-size:18px;}
+p{font-size:16px;line-height:1.5;margin:0 0 10px;}
+.email-body{padding:20px 30px;line-height:1.6;font-size:16px;}
+.email-body ul{margin:8px 0 16px;padding-left:18px;list-style-position:inside;}
+.email-body li{margin:0 0 6px;line-height:1.4;}
+.button{display:inline-block;background:#2196F3;color:#fff;padding:12px 28px;border-radius:5px;text-decoration:none;font-weight:bold;font-size:16px;white-space:nowrap;}
+.footer{color:#777;font-size:12px;text-align:center;margin-top:20px;line-height:1.4;}
+.table-slim{width:100%;border-collapse:collapse;table-layout:fixed;}
+.table-slim td{padding:4px 0;font-size:16px;line-height:1.4;word-wrap:break-word;}
+.table-slim td.qty{text-align:right;font-weight:bold;white-space:nowrap;}
+.logo img{max-width:200px;height:auto;}
+/* graphs */
+.email-body img.graph{max-width:100%;height:auto;border:0;outline:none;text-decoration:none;}
+</style>
 </head>
+
 <body>
-    <!-- Full-width "wrapper" table to accommodate background color in older email clients -->
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f8f8f8;">
-        <tr>
-            <td align="center" valign="top">
-                <div class="container">
-                    <!-- Logo Section -->
-                    <div class="logo">
-                        <!-- Include descriptive alt text for accessibility -->
-                        <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" />
-                    </div>
+<!-- invisible pre‑header -->
+<span style="display:none;max-height:0;overflow:hidden;">{{ preheader_text|default:_("Your latest meal plan & tips inside.") }}</span>
 
-                    <div class="email-body">
-                        <p>Hi {{ user_name|default:'there' }},</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f8f8f8;">
+<tr><td align="center">
 
+<div class="container">
 
-                        {% if personal_assistant_email %}
-                        <div style="background: #f0f8ff; border-left: 4px solid #4CAF50; border-radius: 8px; margin: 24px 0; padding: 20px 16px;">
-                            <h3 style="margin: 0 0 8px; font-family: Arial, sans-serif; color: #2196F3; font-size: 18px; display: flex; align-items: center;">
-                                🤖 Contact Your AI Assistant
-                            </h3>
-                            <p style="margin: 0 0 12px; color: #333; font-size: 16px; line-height: 1.5;">
-                                Need something personalized? Just email your assistant directly:
-                            </p>
-                            <a href="mailto:{{ personal_assistant_email }}" 
-                               style="display: inline-block; background: #4CAF50; color: #fff; padding: 12px 28px; border-radius: 5px; text-decoration: none; font-weight: bold; font-size: 16px;">
-                                {{ personal_assistant_email }}
-                            </a>
-                        </div>
-                        {% endif %}
-                        <div class="content-section">
-                            {% autoescape off %}
-                            {{ email_body_content|safe }}
-                            {% endautoescape %}
-                        </div>
-            
-                        {% if profile_url %}
-                        <div class="button-container">
-                            <a href="{{ profile_url }}" class="button">Access Your Dashboard</a>
-                        </div>
-                        {% endif %}
-            
-                        {% if personal_assistant_email %}
-                        <div style="background: #f0f8ff; border-left: 4px solid #4CAF50; border-radius: 8px; margin: 24px 0; padding: 20px 16px;">
-                            <h3 style="margin: 0 0 8px; font-family: Arial, sans-serif; color: #2196F3; font-size: 18px; display: flex; align-items: center;">
-                                🤖 Contact Your AI Assistant
-                            </h3>
-                            <p style="margin: 0 0 12px; color: #333; font-size: 16px; line-height: 1.5;">
-                                If you have any further questions, contact your personal assistant at:
-                            </p>
-                            <a href="mailto:{{ personal_assistant_email }}" 
-                               style="display: inline-block; background: #4CAF50; color: #fff; padding: 12px 28px; border-radius: 5px; text-decoration: none; font-weight: bold; font-size: 16px;">
-                                {{ personal_assistant_email }}
-                            </a>
-                        </div>
-                        {% endif %}
-                    </div>
+  <!-- Logo -->
+  <div class="logo">
+    <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI" role="presentation" />
+  </div>
 
-                    </div>
-                    <!-- Footer -->
-                    <p style="color: #777; font-size: 12px; margin-top: 20px;">
-                        <strong>Disclaimer:</strong> SautAI uses generative AI for meal planning, 
-                        shopping list generation, and other suggestions, which may produce inaccuracies. 
-                        Always double-check crucial information.
-                    </p>
-                    <p style="color: #777; font-size: 12px; margin-top: 10px;">
-                        You can <a href="{{ profile_url }}" style="color: #4CAF50; text-decoration: underline;">unsubscribe from emails</a> at any time from your profile page.
-                    </p>
-                </div>
-            </td>
-        </tr>
-    </table>
+  <!-- Greeting -->
+  <div class="email-body">
+    <p>{% blocktrans with name=user_name|default:"there" %}Hi {{ name }},{% endblocktrans %}</p>
+
+    <!-- Assistant contact (only once) -->
+    {% if personal_assistant_email %}
+      <div style="background:#f0f8ff;border-left:4px solid #4CAF50;border-radius:8px;margin:24px 0;padding:20px 16px;">
+        <h3 style="margin:0 0 8px;font-family:Arial,sans-serif;color:#2196F3;font-size:18px;">🤖 {% trans "Contact Your AI Assistant" %}</h3>
+        <p style="margin:0 0 12px;">{% trans "Need something personalised?  Just reply or e‑mail:" %}</p>
+        <a href="mailto:{{ personal_assistant_email }}" class="button" style="background:#4CAF50;">📧 {% trans "Your sautAI Assistant" %}</a>
+      </div>
+    {% endif %}
+
+    <!-- ===== MAIN CONTENT ===== -->
+    {% autoescape off %}
+      {{ email_body_main|safe }}
+      {{ email_body_data|safe }}
+      {{ email_body_final|safe }}
+    {% endautoescape %}
+
+    <!-- Dashboard CTA (optional) -->
+    {% if profile_url %}
+      <p style="text-align:center;margin:28px 0;">
+        <a href="{{ profile_url }}" class="button">{% trans "Open Your sautAI Dashboard" %}</a>
+      </p>
+    {% endif %}
+  </div><!-- /email‑body -->
+
+  <!-- Footer -->
+  <div class="footer">
+    <p><strong>{% trans "Disclaimer:" %}</strong> {% trans "SautAI uses generative AI. Please double‑check critical information." %}</p>
+    <p><a href="{{ profile_url }}">{% trans "Authenticate and navigate to your profile to unsubscribe or update e‑mail preferences" %}</a></p>
+  </div>
+
+</div><!-- /container -->
+</td></tr></table>
 </body>
 </html>

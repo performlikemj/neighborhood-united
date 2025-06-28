@@ -281,4 +281,3 @@ class UserRole(models.Model):
         return f'{self.user.username} - {self.current_role}'
     
 
-

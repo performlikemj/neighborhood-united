@@ -10,15 +10,12 @@ from django.db.models import Sum
 from pydantic import ValidationError
 from celery import shared_task
 from custom_auth.models import CustomUser
-from shared.utils import generate_user_context
+from shared.utils import generate_user_context, get_openai_client
 from meals.models import PantryItem, Tag, MealPlanMealPantryUsage
 from meals.pydantic_models import ReplenishItemsSchema, PantryTagsSchema
 from openai import OpenAI, OpenAIError
 
 logger = logging.getLogger(__name__)
-
-OPENAI_API_KEY = settings.OPENAI_KEY
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 def get_user_pantry_items(user):
     """
@@ -118,7 +115,7 @@ def check_item_for_allergies_gpt(item_name: str, user) -> bool:
     ]
 
     try:
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-mini",
             input=prompt_messages,
             text={
@@ -374,7 +371,7 @@ def determine_items_to_replenish(user):
     
     # Step 6: Call OpenAI API
     try:
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-mini",
             input=[
                 {"role": "developer", "content": prompt_system},
@@ -421,7 +418,7 @@ def assign_pantry_tags(pantry_item_id):
     )
 
     try:
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-mini",
             input=[
                 {"role": "developer", "content": (

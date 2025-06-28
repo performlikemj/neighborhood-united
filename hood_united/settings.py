@@ -210,14 +210,35 @@ if DEBUG:
     MEDIA_URL = '/media/'
     MEDIA_ROOT = os.path.join(BASE_DIR, 'media/')
 else:
-    # Blob Storage
-    DEFAULT_FILE_STORAGE = 'storages.backends.azure_storage.AzureStorage'
-
-    AZURE_ACCOUNT_NAME = os.getenv('AZURE_ACCOUNT_NAME')  # your azure account name
-    AZURE_ACCOUNT_KEY = os.getenv('AZURE_ACCOUNT_KEY')  # your azure account key
-    AZURE_CONTAINER = os.getenv('AZURE_CONTAINER')  # the default container
+    # Modern Django 4.2+ Azure Blob Storage Configuration
+    AZURE_ACCOUNT_NAME = os.getenv('AZURE_ACCOUNT_NAME', 'sautaiblobstorage')
+    AZURE_ACCOUNT_KEY = os.getenv('AZURE_ACCOUNT_KEY')
+    AZURE_CONNECTION_STRING = os.getenv('AZURE_CONNECTION_STRING')  # Optional but recommended
+    AZURE_CONTAINER = os.getenv('AZURE_CONTAINER', 'media')
     AZURE_CUSTOM_DOMAIN = f'{AZURE_ACCOUNT_NAME}.blob.core.windows.net'
     MEDIA_URL = f'https://{AZURE_CUSTOM_DOMAIN}/{AZURE_CONTAINER}/'
+    
+    # New STORAGES setting for Django 4.2+
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.azure_storage.AzureStorage",
+            "OPTIONS": {
+                "account_name": AZURE_ACCOUNT_NAME,
+                "account_key": AZURE_ACCOUNT_KEY,
+                "azure_container": AZURE_CONTAINER,
+                "azure_ssl": True,
+                "overwrite_files": False,  # Prevents overwriting files with same name
+                "location": "",  # Root level of container
+                "cache_control": "public,max-age=31536000,immutable",  # 1 year cache
+                "object_parameters": {
+                    "cache_control": "public,max-age=31536000,immutable",
+                }
+            },
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
 
 # Custom user model
 AUTH_USER_MODEL = 'custom_auth.CustomUser'
@@ -266,32 +287,33 @@ REDIS_PASSWORD = os.getenv('REDIS_PASSWORD')
 DJANGO_REDIS_LOG_IGNORED_EXCEPTIONS = True
 DJANGO_REDIS_LOGGER = 'django.request'
 
-# Cache configuration - handle missing Redis URL for CI/testing
-if REDIS_URL:
-    CACHES = {
-        'default': {
-            'BACKEND': 'django_redis.cache.RedisCache',
-            # If REDIS_URL already contains a scheme (`rediss://`) just use it;
-            # otherwise fall back to adding one. This keeps both utils.quotas and Django‑redis happy.
-            'LOCATION': f"{REDIS_URL if REDIS_URL.startswith(('rediss://')) else 'rediss://'+REDIS_URL+':6380/0'}?ssl_cert_reqs=required",
-            'OPTIONS': {
-                'CLIENT_CLASS': 'django_redis.client.DefaultClient',
-                'PASSWORD': REDIS_PASSWORD,
-                'SOCKET_CONNECT_TIMEOUT': 15,  # Try increasing to 15 seconds
-                'SOCKET_TIMEOUT': 15,  # Similarly increase to 15 seconds
-                'RETRY_ON_TIMEOUT': True,  # Retry on timeout
-                'SOCKET_KEEPALIVE': True,  # Keep the connection alive
-            }
-        }
+RAW_REDIS_URL = os.getenv("REDIS_URL", "").strip()
+
+if not RAW_REDIS_URL:
+    raise RuntimeError("REDIS_URL is not set")
+
+if not RAW_REDIS_URL.startswith("rediss://"):
+    # assume host[:port][/db]   →  prepend scheme & default port/db
+    RAW_REDIS_URL = f"rediss://{RAW_REDIS_URL}:6380/0"
+
+# Append SSL flag only once
+if "ssl_cert_reqs=" not in RAW_REDIS_URL:
+    RAW_REDIS_URL = RAW_REDIS_URL + "?ssl_cert_reqs=required"
+
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": RAW_REDIS_URL,
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            # password is already embedded in the URL; no need for extra key
+            "SOCKET_CONNECT_TIMEOUT": 15,
+            "SOCKET_TIMEOUT": 15,
+            "RETRY_ON_TIMEOUT": True,
+            "SOCKET_KEEPALIVE": True,
+        },
     }
-else:
-    # Fallback cache for CI/testing when Redis is not available
-    CACHES = {
-        'default': {
-            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-            'LOCATION': 'unique-snowflake',
-        }
-    }
+}
 
 # Celery settings
 CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL')

@@ -17,14 +17,11 @@ from custom_auth.models import CustomUser
 from meals.models import Meal, MealPlan, MealPlanMeal, PantryItem, MealPlanMealPantryUsage, MealCompatibility
 from meals.pydantic_models import MealOutputSchema, SanitySchema, UsageList
 from shared.utils import (generate_user_context, create_meal,
-                          get_embedding, cosine_similarity)
+                          get_embedding, cosine_similarity, get_openai_client)
 from meals.pantry_management import get_expiring_pantry_items, compute_effective_available_items
 from openai import OpenAIError, BadRequestError
 
 logger = logging.getLogger(__name__)
-
-OPENAI_API_KEY = settings.OPENAI_KEY
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 def use_pantry_item(pantry_item: PantryItem, units_to_use: int) -> None:
     """
@@ -257,7 +254,7 @@ def generate_and_create_meal(
                         meal_name=meal.name,
                         meal_description=meal.description,
                         used_pantry_info=usage_data,
-                        serving_size=user.preferred_servings,
+                        serving_size=user.household_member_count,
                         request_id=request_id
                     )
                     logger.info(f"[{request_id}] Scheduled usage determination for pantry item '{item_name}'")
@@ -334,7 +331,7 @@ def perform_openai_sanity_check(meal, user):
     
     # We need to perform a sanity check with OpenAI
     try:
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-mini",
             input=[
                 {
@@ -607,7 +604,8 @@ def generate_meal_details(
         - Is not too similar to: {', '.join(combined_meal_names)}
         - Meets the user's goal: {user_goals}
         - Avoids user allergies: {allergens_str}
-        - Aligns with user preferences: {generate_user_context(user)}
+        - Aligns with user preferences and considers individual household member dietary needs: {generate_user_context(user)}
+        - Accommodates different dietary requirements, ages, and preferences within the household
         - Is served as: {meal_type}
 
         Begin!
@@ -626,7 +624,7 @@ def generate_meal_details(
                 Available dietary preferences: {dietary_preferences_str}
                 Please ensure the meal's dietary_preference field uses one of these exact values.
                 """
-                response = client.responses.create(
+                response = get_openai_client().responses.create(
                     model="gpt-4.1-mini",
                     input=[
                         {"role": "developer", "content": (
@@ -643,7 +641,8 @@ def generate_meal_details(
 
                             2. **Meal Creation:**
                             - Develop a creative meal idea that satisfies the user's requirements and preferences.
-                            - Avoid ingredients that the user is allergic to.
+                            - Consider individual household member dietary needs, ages, and preferences when designing the meal.
+                            - Avoid ingredients that the user or household members are allergic to.
 
                             3. **JSON Structure:**
                             - Utilize the `MealData` and `MealOutputSchema` schemas.
@@ -861,15 +860,17 @@ def determine_usage_for_meal(
     user_msg = (
         f"Meal Name: '{meal_name}'\n"
         f"Description: {meal_description}\n"
-        f"Serving size: {serving_size}\n"
+        f"Serving size: {serving_size} people (consider individual household member dietary needs and ages when determining quantities)\n"
         f"Items to use: {used_items_str}\n"
         f"User's dietary preferences: {combined_prefs}\n"
+        f"User context with household member details: {generate_user_context(user)}\n"
         "Only return usage for the items in used_pantry_info. "
-        "If an item is not used, omit it. Also specify the unit (e.g., 'cans' or 'cups')."
+        "If an item is not used, omit it. Also specify the unit (e.g., 'cans' or 'cups'). "
+        "Adjust quantities based on individual household member needs, ages, and dietary restrictions."
     )
 
     try:
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-mini",
             input=[
                 {"role": "developer", "content": system_msg},

@@ -35,6 +35,7 @@ import django.db.utils
 import dateutil.parser
 import re
 import json
+import requests
 from django.db import transaction
 from decimal import Decimal, InvalidOperation
 from django.core.paginator import Paginator
@@ -47,9 +48,6 @@ import pytz
 
 
 logger = logging.getLogger(__name__)
-
-OPENAI_API_KEY = settings.OPENAI_KEY
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -98,7 +96,6 @@ def stripe_refresh(request, account_id):
     API endpoint to handle refresh requests from Stripe onboarding flow.
     Returns new account link when session expires or retry is needed.
     """
-    logger.info(f"User {request.user.id} needs to refresh Stripe onboarding for account {account_id}")
     try:
         # Verify chef status
         chef = get_object_or_404(Chef, user=request.user)
@@ -173,7 +170,6 @@ def api_chef_meal_orders(request):
     """
     # Handle GET requests
     if request.method == 'GET':
-        print(f"Received GET request for chef meal orders")
         as_chef = request.query_params.get('as_chef') == 'true'
         orders = _get_chef_meal_orders(request.user, as_chef)
         serializer = ChefMealOrderSerializer(orders, many=True)
@@ -204,7 +200,6 @@ def api_chef_meal_order_detail(request, order_id):
     user = request.user
     as_chef = request.query_params.get('as_chef') == 'true'
     
-    logger.info(f"api_chef_meal_order_detail called with order_id={order_id}, user_id={user.id}, as_chef={as_chef}")
     
     # First, try to get the order as a ChefMealOrder
     chef_meal_order = None
@@ -215,39 +210,53 @@ def api_chef_meal_order_detail(request, order_id):
         if as_chef:
             try:
                 chef = Chef.objects.get(user=user)
-                logger.info(f"Looking for ChefMealOrder as chef with id={order_id}, chef_id={chef.id}")
                 chef_meal_order = ChefMealOrder.objects.select_related('order', 'meal_event').get(
                     id=order_id,
                     meal_event__chef=chef
                 )
-                logger.info(f"Found ChefMealOrder with id={chef_meal_order.id}")
             except Chef.DoesNotExist:
                 logger.error(f"Chef profile not found for user_id={user.id}")
                 return Response({"error": "Chef profile not found"}, status=404)
             except ChefMealOrder.DoesNotExist:
-                logger.info(f"ChefMealOrder not found with id={order_id} for chef_id={chef.id}")
+                # n8n traceback
+                n8n_traceback = {
+                    'error': f"ChefMealOrder not found with id={order_id} for chef_id={chef.id}",
+                    'source': 'api_chef_meal_order_detail',
+                    'traceback': traceback.format_exc()
+                }
+                requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+                pass
         else:
             try:
-                logger.info(f"Looking for ChefMealOrder as customer with id={order_id}, user_id={user.id}")
                 chef_meal_order = ChefMealOrder.objects.select_related('order').get(
                     id=order_id,
                     customer=user
                 )
-                logger.info(f"Found ChefMealOrder with id={chef_meal_order.id}")
             except ChefMealOrder.DoesNotExist:
-                logger.info(f"ChefMealOrder not found with id={order_id} for user_id={user.id}")
+                # n8n traceback
+                n8n_traceback = {
+                    'error': f"ChefMealOrder not found with id={order_id} for user_id={user.id}",
+                    'source': 'api_chef_meal_order_detail',
+                    'traceback': traceback.format_exc()
+                }
+                requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         
         # If we found a ChefMealOrder, get its parent Order
         if chef_meal_order:
             order = chef_meal_order.order
-            logger.info(f"Retrieved parent Order with id={order.id}")
             
     except ChefMealOrder.DoesNotExist:
         # Already handled in the inner blocks
         pass
     except Exception as e:
         logger.error(f"Unexpected error looking for ChefMealOrder: {str(e)}")
-        logger.error(traceback.format_exc())
+        # n8n traceback
+        n8n_traceback = {
+            'error': str(e),
+            'source': 'api_chef_meal_order_detail',
+            'traceback': traceback.format_exc()
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
     
     # If not found as ChefMealOrder, try as regular Order
     if not order:
@@ -255,20 +264,30 @@ def api_chef_meal_order_detail(request, order_id):
             if as_chef:
                 try:
                     chef = Chef.objects.get(user=user)
-                    logger.info(f"Looking for Order as chef with id={order_id}, chef_id={chef.id}")
                     order = Order.objects.prefetch_related('chef_meal_orders').get(
                         id=order_id,
                         chef_meal_orders__meal_event__chef=chef
                     )
-                    logger.info(f"Found Order with id={order.id} as chef")
                 except Chef.DoesNotExist:
                     logger.error(f"Chef profile not found for user_id={user.id}")
+                    # n8n traceback
+                    n8n_traceback = {
+                        'error': f"Chef profile not found for user_id={user.id}",
+                        'source': 'api_chef_meal_order_detail',
+                        'traceback': traceback.format_exc()
+                    }
+                    requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
                     return Response({"error": "Chef profile not found"}, status=404)
                 except Order.DoesNotExist:
-                    logger.info(f"Order not found with id={order_id} for chef_id={chef.id}")
+                    # n8n traceback
+                    n8n_traceback = {
+                        'error': f"Order not found with id={order_id} for chef_id={chef.id}",
+                        'source': 'api_chef_meal_order_detail',
+                        'traceback': traceback.format_exc()
+                    }
+                    requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             else:
                 try:
-                    logger.info(f"Looking for Order as customer with id={order_id}, user_id={user.id}")
                     # First check if the order exists at all
                     if Order.objects.filter(id=order_id).exists():
                         # Check if it belongs to this user
@@ -278,7 +297,6 @@ def api_chef_meal_order_detail(request, order_id):
                                 id=order_id, 
                                 customer=user
                             )
-                            logger.info(f"Found Order with id={order.id} and chef_meal_orders count: {order.chef_meal_orders.count()}")
                         else:
                             user_of_order = Order.objects.get(id=order_id).customer
                             logger.warning(f"Order exists but belongs to user_id={user_of_order.id}, not requestor user_id={user.id}")
@@ -287,10 +305,22 @@ def api_chef_meal_order_detail(request, order_id):
                         logger.warning(f"Order with id={order_id} does not exist in the database")
                         return Response({"error": "Order does not exist"}, status=404)
                 except Order.DoesNotExist:
-                    logger.info(f"Order not found with id={order_id} for user_id={user.id}")
+                    # n8n traceback
+                    n8n_traceback = {
+                        'error': f"Order not found with id={order_id} for user_id={user.id}",
+                        'source': 'api_chef_meal_order_detail',
+                        'traceback': traceback.format_exc()
+                    }
+                    requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
                 except Exception as e:
                     logger.error(f"Unexpected error looking for Order: {str(e)}")
-                    logger.error(traceback.format_exc())
+                    # n8n traceback
+                    n8n_traceback = {
+                        'error': str(e),
+                        'source': 'api_chef_meal_order_detail',
+                        'traceback': traceback.format_exc()
+                    }
+                    requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
                 
             # Check if the order has any chef meal orders
             if order and not order.chef_meal_orders.exists():
@@ -305,15 +335,27 @@ def api_chef_meal_order_detail(request, order_id):
                 
                 # Instead of returning a 404, continue with the empty chef_meal_orders
                 # This allows the frontend to handle orders without chef meals
-                logger.info(f"Continuing with empty chef_meal_orders for Order with id={order.id}")
                 # We'll just continue and let the serializer handle the empty chef_meal_orders
         
         except Order.DoesNotExist:
             logger.warning(f"Order with id={order_id} does not exist for user_id={user.id}")
+            # n8n traceback
+            n8n_traceback = {
+                'error': f"Order not found with id={order_id} for user_id={user.id}",
+                'source': 'api_chef_meal_order_detail',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             return Response({"error": "Order not found"}, status=404)
         except Exception as e:
             logger.error(f"Unexpected error looking for Order: {str(e)}")
-            logger.error(traceback.format_exc())
+            # n8n traceback
+            n8n_traceback = {
+                'error': str(e),
+                'source': 'api_chef_meal_order_detail',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             return Response({"error": f"Unexpected error: {str(e)}"}, status=500)
     
     # At this point, we should have an Order object
@@ -326,7 +368,6 @@ def api_chef_meal_order_detail(request, order_id):
         try:
             # IMPORTANT: Explicitly fetch the chef meal orders
             chef_meal_orders = list(ChefMealOrder.objects.filter(order_id=order.id))
-            logger.info(f"Explicitly fetched {len(chef_meal_orders)} ChefMealOrders for order_id={order.id}")
             
             # Serialize the order with its chef meal orders
             from meals.serializers import OrderWithChefMealsSerializer
@@ -341,11 +382,16 @@ def api_chef_meal_order_detail(request, order_id):
                 from meals.serializers import ChefMealOrderSerializer
                 data['chef_meal_orders'] = ChefMealOrderSerializer(chef_meal_orders, many=True).data
             
-            logger.info(f"Successfully serialized Order with id={order.id}")
             return Response(data)
         except Exception as e:
             logger.error(f"Error serializing Order with id={order.id}: {str(e)}")
-            logger.error(traceback.format_exc())
+            # n8n traceback
+            n8n_traceback = {
+                'error': str(e),
+                'source': 'api_chef_meal_order_detail',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             return Response({"error": f"Error serializing order: {str(e)}"}, status=500)
     
     # Handle DELETE request - cancel the order
@@ -360,11 +406,16 @@ def api_chef_meal_order_detail(request, order_id):
             order.status = 'Cancelled'
             order.save()
             
-            logger.info(f"Successfully cancelled Order with id={order.id}")
             return Response({"status": "success", "message": "Order cancelled successfully"})
         except Exception as e:
             logger.error(f"Error cancelling Order with id={order.id}: {str(e)}")
-            logger.error(traceback.format_exc())
+            # n8n traceback
+            n8n_traceback = {
+                'error': str(e),
+                'source': 'api_chef_meal_order_detail',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             return Response({"error": f"Error cancelling order: {str(e)}"}, status=500)
     
     # Handle PUT/PATCH request - update the order
@@ -395,7 +446,6 @@ def api_chef_meal_order_detail(request, order_id):
                 order.save(update_fields=['special_requests'])
                 
                 updates_made = True
-                logger.info(f"Updated special requests for Order with id={order.id}")
             
             # Update quantity if provided
             if quantity is not None:
@@ -435,24 +485,27 @@ def api_chef_meal_order_detail(request, order_id):
                             )
                             order_meal.quantity = quantity
                             order_meal.save(update_fields=['quantity'])
-                            logger.info(f"Updated OrderMeal id={order_meal.id} quantity to {quantity}")
                         except OrderMeal.DoesNotExist:
                             logger.warning(f"No OrderMeal found for ChefMealOrder id={chef_meal_order.id}")
                     
                     updates_made = True
-                    logger.info(f"Updated quantity to {quantity} for Order with id={order.id}")
                 except ValueError:
                     return Response({"error": "Invalid quantity value"}, status=400)
                 
             if updates_made:
-                logger.info(f"Successfully updated Order with id={order.id}")
                 return Response({"status": "success", "message": "Order updated successfully"})
             else:
                 logger.warning(f"No valid fields to update for Order with id={order.id}")
                 return Response({"error": "No valid fields to update"}, status=400)
         except Exception as e:
             logger.error(f"Error updating Order with id={order.id}: {str(e)}")
-            logger.error(traceback.format_exc())
+            # n8n traceback
+            n8n_traceback = {
+                'error': str(e),
+                'source': 'api_chef_meal_order_detail',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             return Response({"error": f"Error updating order: {str(e)}"}, status=500)
 
 @api_view(['GET'])
@@ -622,7 +675,6 @@ def api_cancel_chef_meal_order(request, order_id):
     reason = request.data.get('reason', '')
     
     # Log the cancellation request
-    logger.info(f"User {request.user.id} is cancelling chef meal order {order_id} with reason: {reason}")
     _, response_data, status_code = _cancel_chef_meal_order(request.user, order_id)
     return Response(response_data, status=status_code)
 
@@ -647,12 +699,9 @@ def stripe_webhook(request):
         logger.error(f"Invalid signature in Stripe webhook: {str(e)}")
         return Response({"error": "Invalid signature"}, status=400)
     
-    logger.info(f"Received Stripe webhook of type {event.type}")
-    
     try:
         if event.type == 'checkout.session.completed':
             session = event.data.object
-            logger.info(f"Received Stripe webhook for completed checkout: {session.id}")
             
             # Handle chef meal payments
             if session.metadata.get('order_type') == 'chef_meal':
@@ -701,9 +750,23 @@ def stripe_webhook(request):
                     logger.info(f"Successfully processed payment for chef meal order {order_id}")
                 except ChefMealOrder.DoesNotExist:
                     logger.error(f"Could not find chef meal order {order_id} for completed Stripe session")
+                    # n8n traceback
+                    n8n_traceback = {
+                        'error': f"Could not find chef meal order {order_id} for completed Stripe session",
+                        'source': 'stripe_webhook',
+                        'traceback': traceback.format_exc()
+                    }
+                    requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
                     return Response({"error": "Order not found"}, status=404)
                 except Exception as e:
                     logger.error(f"Error processing chef meal payment: {str(e)}", exc_info=True)
+                    # n8n traceback
+                    n8n_traceback = {
+                        'error': str(e),
+                        'source': 'stripe_webhook',
+                        'traceback': traceback.format_exc()
+                    }
+                    requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
                     return Response({"error": str(e)}, status=400)
             
             # Handle regular meal plan payments
@@ -750,19 +813,31 @@ def stripe_webhook(request):
                     # You could add email notification here
                     # send_payment_confirmation_email.delay(order_id)
                     
-                    logger.info(f"Successfully processed payment for meal plan order {order_id}")
                     
                 except Order.DoesNotExist:
                     logger.error(f"Could not find meal plan order {order_id} for completed Stripe session")
+                    # n8n traceback
+                    n8n_traceback = {
+                        'error': f"Could not find meal plan order {order_id} for completed Stripe session",
+                        'source': 'stripe_webhook',
+                        'traceback': traceback.format_exc()
+                    }
+                    requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
                     return Response({"error": "Order not found"}, status=404)
                 except Exception as e:
                     logger.error(f"Error processing meal plan payment: {str(e)}", exc_info=True)
+                    # n8n traceback
+                    n8n_traceback = {
+                        'error': str(e),
+                        'source': 'stripe_webhook',
+                        'traceback': traceback.format_exc()
+                    }
+                    requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
                     return Response({"error": str(e)}, status=400)
         
         elif event.type == 'payment_intent.succeeded':
             # Handle direct payment intents (not through checkout)
             payment_intent = event.data.object
-            logger.info(f"Payment intent succeeded: {payment_intent.id}")
             
             # Check if we have any orders with this payment intent
             chef_meal_orders = ChefMealOrder.objects.filter(payment_intent_id=payment_intent.id)
@@ -787,12 +862,18 @@ def stripe_webhook(request):
                                 details={'payment_intent_id': payment_intent.id}
                             )
                         
-                        logger.info(f"Updated ChefMealOrder {order.id} to confirmed status and updated meal counts")
         
         return Response({"status": "success"})
         
     except Exception as e:
         logger.error(f"Error processing Stripe webhook: {str(e)}", exc_info=True)
+        # n8n traceback
+        n8n_traceback = {
+            'error': str(e),
+            'source': 'stripe_webhook',
+            'traceback': traceback.format_exc()
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return Response({"error": str(e)}, status=400)
 
 @api_view(['GET', 'POST'])
@@ -870,6 +951,13 @@ def api_chef_meal_events(request):
             )
         except Exception as e:
             logger.error(f"Error retrieving chef meal events: {str(e)}", exc_info=True)
+            # n8n traceback
+            n8n_traceback = {
+                'error': str(e),
+                'source': 'api_chef_meal_events',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             return standardize_response(
                 status="error",
                 message="Unable to retrieve meal events. Please try again later.",
@@ -877,12 +965,17 @@ def api_chef_meal_events(request):
             )
     
     elif request.method == 'POST':
-        logger.info(f"Chef meal event create request: {request.data}")
-        
         # Verify the user is a chef
         try:
             chef = request.user.chef
         except Chef.DoesNotExist:
+            # n8n traceback
+            n8n_traceback = {
+                'error': f"User {request.user.username} is not a chef",
+                'source': 'api_chef_meal_events',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             return standardize_response(
                 status="error",
                 message="You must be registered as a chef to create meal events.",
@@ -899,6 +992,13 @@ def api_chef_meal_events(request):
                     status_code=403
                 )
         except StripeConnectAccount.DoesNotExist:
+            # n8n traceback
+            n8n_traceback = {
+                'error': f"User {request.user.username} is not a chef",
+                'source': 'api_chef_meal_events',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             return standardize_response(
                 status="error",
                 message="You must complete payment setup before creating meal events.",
@@ -928,6 +1028,13 @@ def api_chef_meal_events(request):
                     status_code=403
                 )
         except Meal.DoesNotExist:
+            # n8n traceback
+            n8n_traceback = {
+                'error': f"Meal not found with id={data['meal']}",
+                'source': 'api_chef_meal_events',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             return standardize_response(
                 status="error",
                 message="Meal not found.",
@@ -988,6 +1095,13 @@ def api_chef_meal_events(request):
             order_cutoff_time = order_cutoff_time.astimezone(timezone.utc)
             
         except ValueError:
+            # n8n traceback
+            n8n_traceback = {
+                'error': f"Invalid date or time format. Please use YYYY-MM-DD for dates and HH:MM for times.",
+                'source': 'api_chef_meal_events',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             return standardize_response(
                 status="error",
                 message="Invalid date or time format. Please use YYYY-MM-DD for dates and HH:MM for times.",
@@ -1043,6 +1157,13 @@ def api_chef_meal_events(request):
             except Exception as e:
                 # If there's an error checking for cancelled events, log it but continue with normal creation
                 logger.warning(f"Error checking for cancelled events: {str(e)}")
+                # n8n traceback
+                n8n_traceback = {
+                    'error': str(e),
+                    'source': 'api_chef_meal_events',
+                    'traceback': traceback.format_exc()
+                }
+                requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             
             # Your existing code to create a new event if no cancelled event was found...
             
@@ -1118,6 +1239,13 @@ def api_chef_meal_events(request):
                 
         except Exception as e:
             logger.error(f"Error creating chef meal event: {str(e)}", exc_info=True)
+            # n8n traceback
+            n8n_traceback = {
+                'error': str(e),
+                'source': 'api_chef_meal_events',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             return standardize_response(
                 status="error",
                 message="Unable to create meal event. Please try again later.",
@@ -1133,7 +1261,6 @@ def api_cancel_chef_meal_event(request, event_id):
     Required fields:
     - reason: String, reason for cancellation
     """
-    logger.info(f"Chef meal event cancellation request for event_id {event_id}: {request.data}")
     from meals.email_service import send_order_cancellation_email, send_refund_notification_email
     # Verify the user is a chef
 
@@ -1141,6 +1268,13 @@ def api_cancel_chef_meal_event(request, event_id):
         chef = request.user.chef
     except Chef.DoesNotExist:
         logger.error(f"User {request.user.username} is not a chef")
+        # n8n traceback
+        n8n_traceback = {
+            'error': f"User {request.user.username} is not a chef",
+            'source': 'api_cancel_chef_meal_event',
+            'traceback': traceback.format_exc()
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return standardize_response(
             status="error",
             message="User is not a chef.",
@@ -1269,10 +1403,8 @@ def api_get_meals(request):
     - chef_meals: If 'true', returns only meals created by the requesting chef (this is now the default behavior)
     - all_meals: If 'true', returns all meals from all chefs (requires admin/staff permissions)
     """
-    logger.info(f"Request data: {request.query_params}")
     try:
         user = request.user
-        print(f"User: {user} and Username: {user.username}")
         # Default behavior: return chef's own meals
         try:
             chef = Chef.objects.get(user=user)
@@ -1284,7 +1416,6 @@ def api_get_meals(request):
         # Only administrators can request all meals by setting all_meals=true
         if request.query_params.get('all_meals') == 'true' and user.is_staff:
             queryset = Meal.objects.all().order_by('-created_date')
-            logger.info(f"Admin user {user.username} retrieved all meals")
         
         serializer = MealSerializer(queryset, many=True)
         # Return standardized response with status code
@@ -1296,6 +1427,13 @@ def api_get_meals(request):
         )
     except Exception as e:
         logger.error(f"Error retrieving meals: {str(e)}")
+        # n8n traceback
+        n8n_traceback = {
+            'error': str(e),
+            'source': 'api_get_meals',
+            'traceback': traceback.format_exc()
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return standardize_response(
             status="error",
             message=f"Error retrieving meals: {str(e)}",
@@ -1321,12 +1459,17 @@ def api_create_chef_meal(request):
     - dietary_preferences: List, dietary preferences related to the meal
     - custom_dietary_preferences: List, custom dietary preferences
     """
-    print(f"Request from api_create_chef_meal: {request.data}")
-    print(f"Request from api_create_chef_meal: {request.user}")
     # Verify the user is a chef
     try:
         chef = request.user.chef
     except Chef.DoesNotExist:
+        # n8n traceback
+        n8n_traceback = {
+            'error': f"User {request.user.username} is not a chef",
+            'source': 'api_create_chef_meal',
+            'traceback': traceback.format_exc()
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return standardize_response(
             status="error",
             message="User is not a chef.",

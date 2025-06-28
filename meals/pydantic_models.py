@@ -722,7 +722,29 @@ class PaymentInfoSchema(BaseModel):
     session_id: str = Field(..., description="Stripe session ID")
     html_button: str = Field(..., description="HTML button containing the full checkout url")
 
- # --- Meal Modification Schemas ----------------------------------------------
+# --- Ingredient Substitution Schemas ----------------------------------------
+
+class IngredientSubstitutions(BaseModel):
+    """
+    Schema for ingredient substitution suggestions.
+    Contains a dictionary mapping ingredient names to arrays of substitution suggestions.
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    substitutions: Dict[str, List[str]] = Field(
+        ..., 
+        description="Dictionary mapping flagged ingredient names to arrays of safe substitution suggestions"
+    )
+    
+    example: ClassVar[Dict[str, Any]] = {
+        "substitutions": {
+            "milk": ["almond milk", "coconut milk", "soy milk"],
+            "peanut butter": ["sunflower seed butter", "almond butter"],
+            "wheat flour": ["oat flour", "rice flour"]
+        }
+    }
+
+# --- Meal Modification Schemas ----------------------------------------------
 
 class IngredientChange(BaseModel):
     """

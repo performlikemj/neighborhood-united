@@ -8,13 +8,9 @@ from rest_framework.renderers import JSONRenderer
 from meals.models import Meal, Dish, Ingredient
 from chefs.models import Chef
 from shared.utils import get_embedding
-from openai import OpenAI
 import json
 
 logger = logging.getLogger(__name__)
-
-OPENAI_API_KEY = settings.OPENAI_KEY
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 def prepare_meal_representation(meal: Meal) -> str:
     attributes = [meal.name, meal.description]

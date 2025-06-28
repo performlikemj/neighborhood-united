@@ -39,7 +39,7 @@ import uuid
 from meals.streaming_instructions import generate_streaming_instructions
 from meals.macro_info_retrieval import get_meal_macro_information
 from meals.youtube_api_search import find_youtube_cooking_videos, format_for_structured_output
-from meals.pydantic_models import MealMacroInfo, VideoRankings  # schema validation
+from meals.pydantic_models import MealMacroInfo, VideoRankings, YouTubeVideoResults  # schema validation
 from pydantic import ValidationError
 from django.conf import settings
 from meals.instacart_service import generate_instacart_link as _util_generate_instacart_link
@@ -429,6 +429,22 @@ MEAL_PLANNING_TOOLS = [
             "additionalProperties": False
         }
     },
+    {
+        "type": "function",
+        "name": "list_user_meal_plans",
+        "description": "Get a summary list of all meal plans for a user, showing just the meal plan IDs, start/end dates, and basic info to help choose the correct meal plan for other operations",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "integer",
+                    "description": "The ID of the user whose meal plans to list"
+                }
+            },
+            "required": ["user_id"],
+            "additionalProperties": False
+        }
+    },
     # TODO: Add one for obtaining a meals macronutrient breakdown
     # TODO: Add one for finding youtube videos about a meal
 ]
@@ -784,6 +800,43 @@ def get_meal_plan(user_id: int, meal_plan_id: int = None) -> Dict[str, Any]:
         requests.post(n8n_traceback_url, json={"error": str(e), "source":"get_meal_plan", "traceback": traceback.format_exc()})
         return {"status": "error", "message": f"Failed to get meal plan"}
 
+def list_user_meal_plans(user_id: int) -> Dict[str, Any]:
+    """
+    Get a summary list of all meal plans for a user, showing just the meal plan IDs, 
+    start/end dates, and basic info to help choose the correct meal plan for other operations.
+    
+    Args:
+        user_id: The ID of the user whose meal plans to list
+        
+    Returns:
+        Dict containing a list of meal plan summaries
+    """
+    try:
+        user = get_object_or_404(CustomUser, id=user_id)
+        meal_plans = MealPlan.objects.filter(user=user).order_by('-week_start_date')
+        
+        meal_plans_summary = []
+        for mp in meal_plans:
+            meal_plans_summary.append({
+                "meal_plan_id": mp.id,
+                "week_start_date": mp.week_start_date.isoformat(),
+                "week_end_date": mp.week_end_date.isoformat(),
+                "created_date": mp.created_date.isoformat() if mp.created_date else None,
+                "is_approved": mp.is_approved,
+                "has_changes": mp.has_changes
+            })
+        
+        return {
+            "status": "success",
+            "meal_plans": meal_plans_summary
+        }
+    except Exception as e:
+        logger.error(f"list_user_meal_plans error for user {user_id}: {e}")
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"list_user_meal_plans", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": f"Failed to list user meal plans"}
+
 def email_generate_meal_instructions(user_id: int, meal_plan_id: int, day: str = None, 
                               meal_type: str = None) -> Dict[str, Any]:
     """
@@ -1032,7 +1085,7 @@ def find_related_youtube_videos(meal_id: int, max_results: int = 5) -> Dict[str,
         
         # Validate
         try:
-            validated = VideoRankings.model_validate(formatted)
+            validated = YouTubeVideoResults.model_validate(formatted)
             validated_data = validated.model_dump()
         except ValidationError as e:
             logger.error(f"find_related_youtube_videos validation error: {e}")
@@ -1059,9 +1112,9 @@ def generate_instacart_link_tool(user_id: int, meal_plan_id: int, postal_code: s
     Generate an Instacart shopping list link from the user's meal plan to buy ingredients
     """
     try:
-        req = HttpRequest()
-        req.data = {"user_id": user_id, "meal_plan_id": meal_plan_id, "postal_code": postal_code}
-        return _util_generate_instacart_link(req)
+        logger.info(f"generate_instacart_link_tool called for user {user_id} and meal plan {meal_plan_id} with postal code {postal_code}")
+        # Call the service function directly with proper parameters
+        return _util_generate_instacart_link(user_id, meal_plan_id, postal_code)
     except Exception as e:
         logger.error(f"generate_instacart_link error: {e}")
         n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")

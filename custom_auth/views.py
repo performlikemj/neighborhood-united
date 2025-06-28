@@ -60,7 +60,7 @@ from customer_dashboard.tasks import process_aggregated_emails
 from utils.translate_html import translate_paragraphs  # Import the translation utility
 from bs4 import BeautifulSoup
 from django.conf.locale import LANG_INFO
-
+import traceback
 logger = logging.getLogger(__name__)
 
 # Constants from secure_email_integration.py (or define them in a shared place)
@@ -75,7 +75,6 @@ def email_authentication_view(request, auth_token):
     Validates the token, creates a UserEmailSession, processes any pending message,
     and logs the user in.
     """
-    logger.info(f"Email authentication view called with auth_token: {auth_token}")
     try:
         token_obj = AssistantEmailToken.objects.select_related('user', 'pending_message_for_token').get(auth_token=auth_token)
     except AssistantEmailToken.DoesNotExist:
@@ -95,7 +94,6 @@ def email_authentication_view(request, auth_token):
     # Mark token as used BEFORE processing pending message to avoid race conditions
     token_obj.used = True
     token_obj.save()
-    logger.info(f"Successfully validated and marked auth_token {auth_token} as used for user {user.username}.")
 
     # Create or update UserEmailSession
     session_duration_hours = getattr(settings, 'EMAIL_ASSISTANT_SESSION_DURATION_HOURS', 24)
@@ -108,13 +106,11 @@ def email_authentication_view(request, auth_token):
         user=user,
         expires_at=session_expires_at
     )
-    logger.info(f"Created new UserEmailSession for user {user.username} expiring at {session_expires_at}.")
 
     # Check for and process pending message
     try:
         pending_message = getattr(token_obj, 'pending_message_for_token', None)
         if pending_message:
-            logger.info(f"Found pending message for user {user.username} (token {auth_token}). Processing it.")
             
             # Start a new DB-backed email aggregation session with this pending message
             db_aggregation_session = EmailAggregationSession.objects.create(
@@ -132,17 +128,14 @@ def email_authentication_view(request, auth_token):
                 session=db_aggregation_session,
                 content=pending_message.content
             )
-            logger.info(f"Created EmailAggregationSession {db_aggregation_session.session_identifier} and first AggregatedMessageContent from pending message.")
 
             active_session_flag_key = f"{ACTIVE_DB_AGGREGATION_SESSION_FLAG_PREFIX}{user.id}"
             cache.set(active_session_flag_key, str(db_aggregation_session.session_identifier), timeout=AGGREGATION_WINDOW_MINUTES * 60)
-            logger.info(f"Set cache flag {active_session_flag_key} for new aggregation window.")
 
             process_aggregated_emails.apply_async(
                 args=[str(db_aggregation_session.session_identifier)],
                 countdown=AGGREGATION_WINDOW_MINUTES * 60
             )
-            logger.info(f"Scheduled process_aggregated_emails task for session {db_aggregation_session.session_identifier}.")
 
             # Optionally, send an acknowledgment for the processed pending message
             ack_subject = f"Re: {pending_message.original_subject}" if pending_message.original_subject else "Your SautAI Assistant is Ready"
@@ -153,7 +146,7 @@ def email_authentication_view(request, auth_token):
             )
             user_name_for_template = user.get_full_name() or user.username
             site_domain_for_template = os.getenv('STREAMLIT_URL') # Ensure STREAMLIT_URL is available
-            profile_url_for_template = f"{site_domain_for_template}/profile"
+            profile_url_for_template = f"{site_domain_for_template}/"
             personal_assistant_email_for_template = user.personal_assistant_email if hasattr(user, 'personal_assistant_email') and user.personal_assistant_email else f"mj+{user.email_token}@sautai.com"
 
             # Get user's preferred language and translate the email content
@@ -166,7 +159,6 @@ def email_authentication_view(request, auth_token):
                 raw_soup_translated = BeautifulSoup(translate_paragraphs(str(raw_soup), user_preferred_language), "html.parser")
                 # Extract the translated content from the div
                 ack_message_translated = "".join(str(c) for c in raw_soup_translated.div.contents)
-                logger.info(f"Successfully translated acknowledgment message to {_get_language_name(user_preferred_language)} ({user_preferred_language})")
             except Exception as e:
                 logger.error(f"Error directly translating acknowledgment message: {e}")
                 ack_message_translated = ack_message_raw  # Fallback to original
@@ -176,7 +168,7 @@ def email_authentication_view(request, auth_token):
                 'customer_dashboard/assistant_email_template.html',
                 {
                     'user_name': user_name_for_template,
-                    'email_body_content': ack_message_translated,  # Already translated content
+                    'email_body_main': ack_message_translated,  # Already translated content
                     'profile_url': profile_url_for_template,
                     'personal_assistant_email': personal_assistant_email_for_template
                 }
@@ -188,7 +180,6 @@ def email_authentication_view(request, auth_token):
                     ack_email_html_content,
                     user_preferred_language
                 )
-                logger.info(f"Successfully translated full email HTML to {_get_language_name(user_preferred_language)} ({user_preferred_language})")
             except Exception as e:
                 logger.error(f"Error translating full email HTML: {e}")
                 # Continue with partially translated content
@@ -207,7 +198,6 @@ def email_authentication_view(request, auth_token):
                     }
                     try:
                         requests.post(n8n_webhook_url, json=payload, timeout=10)
-                        logger.info(f"Sent acknowledgment for processed pending message to user {user.id} (recipient: {pending_message.sender_email}).")
                     except requests.RequestException as e_n8n:
                         logger.error(f"Failed to send ack for pending message to n8n for user {user.id}: {e_n8n}")
                 else:
@@ -217,7 +207,6 @@ def email_authentication_view(request, auth_token):
                 
             # Delete the pending message as it's now processed
             pending_message.delete()
-            logger.info(f"Deleted processed pending message for token {auth_token}.")
 
         else:
             logger.info(f"No pending message found for user {user.username} (token {auth_token}).")
@@ -428,7 +417,7 @@ def password_reset_request(request):
         """
 
         # Send data to Zapier
-        zapier_webhook_url = os.getenv('ZAP_PW_RESET_URL')
+        password_reset_webhook_url = os.getenv('N8N_PW_RESET_URL')
         email_data = {
             'subject': mail_subject,
             'message': message,
@@ -436,8 +425,7 @@ def password_reset_request(request):
             'from': 'support@sautai.com',
         }
         try:
-            requests.post(zapier_webhook_url, json=email_data)
-            logger.info(f"Password reset email data sent to Zapier for: {email}")
+            requests.post(password_reset_webhook_url, json=email_data)
         except Exception as e:
             logger.error(f"Error sending password reset email data to Zapier for: {email}, error: {str(e)}")
 
@@ -446,6 +434,13 @@ def password_reset_request(request):
         logger.warning(f"Password reset attempted for non-existent email: {email}")
         return Response({'status': 'success', 'message': 'Password reset email sent'})
     except Exception as e:
+        # n8n traceback
+        n8n_traceback = {
+            'error': str(e),
+            'source': 'password_reset_request',
+            'traceback': traceback.format_exc()
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return Response({'status': 'error', 'message': str(e)})
 
 @api_view(['POST'])
@@ -491,7 +486,6 @@ def address_details_view(request):
     serializer = AddressSerializer(address)
     return Response(serializer.data)
 
-
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def household_members_list_create(request):
@@ -533,166 +527,185 @@ def get_countries(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def update_profile_api(request):
-    print(f"Request data: {request.data}")  # Debug print
 
-    user = request.user
-    user_serializer = CustomUserSerializer(user, data=request.data, partial=True)
+    try:
+        user = request.user
+        user_serializer = CustomUserSerializer(user, data=request.data, partial=True)
 
-    if user_serializer.is_valid():
-        print(f"Validated data: {user_serializer.validated_data}")  # Debug print
+        if user_serializer.is_valid():
+            print(f"Validated data: {user_serializer.validated_data}")  # Debug print
 
-        if 'email' in user_serializer.validated_data and user_serializer.validated_data['email'] != user.email:
-            new_email = user_serializer.validated_data['email']
-            if not new_email:
-                return Response({'status': 'failure', 'message': 'Email cannot be empty'}, status=400)
+            if 'email' in user_serializer.validated_data and user_serializer.validated_data['email'] != user.email:
+                new_email = user_serializer.validated_data['email']
+                if not new_email:
+                    return Response({'status': 'failure', 'message': 'Email cannot be empty'}, status=400)
 
-            user.email_confirmed = False
-            user.new_email = new_email
-            user.save()
+                user.email_confirmed = False
+                user.new_email = new_email
+                user.save()
 
-            # Prepare data for Zapier webhook
-            uid = urlsafe_base64_encode(force_bytes(user.pk))
-            token = account_activation_token.make_token(user)
-            activation_link = f"{os.getenv('STREAMLIT_URL')}/account?uid={uid}&token={token}"
-            # HTML email content
-            email_content = f"""
-            <html>
-            <body>
-                <div style="text-align: center;">
-                    <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
-                </div>
-                <h2 style="color: #333;">Email Verification Required, {user.username}</h2>
-                <p>We noticed that you've updated your email address. To continue accessing your account, please verify your new email address by clicking the button below:</p>
-                <div style="text-align: center; margin: 20px 0;">
-                    <a href="{activation_link}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Verify Your Email</a>
-                </div>
-                <p>If the button above doesn't work, you can copy and paste the following link into your web browser:</p>
-                <p><a href="{activation_link}" style="color: #4CAF50;">{activation_link}</a></p>
-                <p>If you did not request this change, please contact our support team at <a href="mailto:support@sautai.com">support@sautai.com</a> immediately.</p>
-                <p>Thanks,<br>The SautAI Support Team</p>
-            </body>
-            </html>
-            """
+                # Prepare data for Zapier webhook
+                uid = urlsafe_base64_encode(force_bytes(user.pk))
+                token = account_activation_token.make_token(user)
+                activation_link = f"{os.getenv('STREAMLIT_URL')}/account?uid={uid}&token={token}"
+                # HTML email content
+                email_content = f"""
+                <html>
+                <body>
+                    <div style="text-align: center;">
+                        <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+                    </div>
+                    <h2 style="color: #333;">Email Verification Required, {user.username}</h2>
+                    <p>We noticed that you've updated your email address. To continue accessing your account, please verify your new email address by clicking the button below:</p>
+                    <div style="text-align: center; margin: 20px 0;">
+                        <a href="{activation_link}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Verify Your Email</a>
+                    </div>
+                    <p>If the button above doesn't work, you can copy and paste the following link into your web browser:</p>
+                    <p><a href="{activation_link}" style="color: #4CAF50;">{activation_link}</a></p>
+                    <p>If you did not request this change, please contact our support team at <a href="mailto:support@sautai.com">support@sautai.com</a> immediately.</p>
+                    <p>Thanks,<br>The SautAI Support Team</p>
+                </body>
+                </html>
+                """
 
-            zapier_data = {
-                'recipient_email': user_serializer.validated_data.get('email'),
-                'subject': 'Verify your email to resume access.',
-                'message': email_content,
-                'username': user.username,
-                'activation_link': activation_link,
-                'html': True  # Indicate that the message is in HTML format
-            }
-            # Send data to Zapier
-            requests.post(os.getenv("ZAP_UPDATE_PROFILE_URL"), json=zapier_data)
+                zapier_data = {
+                    'recipient_email': user_serializer.validated_data.get('email'),
+                    'subject': 'Verify your email to resume access.',
+                    'message': email_content,
+                    'username': user.username,
+                    'activation_link': activation_link,
+                    'html': True  # Indicate that the message is in HTML format
+                }
+                # Send data to Zapier
+                requests.post(os.getenv("ZAP_UPDATE_PROFILE_URL"), json=zapier_data)
 
-        if 'username' in user_serializer.validated_data and user_serializer.validated_data['username'] != user.username:
-            user.username = user_serializer.validated_data['username']
-            user.save()
+            if 'username' in user_serializer.validated_data and user_serializer.validated_data['username'] != user.username:
+                user.username = user_serializer.validated_data['username']
+                user.save()
 
-        if 'dietary_preferences' in user_serializer.validated_data:
-            # Use .set() to update the many-to-many relationship
-            user.dietary_preferences.set(user_serializer.validated_data['dietary_preferences'])
+            if 'dietary_preferences' in user_serializer.validated_data:
+                # Use .set() to update the many-to-many relationship
+                user.dietary_preferences.set(user_serializer.validated_data['dietary_preferences'])
 
-        # If new custom dietary preferences are added, dispatch tasks
-        if 'custom_dietary_preferences' in user_serializer.validated_data:
-            new_custom_prefs = user_serializer.validated_data['custom_dietary_preferences']
-            # Identify newly added custom preferences
-            existing_custom_prefs = set(user.custom_dietary_preferences.values_list('name', flat=True))
-            added_custom_prefs = set([pref.name for pref in new_custom_prefs]) - existing_custom_prefs
-            if added_custom_prefs:
-                # Dispatch task for newly added custom preferences
-                handle_custom_dietary_preference.delay(list(added_custom_prefs))
-                logger.info(f"Dispatched tasks for new custom dietary preferences: {added_custom_prefs}")
+            # If new custom dietary preferences are added, dispatch tasks
+            if 'custom_dietary_preferences' in user_serializer.validated_data:
+                new_custom_prefs = user_serializer.validated_data['custom_dietary_preferences']
+                # Identify newly added custom preferences
+                existing_custom_prefs = set(user.custom_dietary_preferences.values_list('name', flat=True))
+                added_custom_prefs = set([pref.name for pref in new_custom_prefs]) - existing_custom_prefs
+                if added_custom_prefs:
+                    # Dispatch task for newly added custom preferences
+                    handle_custom_dietary_preference.delay(list(added_custom_prefs))
+                    logger.info(f"Dispatched tasks for new custom dietary preferences: {added_custom_prefs}")
 
 
-        if 'allergies' in user_serializer.validated_data:
-            user.allergies = user_serializer.validated_data['allergies']
-        
-        if 'custom_allergies' in user_serializer.validated_data:
-            user.custom_allergies = user_serializer.validated_data['custom_allergies']
+            if 'allergies' in user_serializer.validated_data:
+                user.allergies = user_serializer.validated_data['allergies']
+            
+            if 'custom_allergies' in user_serializer.validated_data:
+                user.custom_allergies = user_serializer.validated_data['custom_allergies']
 
-        if 'timezone' in user_serializer.validated_data:
-            user.timezone = user_serializer.validated_data['timezone']
+            if 'timezone' in user_serializer.validated_data:
+                user.timezone = user_serializer.validated_data['timezone']
 
-        if 'preferred_language' in user_serializer.validated_data:
-            user.preferred_language = user_serializer.validated_data['preferred_language']
+            if 'preferred_language' in user_serializer.validated_data:
+                user.preferred_language = user_serializer.validated_data['preferred_language']
 
-        if 'unsubscribed_from_emails' in user_serializer.validated_data:
-            user.unsubscribed_from_emails = user_serializer.validated_data['unsubscribed_from_emails']
+            if 'unsubscribed_from_emails' in user_serializer.validated_data:
+                user.unsubscribed_from_emails = user_serializer.validated_data['unsubscribed_from_emails']
 
-        if 'emergency_supply_goal' in user_serializer.validated_data:
-            user.emergency_supply_goal = user_serializer.validated_data['emergency_supply_goal']
+            if 'emergency_supply_goal' in user_serializer.validated_data:
+                user.emergency_supply_goal = user_serializer.validated_data['emergency_supply_goal']
 
-        if 'household_member_count' in user_serializer.validated_data:
-            user.household_member_count = user_serializer.validated_data['household_member_count']
+            if 'household_member_count' in user_serializer.validated_data:
+                user.household_member_count = user_serializer.validated_data['household_member_count']
 
-        user_serializer.save()
+            if 'household_members' in user_serializer.validated_data:
+                user.household_members.set(user_serializer.validated_data['household_members'])
 
-    else:
-        print(f"Serializer errors: {user_serializer.errors}")  # Debug print
-        return Response({'status': 'failure', 'message': user_serializer.errors}, status=400)
+            user_serializer.save()
 
-    # Update or create address data
-    address_data = request.data.get('address')
-    if address_data:
-        
-        # Convert full country name to country code
-        country_name = address_data.get('country')
-        if country_name:
-            country_code = get_country_code(country_name)  # Use the new function to get the country code
-            print(f"Country name: {country_name}, Country code: {country_code}")  # Debugging print
-            if not country_code:
-                return Response({'status': 'failure', 'message': f'Invalid country name: {country_name}'}, status=400)
-            address_data['country'] = country_code
-
-        try:
-            address = Address.objects.get(user=user)
-        except Address.DoesNotExist:
-            address = None
-
-        # Correct field name and handle possible missing data
-        address_data['input_postalcode'] = address_data.pop('postalcode', '')
-        address_serializer = AddressSerializer(instance=address, data=address_data, partial=True)
-        print(f"Address serializer data: {address_serializer.initial_data}")  # Debug print
-        if address_serializer.is_valid():
-            try:
-                address = address_serializer.save(user=user)
-                is_served = address.is_postalcode_served()
-                return Response(
-                    {
-                        'status': 'success',
-                        'message': 'Profile updated successfully',
-                        'is_served': is_served,
-                    }
-                )
-            except ValidationError as ve:
-                # Build a user‑friendly error payload
-                logger.warning(f"Address validation error during profile update: {ve}")
-                if getattr(ve, "message_dict", None):
-                    # If only non‑field errors (usually under "__all__"), flatten to a plain string
-                    non_field_keys = {"__all__", ""}
-                    if set(ve.message_dict.keys()).issubset(non_field_keys):
-                        flat_msg = " ".join(sum(ve.message_dict.values(), []))
-                        friendly_msg = flat_msg
-                    else:
-                        # Field‑specific errors – return the dict so the UI can highlight fields
-                        friendly_msg = ve.message_dict
-                else:
-                    # .messages is already a list of strings
-                    friendly_msg = " ".join(getattr(ve, "messages", [str(ve)]))
-
-                return Response(
-                    {
-                        "status": "failure",
-                        "message": friendly_msg,
-                    },
-                    status=400,
-                )
         else:
-            print(f"Address serializer errors: {address_serializer.errors}")  # Debug print
-            return Response({'status': 'failure', 'message': address_serializer.errors}, status=400)
-    else:
-        return Response({'status': 'success', 'message': 'Profile updated successfully without address data'})
+            print(f"Serializer errors: {user_serializer.errors}")  # Debug print
+            return Response({'status': 'failure', 'message': user_serializer.errors}, status=400)
+
+        # Update or create address data
+        address_data = request.data.get('address')
+        if address_data:
+            
+            # Convert full country name to country code
+            country_name = address_data.get('country')
+            if country_name:
+                country_code = get_country_code(country_name)  # Use the new function to get the country code
+                print(f"Country name: {country_name}, Country code: {country_code}")  # Debugging print
+                if not country_code:
+                    return Response({'status': 'failure', 'message': f'Invalid country name: {country_name}'}, status=400)
+                address_data['country'] = country_code
+
+            try:
+                address = Address.objects.get(user=user)
+            except Address.DoesNotExist:
+                address = None
+
+            # Correct field name mapping - frontend sends 'postalcode' but model expects 'input_postalcode'
+            address_data['input_postalcode'] = address_data.pop('postalcode', '')
+            
+            # Add debugging for address data
+            country_code_received = address_data.get('country', 'NOT_PROVIDED')
+            postal_code_received = address_data.get('input_postalcode', 'NOT_PROVIDED')
+            logger.info(f"Registration address data - Country: '{country_code_received}', Postal Code: '{postal_code_received}'")
+            
+            address_data['user'] = user.id
+            address_serializer = AddressSerializer(instance=address, data=address_data, partial=True)
+            print(f"Address serializer data: {address_serializer.initial_data}")  # Debug print
+            if address_serializer.is_valid():
+                try:
+                    address = address_serializer.save(user=user)
+                    is_served = address.is_postalcode_served()
+                    return Response(
+                        {
+                            'status': 'success',
+                            'message': 'Profile updated successfully',
+                            'is_served': is_served,
+                        }
+                    )
+                except ValidationError as ve:
+                    # Build a user‑friendly error payload
+                    logger.warning(f"Address validation error during profile update: {ve}")
+                    if getattr(ve, "message_dict", None):
+                        # If only non‑field errors (usually under "__all__"), flatten to a plain string
+                        non_field_keys = {"__all__", ""}
+                        if set(ve.message_dict.keys()).issubset(non_field_keys):
+                            flat_msg = " ".join(sum(ve.message_dict.values(), []))
+                            friendly_msg = flat_msg
+                        else:
+                            # Field‑specific errors – return the dict so the UI can highlight fields
+                            friendly_msg = ve.message_dict
+                    else:
+                        # .messages is already a list of strings
+                        friendly_msg = " ".join(getattr(ve, "messages", [str(ve)]))
+
+                    return Response(
+                        {
+                            "status": "failure",
+                            "message": friendly_msg,
+                        },
+                        status=400,
+                    )
+            else:
+                print(f"Address serializer errors: {address_serializer.errors}")  # Debug print
+                return Response({'status': 'failure', 'message': address_serializer.errors}, status=400)
+        else:
+            return Response({'status': 'success', 'message': 'Profile updated successfully without address data'})
+    except Exception as e:
+        # n8n traceback
+        n8n_traceback = {
+            'error': str(e),
+            'source': 'update_profile_api',
+            'traceback': f"Address data: {address_data} | Country received: '{country_code_received}' | Postal code received: '{postal_code_received}' | {traceback.format_exc()}"
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        return Response({'status': 'error', 'message': str(e)}, status=500)
 
 def get_country_code(country_name):
     # Search through the country dictionary and find the corresponding country code
@@ -711,71 +724,136 @@ def get_country_code(country_name):
 @api_view(['POST'])
 def login_api_view(request):
     # Ensure method is POST
-    if request.method != 'POST':
-        return JsonResponse({'status': 'error', 'message': 'Only POST method allowed'}, status=405)
-
     try:
-        # Use request.data instead of parsing request.body directly
-        data = request.data
+        if request.method != 'POST':
+            return JsonResponse({'status': 'error', 'message': 'Only POST method allowed'}, status=405)
+
+        try:
+            # Use request.data instead of parsing request.body directly
+            data = request.data
+        except Exception as e:
+            # n8n traceback
+            n8n_traceback = {
+                'error': str(e),
+                'source': 'login_api_view: try block',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+            return JsonResponse({'status': 'error', 'message': f'Error processing request: {str(e)}'}, status=400)
+
+        # Extract username and password
+        username = data.get('username')
+        password = data.get('password')
+
+        if not username or not password:
+            # n8n traceback
+            n8n_traceback = {
+                'error': 'Username and password are required',
+                'source': 'login_api_view: if not username or not password',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+            return JsonResponse({'status': 'error', 'message': 'Username and password are required'}, status=400)
+
+        # Authenticate user
+        user = authenticate(username=username, password=password)
+        if not user:
+            # Check if user exists but email is not confirmed
+            try:
+                unconfirmed_user = CustomUser.objects.get(username=username)
+                if not unconfirmed_user.email_confirmed:
+                    # User exists but email not confirmed - send activation link
+                    if send_activation_email_to_user(unconfirmed_user, email_subject_prefix="Login attempt - "):
+                        logger.info(f"Sent activation email to unconfirmed user: {username}")
+                        return JsonResponse({
+                            'status': 'error', 
+                            'message': 'Your email address is not confirmed. We have sent you a new activation link.',
+                            'needs_email_confirmation': True
+                        }, status=400)
+                    else:
+                        logger.error(f"Failed to send activation email to unconfirmed user: {username}")
+                        return JsonResponse({
+                            'status': 'error', 
+                            'message': 'Your email address is not confirmed. Please check your email or contact support.',
+                            'needs_email_confirmation': True
+                        }, status=400)
+            except CustomUser.DoesNotExist:
+                # User doesn't exist at all
+                pass
+            
+            # n8n traceback for failed authentication
+            n8n_traceback = {
+                'error': f'Invalid username or password: authentication failed for {username}',
+                'source': 'login_api_view: if not user',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+            return JsonResponse({'status': 'error', 'message': 'Invalid username or password'}, status=400)
+
+        # Successful authentication
+        try:
+            refresh = RefreshToken.for_user(user)
+            
+            # Safely get or create user role
+            user_role, created = UserRole.objects.get_or_create(user=user, defaults={'current_role': 'customer'})
+            if created:
+                logger.info(f"Created missing UserRole for user {user.username} during login")
+
+            # Fetch user goals
+            goal = GoalTracking.objects.filter(user=user).first()
+            goal_name = goal.goal_name if goal else ""
+            goal_description = goal.goal_description if goal else ""
+            # Convert the country to a string
+            country = str(user.address.country) if hasattr(user, 'address') and user.address.country else None
+
+            response_data = {
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+                'user_id': user.id,
+                'username': user.username,
+                'email_confirmed': user.email_confirmed,
+                'timezone': user.timezone,
+                'preferred_language': user.preferred_language,
+                'allergies': list(user.allergies),  # Convert to list immediately
+                'custom_allergies': user.custom_allergies,
+                'dietary_preferences': list(user.dietary_preferences.values_list('name', flat=True)),
+                'custom_dietary_preferences': list(user.custom_dietary_preferences.values_list('name', flat=True)),
+                'emergency_supply_goal': user.emergency_supply_goal,
+                'household_member_count': user.household_member_count,
+                'household_members': HouseholdMemberSerializer(user.household_members.all(), many=True).data,
+                'is_chef': user_role.is_chef,
+                'current_role': user_role.current_role,
+                'goal_name': goal_name,
+                'goal_description': goal_description,
+                'country': country,
+                'personal_assistant_email': user.personal_assistant_email,
+                'status': 'success',
+                'message': 'Logged in successfully'
+            }
+
+            return JsonResponse(response_data, status=200)
+
+        except Exception as e:
+            # Log the exception details to debug it
+            # n8n traceback
+            n8n_traceback = {
+                'error': str(e),
+                'source': 'user_authentication',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+            logger.error(f"Error during authentication: {str(e)}")
+            return JsonResponse({'status': 'error', 'message': 'An error occurred during authentication'}, status=500)
+
     except Exception as e:
-        return JsonResponse({'status': 'error', 'message': f'Error processing request: {str(e)}'}, status=400)
-
-    # Extract username and password
-    username = data.get('username')
-    password = data.get('password')
-
-    if not username or not password:
-        return JsonResponse({'status': 'error', 'message': 'Username and password are required'}, status=400)
-
-    # Authenticate user
-    user = authenticate(username=username, password=password)
-    if not user:
-        return JsonResponse({'status': 'error', 'message': 'Invalid username or password'}, status=400)
-
-    # Successful authentication
-    try:
-        refresh = RefreshToken.for_user(user)
-        user_role = user.userrole  # Assuming a OneToOne relationship for simplicity
-
-        # Fetch user goals
-        goal = GoalTracking.objects.filter(user=user).first()
-        goal_name = goal.goal_name if goal else ""
-        goal_description = goal.goal_description if goal else ""
-        # Convert the country to a string
-        country = str(user.address.country) if hasattr(user, 'address') and user.address.country else None
-
-        response_data = {
-            'refresh': str(refresh),
-            'access': str(refresh.access_token),
-            'user_id': user.id,
-            'email_confirmed': user.email_confirmed,
-            'timezone': user.timezone,
-            'preferred_language': user.preferred_language,
-            'allergies': user.allergies,
-            'custom_allergies': user.custom_allergies,
-            'dietary_preferences': list(user.dietary_preferences.values_list('name', flat=True)),
-            'custom_dietary_preferences': list(user.custom_dietary_preferences.values_list('name', flat=True)),
-            'emergency_supply_goal': user.emergency_supply_goal,
-            'household_member_count': user.household_member_count,
-            'household_members': HouseholdMemberSerializer(user.household_members.all(), many=True).data,
-            'is_chef': user_role.is_chef,
-            'current_role': user_role.current_role,
-            'goal_name': goal_name,
-            'goal_description': goal_description,
-            'country': country,
-            'personal_assistant_email': user.personal_assistant_email,
-            'status': 'success',
-            'message': 'Logged in successfully'
+        logger.error(f"Error during authentication: {str(e)}")
+        # n8n traceback
+        n8n_traceback = {
+            'error': str(e),
+            'source': 'login_api_view: try block',
+            'traceback': traceback.format_exc()
         }
-
-        # Convert ManyRelatedManager fields to lists
-        response_data['allergies'] = list(user.allergies)  # Assuming allergies are simple strings
-
-        return JsonResponse(response_data, status=200)
-
-    except Exception as e:
-        # Log the exception details to debug it
-        print(f"Error during user authentication: {str(e)}")
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return JsonResponse({'status': 'error', 'message': 'An error occurred during authentication'}, status=500)
 
 @api_view(['POST'])
@@ -826,14 +904,30 @@ def register_api_view(request):
                 user.emergency_supply_goal = user_serializer.validated_data['emergency_supply_goal']
                 user.save()
 
+            # Handle the household_member_count during user creation
+            if 'household_member_count' in user_serializer.validated_data:
+                user.household_member_count = user_serializer.validated_data['household_member_count']
+                user.save() 
+            
+            if 'household_members' in user_serializer.validated_data:
+                user.household_members.set(user_serializer.validated_data['household_members'])
+                user.save()
 
             address_data = request.data.get('address')
             # Check if any significant address data is provided
             if address_data and any(value.strip() for value in address_data.values()):
+                # Correct field name mapping - frontend sends 'postalcode' but model expects 'input_postalcode'
+                address_data['input_postalcode'] = address_data.pop('postalcode', '')
+                
+                # Add debugging for address data
+                country_code_received = address_data.get('country', 'NOT_PROVIDED')
+                postal_code_received = address_data.get('input_postalcode', 'NOT_PROVIDED')
+                
                 address_data['user'] = user.id
                 address_serializer = AddressSerializer(data=address_data)
                 if not address_serializer.is_valid():
-                    logger.error(f"Address serializer errors: {address_serializer.errors}")
+                    error_msg = f"Address serializer errors: {address_serializer.errors} | Country received: '{country_code_received}' | Postal code received: '{postal_code_received}'"
+                    logger.error(error_msg)
                     raise serializers.ValidationError(f"We've experienced an issue when updating your address information: {address_serializer.errors}")
                 address_serializer.save()
 
@@ -886,7 +980,6 @@ def register_api_view(request):
             }
             try:
                 requests.post(os.getenv('N8N_REGISTER_URL'), json=email_data)
-                logger.info(f"Activation email data sent to n8n for: {to_email}")
                 print(f"Email data: {email_data}")
             except Exception as e:
                 logger.error(f"Error sending activation email data to n8n for: {to_email}, error: {str(e)}")
@@ -901,12 +994,48 @@ def register_api_view(request):
         })
     except serializers.ValidationError as ve:
         logger.error(f"Validation Error during user registration: {str(ve)}")
+        # Include address data in traceback for debugging
+        address_data = request.data.get('address', {})
+        country_debug = address_data.get('country', 'NOT_PROVIDED') if address_data else 'NO_ADDRESS_DATA'
+        postal_debug = address_data.get('input_postalcode', 'NOT_PROVIDED') if address_data else 'NO_ADDRESS_DATA'
+        
+        # n8n traceback
+        n8n_traceback = {
+            'error': str(ve),
+            'source': 'user_registration',
+            'traceback': f"Address data: {address_data} | Country received: '{country_debug}' | Postal code received: '{postal_debug}' | {traceback.format_exc()}"
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return Response({'errors': ve.detail}, status=400)
     except IntegrityError as e:
         logger.error(f"Integrity Error during user registration: {str(e)}")
+        # Include address data in traceback for debugging
+        address_data = request.data.get('address', {})
+        country_debug = address_data.get('country', 'NOT_PROVIDED') if address_data else 'NO_ADDRESS_DATA'
+        postal_debug = address_data.get('input_postalcode', 'NOT_PROVIDED') if address_data else 'NO_ADDRESS_DATA'
+        
+        # n8n traceback
+        n8n_traceback = {
+            'error': str(e),
+            'source': 'user_registration',
+            'traceback': f"Address data: {address_data} | Country received: '{country_debug}' | Postal code received: '{postal_debug}' | {traceback.format_exc()}"
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return Response({'errors': 'Error occurred while registering. Support team has been notified.'}, status=400)
     except Exception as e:
         logger.error(f"Exception Error during user registration: {str(e)}")
+        # Include address data in traceback for debugging
+        address_data = request.data.get('address', {})
+        country_debug = address_data.get('country', 'NOT_PROVIDED') if address_data else 'NO_ADDRESS_DATA'
+        postal_debug = address_data.get('input_postalcode', 'NOT_PROVIDED') if address_data else 'NO_ADDRESS_DATA'
+        
+        # n8n traceback
+        n8n_traceback = {
+            'error': str(e),
+            'source': 'user_registration',
+            'traceback': f"Address data: {address_data} | Country received: '{country_debug}' | Postal code received: '{postal_debug}' | {traceback.format_exc()}"
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return Response({'errors': str(e)}, status=500)
 
 @api_view(['POST'])
@@ -932,25 +1061,22 @@ def activate_account_api_view(request):
     except Exception as e:
         return Response({'status': 'error', 'message': str(e)})
 
-@api_view(['POST'])
-def resend_activation_link(request):
+# Utility function to send activation email - can be called from multiple places
+def send_activation_email_to_user(user, email_subject_prefix=""):
+    """
+    Utility function to send activation email to a user.
+    Returns True if successful, False otherwise.
+    """
     try:
-        print(f"Request data: {request.data}")
-        user_id = request.data.get('user_id')
-        
-        if not user_id:
-            return Response({'status': 'error', 'message': 'User ID is required.'}, status=400)
-        
-        user = CustomUser.objects.get(pk=user_id)
-        
         if user.email_confirmed:
-            return Response({'status': 'error', 'message': 'This email is already verified.'}, status=400)
+            logger.warning(f"Attempted to send activation email to already confirmed user: {user.username}")
+            return False
         
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         token = account_activation_token.make_token(user)
         activation_link = f"{os.getenv('STREAMLIT_URL')}/account?uid={uid}&token={token}&action=activate"
         
-        mail_subject = 'Resend Activation Link'
+        mail_subject = f'{email_subject_prefix}Activate your account' if email_subject_prefix else 'Activate your account'
         message = f"""
         <html>
         <body>
@@ -970,27 +1096,59 @@ def resend_activation_link(request):
         </html>
         """
         
-        to_email = user.email
         email_data = {
             'subject': mail_subject,
             'message': message,
-            'to': to_email,
+            'to': user.email,
             'from': 'support@sautai.com',
             'username': user.username,
             'activation_link': activation_link,
-            'html': True  # Indicate that the message is in HTML format
+            'html': True
         }
-        try:
-            requests.post(os.getenv('N8N_RESEND_URL'), json=email_data)
-            logger.info(f"Activation email data sent to n8n for: {to_email}")
-        except Exception as e:
-            logger.error(f"Error sending activation email data to n8n for: {to_email}, error: {str(e)}")
         
-        return Response({'status': 'success', 'message': 'A new activation link has been sent to your email.'})
+        requests.post(os.getenv('N8N_RESEND_URL'), json=email_data)
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error sending activation email to {user.email}: {str(e)}")
+        return False
+
+@api_view(['POST'])
+def resend_activation_link(request):
+    try:
+        print(f"Request data: {request.data}")
+        user_id = request.data.get('user_id')
+        
+        if not user_id:
+            return Response({'status': 'error', 'message': 'User ID is required.'}, status=400)
+        
+        user = CustomUser.objects.get(pk=user_id)
+        
+        if user.email_confirmed:
+            return Response({'status': 'error', 'message': 'This email is already verified.'}, status=400)
+        
+        if send_activation_email_to_user(user):
+            return Response({'status': 'success', 'message': 'A new activation link has been sent to your email.'})
+        else:
+            return Response({'status': 'error', 'message': 'Error sending activation email.'}, status=500)
     
     except CustomUser.DoesNotExist:
+        # n8n traceback
+        n8n_traceback = {
+            'error': 'User not found.',
+            'source': 'resend_activation_link',
+            'traceback': traceback.format_exc()
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return Response({'status': 'error', 'message': 'User not found.'}, status=400)
     except Exception as e:
+        # n8n traceback
+        n8n_traceback = {
+            'error': str(e),
+            'source': 'resend_activation_link',
+            'traceback': traceback.format_exc()
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return Response({'status': 'error', 'message': str(e)}, status=500)
 
     

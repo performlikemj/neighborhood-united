@@ -9,6 +9,7 @@ from django.db import transaction, IntegrityError
 from meals.pydantic_models import MealOutputSchema, RelevantSchema
 from local_chefs.models import ChefPostalCode, PostalCode
 from django.conf import settings
+from django.conf.locale import LANG_INFO
 from django_ratelimit.decorators import ratelimit
 from django.utils.html import strip_tags
 from django.http import JsonResponse
@@ -45,7 +46,22 @@ from decimal import Decimal # Add this import
 
 logger = logging.getLogger(__name__)
 
-client = OpenAI(api_key=settings.OPENAI_KEY)
+def get_openai_client():
+    """Get OpenAI client with lazy initialization."""
+    api_key = getattr(settings, 'OPENAI_KEY', None)
+    if not api_key:
+        raise ValueError("OPENAI_KEY not found in settings")
+    return OpenAI(api_key=api_key)
+
+# Helper function to get language name
+def _get_language_name(language_code):
+    """
+    Returns the full language name for a given language code.
+    Falls back to the code itself if the language is not found.
+    """
+    if language_code in LANG_INFO and 'name' in LANG_INFO[language_code]:
+        return LANG_INFO[language_code]['name']
+    return language_code
 
 def day_to_offset(day_name: str) -> int:
     """Convert 'Monday' -> 0, 'Tuesday' -> 1, etc."""
@@ -143,7 +159,7 @@ def get_embedding(text, model="text-embedding-3-small"):
     logger.info(f"Generating embedding with model: {model}, text length: {len(text)}")
     try:
         # Fetch the response from the embedding API
-        response = client.embeddings.create(input=[text], model=model)
+        response = get_openai_client().embeddings.create(input=[text], model=model)
         
         # Enable detailed logging when troubleshooting
         logger.info(f"Embedding API response received, type: {type(response)}")
@@ -231,7 +247,7 @@ def find_nearby_supermarkets(request):
         try:
             from shared.pydantic_models import GeoCoordinates
             user_address_string = f"The user's postal code is {address.input_postalcode} in the country of {address.country}"
-            response = client.responses.create(
+            response = get_openai_client().responses.create(
                 model="gpt-4.1-nano",
                 input=[
                     {
@@ -312,7 +328,7 @@ def find_nearby_supermarkets(request):
 # sautAI functions
 
 def generate_user_context(user):
-    """Creates a detailed user context prompt with location, timezone, and language."""
+    """Creates a detailed user context prompt with location, timezone, language, and household member information."""
     
     # Convert predefined dietary preferences QuerySet to a comma-separated string
     predefined_dietary_preferences = ', '.join([pref.name for pref in user.dietary_preferences.all()]) if user.dietary_preferences.exists() else "None"
@@ -379,6 +395,22 @@ def generate_user_context(user):
         # Fallback to English if language code isn't found
         preferred_language = "English"
     
+    # NEW: Get detailed household member information
+    household_info = ""
+    if hasattr(user, 'household_members'):
+        household_members = user.household_members.all()
+        if household_members.exists():
+            household_info = f"- Household Members ({len(household_members)} total):\n"
+            for member in household_members:
+                member_dietary_prefs = ', '.join([pref.name for pref in member.dietary_preferences.all()]) if member.dietary_preferences.exists() else "None"
+                age_info = f", Age: {member.age}" if member.age else ""
+                notes_info = f", Notes: {member.notes}" if member.notes else ""
+                household_info += f"  • {member.name}{age_info}, Dietary Preferences: {member_dietary_prefs}{notes_info}\n"
+        else:
+            household_info = f"- Household Size: {getattr(user, 'household_member_count', 1)} members (no individual details provided)\n"
+    else:
+        household_info = f"- Household Size: {getattr(user, 'household_member_count', 1)} members (no individual details provided)\n"
+    
     # Combine all information into a structured context
     user_preferences = (
         f"User Preferences:\n"
@@ -388,7 +420,8 @@ def generate_user_context(user):
         f"- Excluded Foods: {excluded_foods_str}\n"
         f"- Allergies: {allergies_str}\n"
         f"- Goals: {goals}\n"
-        f"- Meals Accessible in Location: {city}, {state}, {country}\n"
+        f"{household_info}"
+        f"- Location: {city}, {state}, {country}\n"
         f"- Timezone: {timezone}\n"
         f"- Preferred Language: {preferred_language}"
     )
@@ -452,7 +485,7 @@ def is_question_relevant(question):
     - Access information on healthy meal options and ingredients.
     """
 
-    response = client.chat.completions.create(
+    response = get_openai_client().chat.completions.create(
         model="gpt-4.1-nano",
         messages=[
             {
@@ -605,7 +638,7 @@ def recommend_follow_up(request, context):
         """
 
     try:
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-nano",
             input=[
                 {
@@ -870,6 +903,7 @@ def get_user_info(request):
         if isinstance(postal_code, str) and postal_code.isdigit():
             postal_code = int(postal_code)
 
+        country = address.country if address.country else 'Not provided'
         allergies = user.allergies if user.allergies != [{}] else []
 
         # Convert the QuerySet to a list of values (e.g., names of dietary preferences)
@@ -881,6 +915,7 @@ def get_user_info(request):
             'week_shift': user.week_shift,
             'user_goal': user.goal.goal_description if hasattr(user, 'goal') and user.goal else 'None',
             'postal_code': postal_code,
+            'country': country,
             'allergies': allergies,  
         }
         return {'status': 'success', 'user_info': user_info, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -944,7 +979,7 @@ def update_user_info(request):
             user.goal.goal_description = goal
             # Use responses API to update the goal name
             if not user_goal_name:
-                response = client.responses.create(
+                response = get_openai_client().responses.create(
                     model="gpt-4.1-nano",
                     instructions="Based on the user's goal description, generate a concise and descriptive goal name.",
                     input=[{"role":"user","content":user_goal}],
@@ -1097,7 +1132,7 @@ def generate_review_summary(object_id, category):
 
     # Step 3: Feed the formatted string into GPT-3.5-turbo-1106 to generate the overall summary
     try:
-        response = client.chat.completions.create(
+        response = get_openai_client().chat.completions.create(
             model="gpt-4.1-mini",
             messages=[{"role": "user", "content": formatted_summaries}],
         )
@@ -1117,7 +1152,7 @@ def generate_review_summary(object_id, category):
 # Function to generate a summarized title
 def generate_summary_title(question):
     try:
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-nano",
             messages=[
                 {
@@ -1426,7 +1461,7 @@ def create_meal(request=None, user_id=None, name=None, dietary_preference=None, 
                     else 'No specific goals'
                 )
                 try:
-                    response = client.chat.completions.create(
+                    response = get_openai_client().chat.completions.create(
                         model="gpt-4.1-mini",
                         messages=[
                             {

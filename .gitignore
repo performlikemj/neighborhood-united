@@ -51,3 +51,9 @@ celerybeat*
 sautai_dump*
 celery-celery*
 /.hood/
+date-container-v-ars.sh
+deploy-container-apps.sh
+deploy-simple.sh
+docker-compose.yml
+Dockerfile.*
+setup-azure-secrets.sh

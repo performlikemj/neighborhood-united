@@ -270,7 +270,10 @@ def submit_chef_request(request):
             }, status=500)
         
         # Handle postal codes
-        postal_codes = request.data.getlist('postal_codes', [])
+        postal_codes = request.data.get('postal_codes', [])
+        # Ensure postal_codes is a list
+        if not isinstance(postal_codes, list):
+            postal_codes = [postal_codes] if postal_codes else []
         if postal_codes:
             try:
                 from local_chefs.models import PostalCode

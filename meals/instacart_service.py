@@ -16,8 +16,8 @@ from django.core.cache import cache
 from meals.pydantic_models import Ingredient
 from openai import OpenAI
 from django.conf import settings
-
-client = OpenAI(api_key=settings.OPENAI_KEY)
+import traceback
+from shared.utils import get_openai_client
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 def normalize_lines(lines: list[str]) -> dict:
     prompt = "Turn these loose shopping-list lines into structured JSON ensuring the items are actual shopping list items.\n---\n" + "\n".join(lines)
-    r = client.responses.create(
+    r = get_openai_client().responses.create(
         model="gpt-4.1-nano",
         input=[{"role": "user", "content": prompt}],
         text={
@@ -152,7 +152,7 @@ def create_instacart_shopping_list(
         
         # 3. Get API key
         if not api_key:
-            api_key = getattr(settings, 'INSTACART_API_KEY', None)
+            api_key = os.getenv('INSTACART_API_KEY')
             if not api_key:
                 logger.error("Instacart API key not provided and not found in settings")
                 return {
@@ -392,12 +392,12 @@ def generate_instacart_link(user_id: int, meal_plan_id: int, postal_code: str = 
             shopping_list_data = json.loads(shopping_list.items)
         
         # Get the API key from settings
-        api_key = getattr(settings, 'INSTACART_API_KEY', None)
+        api_key = os.getenv('INSTACART_API_KEY')
         if not api_key:
-            logger.error("Instacart API key not found in settings")
+            logger.error("Instacart API key not found in environment variables")
             return {
                 "status": "error",
-                "message": "Instacart API key not found in settings"
+                "message": "Instacart API key not found in environment variables"
             }
         # Create the Instacart shopping list
         result = create_instacart_shopping_list(
@@ -418,53 +418,13 @@ def generate_instacart_link(user_id: int, meal_plan_id: int, postal_code: str = 
         return result
     except Exception as e:
         logger.error(f"Error generating Instacart link: {str(e)}")
+        n8n_traceback = {
+            'error': str(e),
+            'source': 'instacart_service',
+            'traceback': f"{traceback.format_exc()}"
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return {
             "status": "error",
             "message": f"Failed to generate Instacart link: {str(e)}"
-        }
-
-# Tool definition for OpenAI Responses API
-INSTACART_TOOL = {
-    "type": "function",
-    "name": "create_instacart_shopping_list",
-    "description": "Create an Instacart shopping list from the user's meal plan and generate a link to shop the ingredients",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "user_id": {
-                "type": "integer",
-                "description": "The ID of the user"
-            },
-            "meal_plan_id": {
-                "type": "integer",
-                "description": "The ID of the meal plan to generate the shopping list for"
-            }
-        },
-        "required": ["user_id", "meal_plan_id"],
-        "additionalProperties": False
-    }
-}
-
-def instacart_tool_handler(params: dict) -> dict:
-    """
-    Handler function for the create_instacart_shopping_list tool.
-    This function is called by the OpenAI Responses API tool system.
-    
-    Args:
-        params: Dictionary containing the tool parameters
-        
-    Returns:
-        Dictionary with the tool result
-    """
-    user_id = params.get('user_id')
-    meal_plan_id = params.get('meal_plan_id')
-    
-    if not user_id or not meal_plan_id:
-        logger.error("Both user_id and meal_plan_id are required for Instacart tool")
-        return {
-            "status": "error",
-            "message": "Both user_id and meal_plan_id are required"
-        }
-    
-    # Postal code is not required but will be fetched from the user's address if available
-    return generate_instacart_link(user_id, meal_plan_id) 
+        } 

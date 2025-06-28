@@ -200,9 +200,9 @@ CUSTOMER_DASHBOARD_TOOLS: List[Dict[str, Any]] = [
                     "type": "boolean",
                     "description": "Set to true to unsubscribe from all emails, false to receive emails"
                 },
-                "preferred_servings":  {
+                "household_member_count":  {
                     "type": "integer",
-                    "description": "Default number of servings (servings size) the user wants meals scaled to"
+                    "description": "Default number of household members the user wants meals scaled to"
                 },
                 "emergency_supply_goal": {
                     "type": "integer",
@@ -433,7 +433,7 @@ def update_user_settings(
     custom_allergies: List[str] = None,
     preferred_language: str = None,
     unsubscribed_from_emails: bool = None,
-    preferred_servings: int = None,
+    household_member_count: int = None,
     emergency_supply_goal: int = None,
     phone_number: str = None,
     user_timezone: str = None
@@ -507,7 +507,7 @@ def update_user_settings(
         scalar_map = {
             "preferred_language": preferred_language,
             "unsubscribed_from_emails": unsubscribed_from_emails,
-            "preferred_servings": preferred_servings,
+            "household_member_count": household_member_count,
             "emergency_supply_goal": emergency_supply_goal,
             "phone_number": phone_number,
             "timezone": user_timezone,

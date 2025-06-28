@@ -11,7 +11,7 @@ from django.core.cache import cache
 import requests
 import traceback
 import uuid
-
+import os
 from .models import ChatThread, ChatSessionSummary, UserChatSummary, EmailAggregationSession, AggregatedMessageContent
 from custom_auth.models import CustomUser
 from meals.meal_assistant_implementation import MealPlanningAssistant
@@ -30,11 +30,8 @@ def generate_chat_title(thread_id):
     """
     try:
         thread = ChatThread.objects.get(pk=thread_id)
-        logger.info(f"Task started: Generating title for ChatThread {thread_id}")
-
         # Ensure we still need to generate a title
         if thread.title not in ["Chat with Assistant", "", None] or not thread.openai_input_history:
-            logger.info(f"Skipping title generation for ChatThread {thread_id} - title already set or no history.")
             return
 
         first_user_message_content = None
@@ -78,9 +75,7 @@ def generate_chat_title(thread_id):
 
             new_title = response.output_text
             if new_title:
-                logger.info(f"Generated title for ChatThread {thread_id}: '{new_title}'")
                 ChatThread.objects.filter(pk=thread_id).update(title=new_title)
-                logger.info(f"Successfully updated title for ChatThread {thread_id}")
             else:
                  logger.warning(f"OpenAI returned an empty title for ChatThread {thread_id}")
 
@@ -97,7 +92,6 @@ def summarize_user_chat_sessions():
     """
     Hourly task to summarize chat sessions for users when it's 3:30 AM in their timezone.
     """
-    logger.info("Starting hourly chat session summarization task")
     
     # Get current UTC time
     now_utc = timezone.now()
@@ -129,14 +123,12 @@ def summarize_user_chat_sessions():
                 
                 if is_summary_hour:
                     eligible_users.append(user)
-                    logger.info(f"User {user.username} (TZ: {user.timezone}) is eligible for summary generation")
             except Exception as e:
                 logger.error(f"Error processing timezone for user {user.id}: {e}", exc_info=True)
     except Exception as e:
         logger.error(f"Error retrieving users: {e}", exc_info=True)
     
     if not eligible_users:
-        logger.info("No users eligible for summary generation in this timezone window")
         return 0
     
     today = timezone.localdate()
@@ -201,8 +193,13 @@ def summarize_user_chat_sessions():
                 
             except Exception as e:
                 logger.error(f"Error processing thread {thread.id}: {e}", exc_info=True)
-    
-    logger.info(f"Scheduled {count} chat session summaries for generation")
+                # n8n traceback
+                n8n_traceback = {
+                    'error': str(e),
+                    'source': 'summarize_user_chat_sessions',
+                    'traceback': traceback.format_exc()
+                }
+                requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
     
     # If any summaries were created/updated, schedule the consolidated summary task
     if count > 0:
@@ -332,13 +329,19 @@ def generate_chat_session_summary(summary_id):
             summary_obj.status = ChatSessionSummary.COMPLETED
             summary_obj.save()
             
-            logger.info(f"Successfully generated summary for chat session {summary_id}")
             return f"Successfully generated summary for {summary_id}"
             
         except Exception as api_error:
             logger.error(f"OpenAI API error for summary {summary_id}: {api_error}", exc_info=True)
             summary_obj.status = ChatSessionSummary.ERROR
             summary_obj.save()
+            # n8n traceback
+            n8n_traceback = {
+                'error': str(api_error),
+                'source': 'generate_chat_session_summary',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             return f"API error for summary {summary_id}: {str(api_error)}"
     
     except ChatSessionSummary.DoesNotExist:
@@ -346,6 +349,13 @@ def generate_chat_session_summary(summary_id):
         return f"ChatSessionSummary with id {summary_id} not found"
     except Exception as e:
         logger.error(f"Error generating chat session summary {summary_id}: {e}", exc_info=True)
+        # n8n traceback
+        n8n_traceback = {
+            'error': str(e),
+            'source': 'generate_chat_session_summary',
+            'traceback': traceback.format_exc()
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return f"Error for summary {summary_id}: {str(e)}"
 
 @shared_task
@@ -354,7 +364,6 @@ def consolidate_user_chat_summaries():
     Create consolidated summaries for each user who just had chat sessions summarized.
     Only processes users in their appropriate timezone window.
     """
-    logger.info("Starting task to consolidate user chat summaries")
     yesterday = timezone.localdate() - timedelta(days=1)
     
     # Find users who:
@@ -385,7 +394,6 @@ def consolidate_user_chat_summaries():
             
             # Only update if we have a new summary date
             if user_summary.last_summary_date and user_summary.last_summary_date >= yesterday:
-                logger.debug(f"User {user.id} already has a consolidated summary for {yesterday} or later")
                 continue
             
             # Generate the consolidated summary
@@ -394,8 +402,13 @@ def consolidate_user_chat_summaries():
             
         except Exception as e:
             logger.error(f"Error processing consolidated summary for user {user.id}: {e}", exc_info=True)
-    
-    logger.info(f"Scheduled {count} consolidated user summaries for generation")
+            # n8n traceback
+            n8n_traceback = {
+                'error': str(e),
+                'source': 'consolidate_user_chat_summaries',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
     return count
 
 @shared_task
@@ -500,13 +513,19 @@ def generate_consolidated_user_summary(user_id):
             user_summary.status = UserChatSummary.COMPLETED
             user_summary.save()
             
-            logger.info(f"Successfully generated consolidated summary for user {user_id}")
             return f"Successfully generated consolidated summary for user {user_id}"
             
         except Exception as api_error:
             logger.error(f"OpenAI API error for user summary {user_id}: {api_error}", exc_info=True)
             user_summary.status = UserChatSummary.ERROR
             user_summary.save()
+            # n8n traceback
+            n8n_traceback = {
+                'error': str(api_error),
+                'source': 'generate_consolidated_user_summary',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             return f"API error for user summary {user_id}: {str(api_error)}"
     
     except CustomUser.DoesNotExist:
@@ -514,6 +533,13 @@ def generate_consolidated_user_summary(user_id):
         return f"CustomUser with id {user_id} not found"
     except Exception as e:
         logger.error(f"Error generating consolidated summary for user {user_id}: {e}", exc_info=True)
+        # n8n traceback
+        n8n_traceback = {
+            'error': str(e),
+            'source': 'generate_consolidated_user_summary',
+            'traceback': traceback.format_exc()
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return f"Error for user summary {user_id}: {str(e)}"
 
 @shared_task
@@ -524,7 +550,6 @@ def process_aggregated_emails(session_identifier_str: str):
         session_identifier_str: The UUID string of the EmailAggregationSession.
     """
     task_id_str = process_aggregated_emails.request.id if process_aggregated_emails.request else 'N/A'
-    logger.info(f"Task {task_id_str}: Starting to process aggregated emails for DB session identifier {session_identifier_str}.")
 
     active_session_flag_key = None # Will be set if session is found
     db_session = None
@@ -553,11 +578,8 @@ def process_aggregated_emails(session_identifier_str: str):
         # Combine message content
         # Consider if subjects of individual messages need to be part of combined_content
         combined_content = "\n\n---\n\n".join([item.content for item in aggregated_messages])
-        print(f"DEBUG: Combined content for user {user.id} (DB session {session_identifier_str}):\n{combined_content}")
-        logger.info(f"Task {task_id_str}: Processing {len(aggregated_messages)} aggregated email(s) from DB for user {user.id}. Session: {session_identifier_str}. Combined content length: {len(combined_content)}.")
 
         assistant = MealPlanningAssistant(user_id=user.id)
-        print(f"DEBUG: Processing aggregated emails for user {user.id} (DB session {session_identifier_str}).")
         # Call the method in MealPlanningAssistant to handle processing and n8n reply
         # Pass metadata from the db_session object
         email_reply_result = assistant.process_and_reply_to_email(
@@ -579,17 +601,44 @@ def process_aggregated_emails(session_identifier_str: str):
         # Mark session as processed (inactive)
         db_session.is_active = False
         db_session.save()
-        logger.info(f"Task {task_id_str}: Marked EmailAggregationSession {session_identifier_str} as inactive.")
 
     except EmailAggregationSession.DoesNotExist:
         logger.error(f"Task {task_id_str}: EmailAggregationSession with identifier {session_identifier_str} not found in DB. Cannot process.")
+        # n8n traceback
+        n8n_traceback = {
+            'error': f"Task {task_id_str}: EmailAggregationSession with identifier {session_identifier_str} not found in DB. Cannot process.",
+            'source': 'process_aggregated_emails',
+            'traceback': traceback.format_exc()
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         # No specific user ID to clear a flag if session not found by identifier alone
     except ValueError: # Invalid UUID format
         logger.error(f"Task {task_id_str}: Invalid UUID format for session identifier '{session_identifier_str}'. Cannot process.")
+        # n8n traceback
+        n8n_traceback = {
+            'error': f"Task {task_id_str}: Invalid UUID format for session identifier '{session_identifier_str}'. Cannot process.",
+            'source': 'process_aggregated_emails',
+            'traceback': traceback.format_exc()
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
     except CustomUser.DoesNotExist: # Should not happen if session exists and has a user
         logger.error(f"Task {task_id_str}: User not found for DB session {session_identifier_str}. Session might be corrupted.")
+        # n8n traceback
+        n8n_traceback = {
+            'error': f"Task {task_id_str}: User not found for DB session {session_identifier_str}. Session might be corrupted.",
+            'source': 'process_aggregated_emails',
+            'traceback': traceback.format_exc()
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
     except Exception as e:
         logger.error(f"Task {task_id_str}: Error processing aggregated emails for DB session {session_identifier_str}: {str(e)}\nTraceback: {traceback.format_exc()}.")
+        # n8n traceback
+        n8n_traceback = {
+            'error': str(e),
+            'source': 'process_aggregated_emails',
+            'traceback': traceback.format_exc()
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         # Consider if db_session should be marked inactive on general error, or if it should be retried.
         # If db_session was fetched, it might be good to mark it inactive to prevent re-processing of a failing task unless retries are configured.
         if db_session and db_session.is_active:
@@ -600,7 +649,6 @@ def process_aggregated_emails(session_identifier_str: str):
         # Clean up cache flag for this user if we identified the user and session
         if active_session_flag_key: # This key is set if db_session was found and user identified
             cache.delete(active_session_flag_key)
-            logger.info(f"Task {task_id_str}: Cleaned up cache flag {active_session_flag_key} for user after DB aggregation task for session {session_identifier_str}.")
         else:
             # This case can happen if EmailAggregationSession.DoesNotExist or ValueError on UUID occurred early.
             # We don't have a user.id to construct the cache key for cleanup in that scenario.

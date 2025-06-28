@@ -35,11 +35,7 @@ app.conf.beat_schedule = {
         'task': 'meals.email_service.send_meal_plan_reminder_email',
         'schedule': crontab(hour=10, minute=0)  # Runs daily at 10 AM
     },
-    'analyze-existing-meals': {
-        'task': 'meals.tasks.analyze_existing_meals',
-        'schedule': crontab(hour='2', minute='30'),  # Run at 2:30 AM every day
-        'args': (30,),  # Analyze 30 meals in each batch
-    },
+
     'sync-all-chef-payments': {
         'task': 'meals.tasks.sync_all_chef_payments',
         'schedule': crontab(hour=0, minute=0),  # Runs daily at midnight
@@ -57,5 +53,10 @@ app.conf.beat_schedule = {
     'summarize-user-chat-sessions': {
         'task': 'customer_dashboard.tasks.summarize_user_chat_sessions',
         'schedule': crontab(minute=30),  # Run every hour at X:30 to check for users in different timezones
+    },
+    'create-weekly-chat-threads': {
+        'task': 'meals.tasks.create_weekly_chat_threads',
+        'schedule': crontab(day_of_week='monday', hour=0, minute=5),  # Run every Monday at 00:05
+        'args': (),
     },
 }

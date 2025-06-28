@@ -12,7 +12,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Initialize Redis connection
-r = redis.Redis.from_url(f"rediss://:{os.getenv('REDIS_PASSWORD')}@{os.getenv('REDIS_URL')}:6380/0?ssl_cert_reqs=required")
+r = redis.Redis.from_url(os.getenv('REDIS_URL'))
 
 def _key(user_id: str, model: str) -> str:
     """

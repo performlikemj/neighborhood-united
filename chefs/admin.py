@@ -48,6 +48,58 @@ admin.site.register(Chef, ChefAdmin)
 class ChefRequestAdmin(admin.ModelAdmin):
     list_display = ('user', 'is_approved',)
     actions = ['approve_chef_requests']
+    
+    def save_model(self, request, obj, form, change):
+        """
+        Handle individual approval when admin checks is_approved checkbox
+        """
+        was_approved_before = False
+        if change:  # If this is an update, not a new record
+            try:
+                original_obj = ChefRequest.objects.get(pk=obj.pk)
+                was_approved_before = original_obj.is_approved
+            except ChefRequest.DoesNotExist:
+                pass
+        
+        # Save the ChefRequest first
+        super().save_model(request, obj, form, change)
+        
+        # If the request was just approved (not already approved before)
+        if obj.is_approved and not was_approved_before:
+            try:
+                with transaction.atomic():
+                    # Try to get existing Chef or create a new one
+                    chef, created = Chef.objects.get_or_create(
+                        user=obj.user
+                    )
+                    
+                    # Always update the Chef with data from ChefRequest
+                    if obj.experience:
+                        chef.experience = obj.experience
+                    if obj.bio:
+                        chef.bio = obj.bio
+                    if obj.profile_pic:
+                        chef.profile_pic = obj.profile_pic
+                    
+                    # Save the chef object
+                    chef.save()
+                    
+                    # Set postal codes if there are any
+                    if obj.requested_postalcodes.exists():
+                        chef.serving_postalcodes.set(obj.requested_postalcodes.all())
+                    
+                    # Update UserRole for this user
+                    user_role, created = UserRole.objects.get_or_create(user=obj.user)
+                    user_role.is_chef = True
+                    user_role.current_role = 'chef'
+                    user_role.save()
+                    
+                    messages.success(request, f"Successfully approved chef request for {obj.user.username}.")
+                    
+            except Exception as e:
+                messages.error(request, f"Error approving request for {obj.user.username}: {str(e)}")
+                logger.error(f"Error in save_model for ChefRequest {obj.pk}: {str(e)}")
+
 
     def approve_chef_requests(self, request, queryset):
         success_count = 0

@@ -40,7 +40,7 @@ class HouseholdMemberSerializer(serializers.ModelSerializer):
         if prefs is not None:
             instance.dietary_preferences.set(prefs)
         return instance
-
+    
 class CustomUserSerializer(serializers.ModelSerializer):
     allergies = serializers.ListField(
         child=serializers.CharField(max_length=20),
@@ -68,9 +68,12 @@ class CustomUserSerializer(serializers.ModelSerializer):
         queryset=CustomDietaryPreference.objects.all(),
         required=False
     )
+    
+    # Add is_chef field from UserRole relationship
+    is_chef = serializers.SerializerMethodField()
 
     household_members = HouseholdMemberSerializer(many=True, read_only=True)
-
+    
     class Meta:
         model = get_user_model()
         fields = [
@@ -78,7 +81,8 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'phone_number', 'dietary_preferences', 'custom_dietary_preferences',
             'allergies', 'custom_allergies', 'week_shift', 'email_confirmed',
             'preferred_language', 'timezone', 'emergency_supply_goal',
-            'household_member_count', 'household_members', 'personal_assistant_email'
+            'personal_assistant_email', 'is_chef',
+            'household_member_count', 'household_members'
         ]
         extra_kwargs = {
             'password': {'write_only': True},
@@ -88,6 +92,17 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'custom_dietary_preferences': {'required': False},  # Optional field
             'personal_assistant_email': {'read_only': True}  # Mark as read-only
         }
+
+    def get_is_chef(self, obj):
+        """
+        Get the is_chef status from the related UserRole model.
+        Returns False if UserRole doesn't exist for the user.
+        """
+        try:
+            user_role = UserRole.objects.get(user=obj)
+            return user_role.is_chef
+        except UserRole.DoesNotExist:
+            return False
 
     def __init__(self, *args, **kwargs):
         super(CustomUserSerializer, self).__init__(*args, **kwargs)
@@ -116,7 +131,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
             timezone=validated_data.get('timezone', 'UTC'),
             allergies=validated_data.get('allergies', []),
             custom_allergies=validated_data.get('custom_allergies', ''),
-            emergency_supply_goal=validated_data.get('emergency_supply_goal', 0),
+            emergency_supply_goal=validated_data.get('emergency_supply_goal', 0), 
             household_member_count=validated_data.get('household_member_count', 1),
         )
         user.set_password(validated_data['password'])
@@ -135,6 +150,10 @@ class CustomUserSerializer(serializers.ModelSerializer):
                 instance.dietary_preferences.set(value)  # Update ManyToMany field
             elif attr == 'allergies':
                 instance.allergies = value
+            elif attr == 'household_member_count':
+                if value < 1:
+                    raise ValidationError("Household member count must be greater than 0.")
+                setattr(instance, attr, value)
             elif attr == 'custom_allergies':
                 instance.custom_allergies = value
             else:

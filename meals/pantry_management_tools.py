@@ -22,11 +22,9 @@ from meals.pantry_management import (
     get_expiring_pantry_items,
     determine_items_to_replenish,
 )
+from shared.utils import get_openai_client
 from meals.serializers import PantryItemSerializer
-from openai import OpenAI
 
-api_key = os.getenv("OPENAI_KEY")
-client = OpenAI(api_key=api_key)
 logger = logging.getLogger(__name__)
 n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
 # Tool definitions for the OpenAI Responses API
@@ -164,7 +162,7 @@ PANTRY_MANAGEMENT_TOOLS = [
                 },
                 "household_member_count": {
                     "type": "integer",
-                    "description": "Total number of people in the household."
+                    "description": "Number of household members the user wants emergency supplies scaled to."
                 }
             },
             "required": ["user_id", "days", "household_member_count"],
@@ -188,7 +186,6 @@ def check_pantry_items(user_id: int, item_type: str = None) -> Dict[str, Any]:
     """
     try:
         # Get the user
-        print(f"Checking pantry items for user {user_id}")
         user = get_object_or_404(CustomUser, id=user_id)
         
         # Get the pantry items
@@ -198,10 +195,8 @@ def check_pantry_items(user_id: int, item_type: str = None) -> Dict[str, Any]:
             query_filters['item_type'] = item_type
             
         pantry_items = PantryItem.objects.filter(**query_filters)
-        print(f"Found {len(pantry_items)} pantry item(s)")
         # Serialize the pantry items
         serializer = PantryItemSerializer(pantry_items, many=True)
-        print(f'Serializer data: {serializer.data}')
         return {
             "status": "success",
             "pantry_items": serializer.data,
@@ -265,6 +260,7 @@ def add_pantry_item(user_id: int, item_name: str, quantity: float, item_type: st
                 "pantry_item": serializer.data
             }
         else:
+            
             # Create a new pantry item
             new_item = PantryItem.objects.create(
                 user=user,
@@ -314,13 +310,14 @@ def get_expiring_items(user_id: int, days: int = 7) -> Dict[str, Any]:
         # Format the response
         formatted_items = []
         for item in expiring_items:
-            formatted_items.append({
+            formatted_item = {
                 "name": item.get("name", ""),
                 "expiration_date": item.get("expiration_date", ""),
                 "quantity": item.get("quantity", 0),
                 "type": item.get("item_type", ""),
                 "notes": item.get("notes", "")
-            })
+            }
+            formatted_items.append(formatted_item)
         
         return {
             "status": "success",
@@ -368,13 +365,11 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
     )
     from meals.pydantic_models import ShoppingList as ShoppingListSchema, ShoppingCategory
     user = get_object_or_404(CustomUser, id=user_id)
+    
     # --- 0. Fetch objects ----------------------------------------------------
     meal_plan = get_object_or_404(MealPlan, id=meal_plan_id, user=user)
-    household_member_count = (
-        getattr(user, "household_member_count", None)
-        or getattr(user, "preferred_servings", None)
-        or 1
-    )
+    
+    household_member_count = getattr(user, "household_member_count", 1) or 1
 
     # Shortcut: if a validated shopping list already exists → return it.
     existing = ShoppingListModel.objects.filter(meal_plan=meal_plan).first()
@@ -417,6 +412,7 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
         .annotate(total_used=Sum("quantity_used"))
     )
     bridging_usage = {row["pantry_item"]: float(row["total_used"] or 0.0) for row in bridging_qs}
+    
     leftover_info = []
     for pid, used in bridging_usage.items():
         try:
@@ -433,6 +429,7 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
         user_pantry_items = get_user_pantry_items(user)
     except Exception:
         user_pantry_items = []
+        
     try:
         expiring_items = get_expiring_pantry_items(user)
         expiring_items_str = ", ".join(i["name"] for i in expiring_items) if expiring_items else "None"
@@ -458,7 +455,7 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
 
     # --- 2. Call OpenAI -------------------------------------------------------
     try:
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-mini",
             input=[
                 {
@@ -542,7 +539,7 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
                         f"User context: {user_context}.\n"
                         f"Bridging leftover info: {bridging_leftover_str}.\n"
                         f"The user has the following pantry items: {', '.join(user_pantry_items)}.\n"
-                        f"Household size: {household_member_count}.\n"
+                        f"Household member count: {household_member_count}.\n"
                         f"Expiring pantry items: {expiring_items_str}.\n"
                         f"Available shopping categories: {shopping_category_list}.\n"
                         f"{substitution_str}\n{chef_note}\n"
@@ -596,14 +593,15 @@ def determine_items_to_replenish(user_id: int):
 
     user = get_object_or_404(CustomUser, id=user_id)
 
-    # Early exit if the user hasn’t set a goal
+    # Early exit if the user hasn't set a goal
     goal_days = user.emergency_supply_goal or 0
-    # Fetch household member count (fallback to any older serving size field)
+    
+    # Fetch preferred servings (fallback to 1 if missing or mis‑spelled column)
     household_member_count = (
         getattr(user, "household_member_count", None)
-        or getattr(user, "preferred_servings", None)
         or 1
     )
+    
     if goal_days <= 0:
         return {
             "status": "success",
@@ -666,8 +664,8 @@ def determine_items_to_replenish(user_id: int):
         """
     )
     usr_prompt = (
-        f"The user has an emergency supply goal of {goal_days} days and has "
-        f"{household_member_count} household member(s).\n"
+        f"The user has an emergency supply goal of {goal_days} days and needs to prepare meals for "
+        f"{household_member_count} household members with individual dietary needs (see user context for details).\n"
         f"User Context:\n{generate_user_context(user)}\n"
         f"Current Pantry Items:\n{pantry_summary}\n"
         "When calculating quantities, multiply daily needs by the number of servings.\n"
@@ -675,7 +673,7 @@ def determine_items_to_replenish(user_id: int):
     )
 
     try:
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4o-mini",
             input=[
                 {"role": "developer", "content": sys_prompt},
@@ -700,14 +698,12 @@ def determine_items_to_replenish(user_id: int):
     try:
         parsed = json.loads(raw)
         validated = ReplenishItemsSchema.model_validate(parsed)
-        validated_dict = {
+        return {
             "status": "success",
-            "items_to_replenish": validated.items_to_replenish,
+            "items_to_replenish": [item.model_dump() for item in validated.items_to_replenish],
             "household_member_count": int(household_member_count)
         }
-        return validated_dict
     except (json.JSONDecodeError, ValidationError) as e:
-        logger.error(f"Invalid JSON for user {user_id}: {e}  -- raw: {raw}")
         return {"status": "error", "message": "Assistant produced invalid JSON."}
     
 def set_emergency_supply_goal(user_id: int, days: int, household_member_count: int) -> Dict[str, Any]:
@@ -749,13 +745,13 @@ def set_emergency_supply_goal(user_id: int, days: int, household_member_count: i
 
     try:
         user = get_object_or_404(CustomUser, id=user_id)
+        
+        old_goal = user.emergency_supply_goal
+        old_household_member_count = getattr(user, "household_member_count", None)
+        
         user.emergency_supply_goal = days_int
-        # Update household_member_count (handle legacy preferred_servings field)
-        if hasattr(user, "household_member_count"):
-            user.household_member_count = servings_int
-        elif hasattr(user, "preferred_servings"):
-            user.preferred_servings = servings_int
-        user.save(update_fields=["emergency_supply_goal", "household_member_count" if hasattr(user, "household_member_count") else "preferred_servings"])
+        user.household_member_count = servings_int
+        user.save(update_fields=["emergency_supply_goal", "household_member_count"])
 
         return {
             "status": "success",

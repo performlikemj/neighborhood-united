@@ -22,19 +22,17 @@ from django.utils import timezone
 from openai import OpenAI, OpenAIError
 from custom_auth.models import CustomUser
 from meals.meal_generation import generate_and_create_meal, perform_openai_sanity_check
-from meals.models import Meal, MealPlan, MealPlanMeal, MealPlanInstruction, ChefMealEvent
+from meals.models import Meal, MealPlan, MealPlanMeal, MealPlanInstruction, ChefMealEvent, Dish, Ingredient
 from meals.tasks import MAX_ATTEMPTS
 from meals.pydantic_models import (MealsToReplaceSchema, MealPlanApprovalEmailSchema, BulkPrepInstructions,
                                   MealPlanModificationRequest, PromptMealMap, ModifiedMealSchema)
 from meals.meal_modification_parser import parse_modification_request
 from shared.utils import (generate_user_context, get_embedding, cosine_similarity, replace_meal_in_plan,
-                          remove_meal_from_plan)
+                          remove_meal_from_plan, get_openai_client)
 from django.db import transaction
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
-OPENAI_API_KEY = settings.OPENAI_KEY
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 class DietaryCompatibilityResponse(BaseModel):
     """Schema for OpenAI's response on dietary compatibility"""
@@ -169,14 +167,15 @@ def analyze_meal_compatibility(meal, dietary_preference):
         ]
 
         # Make API call
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-mini",
             input=input,
             text={
                 "format": {
-                    'type': 'json_schema',
-                    'name': 'dietary_compatibility',
-                    'schema': DietaryCompatibilityResponse.model_json_schema()
+                    "type": "json_schema",
+                    "name": "dietary_compatibility",
+                    "schema": DietaryCompatibilityResponse.model_json_schema(),
+                    "strict": True
                 }
             }
         )
@@ -511,14 +510,15 @@ def create_meal_plan_for_user(
                     )
                 }
             ]
-            call = client.responses.create(
+            call = get_openai_client().responses.create(
                 model="gpt-4.1-mini",
                 input=input,
                 text={
                     "format": {
-                        'type': 'json_schema',
-                        'name': 'meal_map',
-                        'schema': PromptMealMap.model_json_schema()
+                        "type": "json_schema",
+                        "name": "meal_map",
+                        "schema": PromptMealMap.model_json_schema(),
+                        "strict": True
                     }
                 }
             )
@@ -1112,14 +1112,15 @@ def analyze_and_replace_meals(user, meal_plan, meal_types, request_id=None):
         ]
         #store=True,
         #metadata={'tag': 'meal-plan-analysis'}
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-mini",
             input=input,
             text={
                 "format": {
-                    'type': 'json_schema',
-                    'name': 'meals_to_replace',
-                    'schema': MealsToReplaceSchema.model_json_schema()
+                    "type": "json_schema",
+                    "name": "meals_to_replace",
+                    "schema": MealsToReplaceSchema.model_json_schema(),
+                    "strict": True
                 }
             }
         )
@@ -1636,21 +1637,22 @@ def guess_meal_ingredients_gpt(meal_name: str, meal_description: str) -> List[st
     ]
     
     try:
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-mini",
             input=prompt_messages,
             text={
                 "format": {
-                    'type': 'json_schema',
-                    'name': 'likely_ingredients',
+                    "type": "json_schema",
+                    "name": "likely_ingredients",
                     "schema": {
                         "type": "object",
                         "properties": {
                             "likely_ingredients": {"type": "array", "items": {"type": "string"}}
                         },
-                            "required": ["likely_ingredients"],
-                            "additionalProperties": False
-                        }
+                        "required": ["likely_ingredients"],
+                        "additionalProperties": False
+                    },
+                    "strict": True
                 }
             }
         )
@@ -1875,32 +1877,33 @@ def check_meal_for_allergens_gpt(meal, user) -> Tuple[bool, List[str], Dict[str,
     ]
     
     try:
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-mini",
             input=prompt_messages,
             text={
                 "format": {
-                    'type': 'json_schema',
-                    'name': 'allergen_analysis',
+                    "type": "json_schema",
+                    "name": "allergen_analysis",
                     "schema": {
-                            "type": "object",
-                            "properties": {
-                                "is_safe": {"type": "boolean"},
-                                "flagged_ingredients": {"type": "array", "items": {"type": "string"}},
-                                "substitutions": {
-                                    "type": "object",
-                                    "additionalProperties": {
-                                        "type": "array",
-                                        "items": {"type": "string"}
-                                    }
-                                },
-                                "reasoning": {"type": "string"}
+                        "type": "object",
+                        "properties": {
+                            "is_safe": {"type": "boolean"},
+                            "flagged_ingredients": {"type": "array", "items": {"type": "string"}},
+                            "substitutions": {
+                                "type": "object",
+                                "additionalProperties": {
+                                    "type": "array",
+                                    "items": {"type": "string"}
+                                }
                             },
-                            "required": ["is_safe", "flagged_ingredients", "reasoning"],
-                            "additionalProperties": False
-                        }
-                    }
+                            "reasoning": {"type": "string"}
+                        },
+                        "required": ["is_safe", "flagged_ingredients", "reasoning"],
+                        "additionalProperties": False
+                    },
+                    "strict": True
                 }
+            }
         )
         data = json.loads(response.output_text)
         is_safe = data.get("is_safe", False)
@@ -1975,6 +1978,8 @@ def get_substitution_suggestions(flagged_ingredients, user_allergies, meal_name)
     Returns:
         Dict mapping flagged ingredients to lists of suggested substitutions
     """
+    from meals.pydantic_models import IngredientSubstitutions
+    
     try:
         prompt_messages = [
             {
@@ -1996,22 +2001,7 @@ def get_substitution_suggestions(flagged_ingredients, user_allergies, meal_name)
 
                     # Output Format
 
-                    The output should be a JSON object where each key is a flagged ingredient, and the value is a list of substitution suggestions. Here is the JSON schema:
-                    ```json
-                    {
-                        "format": {
-                            "type": "json_schema",
-                            "name": "substitution_suggestions",
-                            "schema": {
-                                "type": "object",
-                                "additionalProperties": {
-                                    "type": "array",
-                                    "items": {"type": "string"}
-                                }
-                            }
-                        }
-                    }
-                    ```
+                    Return a JSON object where each key is a flagged ingredient name, and each value is an array of substitution suggestions.
 
                     # Examples
 
@@ -2051,27 +2041,27 @@ def get_substitution_suggestions(flagged_ingredients, user_allergies, meal_name)
             }
         ]
         
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-mini",
             input=prompt_messages,
             text={
                 "format": {
-                    'type': 'json_schema',
-                    'name': 'substitution_suggestions',
-                    "schema": {
-                        "type": "object",
-                        "additionalProperties": {
-                            "type": "array",
-                            "items": {"type": "string"}
-                        }
-                    }
+                    "type": "json_schema",
+                    "name": "ingredient_substitutions",
+                    "schema": IngredientSubstitutions.model_json_schema(),
+                    "strict": True
                 }
             }
         )
         
-        return json.loads(response.output_text)
+        # Parse response and extract the substitutions field
+        result = json.loads(response.output_text)
+        return result.get("substitutions", {})
     except Exception as e:
         logger.error(f"Error generating substitution suggestions: {e}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"get_substitution_suggestions", "traceback": traceback.format_exc()})
         return {}
 
 def get_similar_meal(user_id, name, description, meal_type):
@@ -2173,9 +2163,10 @@ def perform_comprehensive_sanity_check(meal, user, request_id=None):
     # If we have a cached allergen check and it failed, check if it has substitutions
     if cached_allergen_check and not cached_allergen_check.is_safe:
         if cached_allergen_check.substitutions and len(cached_allergen_check.substitutions) > 0:
-            # If the meal has is_substitution_variant=True, it means we already applied substitutions
-            if hasattr(meal, 'is_substitution_variant') and meal.is_substitution_variant:
-                logger.info(f"{log_prefix}Meal '{meal.name}' is already a substitution variant, considering it safe.")
+            # Check if this meal is already a modified/substitution variant based on name
+            is_modified_meal = any(indicator in meal.name.lower() for indicator in ['modified', 'adapted', 'substituted', 'allergen-free', '(modified)'])
+            if is_modified_meal:
+                logger.info(f"{log_prefix}Meal '{meal.name}' appears to be already modified, considering it safe.")
                 return True
             else:
                 logger.info(f"{log_prefix}Meal '{meal.name}' is unsafe for user {user.username} but has substitutions available.")
@@ -2246,12 +2237,33 @@ def apply_substitutions_to_meal(meal, substitutions, user):
     Returns:
         Meal: A new or modified Meal object with substitutions applied, or None if failed
     """
-    from meals.models import Meal, Dish, Ingredient
     from django.db import transaction
+    
+    # Validate inputs
+    if not meal or not user:
+        logger.error("Invalid meal or user provided to apply_substitutions_to_meal")
+        return None
     
     # Check if this is a chef meal - if so, we can't modify it
     if is_chef_meal(meal):
         logger.warning(f"Cannot apply substitutions to chef-created meal '{meal.name}' for user {user.username}")
+        return None
+    
+    # Check if user is a chef to determine what type of substitution we can create
+    user_is_chef = hasattr(user, 'chef') and user.chef
+    if user_is_chef:
+        logger.info(f"User {user.username} is a chef - will create new dishes with ingredient substitutions")
+    else:
+        logger.info(f"User {user.username} is not a chef - will create meal with substitution notes only")
+    
+    # Validate that the meal has dishes to work with
+    if not meal.dishes.exists():
+        logger.warning(f"Cannot apply substitutions to meal '{meal.name}' - no dishes found")
+        return None
+    
+    # Validate substitutions parameter
+    if not substitutions or not isinstance(substitutions, dict):
+        logger.warning(f"Cannot apply substitutions to meal '{meal.name}' - invalid substitutions provided")
         return None
     
     logger.info(f"Applying substitutions to meal '{meal.name}' for user {user.username}")
@@ -2264,6 +2276,11 @@ def apply_substitutions_to_meal(meal, substitutions, user):
                 'dish': dish,
                 'ingredient': ingredient
             }
+    
+    # Validate that we actually have ingredients to substitute
+    if not original_ingredients:
+        logger.warning(f"Cannot apply substitutions to meal '{meal.name}' - no ingredients found in dishes")
+        return None
     
     # Generate a modified recipe and instructions with substitutions
     try:
@@ -2366,66 +2383,168 @@ def apply_substitutions_to_meal(meal, substitutions, user):
             }
         ]
         
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-mini",  # Using more capable model for recipe adaptation
             input=prompt_messages,
             text={
                 "format": {
-                    'type': 'json_schema',
-                    'name': 'modified_meal',
-                    'schema': ModifiedMealSchema.model_json_schema()
+                    "type": "json_schema",
+                    "name": "modified_meal",
+                    "schema": ModifiedMealSchema.model_json_schema(),
+                    "strict": True
                 }
             }
         )
         
-        data = json.loads(response.output_text)
+        try:
+            data = json.loads(response.output_text)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse OpenAI response as JSON for meal '{meal.name}': {e}")
+            logger.error(f"Raw response: {response.output_text}")
+            return None
+        
+        # Validate that required fields are present
+        required_fields = ["modified_name", "modified_description", "modified_instructions", "ingredient_changes"]
+        missing_fields = [field for field in required_fields if field not in data]
+        if missing_fields:
+            logger.error(f"OpenAI response missing required fields {missing_fields} for meal '{meal.name}'")
+            return None
         
         # Create a new meal as a variant of the original
         with transaction.atomic():
-            # Create new meal
+            # Create new meal (mark as modified in the name if not already indicated)
+            modified_name = data["modified_name"].strip() if data["modified_name"] else f"{meal.name} (Modified)"
+            if not any(indicator in modified_name.lower() for indicator in ['modified', 'adapted', 'substituted', 'allergen-free']):
+                modified_name = f"{modified_name} (Modified)"
+            
+            # Ensure the name is unique for this user to avoid constraint violations
+            base_name = modified_name
+            counter = 1
+            while Meal.objects.filter(name=modified_name, creator=user).exists():
+                modified_name = f"{base_name} ({counter})"
+                counter += 1
+            
+            # Safely build description with fallbacks
+            description_parts = []
+            if data.get('modified_description'):
+                description_parts.append(data['modified_description'].strip())
+            if data.get('modified_instructions'):
+                description_parts.append(f"Instructions: {data['modified_instructions'].strip()}")
+            
+            description = '\n\n'.join(description_parts) if description_parts else f"Modified version of {meal.name}"
+            
             modified_meal = Meal.objects.create(
-                name=data["modified_name"],
-                description=data["modified_description"],
-                instructions=data["modified_instructions"],
+                name=modified_name,
+                description=description,
                 meal_type=meal.meal_type,
-                creator=user,
-                base_meal=meal,  # Link to original meal
-                is_substitution_variant=True  # Flag as a substitution variant
+                creator=user
             )
             
-            # Copy all dishes and update ingredients with substitutions
-            for original_dish in meal.dishes.all():
-                new_dish = Dish.objects.create(
-                    name=f"{original_dish.name} (Modified)",
-                    meal=modified_meal
-                )
+            # For regular customers, we can't create new dishes (they require a chef)
+            # Instead, we'll create a simplified meal that documents the substitutions
+            # without creating new dish/ingredient database objects
+            
+            if user_is_chef:
+                # User is a chef - they can create modified dishes
+                for original_dish in meal.dishes.all():
+                    # Use the user's chef profile for new dishes
+                    dish_chef = user.chef
+                    
+                    # Ensure unique dish name for this chef
+                    base_dish_name = f"{original_dish.name} (Modified)"
+                    dish_name = base_dish_name
+                    counter = 1
+                    while Dish.objects.filter(name=dish_name, chef=dish_chef).exists():
+                        dish_name = f"{base_dish_name} ({counter})"
+                        counter += 1
+                    
+                    new_dish = Dish.objects.create(
+                        name=dish_name,
+                        chef=dish_chef
+                    )
+                    
+                    # Get substitution mapping for easy lookup
+                    substitution_map = {}
+                    try:
+                        for change in data["ingredient_changes"]:
+                            if isinstance(change, dict) and "original" in change and "substitute" in change:
+                                substitution_map[change["original"].lower()] = change["substitute"]
+                            else:
+                                logger.warning(f"Invalid ingredient change format: {change}")
+                    except (KeyError, TypeError) as e:
+                        logger.error(f"Error processing ingredient changes: {e}")
+                        continue  # Skip this dish if ingredient changes are malformed
+                    
+                    # For substituted ingredients, create new ones or find existing ones
+                    ingredients_added = 0
+                    for original_ingredient in original_dish.ingredients.all():
+                        ing_name = original_ingredient.name.lower()
+                        if ing_name in substitution_map:
+                            # Create or find substitution ingredient
+                            substitute_name = substitution_map[ing_name]
+                            try:
+                                substitute_ingredient, created = Ingredient.objects.get_or_create(
+                                    name=substitute_name,
+                                    chef=dish_chef,
+                                    defaults={
+                                        'calories': original_ingredient.calories,
+                                        'fat': original_ingredient.fat,
+                                        'carbohydrates': original_ingredient.carbohydrates,
+                                        'protein': original_ingredient.protein,
+                                        'is_custom': True
+                                    }
+                                )
+                                new_dish.ingredients.add(substitute_ingredient)
+                                ingredients_added += 1
+                                if created:
+                                    logger.debug(f"Created new substitute ingredient '{substitute_name}' for chef {dish_chef.user.username}")
+                            except Exception as e:
+                                logger.error(f"Failed to create/add substitute ingredient '{substitute_name}': {e}")
+                                # Fall back to using the original ingredient
+                                new_dish.ingredients.add(original_ingredient)
+                                ingredients_added += 1
+                        else:
+                            # Keep original ingredient
+                            new_dish.ingredients.add(original_ingredient)
+                            ingredients_added += 1
+                    
+                    # Verify the dish has ingredients before adding to meal
+                    if ingredients_added == 0:
+                        logger.warning(f"Dish '{new_dish.name}' has no ingredients - removing it")
+                        new_dish.delete()
+                        continue
+                    
+                    # Add the new dish to the modified meal
+                    modified_meal.dishes.add(new_dish)
+            else:
+                # User is not a chef - we can't create new dishes/ingredients
+                # Instead, keep original dishes but document substitutions in the meal description
+                logger.info(f"User {user.username} is not a chef - creating simplified substituted meal without new dishes")
                 
-                # Get substitution mapping for easy lookup
-                substitution_map = {}
-                for change in data["ingredient_changes"]:
-                    substitution_map[change["original"].lower()] = change["substitute"]
+                # Copy original dishes to the modified meal (without changes)
+                for original_dish in meal.dishes.all():
+                    modified_meal.dishes.add(original_dish)
                 
-                # Add ingredients, substituting as needed
-                for original_ingredient in original_dish.ingredients.all():
-                    ing_name = original_ingredient.name.lower()
-                    if ing_name in substitution_map:
-                        # Use substitution
-                        Ingredient.objects.create(
-                            name=substitution_map[ing_name],
-                            dish=new_dish,
-                            quantity=original_ingredient.quantity,
-                            unit=original_ingredient.unit,
-                            is_substitution=True,
-                            original_ingredient=original_ingredient.name
-                        )
-                    else:
-                        # Keep original ingredient
-                        Ingredient.objects.create(
-                            name=original_ingredient.name,
-                            dish=new_dish,
-                            quantity=original_ingredient.quantity,
-                            unit=original_ingredient.unit
-                        )
+                # Document the substitutions in the meal description
+                substitution_notes = []
+                try:
+                    for change in data["ingredient_changes"]:
+                        if isinstance(change, dict) and "original" in change and "substitute" in change:
+                            substitution_notes.append(f"• Replace {change['original']} with {change['substitute']}")
+                        else:
+                            logger.warning(f"Invalid ingredient change format: {change}")
+                except (KeyError, TypeError) as e:
+                    logger.error(f"Error processing ingredient changes for notes: {e}")
+                
+                if substitution_notes:
+                    substitution_text = f"\n\n**INGREDIENT SUBSTITUTIONS:**\n" + "\n".join(substitution_notes)
+                    modified_meal.description += substitution_text
+            
+            # Verify the modified meal has at least one dish
+            if not modified_meal.dishes.exists():
+                logger.error(f"Modified meal '{modified_meal.name}' has no dishes - cannot create meal")
+                modified_meal.delete()
+                return None
             
             # Copy dietary preferences
             for pref in meal.dietary_preferences.all():
@@ -2449,6 +2568,8 @@ def apply_substitutions_to_meal(meal, substitutions, user):
                 else:
                     logger.warning(f"Failed to generate valid embedding for modified meal '{modified_meal.name}'. Will schedule for batch processing.")
                     # Let the batch processing handle it later
+            except ImportError:
+                logger.info(f"Meal embedding module not available - embedding will be generated by batch process")
             except Exception as e:
                 logger.error(f"Error generating embedding for modified meal '{modified_meal.name}': {e}")
                 # Continue without embedding - it will be generated by the batch process
@@ -2458,6 +2579,9 @@ def apply_substitutions_to_meal(meal, substitutions, user):
             logger.info(f"Successfully created modified meal '{modified_meal.name}' from '{meal.name}'")
             return modified_meal
             
+    except json.JSONDecodeError as e:
+        logger.error(f"Error parsing OpenAI response for meal '{meal.name}': {e}")
+        return None
     except Exception as e:
         logger.error(f"Error applying substitutions to meal '{meal.name}': {e}")
         traceback.print_exc()

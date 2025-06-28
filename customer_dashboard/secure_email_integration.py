@@ -73,7 +73,6 @@ def process_email(request):
 
             # Now compare in a case-insensitive way
             if actual_sender_email_address.lower() == "mj@sautai.com":
-                logger.info(f"Received email from system address '{sender_email}' (parsed as '{actual_sender_email_address}'). Ignoring.")
                 return JsonResponse({'status': 'info', 'message': 'Email from system address ignored.'}, status=200)
         # If sender_email was None, it will be caught by the required_params check below.
         
@@ -100,7 +99,6 @@ def process_email(request):
                 'message': 'Could not parse the assistant email address to find the user token.'
             }, status=400)
 
-        logger.info(f"Extracted email_user_token: {email_user_token} from assistant_email: {assistant_email_str}")
 
         # 1. Lookup User by email_user_token
         try:
@@ -127,7 +125,7 @@ def process_email(request):
             }, status=403) # 403 Forbidden
 
         # Get user's preferred language for translation
-        user_preferred_language = getattr(user, 'preferred_language', 'en')
+        user_preferred_language = _get_language_name(getattr(user, 'preferred_language', 'en'))
         
         # 3. Check for Active UserEmailSession
         active_user_email_session = UserEmailSession.objects.filter(
@@ -136,7 +134,6 @@ def process_email(request):
         ).first()
 
         if active_user_email_session:
-            logger.info(f"Active UserEmailSession found for user {user.username} ({user.id}). Proceeding with email aggregation using DB. Context ID from email: {openai_thread_context_id}")
             
             # This cache key now stores the DB EmailAggregationSession.session_identifier (UUID string) if a window is active
             active_session_flag_key = f"{ACTIVE_DB_AGGREGATION_SESSION_FLAG_PREFIX}{user.id}"
@@ -144,7 +141,6 @@ def process_email(request):
             active_db_session_identifier_str = cache.get(active_session_flag_key)
 
             if not active_db_session_identifier_str:
-                logger.info(f"Starting new DB-backed email aggregation window for user {user.id} (as first message after session became active).")
                 db_aggregation_session = EmailAggregationSession.objects.create(
                     user=user,
                     recipient_email=sender_email,
@@ -183,7 +179,6 @@ def process_email(request):
                     raw_soup_translated = BeautifulSoup(translate_paragraphs(str(raw_soup), user_preferred_language), "html.parser")
                     # Extract the translated content from the div
                     ack_message_translated = "".join(str(c) for c in raw_soup_translated.div.contents)
-                    logger.info(f"Successfully translated acknowledgment message to {_get_language_name(user_preferred_language)} ({user_preferred_language})")
                 except Exception as e:
                     logger.error(f"Error directly translating acknowledgment message: {e}")
                     ack_message_translated = ack_message_raw  # Fallback to original
@@ -193,8 +188,8 @@ def process_email(request):
                     'customer_dashboard/assistant_email_template.html',
                     {
                         'user_name': user.get_full_name() or user.username,
-                        'email_body_content': ack_message_translated,  # Already translated content
-                        'profile_url': f"{os.getenv('STREAMLIT_URL')}/profile",
+                        'email_body_main': ack_message_translated,  # Already translated content
+                        'profile_url': f"{os.getenv('STREAMLIT_URL')}/",
                         'personal_assistant_email': user.personal_assistant_email if hasattr(user, 'personal_assistant_email') and user.personal_assistant_email else f"mj+{user.email_token}@sautai.com"
                     }
                 )
@@ -205,9 +200,15 @@ def process_email(request):
                         ack_email_html_content,
                         user_preferred_language
                     )
-                    logger.info(f"Successfully translated full email HTML to {_get_language_name(user_preferred_language)} ({user_preferred_language})")
                 except Exception as e:
                     logger.error(f"Error translating full email HTML: {e}")
+                    # n8n traceback
+                    n8n_traceback = {
+                        'error': str(e),
+                        'source': 'process_email',
+                        'traceback': traceback.format_exc()
+                    }
+                    requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
                     # Continue with partially translated content
                 
                 # Check if user has unsubscribed from emails
@@ -243,12 +244,18 @@ def process_email(request):
                     else:
                         logger.error("N8N_EMAIL_REPLY_WEBHOOK_URL not configured. Cannot send acknowledgment email.")
                         # DB session and Celery task are created.
+                        # n8n traceback
+                        n8n_traceback = {
+                            'error': 'N8N_EMAIL_REPLY_WEBHOOK_URL not configured. Cannot send acknowledgment email.',
+                            'source': 'process_email',
+                            'traceback': traceback.format_exc()
+                        }
+                        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
                         return JsonResponse({
                             'status': 'error',
                             'message': 'Email service (n8n webhook) not configured for acknowledgments, but DB session started.'
                         }, status=500)
                 else:
-                    logger.info(f"User {user.username} has unsubscribed from emails. Skipping acknowledgment email.")
                     return JsonResponse({
                         'status': 'success',
                         'action': 'db_session_started_no_email',
@@ -257,7 +264,6 @@ def process_email(request):
             else: # DB aggregation window is already active (flag found in cache)
                 try:
                     active_db_session = EmailAggregationSession.objects.get(session_identifier=uuid.UUID(active_db_session_identifier_str), user=user, is_active=True)
-                    logger.info(f"Adding message to active DB aggregation session {active_db_session.session_identifier} for user {user.id}.")
                     AggregatedMessageContent.objects.create(
                         session=active_db_session,
                         content=message_content
@@ -273,7 +279,6 @@ def process_email(request):
                     # This state implies the previous Celery task might have failed or cache out of sync.
                     # Forcing a new session start for this message.
                     # Re-running the logic for a new session:
-                    logger.info(f"Forcing new DB-backed email aggregation window for user {user.id} due to missing DB session for existing cache flag.")
                     db_aggregation_session = EmailAggregationSession.objects.create(
                         user=user, recipient_email=sender_email, user_email_token=str(user.email_token),
                         original_subject=original_subject, in_reply_to_header=in_reply_to_header,
@@ -354,7 +359,7 @@ def process_email(request):
             user_name_for_template = user.get_full_name() or user.username
             site_domain_raw_template = os.getenv('STREAMLIT_URL')
             site_domain_for_template = site_domain_raw_template.strip('"\'') if site_domain_raw_template else ''
-            profile_url_for_template = f"{site_domain_for_template}/profile"
+            profile_url_for_template = f"{site_domain_for_template}/"
             personal_assistant_email_for_template = user.personal_assistant_email if hasattr(user, 'personal_assistant_email') and user.personal_assistant_email else f"mj+{user.email_token}@sautai.com"
             auth_email_body_raw = (
                 f"<p>To continue your conversation with MJ, your SautAI assistant via email, please authenticate your session by clicking the link below:</p>"
@@ -371,16 +376,22 @@ def process_email(request):
                 raw_soup_translated = BeautifulSoup(translate_paragraphs(str(raw_soup), user_preferred_language), "html.parser")
                 # Extract the translated content from the div
                 auth_email_body_translated = "".join(str(c) for c in raw_soup_translated.div.contents)
-                logger.info(f"Successfully translated authentication message to {_get_language_name(user_preferred_language)} ({user_preferred_language})")
             except Exception as e:
                 logger.error(f"Error directly translating authentication message: {e}")
+                # n8n traceback
+                n8n_traceback = {
+                    'error': str(e),
+                    'source': 'process_email',
+                    'traceback': traceback.format_exc()
+                }
+                requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
                 auth_email_body_translated = auth_email_body_raw  # Fallback to original
 
             auth_email_html_content = render_to_string(
                 'customer_dashboard/assistant_email_template.html',
                 {
                     'user_name': user_name_for_template,
-                    'email_body_content': auth_email_body_translated,
+                    'email_body_main': auth_email_body_translated,
                     'profile_url': profile_url_for_template,
                     'personal_assistant_email': personal_assistant_email_for_template
                 }
@@ -392,9 +403,15 @@ def process_email(request):
                     auth_email_html_content,
                     user_preferred_language
                 )
-                logger.info(f"Successfully translated full authentication email HTML to {_get_language_name(user_preferred_language)} ({user_preferred_language})")
             except Exception as e:
                 logger.error(f"Error translating full authentication email HTML: {e}")
+                # n8n traceback
+                n8n_traceback = {
+                    'error': str(e),
+                    'source': 'process_email',
+                    'traceback': traceback.format_exc()
+                }
+                requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
                 # Continue with partially translated content
 
             auth_subject = "Activate Your SautAI Email Assistant Session"
@@ -417,7 +434,6 @@ def process_email(request):
                     try:
                         response = requests.post(n8n_webhook_url, json=payload, timeout=10)
                         response.raise_for_status()
-                        logger.info(f"Authentication link email successfully sent to n8n for user {user.id} (recipient: {sender_email}).")
                         return JsonResponse({
                             'status': 'success',
                             'action': 'auth_link_sent_message_pending',

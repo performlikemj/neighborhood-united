@@ -23,11 +23,11 @@ from django.conf import settings
 import traceback
 from shared.utils import (
     check_allergy_alert as _util_check_allergy_alert,
+    get_openai_client
 )
 import re
 
-api_key = settings.OPENAI_KEY
-client = OpenAI(api_key=api_key)
+
 logger = logging.getLogger(__name__)
 
 n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
@@ -423,7 +423,7 @@ def check_meal_compatibility(user_id: int, meal_id: int) -> dict:
         }
 
         # === 3. Call Responses API with JSON-mode + schema =================
-        response = client.responses.create(
+        response = get_openai_client().responses.create(
             model="gpt-4.1-nano",
             input=[{"role": "developer", "content": system_message},
                    {"role": "user",   "content": json.dumps(user_payload)}],
@@ -634,7 +634,7 @@ def check_allergy_alert(user_id: int, description: str = None) -> dict:
 
         # Check the description of the meal and cross-reference it with the user's allergies
         if description:
-            response = client.responses.create(
+            response = get_openai_client().responses.create(
                 model="gpt-4.1-nano",
                 input= (
                 """

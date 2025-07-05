@@ -279,5 +279,18 @@ class UserRole(models.Model):
 
     def __str__(self):
         return f'{self.user.username} - {self.current_role}'
+
+
+class OnboardingSession(models.Model):
+    """Track registration info collected for guest onboarding."""
+
+    guest_id = models.CharField(max_length=40, unique=True)
+    data = models.JSONField(default=dict)
+    completed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"OnboardingSession({self.guest_id})"
     
 

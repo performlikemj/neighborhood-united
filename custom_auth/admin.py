@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import CustomUser, Address, UserRole
+from .models import CustomUser, Address, UserRole, OnboardingSession
 
 
 
@@ -20,3 +20,4 @@ class UserRoleAdmin(admin.ModelAdmin):
 admin.site.register(CustomUser, CustomUserAdmin)
 admin.site.register(Address, AddressAdmin)
 admin.site.register(UserRole, UserRoleAdmin)
+admin.site.register(OnboardingSession)

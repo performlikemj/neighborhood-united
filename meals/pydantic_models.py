@@ -724,24 +724,39 @@ class PaymentInfoSchema(BaseModel):
 
 # --- Ingredient Substitution Schemas ----------------------------------------
 
-class IngredientSubstitutions(BaseModel):
-    """
-    Schema for ingredient substitution suggestions.
-    Contains a dictionary mapping ingredient names to arrays of substitution suggestions.
-    """
-    model_config = ConfigDict(extra="forbid")
-    
-    substitutions: Dict[str, List[str]] = Field(
-        ..., 
-        description="Dictionary mapping flagged ingredient names to arrays of safe substitution suggestions"
+class IngredientSubstitution(BaseModel):
+    """A single ingredient and its safe alternatives."""
+
+    ingredient: str = Field(..., description="Name of the flagged ingredient")
+    alternatives: List[str] = Field(
+        ..., description="Array of safe substitution suggestions for the ingredient"
     )
-    
+
+
+class IngredientSubstitutions(BaseModel):
+    """Schema containing a list of substitution recommendations."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    substitutions: List[IngredientSubstitution] = Field(
+        ..., description="List of substitution recommendations"
+    )
+
     example: ClassVar[Dict[str, Any]] = {
-        "substitutions": {
-            "milk": ["almond milk", "coconut milk", "soy milk"],
-            "peanut butter": ["sunflower seed butter", "almond butter"],
-            "wheat flour": ["oat flour", "rice flour"]
-        }
+        "substitutions": [
+            {
+                "ingredient": "milk",
+                "alternatives": ["almond milk", "coconut milk", "soy milk"],
+            },
+            {
+                "ingredient": "peanut butter",
+                "alternatives": ["sunflower seed butter", "almond butter"],
+            },
+            {
+                "ingredient": "wheat flour",
+                "alternatives": ["oat flour", "rice flour"],
+            },
+        ]
     }
 
 # --- Meal Modification Schemas ----------------------------------------------

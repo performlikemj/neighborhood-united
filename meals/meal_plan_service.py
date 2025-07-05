@@ -1997,11 +1997,18 @@ def get_substitution_suggestions(flagged_ingredients, user_allergies, meal_name)
                     - Understand the ingredient's role in the meal (e.g., flavor, texture, function).
                     - Suggest alternatives that are not in the `user_allergies` list and match the ingredient's role.
                     - Ensure the substitution aligns with the culinary profile of the `meal_name`.
-                    3. Construct and return the recommendations as a JSON object, mapping each flagged ingredient to a list of viable substitutions.
+                    3. Construct and return the recommendations as a JSON object with a `substitutions` key. This key should contain a list of objects where each
+                    item specifies the flagged `ingredient` and an `alternatives` array of viable substitutions.
 
                     # Output Format
 
-                    Return a JSON object where each key is a flagged ingredient name, and each value is an array of substitution suggestions.
+                    Return a JSON object following this structure:
+                    {
+                        "substitutions": [
+                            {"ingredient": "<ingredient>", "alternatives": ["<option>", ...]},
+                            ...
+                        ]
+                    }
 
                     # Examples
 
@@ -2036,7 +2043,9 @@ def get_substitution_suggestions(flagged_ingredients, user_allergies, meal_name)
                     "1. Safe for the user's allergies/restrictions\n"
                     "2. Maintain the dish's flavor profile\n"
                     "3. Serve the same culinary function (texture, binding, etc.)\n\n"
-                    "Return a JSON object where keys are the flagged ingredients and values are arrays of substitution options."
+                    "Return a JSON object with a `substitutions` field containing"
+                    " a list of objects. Each object must have an `ingredient`"
+                    " field and an `alternatives` array of options."
                 )
             }
         ]
@@ -2054,9 +2063,15 @@ def get_substitution_suggestions(flagged_ingredients, user_allergies, meal_name)
             }
         )
         
-        # Parse response and extract the substitutions field
+        # Parse response and convert to a simple mapping
         result = json.loads(response.output_text)
-        return result.get("substitutions", {})
+        subs = {}
+        for item in result.get("substitutions", []):
+            ingredient = item.get("ingredient")
+            alternatives = item.get("alternatives", [])
+            if ingredient:
+                subs[ingredient] = alternatives
+        return subs
     except Exception as e:
         logger.error(f"Error generating substitution suggestions: {e}")
         # n8n traceback

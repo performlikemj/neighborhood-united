@@ -1976,7 +1976,8 @@ def get_substitution_suggestions(flagged_ingredients, user_allergies, meal_name)
         meal_name: Name of the meal for context
     
     Returns:
-        Dict mapping flagged ingredients to lists of suggested substitutions
+        Dict with a "substitutions" key containing a list of mappings. Each
+        mapping has an "ingredient" name and a list of "alternatives".
     """
     from meals.pydantic_models import IngredientSubstitutions
     
@@ -1997,11 +1998,11 @@ def get_substitution_suggestions(flagged_ingredients, user_allergies, meal_name)
                     - Understand the ingredient's role in the meal (e.g., flavor, texture, function).
                     - Suggest alternatives that are not in the `user_allergies` list and match the ingredient's role.
                     - Ensure the substitution aligns with the culinary profile of the `meal_name`.
-                    3. Construct and return the recommendations as a JSON object, mapping each flagged ingredient to a list of viable substitutions.
+                    3. Construct and return the recommendations as a JSON object containing a `substitutions` array. Each array item should include the `ingredient` name and a list of safe `alternatives`.
 
                     # Output Format
 
-                    Return a JSON object where each key is a flagged ingredient name, and each value is an array of substitution suggestions.
+                    Return a JSON object with a single `substitutions` array. Each element should be an object with `ingredient` and `alternatives` fields.
 
                     # Examples
 
@@ -2013,8 +2014,10 @@ def get_substitution_suggestions(flagged_ingredients, user_allergies, meal_name)
                     ### Example Output
                     ```json
                     {
-                        "milk": ["almond milk", "coconut milk", "soy milk"],
-                        "peanut": ["sunflower seed butter", "almond butter"]
+                        "substitutions": [
+                            {"ingredient": "milk", "alternatives": ["almond milk", "coconut milk", "soy milk"]},
+                            {"ingredient": "peanut", "alternatives": ["sunflower seed butter", "almond butter"]}
+                        ]
                     }
                     ```
 
@@ -2036,7 +2039,7 @@ def get_substitution_suggestions(flagged_ingredients, user_allergies, meal_name)
                     "1. Safe for the user's allergies/restrictions\n"
                     "2. Maintain the dish's flavor profile\n"
                     "3. Serve the same culinary function (texture, binding, etc.)\n\n"
-                    "Return a JSON object where keys are the flagged ingredients and values are arrays of substitution options."
+                    "Return a JSON object with a `substitutions` array where each item lists an `ingredient` and its `alternatives`."
                 )
             }
         ]

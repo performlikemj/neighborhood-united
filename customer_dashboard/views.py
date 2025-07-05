@@ -57,7 +57,11 @@ from django.views import View
 from django.http import JsonResponse, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
-from meals.meal_assistant_implementation import MealPlanningAssistant, generate_guest_id
+from meals.meal_assistant_implementation import (
+    MealPlanningAssistant,
+    OnboardingAssistant,
+    generate_guest_id,
+)
 import traceback
 from django.conf import settings
 from asgiref.sync import async_to_sync
@@ -1492,6 +1496,92 @@ def guest_new_conversation(request):
         return JsonResponse({
             'status': 'error',
             'message': f'Failed to start new guest conversation: {str(e)}'
+        }, status=500)
+
+
+@csrf_exempt
+@api_view(['POST'])
+def onboarding_stream_message(request):
+    """Stream onboarding chat messages for guest users via SSE."""
+    guest_id = request.data.get('guest_id') or request.session.get('guest_id')
+    if not guest_id:
+        guest_id = generate_guest_id()
+        request.session['guest_id'] = guest_id
+        request.session.save()
+
+    message = request.data.get('message')
+    thread_id = request.data.get('response_id')
+
+    assistant = OnboardingAssistant(guest_id)
+
+    def event_stream():
+        emitted_id = False
+        try:
+            for chunk in assistant.stream_message(message, thread_id):
+                if not isinstance(chunk, dict):
+                    continue
+
+                if not emitted_id and chunk.get("type") == "response_id":
+                    yield f"data: {json.dumps({'type': 'response.created', 'id': chunk.get('id')})}\n\n"
+                    emitted_id = True
+                    continue
+
+                if chunk.get("type") == "tool_result":
+                    payload = {
+                        "type": "response.tool",
+                        "id": chunk.get("tool_call_id"),
+                        "name": chunk.get("name"),
+                        "output": chunk.get("output"),
+                    }
+                    yield f"data: {json.dumps(payload)}\n\n"
+                    continue
+
+                if chunk.get("type") == "text":
+                    payload = {
+                        "type": "response.output_text.delta",
+                        "delta": {"text": chunk.get('content')},
+                    }
+                    yield f"data: {json.dumps(payload)}\n\n"
+                    continue
+
+                if chunk.get("type") == "response.completed":
+                    yield f"data: {json.dumps({'type': 'response.completed'})}\n\n"
+                    continue
+        except Exception as e:
+            logger.error(f"Error in onboarding_stream_message: {str(e)}")
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+        yield 'event: close\n\n'
+
+    response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+    response["X-Guest-ID"] = guest_id
+    return response
+
+
+@api_view(['POST'])
+def onboarding_new_conversation(request):
+    """Start a fresh onboarding chat."""
+    try:
+        guest_id = request.data.get('guest_id') or request.session.get('guest_id')
+        if not guest_id:
+            guest_id = generate_guest_id()
+            request.session['guest_id'] = guest_id
+            request.session.save()
+
+        assistant = OnboardingAssistant(guest_id)
+        assistant.reset_conversation()
+
+        return JsonResponse({
+            "status": "success",
+            "guest_id": guest_id,
+            "message": "Onboarding conversation reset successfully."
+        })
+    except Exception as e:
+        logging.error(f"Error in onboarding_new_conversation: {str(e)}")
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to start new onboarding conversation: {str(e)}'
         }, status=500)
 
 @api_view(['GET'])

@@ -51,6 +51,8 @@ urlpatterns = [
     path('api/assistant/conversation/<str:user_id>/history/', views.get_conversation_history, name='get_conversation_history'),
     path('api/assistant/new-conversation/', views.new_conversation, name='new_conversation'),
     path('api/assistant/guest-new-conversation/', views.guest_new_conversation, name='guest_new_conversation'),
+    path('api/assistant/onboarding/stream-message/', views.onboarding_stream_message, name='onboarding_stream_message'),
+    path('api/assistant/onboarding/new-conversation/', views.onboarding_new_conversation, name='onboarding_new_conversation'),
     path('api/email-assistant/process/', secure_email_integration.process_email, name='process_email')
 
 ]

@@ -14,7 +14,7 @@ import requests
 import traceback
 import os
 from datetime import date, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from django.shortcuts import get_object_or_404
 
@@ -92,6 +92,36 @@ GUEST_TOOLS = [
             },
             "required": ["query"],
             "additionalProperties": False
+        }
+    },
+    {
+        "type": "function",
+        "name": "guest_register_user",
+        "description": "Register a new user account using the provided data and return authentication tokens.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "guest_id": {"type": "string", "description": "Guest session identifier"},
+                "user": {"type": "object", "description": "Fields for the CustomUser model (username, email, password, etc.)", "properties": {}, "additionalProperties": true},
+                "address": {"type": "object", "description": "Optional address fields such as street, city and postalcode", "properties": {}, "additionalProperties": true},
+                "goal": {"type": "object", "description": "Optional goal information (goal_name and goal_description)", "properties": {}, "additionalProperties": true}
+            },
+            "required": ["guest_id", "user"],
+            "additionalProperties": false
+        }
+    },
+    {
+        "type": "function",
+        "name": "onboarding_save_progress",
+        "description": "Persist partial registration details during onboarding.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "guest_id": {"type": "string"},
+                "data": {"type": "object", "additionalProperties": true}
+            },
+            "required": ["guest_id", "data"],
+            "additionalProperties": false
         }
     }
 ]
@@ -199,6 +229,58 @@ def guest_search_ingredients(query: str) -> Dict[str, Any]:
         # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
         requests.post(n8n_traceback_url, json={"error": str(e), "source":"guest_search_ingredients", "traceback": traceback.format_exc()})
         return {"status": "error", "message": f"Failed to search ingredients"}
+
+
+def guest_register_user(guest_id: str, user: Dict[str, Any], address: Optional[Dict[str, Any]] = None, goal: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Register a new user account through the chatbot."""
+    from rest_framework.test import APIRequestFactory
+    from custom_auth.views import register_api_view
+
+    try:
+        payload = {"user": user}
+        if address:
+            payload["address"] = address
+        if goal:
+            payload["goal"] = goal
+
+        factory = APIRequestFactory()
+        request = factory.post("/api/register/", data=payload, format="json")
+        response = register_api_view(request)
+        if hasattr(response, "data"):
+            result = response.data
+        else:
+            result = json.loads(response.content)
+
+        # Mark onboarding session as completed
+        try:
+            from custom_auth.models import OnboardingSession
+            session, _ = OnboardingSession.objects.get_or_create(guest_id=guest_id)
+            session.data = payload
+            session.completed = True
+            session.save()
+        except Exception:
+            pass
+
+        return result
+    except Exception as e:
+        requests.post(n8n_traceback_url, json={"error": str(e), "source": "guest_register_user", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": "Failed to register user"}
+
+
+def onboarding_save_progress(guest_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Save partial onboarding data for a guest."""
+    try:
+        from custom_auth.models import OnboardingSession
+
+        session, _ = OnboardingSession.objects.get_or_create(guest_id=guest_id)
+        if not session.data:
+            session.data = {}
+        session.data.update(data)
+        session.save()
+        return {"status": "success", "data": session.data}
+    except Exception as e:
+        requests.post(n8n_traceback_url, json={"error": str(e), "source": "onboarding_save_progress", "traceback": traceback.format_exc()})
+        return {"status": "error", "message": "Failed to save progress"}
 
 
 # -----------------------------------------------------------------------------

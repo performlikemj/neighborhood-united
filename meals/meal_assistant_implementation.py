@@ -2135,6 +2135,37 @@ class MealPlanningAssistant:
 def generate_guest_id() -> str:
     return f"guest_{uuid.uuid4().hex[:8]}"
 
+
+class OnboardingAssistant(MealPlanningAssistant):
+    """Assistant dedicated to chat-based user registration."""
+
+    def __init__(self, user_id: Optional[Union[int, str]] = None):
+        super().__init__(user_id)
+        self.system_message = (
+            "You are sautAI's onboarding assistant. "
+            "Guide the user through creating an account by asking for the same information as the registration form. "
+            "Track the data the user provides and call `onboarding_save_progress` whenever new details are supplied. "
+            "The required fields are username, email, and password. "
+            "Once all required fields are collected, let the user know you can register them and call `guest_register_user`."
+        )
+
+    def _get_tools_for_user(self, is_guest: bool) -> List[Dict[str, Any]]:
+        from .guest_tools import get_guest_tools
+
+        return [t for t in get_guest_tools() if t.get("name") in {"guest_register_user", "onboarding_save_progress"}]
+
+    def build_prompt(self, is_guest: bool) -> str:
+        prompt = super().build_prompt(is_guest)
+        try:
+            from custom_auth.models import OnboardingSession
+            session = OnboardingSession.objects.filter(guest_id=str(self.user_id)).first()
+            if session and session.data:
+                progress = json.dumps(session.data)
+                prompt += f"\n# CURRENT ONBOARDING DATA\n{progress}\n"
+        except Exception:
+            pass
+        return prompt
+
 # ────────────────────────────────────────────────────────────────────
 #  Helper: build branded Instacart CTA button
 # ────────────────────────────────────────────────────────────────────

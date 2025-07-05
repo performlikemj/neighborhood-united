@@ -87,7 +87,9 @@ from .guest_tools import (
     guest_search_dishes,
     guest_search_chefs,
     guest_get_meal_plan,
-    guest_search_ingredients
+    guest_search_ingredients,
+    guest_register_user,
+    onboarding_save_progress,
 )
 
 logger = logging.getLogger(__name__)
@@ -153,6 +155,8 @@ TOOL_FUNCTION_MAP = {
     "guest_search_chefs": guest_search_chefs,
     "guest_get_meal_plan": guest_get_meal_plan,
     "guest_search_ingredients": guest_search_ingredients,
+    "guest_register_user": guest_register_user,
+    "onboarding_save_progress": onboarding_save_progress,
     "chef_service_areas": chef_service_areas
 }
 

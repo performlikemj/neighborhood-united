@@ -49,7 +49,7 @@ import stripe
 import json
 import decimal
 from openai import OpenAI
-from django.core.cache import cache
+from utils.redis_client import get, set, delete
 from django.db import transaction
 import uuid
 from .audio_utils import process_audio_for_pantry_item
@@ -1272,7 +1272,7 @@ def get_user_dietary_preferences(user_id):
     - A list of dietary preference names
     """
     cache_key = f"user_dietary_prefs_{user_id}"
-    prefs = cache.get(cache_key)
+    prefs = get(cache_key)
     
     if prefs is None:
         try:
@@ -1281,7 +1281,7 @@ def get_user_dietary_preferences(user_id):
             custom_dietary_prefs = list(user.custom_dietary_preferences.values_list('name', flat=True))
             prefs = regular_dietary_prefs + custom_dietary_prefs        
             # Cache for 1 hour (3600 seconds)
-            cache.set(cache_key, prefs, 3600)
+            set(cache_key, prefs, 3600)
             logger.debug(f"Cached dietary preferences for user {user_id}")
         except Exception as e:
             logger.error(f"Error fetching dietary preferences for user {user_id}: {str(e)}")
@@ -1300,13 +1300,13 @@ def get_available_meals_count(user_id):
     - The count of available meals
     """
     cache_key = f"available_meals_count_{user_id}"
-    count = cache.get(cache_key)
+    count = get(cache_key)
     
     if count is None:
         try:
             count = Meal.objects.filter(creator_id=user_id).count()
             # Cache for 15 minutes (900 seconds) as this might change more frequently
-            cache.set(cache_key, count, 900)
+            set(cache_key, count, 900)
             logger.debug(f"Cached available meals count for user {user_id}")
         except Exception as e:
             logger.error(f"Error counting available meals for user {user_id}: {str(e)}")
@@ -1325,14 +1325,14 @@ def get_user_postal_code(user):
     - The user's postal code or None if not available
     """
     cache_key = f"user_postal_code_{user.id}"
-    postal_code = cache.get(cache_key)
+    postal_code = get(cache_key)
     
     if postal_code is None:
         try:
             if hasattr(user, 'address'):
                 postal_code = user.address.input_postalcode
                 # Cache for 1 day (86400 seconds) as this rarely changes
-                cache.set(cache_key, postal_code, 86400)
+                set(cache_key, postal_code, 86400)
                 logger.debug(f"Cached postal code for user {user.id}")
         except Exception as e:
             logger.error(f"Error fetching postal code for user {user.id}: {str(e)}")
@@ -2455,8 +2455,11 @@ def api_stripe_account_status(request):
     
     try:
         stripe_account = StripeConnectAccount.objects.get(chef=chef)
-        # Sync with Stripe
-        account_info = stripe.Account.retrieve(stripe_account.stripe_account_id)
+        # Sync with Stripe - expand external_accounts to access bank account data
+        account_info = stripe.Account.retrieve(
+            stripe_account.stripe_account_id,
+            expand=['external_accounts']
+        )
         stripe_account.is_active = (
             account_info.charges_enabled and 
             account_info.details_submitted and 
@@ -2464,11 +2467,50 @@ def api_stripe_account_status(request):
         )
         stripe_account.save()
         
+        # Enhanced diagnostic information
+        diagnostic_info = {
+            'charges_enabled': account_info.charges_enabled,
+            'details_submitted': account_info.details_submitted,
+            'payouts_enabled': account_info.payouts_enabled,
+            'currently_due': account_info.requirements.currently_due or [],
+            'eventually_due': account_info.requirements.eventually_due or [],
+            'past_due': account_info.requirements.past_due or [],
+            'disabled_reason': account_info.requirements.disabled_reason,
+            'capabilities': dict(account_info.capabilities) if account_info.capabilities else {},
+            'external_accounts_count': len(getattr(account_info, 'external_accounts', {}).get('data', [])) if hasattr(account_info, 'external_accounts') else 0
+        }
+        
+        # Check if user needs to complete onboarding to add bank accounts
+        needs_onboarding = bool(
+            diagnostic_info['currently_due'] or 
+            diagnostic_info['past_due'] or
+            diagnostic_info['external_accounts_count'] == 0
+        )
+        
+        # Generate continuation link if needed
+        continue_onboarding_url = None
+        if needs_onboarding:
+            try:
+                base_url = os.getenv("STREAMLIT_URL")
+                if base_url:
+                    account_link = stripe.AccountLink.create(
+                        account=stripe_account.stripe_account_id,
+                        refresh_url=f"{base_url}/",
+                        return_url=f"{base_url}/",
+                        type="account_onboarding",
+                    )
+                    continue_onboarding_url = account_link.url
+            except stripe.error.StripeError as e:
+                logger.error(f"Failed to create continuation link: {str(e)}")
+        
         return Response({
             'has_account': True,
             'is_active': stripe_account.is_active,
             'account_id': stripe_account.stripe_account_id,
             'disabled_reason': account_info.requirements.disabled_reason,
+            'needs_onboarding': needs_onboarding,
+            'continue_onboarding_url': continue_onboarding_url,
+            'diagnostic': diagnostic_info,  # Add this for debugging
         }, status=200)
     except StripeConnectAccount.DoesNotExist:
         return Response({'has_account': False}, status=200)
@@ -2568,7 +2610,8 @@ def api_create_stripe_account_link(request):
                 },
                 tos_acceptance={"service_agreement": "recipient"},
                 capabilities={
-                    "transfers": {"requested": True}
+                    "transfers": {"requested": True},
+                    "card_payments": {"requested": True}  # Often needed for Express accounts
                 }
             )
             
@@ -4061,4 +4104,238 @@ def api_get_instacart_url(request, meal_plan_id):
             {"status": "error", "message": f"Error getting Instacart URL: {str(e)}"},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def api_get_bank_account_guidance(request):
+    """
+    Provide country-specific guidance for bank account setup
+    Helps users understand why bank search might be empty and what to do
+    """
+    try:
+        chef = Chef.objects.get(user=request.user)
+        stripe_account = StripeConnectAccount.objects.get(chef=chef)
+        
+        # Set Stripe API
+        stripe.api_version = '2023-10-16'
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        
+        # Get account country
+        account_info = stripe.Account.retrieve(stripe_account.stripe_account_id)
+        country = account_info.country
+        
+        # Country-specific guidance
+        guidance = {
+            "country": country,
+            "financial_connections_available": country == "US",
+            "instructions": {},
+            "common_issues": []
+        }
+        
+        if country == "JP":
+            guidance["instructions"] = {
+                "title": "Bank Account Setup for Japan",
+                "steps": [
+                    "Click 'Enter bank details manually instead' in the Stripe form",
+                    "Provide your bank details:",
+                    "• Bank name (in English or Japanese)",
+                    "• Branch code (4 digits)", 
+                    "• Account number",
+                    "• Account type (checking/savings)",
+                    "Stripe will verify via micro-deposits (1-2 business days)"
+                ],
+                "note": "Bank search is not available in Japan - manual entry is the standard process"
+            }
+            guidance["common_issues"] = [
+                "Empty bank search results → This is normal for Japan, use manual entry",
+                "Can't find my bank → Use manual entry with bank details",
+                "Verification needed → Micro-deposits will be sent to verify your account"
+            ]
+        elif country == "US":
+            guidance["instructions"] = {
+                "title": "Bank Account Setup for United States", 
+                "steps": [
+                    "Search for your bank by name",
+                    "Log in to your online banking to instantly verify",
+                    "Or choose 'Enter bank details manually' for traditional verification"
+                ],
+                "note": "Financial Connections enables instant bank verification"
+            }
+        else:
+            guidance["instructions"] = {
+                "title": f"Bank Account Setup for {country}",
+                "steps": [
+                    "Use 'Enter bank details manually instead'",
+                    "Provide your local bank account details",
+                    "Verification will be completed according to local banking requirements"
+                ],
+                "note": "Bank search is currently available only in the United States"
+            }
+            
+        return Response(guidance, status=200)
+        
+    except (Chef.DoesNotExist, StripeConnectAccount.DoesNotExist):
+        return Response({"error": "No Stripe account found"}, status=404)
+    except Exception as e:
+        logger.error(f"Error getting bank guidance: {str(e)}")
+        return Response({"error": "Failed to get guidance"}, status=500)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_regenerate_stripe_account_link(request):
+    """
+    Regenerate account link for users already in onboarding process
+    Useful when dashboard settings have been updated and user needs new link
+    """
+    logger.info(f"Regenerating account link for user {request.user.id}")
+    try:
+        chef = Chef.objects.get(user=request.user)
+        stripe_account = StripeConnectAccount.objects.get(chef=chef)
+        
+        # Set Stripe API
+        stripe.api_version = '2023-10-16'
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        
+        # Get the current account status
+        account_info = stripe.Account.retrieve(stripe_account.stripe_account_id)
+        
+        # Generate new account link with current dashboard settings
+        base_url = os.getenv("STREAMLIT_URL")
+        if not base_url:
+            return Response({
+                "error": "Front end URL environment variable not set",
+                "status": "error"
+            }, status=500)
+        
+        # Create fresh account link - this will use current dashboard settings
+        account_link = stripe.AccountLink.create(
+            account=stripe_account.stripe_account_id,
+            refresh_url=f"{base_url}/",
+            return_url=f"{base_url}/",
+            type="account_onboarding",
+        )
+        
+        return Response({
+            "status": "success",
+            "message": "New onboarding link generated with updated settings",
+            "onboarding_url": account_link.url,
+            "account_status": {
+                "details_submitted": account_info.details_submitted,
+                "charges_enabled": account_info.charges_enabled,
+                "payouts_enabled": account_info.payouts_enabled
+            },
+            "note": "This link uses your current dashboard configuration for bank account collection"
+        }, status=200)
+        
+    except Chef.DoesNotExist:
+        return Response({"error": "User is not a chef"}, status=404)
+    except StripeConnectAccount.DoesNotExist:
+        return Response({"error": "No Stripe account found"}, status=404)
+    except Exception as e:
+        logger.error(f"Error regenerating account link: {str(e)}")
+        return Response({"error": f"Failed to regenerate link: {str(e)}"}, status=500)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_fix_restricted_stripe_account(request):
+    """
+    Fix a restricted Stripe account by creating a new properly configured account
+    This is needed when the account isn't configured for platform-collected requirements
+    """
+    logger.info(f"Fixing restricted Stripe account for user {request.user.id}")
+    try:
+        chef = Chef.objects.get(user=request.user)
+    except Chef.DoesNotExist:
+        return Response({"error": "User is not a chef"}, status=404)
+    
+    try:
+        # Check if there's an existing account
+        existing_account = StripeConnectAccount.objects.filter(chef=chef).first()
+        
+        if existing_account:
+            # Deactivate the old account (keep for records)
+            existing_account.is_active = False
+            existing_account.save()
+            logger.info(f"Deactivated old Stripe account: {existing_account.stripe_account_id}")
+        
+        # Set Stripe API
+        stripe.api_version = '2023-10-16'
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        
+        # Get user's country
+        try:
+            user_address = request.user.address
+            if not user_address or not user_address.country:
+                return Response({
+                    "error": "Please add your country in your profile settings before creating a Stripe account",
+                    "details": "Country code is required for Stripe account creation"
+                }, status=400)
+            country_code = user_address.country.code
+        except:
+            return Response({
+                "error": "Please add your address and country in your profile settings",
+                "details": "Address and country code are required"
+            }, status=400)
+
+        # Create NEW account with PROPER controller configuration
+        account = stripe.Account.create(
+            controller={
+                "stripe_dashboard": {
+                    "type": "express",
+                },
+                "fees": {
+                    "payer": "application"  # Platform pays Stripe fees
+                },
+                "losses": {
+                    "payments": "application"  # Platform handles disputes
+                },
+                "requirement_collection": "application"  # KEY: Platform collects requirements
+            },
+            email=request.user.email,
+            country=country_code,
+            business_profile={
+                "name": f"{request.user.first_name} {request.user.last_name}",
+                "product_description": "Chef prepared meals"
+            },
+            capabilities={
+                "transfers": {"requested": True},
+                "card_payments": {"requested": True}
+            }
+        )
+        
+        # Create new StripeConnectAccount record
+        new_stripe_account = StripeConnectAccount.objects.create(
+            chef=chef,
+            stripe_account_id=account.id,
+            is_active=False  # Will be activated after onboarding
+        )
+        
+        # Generate onboarding link
+        base_url = os.getenv("STREAMLIT_URL")
+        if not base_url:
+            return Response({
+                "error": "Front end URL not configured"
+            }, status=500)
+        
+        account_link = stripe.AccountLink.create(
+            account=account.id,
+            refresh_url=f"{base_url}/",
+            return_url=f"{base_url}/", 
+            type="account_onboarding",
+        )
+        
+        return Response({
+            "status": "success",
+            "message": "New Stripe account created with proper configuration",
+            "old_account_id": existing_account.stripe_account_id if existing_account else None,
+            "new_account_id": account.id,
+            "onboarding_url": account_link.url,
+            "note": "This account is configured to collect external account information via the dashboard toggle"
+        }, status=200)
+        
+    except Exception as e:
+        logger.error(f"Error fixing restricted account: {str(e)}")
+        return Response({
+            "error": f"Failed to fix account: {str(e)}"
+        }, status=500)
 

@@ -33,8 +33,10 @@ urlpatterns = [
     path('gamification/', include('gamification.urls')),
 ]
 
+# Serve media files in development only
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    # Static files are automatically served by Django's development server when DEBUG=True
 
 
 

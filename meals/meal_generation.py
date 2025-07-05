@@ -115,7 +115,7 @@ def generate_and_create_meal(
         meal_data = create_meal(
             user_id=user_id,
             name=meal_details.get('name'),
-            dietary_preference=meal_details.get('dietary_preference'),
+            dietary_preferences=meal_details.get('dietary_preferences'),
             description=meal_details.get('description'),
             meal_type=meal_type,
             used_pantry_items=used_pantry_items,
@@ -331,83 +331,67 @@ def perform_openai_sanity_check(meal, user):
     
     # We need to perform a sanity check with OpenAI
     try:
+        checker_prompt = f"""
+        You are a **dietary-compliance checker**.
+
+        --- TASK ---
+        Given:
+        • **Meal ingredients** (list of strings)  
+        • **Allergens to avoid** (list of strings)  
+        • **Dietary preferences** (list of strings)
+
+        Return a JSON object that **exactly** matches this shape:
+
+        {{
+        "allergen_check": true | false
+        }}
+
+        — Output rules —
+        1. `allergen_check` **true**  →  meal contains none of the listed allergens **and** meets every dietary preference.  
+        2. `allergen_check` **false** →  otherwise.  
+        3. Output **only** the JSON (no prose, no code-fences, no keys beyond the one shown).  
+        4. Boolean values must be lowercase `true` / `false`.  
+        5. Assume dietary preferences are strict (e.g., “vegetarian” excludes meat, poultry, fish).  
+        6. If cross-contamination is explicitly noted in ingredients, treat as containing the allergen.
+
+        --- EXAMPLES ---
+        INPUT  
+        • Ingredients: ["wheat", "milk", "peanut"]  
+        • Allergens: ["peanut", "soy"]  
+        • Preferences: ["vegetarian"]
+
+        OUTPUT  
+        {{"allergen_check": false}}
+
+        INPUT  
+        • Ingredients: ["rice", "broccoli", "tofu"]  
+        • Allergens: ["peanut", "soy"]  
+        • Preferences: ["vegetarian"]
+
+        OUTPUT  
+        {{"allergen_check": true}}
+
+        --- USER DATA ---
+        User context: {user_context}  
+        Allergens to avoid: {allergies_str}  
+        Meal name: "{meal.name}"  
+        Meal description: {meal.description}  
+        Meal dietary tags: {meal.dietary_preferences.all()} {meal.custom_dietary_preferences.all()}
+        """
         response = get_openai_client().responses.create(
             model="gpt-4.1-mini",
             input=[
                 {
                     "role": "developer",
                     "content": (
-                    """
-                    Check whether a meal is free of allergens and meets a user's dietary preferences.
-
-                    You will assess the ingredients of a meal to determine if any of the specified allergens are present and if the meal aligns with the user's dietary preferences. If the meal is allergen-free and matches the user's dietary requirements, return 'True'. Otherwise, return 'False'.
-
-                    # Steps
-
-                    1. **Receive Input**: You will receive a list of meal ingredients, a list of allergens to check, and a set of dietary preferences.
-                    2. **Allergen Evaluation**: Compare the meal ingredients against the user's specified allergens.
-                    3. **Dietary Preference Check**: Verify if the meal complies with all given dietary preferences.
-                    4. **Determine Result**: If the meal does not contain any allergens and meets the dietary preferences, return 'True'. Otherwise, return 'False'.
-
-                    # Output Format
-
-                    - The output should be structured as a JSON adhering to the following format:
-                    ```json
-                    {
-                        "allergen_check": true|false
-                    }
-                    ```
-                    
-                    - "allergen_check" should be `true` if the meal is free of specified allergens and aligns with dietary preferences; otherwise, it should be `false`.
-
-                    # Examples
-
-                    **Input:**
-                    - Meal Ingredients: ["wheat", "milk", "peanut"]
-                    - Allergens: ["peanut", "soy"]
-                    - Dietary Preferences: ["vegetarian"]
-
-                    **Process:**
-                    - Compare ingredients and allergens: "peanut" is present (Allergen found)
-                    - Check dietary preferences: The meal is vegetarian
-
-                    **Output:**
-                    ```json
-                    {
-                    "allergen_check": false
-                    }
-                    ```
-
-                    **Input:**
-                    - Meal Ingredients: ["rice", "broccoli", "tofu"]
-                    - Allergens: ["peanut", "soy"]
-                    - Dietary Preferences: ["vegetarian"]
-
-                    **Process:**
-                    - Compare ingredients and allergens: No allergens present
-                    - Check dietary preferences: The meal is vegetarian
-
-                    **Output:**
-                    ```json
-                    {
-                    "allergen_check": true
-                    }
-                    ```
-
-                    # Notes
-
-                    - **Edge Cases**: Consider cross-contamination scenarios where ingredients may not directly list allergens but could be contaminated.
-                    - Ensure that all dietary preferences must be strictly adhered to unless explicitly stated otherwise.
-                    """                    )
+                        # Stable meta-instruction
+                        "You are a dietary-compliance checker. "
+                        "Return ONLY the JSON object that passes the provided schema; no prose."
+                    )
                 },
                 {
                     "role": "user",
-                    "content": (
-                        f"Given the following user preferences: {user_context}. "
-                        f"The user has the following allergies: {allergies_str}. "
-                        f"The meal is called '{meal.name}' and is described as: {meal.description}. "
-                        f"The dietary information about the meal are: {meal.dietary_preferences.all()} and/or {meal.custom_dietary_preferences.all()}. "
-                    )
+                    "content": checker_prompt,
                 }
             ],
             #store=True,
@@ -484,6 +468,8 @@ def generate_meal_details(
     Returns:
     - Dictionary containing generated meal details
     """
+    from meals.pydantic_models import DietaryPreference
+
     if request_id is None:
         request_id = str(uuid.uuid4())
 
@@ -493,10 +479,12 @@ def generate_meal_details(
         return {
             'name': 'Test Meal',
             'description': 'This is a test meal',
-            'dietary_preference': 'Everything',
+            'dietary_preferences': ['Everything'],
             'ingredients': []
         }
-        
+    allowed_enum = ", ".join(pref.value for pref in DietaryPreference)
+    static_rules = f"… tags from: {allowed_enum}"
+
     # Rest of the function continues with normal processing
     attempts = 0
     while attempts < max_attempts:
@@ -561,136 +549,24 @@ def generate_meal_details(
         user_goals = user_goal_description if user_goal_description is not None else getattr(getattr(user, 'goal', None), 'goal_description', 'None')
 
         # 5) Build the GPT prompt
-        base_prompt = f"""
-        You are a helpful meal-planning assistant.
-        The user has expiring pantry items with these *effective* quantities:
-        {expiring_items_str}.
+        base_prompt = build_user_context(user, expiring_items_str, user_goals, combined_meal_names, allergens_str, meal_type)
 
-        Requirements:
-        1. Only use these expiring items if they make sense together.
-        2. Do not invent additional pantry items not in the user's pantry.
-        3. If an expiring item conflicts with user allergies, skip it.
-        4. The meal must be realistic—avoid bizarre flavor combos.
-        5. Return JSON with the MealOutputSchema format, including "used_pantry_items".
-        6. Use at most 2 expiring items to avoid wild combos.
+        static_rules = f"""
+        You are a meal‑planning assistant …
+        (put ALL hard rules here, inc. 0–2 items rule, schema mandate, chef_name=null rule)
+        For "dietary_preferences" output 1–3 tags chosen from:
+        {allowed_enum}
         """
-
-        if user_prompt:
-            base_prompt += f"""
-            
-            The user has specifically requested:
-            {user_prompt}
-
-            Make sure the generated meal satisfies these requirements while still meeting
-            all dietary restrictions and preferences.
-            """
-
-        base_prompt += f"""
-        Example JSON structure:
-        {{
-          "status": "success",
-          "message": "Meal created successfully!",
-          "current_time": "2023-10-05T10:00:00Z",
-          "meal": {{
-              "name": "Hearty Lentil Tomato Stew",
-              "description": "...",
-              "dietary_preference": "Everything",
-              "meal_type": "{meal_type}",
-              "used_pantry_items": ["lentils", "tomato sauce"]
-          }}
-        }}
-
-        Now, generate a new meal that:
-        - Is not too similar to: {', '.join(combined_meal_names)}
-        - Meets the user's goal: {user_goals}
-        - Avoids user allergies: {allergens_str}
-        - Aligns with user preferences and considers individual household member dietary needs: {generate_user_context(user)}
-        - Accommodates different dietary requirements, ages, and preferences within the household
-        - Is served as: {meal_type}
-
-        Begin!
-        """
-        from meals.pydantic_models import DietaryPreference
         # 6) Attempt up to max_attempts
+
         for attempt in range(max_attempts):
             try:
                 # Pass the list of possible dietary preferences to the model
-                dietary_preferences_list = [pref.value for pref in DietaryPreference]
-                dietary_preferences_str = ", ".join(dietary_preferences_list)
-                
                 # Add dietary preferences to the base prompt
-                base_prompt += f"""
-                
-                Available dietary preferences: {dietary_preferences_str}
-                Please ensure the meal's dietary_preference field uses one of these exact values.
-                """
                 response = get_openai_client().responses.create(
                     model="gpt-4.1-mini",
                     input=[
-                        {"role": "developer", "content": (
-                            """
-                            Generate a single meal JSON based on specified criteria, ensuring it aligns with user goals and preferences, while avoiding similarities to past meals and any user allergies.
-
-                            You will use the provided schemas to structure your response, ensuring all required fields are included and validated.
-
-                            # Steps
-
-                            1. **Analyze User Requirements:**
-                            - Consider user goals, allergies, preferences, and the required meal type.
-                            - Ensure the new meal is distinct from past meals listed.
-
-                            2. **Meal Creation:**
-                            - Develop a creative meal idea that satisfies the user's requirements and preferences.
-                            - Consider individual household member dietary needs, ages, and preferences when designing the meal.
-                            - Avoid ingredients that the user or household members are allergic to.
-
-                            3. **JSON Structure:**
-                            - Utilize the `MealData` and `MealOutputSchema` schemas.
-                            - Ensure all relevant fields, such as meal name, description, dietary preferences, chef data, and pantry items, are appropriately filled.
-
-                            # Output Format
-
-                            The output must be a JSON object following the `MealOutputSchema`. This includes:
-                            - "status": A string indicating the success of the meal creation.
-                            - "message": A success message for the meal creation.
-                            - "current_time": A timestamp in ISO 8601 format (use a placeholder for demonstration).
-                            - "meal": An object conforming to `MealData`.
-
-                            # Example
-
-                            Example input: (input details would be provided in actual use, this is a placeholder)
-                            - combined_meal_names = ["Hearty Lentil Tomato Stew", "Spicy Black Bean Soup"]
-                            - user_goals = "Create a healthy, balanced meal."
-                            - allergens_str = "gluten"
-                            - generate_user_context(user) = "Prefers vegan meals, likes spicy flavors."
-                            - meal_type = "Dinner"
-
-                            Example output: 
-                            ```json
-                            {
-                            "status": "success",
-                            "message": "Meal created successfully!",
-                            "current_time": "2023-10-05T12:00:00Z",
-                            "meal": {
-                                "name": "Spicy Quinoa Chili",
-                                "description": "A hearty and spicy vegan chili with quinoa, kidney beans, and bell peppers.",
-                                "dietary_preference": "Vegan",
-                                "meal_type": "Dinner",
-                                "is_chef_meal": false,
-                                "chef_name": null,
-                                "chef_meal_event_id": null,
-                                "used_pantry_items": ["quinoa", "kidney beans", "bell peppers"]
-                            }
-                            }
-                            ```
-
-                            # Notes
-
-                            - Ensure creativity when generating meal descriptions, while respecting user dietary preferences and restrictions.
-                            - Always verify that the meal is unique compared to the combined meal names provided.
-                            - Use appropriate placeholders where real-time data, such as current time, is needed.                        
-                            """
-                        )},
+                        {"role": "developer", "content": static_rules},
                         {"role": "user", "content": base_prompt}
                     ],
                     #store=True,
@@ -710,17 +586,17 @@ def generate_meal_details(
                 meal_dict = meal_data.get('meal', {})
                 meal_name = meal_dict.get('name')
                 description = meal_dict.get('description')
-                dietary_preference = meal_dict.get('dietary_preference')
+                dietary_preferences = meal_dict.get('dietary_preferences', [])
                 used_pantry_items = meal_dict.get('used_pantry_items', [])
 
                 # Basic checks
-                if not meal_name or not description or not dietary_preference:
+                if not meal_name or not description or not dietary_preferences:
                     logger.error(f"[{request_id}] [Attempt {attempt+1}] Meal data incomplete: {meal_data}. Skipping.")
                     continue
 
                 meal_representation = (
                     f"Name: {meal_name}, Description: {description}, "
-                    f"Dietary Preference: {dietary_preference}, Meal Type: {meal_type}, "
+                    f"Dietary Preferences: {dietary_preferences}, Meal Type: {meal_type}, "
                     f"Chef: {user.username}, Price: 'N/A'"
                 )
                 new_meal_embedding = get_embedding(meal_representation)
@@ -741,18 +617,31 @@ def generate_meal_details(
                 return {
                     'name': meal_name,
                     'description': description,
-                    'dietary_preference': dietary_preference,
+                    'dietary_preferences': dietary_preferences,
                     'meal_embedding': new_meal_embedding,
                     'used_pantry_items': used_pantry_items
                 }
 
             except Exception as e:
                 logger.error(f"[{request_id}] [Attempt {attempt+1}] Error generating meal: {e}")
-                return None
+                continue
 
         logger.error(f"[{request_id}] Failed to generate a unique meal after {max_attempts} attempts.")
         return None
 
+def build_user_context(user, expiring_items_str, user_goals, combined_meal_names, allergens_str, meal_type, user_prompt=None):
+    # fresh every attempt
+    lines = [
+        f"The user has expiring pantry items: {expiring_items_str or 'none'}",
+        f"Do NOT copy previous meals: {', '.join(combined_meal_names)}",
+        f"User goal: {user_goals}",
+        f"Allergens: {allergens_str}",
+        f"Household: {generate_user_context(user)}",
+        f"Meal type required: {meal_type}",
+    ]
+    if user_prompt:
+        lines.append(f"User request: {user_prompt}")
+    return "\n".join(lines)
 
 @shared_task
 def determine_usage_for_meal(

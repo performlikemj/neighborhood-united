@@ -4,7 +4,7 @@ This module contains the core functions for handling gamification features.
 """
 from django.db import transaction
 from django.utils import timezone
-from django.core.cache import cache
+from utils.redis_client import get, set, delete
 from datetime import timedelta
 import logging
 
@@ -198,7 +198,7 @@ def update_weekly_goal(user, week_start_date=None):
 def get_leaderboard(limit=10):
     """Get the top users by points for a leaderboard."""
     cache_key = f'leaderboard_top_{limit}'
-    leaderboard = cache.get(cache_key)
+    leaderboard = get(cache_key)
     
     if leaderboard is None:
         # Query the top users
@@ -215,7 +215,7 @@ def get_leaderboard(limit=10):
         ]
         
         # Cache for 1 hour
-        cache.set(cache_key, leaderboard, 3600)
+        set(cache_key, leaderboard, 3600)
     
     return leaderboard
 

@@ -72,7 +72,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
     # Add is_chef field from UserRole relationship
     is_chef = serializers.SerializerMethodField()
 
-    household_members = HouseholdMemberSerializer(many=True, read_only=True)
+    household_members = HouseholdMemberSerializer(many=True, required=False)
     
     class Meta:
         model = get_user_model()
@@ -143,6 +143,8 @@ class CustomUserSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         custom_dietary_prefs = validated_data.pop('custom_dietary_preferences', None)
+        household_members_data = validated_data.pop('household_members', None)
+        
         for attr, value in validated_data.items():
             if attr == 'password':
                 instance.set_password(value)
@@ -158,8 +160,22 @@ class CustomUserSerializer(serializers.ModelSerializer):
                 instance.custom_allergies = value
             else:
                 setattr(instance, attr, value)
+        
         if custom_dietary_prefs is not None:
             instance.custom_dietary_preferences.set(custom_dietary_prefs)
+            
+        # Handle household members if provided
+        if household_members_data is not None:
+            # Clear existing household members
+            instance.household_members.all().delete()
+            
+            # Create new household members
+            for member_data in household_members_data:
+                dietary_prefs = member_data.pop('dietary_preferences', [])
+                member = HouseholdMember.objects.create(user=instance, **member_data)
+                if dietary_prefs:
+                    member.dietary_preferences.set(dietary_prefs)
+                    
         instance.save()
         return instance
 

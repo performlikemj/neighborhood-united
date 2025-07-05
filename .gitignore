@@ -57,3 +57,4 @@ deploy-simple.sh
 docker-compose.yml
 Dockerfile.*
 setup-azure-secrets.sh
+../setup-secure-env.sh

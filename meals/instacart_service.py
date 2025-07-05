@@ -12,7 +12,7 @@ import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Union
 from django.conf import settings
-from django.core.cache import cache
+from utils.redis_client import get, set, delete
 from meals.pydantic_models import Ingredient
 from openai import OpenAI
 from django.conf import settings
@@ -134,7 +134,7 @@ def create_instacart_shopping_list(
         # 1. Check cache if user_id and meal_plan_id are provided
         if user_id and meal_plan_id:
             cache_key = f"instacart_link_{user_id}_{meal_plan_id}"
-            cached_url = cache.get(cache_key)
+            cached_url = get(cache_key)
             if cached_url:
                 logger.info(f"Using cached Instacart URL for user {user_id}, meal plan {meal_plan_id}")
                 return {
@@ -175,7 +175,7 @@ def create_instacart_shopping_list(
         # 6. Cache the URL if user_id and meal_plan_id are provided
         if user_id and meal_plan_id and instacart_url:
             cache_key = f"instacart_link_{user_id}_{meal_plan_id}"
-            cache.set(cache_key, instacart_url, timeout=cache_duration_days * 86400)  # Convert days to seconds
+            set(cache_key, instacart_url, timeout=cache_duration_days * 86400)  # Convert days to seconds
         
         return {
             "status": "success",

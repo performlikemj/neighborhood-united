@@ -14,8 +14,13 @@ from pathlib import Path
 import os
 import sys
 from dotenv import load_dotenv
-load_dotenv('/etc/myapp/config.env')
 from datetime import timedelta
+
+# Load environment variables - check for dev.env first (development), then .env (production)
+if os.path.exists(os.path.join(os.path.dirname(__file__), '..', 'dev.env')):
+    load_dotenv(os.path.join(os.path.dirname(__file__), '..', 'dev.env'))
+else:
+    load_dotenv()  # Try default .env file
 
 # Test mode flag for disabling external API calls during tests
 TEST_MODE = os.getenv("TEST_MODE") == "True"
@@ -78,10 +83,19 @@ MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware', # CORS middleware
 ]
 
-CORS_ALLOWED_ORIGINS = [
-    os.getenv('STREAMLIT_URL'),  # Add your Streamlit app's origin here
-    # "https://example.com",  # Add other origins as needed
-]
+# CORS Configuration - Handle comma-separated origins from Key Vault
+cors_origins_str = os.getenv('CORS_ALLOWED_ORIGINS', '')
+if cors_origins_str:
+    CORS_ALLOWED_ORIGINS = [origin.strip() for origin in cors_origins_str.split(',') if origin.strip()]
+else:
+    # Fallback if no CORS_ALLOWED_ORIGINS set
+    CORS_ALLOWED_ORIGINS = [
+        os.getenv('STREAMLIT_URL', 'https://sautai.com'),
+        'https://hoodunited.org',
+        'https://www.hoodunited.org',
+        'https://neighborhoodunited.org',
+        'https://www.neighborhoodunited.org',
+    ]
 
 ROOT_URLCONF = 'hood_united.urls'
 
@@ -187,45 +201,51 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
-STATIC_URL = '/static/'
+# Azure Blob Storage Configuration
+AZURE_ACCOUNT_NAME = os.getenv('AZURE_ACCOUNT_NAME', 'sautaiblobstorage')
+AZURE_ACCOUNT_KEY = os.getenv('AZURE_ACCOUNT_KEY')
+AZURE_CONNECTION_STRING = os.getenv('AZURE_CONNECTION_STRING')  # Optional but recommended
+AZURE_CUSTOM_DOMAIN = f'{AZURE_ACCOUNT_NAME}.blob.core.windows.net'
+
+# Static files directories - this applies to both DEBUG and production
 STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'static'),
 ]
 
-# Default primary key field type
-# https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
-
-DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-
-
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/4.1/howto/static-files/
-
-STATIC_URL = '/static/'
-STATICFILES_DIRS = [os.path.join(BASE_DIR, 'static/')]
-STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
-
-# Media files
 if DEBUG:
+    # Local development settings
+    STATIC_URL = '/static/'
+    STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
     MEDIA_URL = '/media/'
     MEDIA_ROOT = os.path.join(BASE_DIR, 'media/')
-else:
-    # Modern Django 4.2+ Azure Blob Storage Configuration
-    AZURE_ACCOUNT_NAME = os.getenv('AZURE_ACCOUNT_NAME', 'sautaiblobstorage')
-    AZURE_ACCOUNT_KEY = os.getenv('AZURE_ACCOUNT_KEY')
-    AZURE_CONNECTION_STRING = os.getenv('AZURE_CONNECTION_STRING')  # Optional but recommended
-    AZURE_CONTAINER = os.getenv('AZURE_CONTAINER', 'media')
-    AZURE_CUSTOM_DOMAIN = f'{AZURE_ACCOUNT_NAME}.blob.core.windows.net'
-    MEDIA_URL = f'https://{AZURE_CUSTOM_DOMAIN}/{AZURE_CONTAINER}/'
     
-    # New STORAGES setting for Django 4.2+
+    # Use local storage for development
+    STORAGES = {
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
+else:
+    # Production settings - Azure Blob Storage
+    AZURE_MEDIA_CONTAINER = os.getenv('AZURE_CONTAINER', 'media')
+    AZURE_STATIC_CONTAINER = os.getenv('AZURE_STATIC_CONTAINER', 'static')
+    
+    # Media and Static URLs
+    MEDIA_URL = f'https://{AZURE_CUSTOM_DOMAIN}/{AZURE_MEDIA_CONTAINER}/'
+    STATIC_URL = f'https://{AZURE_CUSTOM_DOMAIN}/{AZURE_STATIC_CONTAINER}/'
+    STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')  # Still needed for collectstatic
+    
+    # Modern Django 4.2+ Azure Blob Storage Configuration
     STORAGES = {
         "default": {
             "BACKEND": "storages.backends.azure_storage.AzureStorage",
             "OPTIONS": {
                 "account_name": AZURE_ACCOUNT_NAME,
                 "account_key": AZURE_ACCOUNT_KEY,
-                "azure_container": AZURE_CONTAINER,
+                "azure_container": AZURE_MEDIA_CONTAINER,
                 "azure_ssl": True,
                 "overwrite_files": False,  # Prevents overwriting files with same name
                 "location": "",  # Root level of container
@@ -236,9 +256,26 @@ else:
             },
         },
         "staticfiles": {
-            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+            "BACKEND": "storages.backends.azure_storage.AzureStorage",
+            "OPTIONS": {
+                "account_name": AZURE_ACCOUNT_NAME,
+                "account_key": AZURE_ACCOUNT_KEY,
+                "azure_container": AZURE_STATIC_CONTAINER,
+                "azure_ssl": True,
+                "overwrite_files": True,  # Allow overwriting static files
+                "location": "",  # Root level of container
+                "cache_control": "public,max-age=31536000,immutable",  # 1 year cache for static files
+                "object_parameters": {
+                    "cache_control": "public,max-age=31536000,immutable",
+                }
+            },
         },
     }
+
+# Default primary key field type
+# https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
+
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Custom user model
 AUTH_USER_MODEL = 'custom_auth.CustomUser'
@@ -282,38 +319,49 @@ DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL')
 REDIS_URL = os.getenv('REDIS_URL')
 REDIS_PASSWORD = os.getenv('REDIS_PASSWORD')
 
-
-
 DJANGO_REDIS_LOG_IGNORED_EXCEPTIONS = True
 DJANGO_REDIS_LOGGER = 'django.request'
 
-RAW_REDIS_URL = os.getenv("REDIS_URL", "").strip()
+DEBUG_VALUE = os.getenv('DEBUG', 'False').lower() == 'true'
 
-if not RAW_REDIS_URL:
-    raise RuntimeError("REDIS_URL is not set")
-
-if not RAW_REDIS_URL.startswith("rediss://"):
-    # assume host[:port][/db]   →  prepend scheme & default port/db
-    RAW_REDIS_URL = f"rediss://{RAW_REDIS_URL}:6380/0"
-
-# Append SSL flag only once
-if "ssl_cert_reqs=" not in RAW_REDIS_URL:
-    RAW_REDIS_URL = RAW_REDIS_URL + "?ssl_cert_reqs=required"
-
-CACHES = {
-    "default": {
-        "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": RAW_REDIS_URL,
-        "OPTIONS": {
-            "CLIENT_CLASS": "django_redis.client.DefaultClient",
-            # password is already embedded in the URL; no need for extra key
-            "SOCKET_CONNECT_TIMEOUT": 15,
-            "SOCKET_TIMEOUT": 15,
-            "RETRY_ON_TIMEOUT": True,
-            "SOCKET_KEEPALIVE": True,
-        },
+# Configure different cache backends for development vs production
+if DEBUG_VALUE:
+    # Development: Use local memory cache (no Redis required)
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "unique-snowflake",
+        }
     }
-}
+else:
+    # Production: Use Redis with SSL
+    RAW_REDIS_URL = os.getenv("REDIS_URL", "").strip()
+
+    if not RAW_REDIS_URL:
+        raise RuntimeError("REDIS_URL is not set")
+
+    if not RAW_REDIS_URL.startswith("rediss://"):
+        # assume host[:port][/db]   →  prepend scheme & default port/db
+        RAW_REDIS_URL = f"rediss://{RAW_REDIS_URL}:6380/0"
+
+    # Append SSL flag only once
+    if "ssl_cert_reqs=" not in RAW_REDIS_URL:
+        RAW_REDIS_URL = RAW_REDIS_URL + "?ssl_cert_reqs=required"
+
+    CACHES = {
+        "default": {
+            "BACKEND": "django_redis.cache.RedisCache",
+            "LOCATION": RAW_REDIS_URL,
+            "OPTIONS": {
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                # password is already embedded in the URL; no need for extra key
+                "SOCKET_CONNECT_TIMEOUT": 15,
+                "SOCKET_TIMEOUT": 15,
+                "RETRY_ON_TIMEOUT": True,
+                "SOCKET_KEEPALIVE": True,
+            },
+        }
+    }
 
 # Celery settings
 CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL')
@@ -374,8 +422,11 @@ LOGGING = {
         },
     }
 }
-if DEBUG == False:
-# Cookie settings
+# Environment-aware security settings
+IS_PRODUCTION = not DEBUG_VALUE and not TEST_MODE
+
+if IS_PRODUCTION:
+    # Production-only security settings
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     CSRF_TRUSTED_ORIGINS = [
@@ -385,14 +436,20 @@ if DEBUG == False:
         'https://*.127.0.0.1'
     ]
 
-    # HSTS
+    # HSTS (HTTP Strict Transport Security)
     SECURE_HSTS_SECONDS = 31536000
     SECURE_HSTS_PRELOAD = True
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 
-    # SSL - disable redirect during testing
-    SECURE_SSL_REDIRECT = not TEST_MODE  # Only redirect to SSL when not in test mode
+    # SSL redirect - ONLY in production
+    SECURE_SSL_REDIRECT = True
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+else:
+    # Development/Testing settings - NO SSL enforcement
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
+    SECURE_SSL_REDIRECT = False
+    SECURE_HSTS_SECONDS = 0
 
     # Clickjacking Protection
     X_FRAME_OPTIONS = 'DENY'

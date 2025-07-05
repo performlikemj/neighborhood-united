@@ -1,9 +1,10 @@
 import re
 import uuid
 import os
+import redis
+import ssl
 from openai import OpenAI
 from bs4 import BeautifulSoup
-from django.core.cache import cache
 import logging
 from django.conf.locale import LANG_INFO
 
@@ -12,6 +13,67 @@ logger = logging.getLogger(__name__)
 client = OpenAI(api_key=os.environ.get("OPENAI_KEY"))
 
 VAR_RX = re.compile(r"({{.*?}}|{%.*?%})", re.S)
+
+# Initialize Redis connection with proper SSL handling
+def get_redis_connection():
+    """Get a properly configured Redis connection with SSL support."""
+    redis_url = os.getenv('REDIS_URL', '')
+    
+    if not redis_url:
+        logger.error("REDIS_URL environment variable not set")
+        return None
+    
+    try:
+        # Parse the Redis URL and create connection with SSL verification
+        return redis.Redis.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_keepalive=True,
+            socket_keepalive_options={},
+            health_check_interval=30,
+            retry_on_error=[redis.exceptions.ReadOnlyError, redis.exceptions.ConnectionError],
+            ssl_cert_reqs=ssl.CERT_REQUIRED,
+            ssl_check_hostname=False,  # Azure Redis doesn't need hostname verification
+        )
+    except Exception as e:
+        logger.error(f"Failed to create Redis connection: {str(e)}")
+        return None
+
+# Global Redis connection instance
+_redis_connection = None
+
+def get_cached_translation(cache_key):
+    """Get cached translation from Redis."""
+    global _redis_connection
+    try:
+        if _redis_connection is None:
+            _redis_connection = get_redis_connection()
+        
+        if _redis_connection is None:
+            logger.warning("Redis connection not available for caching")
+            return None
+            
+        return _redis_connection.get(cache_key)
+    except Exception as e:
+        logger.error(f"Error retrieving from Redis cache: {str(e)}")
+        return None
+
+def set_cached_translation(cache_key, value, timeout=3600):
+    """Set cached translation in Redis."""
+    global _redis_connection
+    try:
+        if _redis_connection is None:
+            _redis_connection = get_redis_connection()
+        
+        if _redis_connection is None:
+            logger.warning("Redis connection not available for caching")
+            return False
+            
+        _redis_connection.setex(cache_key, timeout, value)
+        return True
+    except Exception as e:
+        logger.error(f"Error setting Redis cache: {str(e)}")
+        return False
 
 def _mask_vars(html: str):
     mapping = {}
@@ -54,10 +116,11 @@ def translate_paragraphs(html: str, target_lang: str) -> str:
     target_lang_name = _get_language_name(target_lang)
     logger.info(f"Translating to {target_lang_name} (code: {target_lang})")
     
-    # Check cache first to avoid redundant API calls
+    # Check Redis cache first to avoid redundant API calls
     cache_key = f"translated_html:{hash(html)}:{target_lang}"
-    cached_result = cache.get(cache_key)
+    cached_result = get_cached_translation(cache_key)
     if cached_result:
+        logger.info(f"Retrieved translation from Redis cache")
         return cached_result
 
     try:
@@ -156,8 +219,12 @@ def translate_paragraphs(html: str, target_lang: str) -> str:
         # Regenerate the HTML with translations
         result = _unmask(str(soup), mapping)
         
-        # Cache the result for 1 hour
-        cache.set(cache_key, result, timeout=60*60)
+        # Cache the result in Redis for 1 hour
+        if set_cached_translation(cache_key, result, timeout=60*60):
+            logger.info(f"Successfully cached translation to Redis")
+        else:
+            logger.warning(f"Failed to cache translation to Redis")
+            
         logger.info(f"Successfully translated content to {target_lang_name}")
         
         return result

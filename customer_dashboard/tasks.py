@@ -7,7 +7,7 @@ from datetime import timedelta
 import json
 import hashlib
 import pytz
-from django.core.cache import cache
+from utils.redis_client import get, set, delete
 import requests
 import traceback
 import uuid
@@ -572,7 +572,7 @@ def process_aggregated_emails(session_identifier_str: str):
             logger.warning(f"Task {task_id_str}: No messages found in DB for EmailAggregationSession {session_identifier_str} for user {user.id}. Marking session inactive.")
             db_session.is_active = False
             db_session.save()
-            cache.delete(active_session_flag_key)
+            delete(active_session_flag_key)
             return
 
         # Combine message content
@@ -648,7 +648,7 @@ def process_aggregated_emails(session_identifier_str: str):
     finally:
         # Clean up cache flag for this user if we identified the user and session
         if active_session_flag_key: # This key is set if db_session was found and user identified
-            cache.delete(active_session_flag_key)
+            delete(active_session_flag_key)
         else:
             # This case can happen if EmailAggregationSession.DoesNotExist or ValueError on UUID occurred early.
             # We don't have a user.id to construct the cache key for cleanup in that scenario.

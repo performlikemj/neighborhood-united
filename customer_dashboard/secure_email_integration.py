@@ -15,7 +15,7 @@ import uuid # For generating session_identifier if models were here
 from custom_auth.models import CustomUser
 from customer_dashboard.models import AssistantEmailToken, UserEmailSession, EmailAggregationSession, AggregatedMessageContent, PreAuthenticationMessage
 from meals.meal_assistant_implementation import MealPlanningAssistant
-from django.core.cache import cache 
+from utils.redis_client import get, set, delete
 from django.template.loader import render_to_string 
 from .tasks import process_aggregated_emails
 from requests.compat import urlencode 
@@ -138,7 +138,7 @@ def process_email(request):
             # This cache key now stores the DB EmailAggregationSession.session_identifier (UUID string) if a window is active
             active_session_flag_key = f"{ACTIVE_DB_AGGREGATION_SESSION_FLAG_PREFIX}{user.id}"
             
-            active_db_session_identifier_str = cache.get(active_session_flag_key)
+            active_db_session_identifier_str = get(active_session_flag_key)
 
             if not active_db_session_identifier_str:
                 db_aggregation_session = EmailAggregationSession.objects.create(
@@ -155,7 +155,7 @@ def process_email(request):
                     session=db_aggregation_session,
                     content=message_content
                 )
-                cache.set(active_session_flag_key, str(db_aggregation_session.session_identifier), timeout=AGGREGATION_WINDOW_MINUTES * 60)
+                set(active_session_flag_key, str(db_aggregation_session.session_identifier), timeout=AGGREGATION_WINDOW_MINUTES * 60)
                 process_aggregated_emails.apply_async(
                     args=[str(db_aggregation_session.session_identifier)],
                     countdown=AGGREGATION_WINDOW_MINUTES * 60
@@ -275,7 +275,7 @@ def process_email(request):
                     }, status=202)
                 except EmailAggregationSession.DoesNotExist:
                     logger.error(f"Cache flag indicated active session {active_db_session_identifier_str} for user {user.id}, but DB session not found or not active. Clearing flag.")
-                    cache.delete(active_session_flag_key)
+                    delete(active_session_flag_key)
                     # This state implies the previous Celery task might have failed or cache out of sync.
                     # Forcing a new session start for this message.
                     # Re-running the logic for a new session:
@@ -286,7 +286,7 @@ def process_email(request):
                         is_active=True
                     )
                     AggregatedMessageContent.objects.create(session=db_aggregation_session, content=message_content)
-                    cache.set(active_session_flag_key, str(db_aggregation_session.session_identifier), timeout=AGGREGATION_WINDOW_MINUTES * 60)
+                    set(active_session_flag_key, str(db_aggregation_session.session_identifier), timeout=AGGREGATION_WINDOW_MINUTES * 60)
                     process_aggregated_emails.apply_async(args=[str(db_aggregation_session.session_identifier)], countdown=AGGREGATION_WINDOW_MINUTES * 60)
                     # Send acknowledgment for this newly forced session
                     # (Ack email sending logic would be duplicated or refactored into a helper)
@@ -295,7 +295,7 @@ def process_email(request):
 
                 except ValueError: # Invalid UUID from cache
                     logger.error(f"Invalid UUID format '{active_db_session_identifier_str}' in cache for key {active_session_flag_key}. Clearing flag.")
-                    cache.delete(active_session_flag_key)
+                    delete(active_session_flag_key)
                     return JsonResponse({
                         'status': 'error',
                         'message': 'Internal session error. Please try sending your initial message again.'

@@ -48,11 +48,6 @@ STATUS_REFUNDED = 'refunded'
 
 logger = logging.getLogger(__name__)
 
-class Migration(migrations.Migration):
-    operations = [
-        VectorExtension()
-    ]
-
 class Ingredient(models.Model):
     chef = models.ForeignKey(Chef, on_delete=models.CASCADE, related_name='ingredients')
     name = models.CharField(max_length=200)
@@ -529,15 +524,17 @@ class MealPlan(models.Model):
 
     def average_meal_rating(self):
         """
-        Calculate the average rating of all meals in this meal plan.
+        Calculate the average rating of all meals in this meal plan using optimized database aggregation.
+        FIXED: Previous implementation caused N+1 queries and memory exhaustion.
         """
-        meals = self.meal.all()
-        if not meals.exists():
-            return None
-        ratings = [m.average_rating() for m in meals if m.average_rating() is not None]
-        if not ratings:
-            return None
-        return sum(ratings) / len(ratings)
+        # Use database-level aggregation to avoid N+1 query problem
+        avg_rating = self.meal.filter(
+            reviews__isnull=False
+        ).aggregate(
+            avg_rating=Avg('reviews__rating')
+        )['avg_rating']
+        
+        return avg_rating
         
 class MealPlanInstruction(models.Model):
     meal_plan = models.ForeignKey('MealPlan', on_delete=models.CASCADE)

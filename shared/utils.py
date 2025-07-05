@@ -43,12 +43,13 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 import time
 from decimal import Decimal # Add this import
+from typing import List
 
 logger = logging.getLogger(__name__)
 
 def get_openai_client():
     """Get OpenAI client with lazy initialization."""
-    api_key = getattr(settings, 'OPENAI_KEY', None)
+    api_key = os.getenv('OPENAI_KEY')
     if not api_key:
         raise ValueError("OPENAI_KEY not found in settings")
     return OpenAI(api_key=api_key)
@@ -426,6 +427,10 @@ def generate_user_context(user):
         f"- Preferred Language: {preferred_language}"
     )
     
+    age_note = build_age_safety_note(user)
+    if age_note:
+        user_preferences += f"\n{age_note}"
+
     return user_preferences
 
 
@@ -1400,7 +1405,7 @@ def is_valid_embedding(embedding, expected_length=1536):
         return False
     return True
 
-def create_meal(request=None, user_id=None, name=None, dietary_preference=None, description=None, meal_type=None, used_pantry_items=None, max_attempts=3):
+def create_meal(request=None, user_id=None, name=None, dietary_preferences=None, description=None, meal_type=None, used_pantry_items=None, max_attempts=3):
     from meals.dietary_preferences import assign_dietary_preferences
     attempt = 0
 
@@ -1496,7 +1501,7 @@ def create_meal(request=None, user_id=None, name=None, dietary_preference=None, 
                     # Extract meal details
                     meal_name = meal_data.get('meal', {}).get('name', 'Meal Placeholder')
                     description = meal_data.get('meal', {}).get('description', 'Placeholder description')
-                    dietary_preference = meal_data.get('meal', {}).get('dietary_preference', "None")
+                    dietary_list = meal_data.get('meal', {}).get('dietary_preferences', [])
                     generated_meal_type = meal_data.get('meal', {}).get('meal_type', 'Dinner')
 
                 except Exception as e:
@@ -1505,7 +1510,7 @@ def create_meal(request=None, user_id=None, name=None, dietary_preference=None, 
                     meal_name = meal_name_input
                     description = 'Fallback Description'
                     generated_meal_type = meal_type_input
-                    dietary_preference = "None"
+                    dietary_list = []
 
                 # Step 4: Create the Meal instance without dietary preferences
                 meal = Meal(
@@ -1515,15 +1520,15 @@ def create_meal(request=None, user_id=None, name=None, dietary_preference=None, 
                     meal_type=generated_meal_type,
                     created_date=timezone.now(),
                 )
-                meal.save()
 
                 # logger.info(f"Meal '{meal.name}' saved successfully with ID {meal.id}.")
 
                 # Step 5: Assign dietary preferences
                 # Fetch and assign the regular dietary preferences
-                if dietary_preference != "None":
-                    assign_dietary_preferences(meal.id)
-                    meal.save()
+                if dietary_list:
+                    assign_dietary_preferences(meal.id, dietary_list)
+
+                meal.save()
 
                 # Fetch and assign the custom dietary preferences
                 custom_prefs = user.custom_dietary_preferences.all()
@@ -1534,7 +1539,7 @@ def create_meal(request=None, user_id=None, name=None, dietary_preference=None, 
 
                 # Step 6: Generate and assign the embedding
                 meal_representation = (
-                    f"Name: {meal.name}, Description: {meal.description}, Dietary Preference: {dietary_preference}, "
+                    f"Name: {meal.name}, Description: {meal.description}, Dietary Preferences: {dietary_list}, "
                     f"Meal Type: {meal.meal_type}, Chef: {user.username}, Price: {meal.price if meal.price else 'N/A'}"
                 )
                 
@@ -1601,6 +1606,39 @@ def create_meal(request=None, user_id=None, name=None, dietary_preference=None, 
 
     return {'status': 'error', 'message': 'Maximum attempts reached. Could not create a unique meal.'}
 
+def build_age_safety_note(user) -> str:
+    """
+    Inspect HouseholdMember records and return a multi‑line string for the prompt.
+    •  Babies  < 2 yrs  →  baby‑safe steps (no honey, low salt, puree, no whole nuts…)
+    •  Toddlers 2–4 yrs →  small pieces, mild spice
+    •  Children 5–11 yrs → kid‑friendly portions
+    """
+    hm_qs = getattr(user, "household_members", None)
+    if hm_qs is None or not hm_qs.exists():
+        return ""
+
+    babies    : List = [m for m in hm_qs if m.age and m.age <  2]
+    toddlers  : List = [m for m in hm_qs if m.age and 2 <= m.age < 5]
+    children  : List = [m for m in hm_qs if m.age and 5 <= m.age < 12]
+
+    lines = []
+    if babies:
+        lines.append(
+            f"BABY SAFETY: {len(babies)} baby(ies) <2 yrs – "
+            "provide separate baby‑safe prep; no honey, no added salt, no whole nuts, "
+            "no raw egg or unpasteurised dairy; puree / mash to age‑appropriate texture."
+        )
+    if toddlers:
+        lines.append(
+            f"TODDLER SAFETY: {len(toddlers)} toddler(s) 2‑4 yrs – "
+            "cut food into bite‑size pieces, use soft textures, mild spice."
+        )
+    if children:
+        lines.append(
+            f"CHILD PREFS: {len(children)} child(ren) 5‑11 yrs – offer kid‑friendly flavours and presentations."
+        )
+
+    return "\n".join(lines)
 
 def add_meal_to_plan(request, meal_plan_id, meal_id, day, meal_type, allow_duplicates=False):
     print("From add_meal_to_plan")

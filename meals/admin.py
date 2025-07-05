@@ -235,10 +235,10 @@ class MealPlanAdmin(admin.ModelAdmin):
         return obj.meal.count()
     get_meals_count.short_description = 'Meals Count'
 
-    def average_rating_display(self, obj):
-        avg = obj.average_meal_rating()
-        return f"{avg:.2f}" if avg else "No Ratings"
-    average_rating_display.short_description = 'Avg. Meal Rating'
+    # def average_rating_display(self, obj):
+    #     avg = obj.average_meal_rating()
+    #     return f"{avg:.2f}" if avg else "No Ratings"
+    # average_rating_display.short_description = 'Avg. Meal Rating'
 
 class MealPlanMealAdmin(admin.ModelAdmin):
     list_display = ('meal_plan', 'meal', 'day', 'meal_type')

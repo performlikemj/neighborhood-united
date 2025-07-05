@@ -73,10 +73,11 @@ class DietaryPreferenceSerializer(serializers.ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     dietary_preferences = DietaryPreferenceSerializer(many=True, read_only=True)
     address = serializers.SerializerMethodField()
+    household_members = serializers.SerializerMethodField()
     
     class Meta:
         model = CustomUser
-        fields = ['id', 'username', 'email', 'dietary_preferences', 'allergies', 'custom_allergies', 'custom_dietary_preferences', 'preferred_language', 'address']
+        fields = ['id', 'username', 'email', 'dietary_preferences', 'allergies', 'custom_allergies', 'custom_dietary_preferences', 'preferred_language', 'address', 'household_member_count', 'household_members']
 
     def get_address(self, obj):
         if hasattr(obj, 'address'):
@@ -93,6 +94,11 @@ class UserSerializer(serializers.ModelSerializer):
                 }
             }
         return None
+    
+    def get_household_members(self, obj):
+        from custom_auth.serializers import HouseholdMemberSerializer
+        household_members = obj.household_members.all()
+        return HouseholdMemberSerializer(household_members, many=True).data
 
 class ChefSerializer(serializers.ModelSerializer):
     user_name = serializers.SerializerMethodField()

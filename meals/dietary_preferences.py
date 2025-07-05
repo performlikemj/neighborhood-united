@@ -11,6 +11,7 @@ import traceback
 from meals.models import Meal, DietaryPreference, CustomDietaryPreference
 from meals.pydantic_models import DietaryPreferenceDetail, DietaryPreferencesSchema
 from shared.utils import create_or_update_dietary_preference, get_dietary_preference_info, get_openai_client
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -142,54 +143,59 @@ def handle_custom_dietary_preference(custom_prefs):
     return True  # If preference exists, nothing to do
 
 @shared_task
-def assign_dietary_preferences(meal_id):
+def assign_dietary_preferences(meal_id: int, gpt_tags: Optional[List[str]] = None):
     """
-    Use OpenAI API to determine dietary preferences based on meal details.
-    Returns a list of dietary preferences.
+    Attach dietary tags to a Meal.
+    If gpt_tags is supplied, trust & validate them;
+    otherwise fall back to the OpenAI classification call.
     """
     try:
         meal = Meal.objects.get(id=meal_id)
-        messages = meal.generate_messages()
-        response = get_openai_client().responses.create(
-            model="gpt-4.1-mini",
-            input=messages,
-            #store=True,
-            #metadata={'tag': 'dietary_preferences'},
-            text={
-                "format": {
-                    'type': 'json_schema',
-                    'name': 'preferences',
-                    'schema': DietaryPreferencesSchema.model_json_schema()
-                }
-            }
-        )  
+        ALLOWED = set(dp.name for dp in DietaryPreference.objects.all())
 
-        assistant_message_content = response.output_text.strip()
+        # 1. Use incoming tags if provided
+        tags = []
+        if gpt_tags:
+            invalid = [t for t in gpt_tags if t not in ALLOWED]
+            if invalid:
+                logger.warning(f"GPT returned invalid tags {invalid}; they will be ignored.")
+            tags = [t for t in gpt_tags if t in ALLOWED]
 
-        dietary_prefs = meal.parse_dietary_preferences(assistant_message_content)
+        # 2. If no tags yet, ask GPT to classify
+        if not tags:
+            messages = meal.generate_messages()
+            response = get_openai_client().responses.create(
+                model="gpt-4.1-mini",
+                input=messages,
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "preferences",
+                        "schema": DietaryPreferencesSchema.model_json_schema(),
+                    }
+                },
+            )
+            assistant_json = response.output_text.strip()
+            tags = meal.parse_dietary_preferences(assistant_json)
 
-        if not dietary_prefs:
-            logger.warning(f"No dietary preferences returned by OpenAI for '{meal.name}'.")
+        # 3. Persist
+        if not tags:
+            logger.warning(f"No dietary preferences determined for '{meal.name}'.")
             return
 
-        # Assign the dietary preferences to the meal
-        for pref_name in dietary_prefs:
-            pref, created = DietaryPreference.objects.get_or_create(name=pref_name)
+        for name in tags:
+            pref, _ = DietaryPreference.objects.get_or_create(name=name)
             meal.dietary_preferences.add(pref)
 
-        # logger.info(f"Assigned dietary preferences for '{meal.name}': {dietary_prefs}")
-
     except Meal.DoesNotExist:
-        logger.error(f"Meal with ID {meal_id} does not exist.")
-        return
-
+        logger.error(f"Meal {meal_id} not found.")
     except ValidationError as ve:
         logger.error(f"Pydantic validation error for Meal '{meal.name}': {ve}")
         return
 
     except json.JSONDecodeError as je:
         logger.error(f"JSON decoding error for Meal '{meal.name}': {je}")
-        logger.error(f"Response content: {assistant_message_content}")
+        logger.error(f"Response content: {assistant_json}")
         return
 
     except OpenAIError as oe:
@@ -197,6 +203,5 @@ def assign_dietary_preferences(meal_id):
         return
 
     except Exception as e:
-        logger.error(f"Unexpected error while assigning dietary preferences for Meal '{meal.name}': {e}")
+        logger.error(f"assign_dietary_preferences failed: {e}")
         logger.error(traceback.format_exc())
-        return

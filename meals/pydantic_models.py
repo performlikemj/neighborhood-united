@@ -174,7 +174,7 @@ class MealData(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str
     description: str
-    dietary_preference: str = Field(..., description="Dietary preference for the meal.")
+    dietary_preferences: List[str] = Field(..., description="One or more dietary preference tags.")
     meal_type: Optional[str] = Field(..., description="Type of meal (e.g., 'Breakfast', 'Lunch', 'Dinner')")
     is_chef_meal: bool = Field(
         ...,

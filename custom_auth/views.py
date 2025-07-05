@@ -55,7 +55,7 @@ from meals.models import CustomDietaryPreference
 from django.core.mail import send_mail
 from django.conf import settings
 from uuid import UUID
-from django.core.cache import cache
+from utils.redis_client import get, set
 from customer_dashboard.tasks import process_aggregated_emails
 from utils.translate_html import translate_paragraphs  # Import the translation utility
 from bs4 import BeautifulSoup
@@ -130,7 +130,7 @@ def email_authentication_view(request, auth_token):
             )
 
             active_session_flag_key = f"{ACTIVE_DB_AGGREGATION_SESSION_FLAG_PREFIX}{user.id}"
-            cache.set(active_session_flag_key, str(db_aggregation_session.session_identifier), timeout=AGGREGATION_WINDOW_MINUTES * 60)
+            set(active_session_flag_key, str(db_aggregation_session.session_identifier), timeout=AGGREGATION_WINDOW_MINUTES * 60)
 
             process_aggregated_emails.apply_async(
                 args=[str(db_aggregation_session.session_identifier)],
@@ -533,8 +533,6 @@ def update_profile_api(request):
         user_serializer = CustomUserSerializer(user, data=request.data, partial=True)
 
         if user_serializer.is_valid():
-            print(f"Validated data: {user_serializer.validated_data}")  # Debug print
-
             if 'email' in user_serializer.validated_data and user_serializer.validated_data['email'] != user.email:
                 new_email = user_serializer.validated_data['email']
                 if not new_email:
@@ -579,6 +577,18 @@ def update_profile_api(request):
                 # Send data to Zapier
                 requests.post(os.getenv("ZAP_UPDATE_PROFILE_URL"), json=zapier_data)
 
+            # Store original custom dietary preferences before update for task dispatching
+            original_custom_prefs = set()
+            if 'custom_dietary_preferences' in user_serializer.validated_data:
+                # Safely get existing custom dietary preferences
+                existing_prefs = user.custom_dietary_preferences.values_list('name', flat=True)
+                original_custom_prefs = set(existing_prefs) if existing_prefs else set()
+            
+            # Let the serializer handle all updates including household_members
+            # The serializer's update() method properly handles all fields including household_members
+            user_serializer.save()
+            
+            # Now handle specific fields that need special processing
             if 'username' in user_serializer.validated_data and user_serializer.validated_data['username'] != user.username:
                 user.username = user_serializer.validated_data['username']
                 user.save()
@@ -590,14 +600,14 @@ def update_profile_api(request):
             # If new custom dietary preferences are added, dispatch tasks
             if 'custom_dietary_preferences' in user_serializer.validated_data:
                 new_custom_prefs = user_serializer.validated_data['custom_dietary_preferences']
-                # Identify newly added custom preferences
-                existing_custom_prefs = set(user.custom_dietary_preferences.values_list('name', flat=True))
-                added_custom_prefs = set([pref.name for pref in new_custom_prefs]) - existing_custom_prefs
+                new_custom_pref_names = set([pref.name for pref in new_custom_prefs])
+                
+                # Find newly added preferences
+                added_custom_prefs = new_custom_pref_names - original_custom_prefs
                 if added_custom_prefs:
                     # Dispatch task for newly added custom preferences
                     handle_custom_dietary_preference.delay(list(added_custom_prefs))
                     logger.info(f"Dispatched tasks for new custom dietary preferences: {added_custom_prefs}")
-
 
             if 'allergies' in user_serializer.validated_data:
                 user.allergies = user_serializer.validated_data['allergies']
@@ -620,13 +630,10 @@ def update_profile_api(request):
             if 'household_member_count' in user_serializer.validated_data:
                 user.household_member_count = user_serializer.validated_data['household_member_count']
 
-            if 'household_members' in user_serializer.validated_data:
-                user.household_members.set(user_serializer.validated_data['household_members'])
-
-            user_serializer.save()
+            # Final save to persist any manual field updates
+            user.save()
 
         else:
-            print(f"Serializer errors: {user_serializer.errors}")  # Debug print
             return Response({'status': 'failure', 'message': user_serializer.errors}, status=400)
 
         # Update or create address data
@@ -637,7 +644,6 @@ def update_profile_api(request):
             country_name = address_data.get('country')
             if country_name:
                 country_code = get_country_code(country_name)  # Use the new function to get the country code
-                print(f"Country name: {country_name}, Country code: {country_code}")  # Debugging print
                 if not country_code:
                     return Response({'status': 'failure', 'message': f'Invalid country name: {country_name}'}, status=400)
                 address_data['country'] = country_code
@@ -657,7 +663,6 @@ def update_profile_api(request):
             
             address_data['user'] = user.id
             address_serializer = AddressSerializer(instance=address, data=address_data, partial=True)
-            print(f"Address serializer data: {address_serializer.initial_data}")  # Debug print
             if address_serializer.is_valid():
                 try:
                     address = address_serializer.save(user=user)
@@ -693,7 +698,6 @@ def update_profile_api(request):
                         status=400,
                     )
             else:
-                print(f"Address serializer errors: {address_serializer.errors}")  # Debug print
                 return Response({'status': 'failure', 'message': address_serializer.errors}, status=400)
         else:
             return Response({'status': 'success', 'message': 'Profile updated successfully without address data'})
@@ -702,7 +706,7 @@ def update_profile_api(request):
         n8n_traceback = {
             'error': str(e),
             'source': 'update_profile_api',
-            'traceback': f"Address data: {address_data} | Country received: '{country_code_received}' | Postal code received: '{postal_code_received}' | {traceback.format_exc()}"
+            'traceback': f"Request data: {request.data} | {traceback.format_exc()}"
         }
         requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return Response({'status': 'error', 'message': str(e)}, status=500)

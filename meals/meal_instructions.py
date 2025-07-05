@@ -20,7 +20,7 @@ from meals.models import MealPlanMeal, MealPlan, MealPlanInstruction, Instructio
 from meals.pydantic_models import Instructions as InstructionsSchema
 from meals.serializers import MealPlanMealSerializer
 from custom_auth.models import CustomUser
-from shared.utils import generate_user_context, get_openai_client
+from shared.utils import generate_user_context, get_openai_client, build_age_safety_note
 from meals.pantry_management import get_expiring_pantry_items
 from meals.pydantic_models import BulkPrepInstructions, DailyTask
 from django.template.loader import render_to_string
@@ -258,6 +258,9 @@ def generate_instructions(meal_plan_meal_ids):
                  pass
 
 
+        # Add age safety note
+        age_note = build_age_safety_note(user)
+
         # Check for existing instructions first (Using the imported Instruction model)
         existing_instruction = Instruction.objects.filter(meal_plan_meal=meal_plan_meal).first()
 
@@ -304,72 +307,41 @@ def generate_instructions(meal_plan_meal_ids):
                     input=[
                         {
                             "role": "developer",
-                            "content": (
-                                f"Generate cooking instructions in the user's preferred language of {user_preferred_language} based on the provided meal data and user context. The output should be in JSON format conforming to the provided Instructions schema. "
-                                """
-                                # Steps
-
-                                1. **Understand the Meal Data:** Analyze the provided meal data to understand the ingredients, cooking methods, and overall recipe structure.
-                                
-                                2. **Generate Instructions:**
-                                - For each step in the cooking process, determine the sequence, actions, and necessary details.
-                                - Assign a step number to each action in chronological order.
-                                - Write a clear description of the step in the user's preferred language.
-                                - Estimate the duration for each step. If the duration is not provided, use "N/A". 
-
-                                3. **Compile the Output:**
-                                - Ensure each instruction fits the InstructionStep schema: step number, description, and duration.
-                                - Aggregate all steps into a list matching the structure of the Instructions schema.
-
-                                # Output Format
-
-                                The output should be a JSON object matching the Instructions schema with a list of steps. Each step should include the step number, description, and duration. The JSON should not be wrapped in code blocks.
-
-                                # Examples
-
-                                **Example Input:**
-                                - Meal Data: [Ingredients and cooking method details]
-                                - User Preferred Language: "Spanish"
-
-                                **Example Output:**
-                                ```json
-                                {
-                                    "steps": [
-                                        {
-                                            "step_number": 1,
-                                            "description": "Precalienta el horno a 180 grados Celsius.",
-                                            "duration": "5 minutos"
-                                        },
-                                        {
-                                            "step_number": 2,
-                                            "description": "Mezcla la harina y el azúcar en un bol grande.",
-                                            "duration": "N/A"
-                                        }
-                                    ]
-                                }
-                                ```
-                                (Note: In a real scenario, ensure the descriptions are fully detailed and appropriately translated based on the meal data and language specified.)
-
-                                # Notes
-
-                                - Ensure that each instruction is adapted to the user's preferred language.
-                                - If specific durations are given in the meal data, those should be used; otherwise, default to "N/A" for duration estimation.
-                                - Pay attention to making the steps easy to understand and follow.
-                                """
+                            "content":
+                            (
+                                f"## Mission\n"
+                                f"You are **Sous‑Chef**, a multilingual culinary expert who writes crystal‑clear, "
+                                "step‑by‑step cooking instructions.  You ALWAYS return a JSON object that "
+                                "validates against the provided `Instructions` schema.  No prose or markdown. "
+                                f"Write cooking instructions in **{user_preferred_language}**. "
+                                f" **Age Safety Note**: {age_note or 'None'}\n\n"
+                                f"## Data Available\n"
+                                f"- **Meal data**: ingredients, methods, times.\n"
+                                f"- **User context**: household ages, dietary needs, kitchen skill.\n"
+                                f"- **Expiring pantry items**: {expiring_items_str} (use when sensible to cut waste).\n"
+                                f"- **Metadata**: {metadata_prompt_part.strip()}\n\n"
+                                f"## Output Rules\n"
+                                f"1.  Return exactly one JSON object—nothing else—conforming to the `Instructions` "
+                                f"   schema below (Pydantic `extra='forbid'`).\n"
+                                f"2.  `steps` **must** be ordered; start numbering at **1**.\n"
+                                f"3.  `description` ≤ 2 concise sentences; write in {user_preferred_language}.\n"
+                                f"4.  `duration`: use value from meal data; if missing, write `'N/A'`.\n"
+                                f"5.  Max total tokens ≈ 350 to avoid cost spikes.\n"
+                                f"6.  Never repeat nutrition or video metadata inside `description`.\n"
+                                f"7.  If you cannot comply, return `null`.\n\n"
+                                f"### Instructions schema (immutable)\n"
+                                f"{InstructionsSchema.model_json_schema()}"
                             )
                         },
                         {
                             "role": "user",
-                            "content": (
-                                f"Generate cooking instructions in {user_preferred_language} for the following meal: {meal_data_json}. "
-                                f"The user's context is: {user_context}. "
-                                f"Pay special attention to individual household member dietary needs, preferences, and ages when adjusting cooking methods, portion guidance, and ingredient handling. "
-                                f"The user has these pantry items expiring soon: {expiring_items_str}. Prioritize using these if applicable. "
-                                f"{metadata_prompt_part}" # Include the metadata context here
-                                f"\\\\n\\\\n{substitution_str}\\\\n"
-                                f"{chef_note}\\\\n"
-                                f"Provide clear, step-by-step instructions, including estimated times for each step. "
-                                f"Focus on practical steps a home cook can follow. Do not repeat the nutrition/video info in the steps, it's just for context."
+                            "content":
+                            (
+                                f"Generate the instructions now.\n\n"
+                                f"- **Meal**: {meal_data_json}\n"
+                                f"- **Household**: {user_context}\n"
+                                f"- **Substitutions**: {substitution_str.strip()}\n"
+                                f"- **Chef note**: {chef_note.strip()}\n"
                             )
                         }
                     ],
@@ -381,7 +353,9 @@ def generate_instructions(meal_plan_meal_ids):
                         'name': 'get_instructions',
                         'schema': InstructionsSchema.model_json_schema()
                         }
-                    }
+                    },
+                    temperature=0.4,
+                    max_tokens=400,
                 )
 
                 instructions_content = response.output_text
@@ -694,6 +668,10 @@ def generate_bulk_prep_instructions(meal_plan_id):
         logger.error(f"Error generating user context: {e}")
         user_context = 'No additional user context provided.'
 
+    # Add age safety note
+    age_note = build_age_safety_note(user)
+
+
     try:
         # Format substitution information for prompt
         substitution_str = ""
@@ -704,83 +682,60 @@ def generate_bulk_prep_instructions(meal_plan_id):
             for note in unique_notes:
                 substitution_str += f"- {note}\\\\n"
 
-        # Add chef meal note if needed
-        chef_note = ""
-        if chef_meals_present:
-            chef_note = "\\\\nIMPORTANT: Some meals in this plan are chef-created and MUST be prepared exactly as specified. Do not suggest substitutions for ANY ingredients in chef-created meals."
+        ###########################################
+        # BUILD THE CHAT MESSAGES
+        ###########################################
 
-        # Serialize all meal data with metadata for the prompt
-        # Or adjust the prompt to expect potentially stringified JSON.
-        # For simplicity here, we send the potentially stringified JSON directly.
-        all_meals_json_for_prompt = json.dumps(all_meals_data_for_prompt, indent=2)
+        # -- sanity‑checked variables ------------
+        user_lang   = user_preferred_language or "English"
+        meals_json  = json.dumps(all_meals_data_for_prompt, ensure_ascii=False)
+        subs_text   = build_substitution_bullets(substitution_info)   # helper returns '' if none
+        meta_part   = build_metadata_prompt_part(meal_plan_meals)
+        chef_text   = ("\nIMPORTANT: Some meals are chef‑created and MUST NOT be altered."
+                    if chef_meals_present else "")
+        # ----------------------------------------
 
+        messages = [
+            {
+                "role": "developer",
+                "content": (
+                    f"You are **Batch‑Chef**, a multilingual bulk‑meal‑prep specialist. "
+                    f"Return ONE JSON object matching the `BulkPrepInstructions` schema. "
+                    f"No markdown, no explanations. "
+                    f" **Age Safety Note**: {age_note or 'None'}. "
+                    f"## Objective\nPrepare a one‑session bulk‑prep plan in **{user_lang}**.\n\n"
+
+                    f"## Data\n"
+                    f"- Weekly meals JSON:\n```json\n{meals_json}\n```\n"
+                    f"- Household context: {user_context} (diners={household_member_count})\n"
+                    f"- Expiring items: {expiring_items_str}\n"
+                    f"- Metadata: {meta_part}\n\n"
+
+                    f"## Rules\n"
+                    f"1. Output fields: `bulk_prep_steps` then `daily_tasks`, both ordered by `step_number`.\n"
+                    f"2. Group like operations (e.g., chop all veg) before cooking grains/proteins.\n"
+                    f"3. Hot foods must cool to ≤40 °F/4 °C within 2 h before storage. "
+                    f"4. Storage `notes`: fridge ≤4 days; freezer ≤3 months. "
+                    f"5. Each `description` ≤2 concise sentences in {user_lang}.\n"
+                    f"6. Use provided durations or `'N/A'`.\n"
+                    f"7. Never repeat nutrition/video metadata.\n"
+                    f"8. If you cannot comply, output `null`.\n"
+                    f"9. Keep total tokens ≈400; be terse.\n\n"
+
+                    f"## Extras\n{subs_text}{chef_text}"
+                )
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Generate the bulk‑prep plan now. Remember: nutrition/video info is context only."
+                )
+            }
+        ]
         # Generate the bulk prep instructions using OpenAI
         response = get_openai_client().responses.create(
             model="gpt-4.1-mini", # Or gpt-4-turbo if more complexity needed
-            input=[
-                {
-                    "role": "developer",
-                    "content": (
-                        f"Generate efficient, step-by-step bulk meal prep instructions in the specified language of {user_preferred_language}, outputting JSON conforming to the BulkPrepInstructions schema. Group instructions logically (e.g., chop all veggies, cook all grains) and include storage tips and instructions for final assembly/reheating on the day of eating. "
-                        """
-                        # Steps
-
-                        1. **Bulk Preparation**: Develop a detailed list of bulk preparation steps. Each step should be efficient and grouped logically (e.g., all vegetables chopping should occur together). Include:
-                        - Step number indicating the order of operations.
-                        - Meal type (Breakfast, Lunch, Dinner) relevant to the step.
-                        - Detailed description of the step.
-                        - Duration (time needed for the step).
-                        - List of ingredients needed.
-                        - Optional notes or tips for storage and freshness.
-
-                        2. **Integration**: Ensure that the bulk preparation steps logically integrate to facilitate reduced daily workload.
-
-                        # Output Format
-
-                        The output should be provided in JSON format, structured according to the BulkPrepInstructions schema. Each component must adhere strictly to the fields defined in this schema.
-
-                        # Examples
-
-                        ## Example of BulkPrepInstructions
-
-                        ```json
-                        {
-                            "step_number": 1,
-                            "meal_type": "Breakfast",
-                            "description": "Wash, hull, and slice 3 cups of strawberries. Store in an airtight container.",
-                            "duration": "15 minutes",
-                            "ingredients": ["strawberries"],
-                            "notes": "Keep refrigerated and use within 3 days."
-                        }
-                        ```
-
-                        (Note: The actual number of tasks and steps will vary depending on the complexity and requirements of the meal prep plan.)
-
-                        # Notes
-
-                        - Ensure all steps are clearly described and placed in the correct sequence.
-                        - Include storage tips to maintain freshness and practicality.
-                        - The JSON should be well-structured and valid according to the BulkPrepInstructions schema.
-                        """
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Generate a comprehensive bulk meal prep plan in {user_preferred_language} for the following weekly meals (nutrition/video info is context, may be JSON strings): {all_meals_json_for_prompt}. "
-                        f"The plan serves {household_member_count} household members total. Pay special attention to individual household member dietary needs, preferences, and ages listed in the user context when planning quantities, preparation methods, and storage considerations. Adjust portions and cooking methods to accommodate different dietary requirements within the household. "
-                        f"User Context: {user_context}. "
-                        f"Expiring Pantry Items (prioritize using these): {expiring_items_str}. "
-                        f"Goal: Prepare as much as possible in one session (e.g., Sunday) for the week. "
-                        f"Provide detailed steps for the main prep day, storage instructions (refrigerate/freeze), and simple daily tasks for reheating/assembly. "
-                        f"Include estimated times. Be mindful of food safety (e.g., cool before storing). "
-                        f"The JSON output should contain a list of 'bulk_prep_steps' for the main prep day and a list of 'daily_tasks' for the rest of the week." 
-                        f"{substitution_str}" # Substitution info appended
-                        f"{chef_note}" # Chef meal constraints appended
-                        f"\\\\nREMINDER: Nutritional info and videos provided in the meal list are for context only; do not repeat them verbatim in the instructions."
-                    )
-                }
-            ],
+            input=messages,
             text={
                 "format": {
                 'type': 'json_schema',
@@ -901,6 +856,17 @@ def generate_bulk_prep_instructions(meal_plan_id):
     
     except Exception as e:
         logger.error(f"Error generating bulk prep instructions for meal plan {meal_plan_id}: {str(e)}")
+
+def build_substitution_bullets(subs):
+    if not subs:
+        return ""
+    bullets = "\nIngredient substitutions for non‑chef meals:\n"
+    seen = set()
+    for s in subs:
+        if s["notes"] not in seen:
+            bullets += f"- {s['notes']}\n"
+            seen.add(s["notes"])
+    return bullets
 
 @shared_task
 @handle_task_failure
@@ -1148,3 +1114,51 @@ def send_follow_up_instructions(meal_plan_id):
         except Exception as e:
             logger.error(f"Failed to send follow-up instructions for user {user.id}: {e}")
             continue
+
+def build_metadata_prompt_part(meal_plan_meals):
+    """
+    Collect lightweight, plan‑level metadata for the LLM.
+    Returns a pretty‑printed JSON string or an empty string.
+    """
+    rollup = {
+        "total_meals": len(meal_plan_meals),
+        "meals_with_macro_data": 0,
+        "meals_without_macro_data": 0,
+        "macro_summary": {
+            "protein": 0,
+            "carbohydrates": 0,
+            "fat": 0,
+            "calories": 0,
+        },
+        "videos_present": False,
+    }
+
+    for mpm in meal_plan_meals:
+        meal = mpm.meal
+        # macro_info assumed to be JSON str → dict
+        if meal.macro_info:
+            try:
+                macros = json.loads(meal.macro_info) if isinstance(meal.macro_info, str) else meal.macro_info
+                # Use the correct field names from the MealMacroInfo schema
+                rollup["macro_summary"]["protein"] += macros.get("protein", 0)
+                rollup["macro_summary"]["carbohydrates"] += macros.get("carbohydrates", 0)
+                rollup["macro_summary"]["fat"] += macros.get("fat", 0)
+                rollup["macro_summary"]["calories"] += macros.get("calories", 0)
+                rollup["meals_with_macro_data"] += 1
+            except (json.JSONDecodeError, TypeError, AttributeError) as e:
+                logger.warning(f"Could not parse macro_info for meal {meal.id}: {e}")
+                rollup["meals_without_macro_data"] += 1
+                continue
+        else:
+            rollup["meals_without_macro_data"] += 1
+
+        if meal.youtube_videos:
+            rollup["videos_present"] = True
+
+    # If no meals have macro data, indicate that clearly
+    if rollup["meals_with_macro_data"] == 0:
+        rollup["macro_summary"] = "No macro data available for any meals"
+    elif rollup["meals_without_macro_data"] > 0:
+        rollup["macro_summary"]["note"] = f"Summary based on {rollup['meals_with_macro_data']} of {rollup['total_meals']} meals"
+
+    return json.dumps(rollup, ensure_ascii=False, indent=2)

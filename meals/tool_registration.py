@@ -90,6 +90,8 @@ from .guest_tools import (
     guest_search_ingredients,
     guest_register_user,
     onboarding_save_progress,
+    onboarding_request_password,
+    get_guest_tools
 )
 
 logger = logging.getLogger(__name__)
@@ -157,6 +159,7 @@ TOOL_FUNCTION_MAP = {
     "guest_search_ingredients": guest_search_ingredients,
     "guest_register_user": guest_register_user,
     "onboarding_save_progress": onboarding_save_progress,
+    "onboarding_request_password": onboarding_request_password,
     "chef_service_areas": chef_service_areas
 }
 

@@ -22,8 +22,22 @@ if os.path.exists(os.path.join(os.path.dirname(__file__), '..', 'dev.env')):
 else:
     load_dotenv()  # Try default .env file
 
+# Helper function to convert string values to boolean
+def str_to_bool(value, default=False):
+    """
+    Convert string values to boolean.
+    Handles various string representations of True/False.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ('true', '1', 'yes', 'on')
+    return bool(value)
+
 # Test mode flag for disabling external API calls during tests
-TEST_MODE = os.getenv("TEST_MODE") == "True"
+TEST_MODE = str_to_bool(os.getenv("TEST_MODE", "False"))
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -35,6 +49,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
+# DEBUG = str_to_bool(os.getenv('DEBUG', 'False'))
 DEBUG = False
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '').split(',')
@@ -42,7 +57,7 @@ ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '').split(',')
 # Model quota limits
 GPT41_AUTH_LIMIT = int(os.getenv('GPT41_AUTH_LIMIT', 5))  # GPT-4.1 per authenticated user / day
 GPT41_MINI_GUEST_LIMIT = int(os.getenv('GPT41_MINI_GUEST_LIMIT', 10))  # GPT-4.1-mini per guest / day
-# Application definition
+
 # Application definition
 
 INSTALLED_APPS = [
@@ -124,11 +139,15 @@ ASGI_APPLICATION = 'hood_united.asgi.application'
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
-if DEBUG == 'True':
+if DEBUG:
     DATABASES = {
         'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.getenv('TEST_DB_NAME'),
+            'USER': os.getenv('TEST_DB_USER'),
+            'PASSWORD': os.getenv('TEST_DB_PASSWORD'),
+            'HOST': os.getenv('TEST_DB_HOST'),
+            'PORT': os.getenv('TEST_DB_PORT'),
         }
     }
 else:
@@ -189,13 +208,13 @@ SIMPLE_JWT = {
 # Internationalization
 # https://docs.djangoproject.com/en/4.2/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = os.getenv('LANGUAGE_CODE', 'en-us')
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = os.getenv('TIME_ZONE', 'UTC')
 
 USE_I18N = True
 
-USE_TZ = True
+USE_TZ = str_to_bool(os.getenv('USE_TZ', 'True'))
 
 
 # Static files (CSS, JavaScript, Images)
@@ -307,8 +326,8 @@ STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET') #TODO: Add this to th
 
 # Email settings
 EMAIL_HOST = os.getenv('EMAIL_HOST')
-EMAIL_PORT = os.getenv('EMAIL_PORT')
-EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS')
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
+EMAIL_USE_TLS = str_to_bool(os.getenv('EMAIL_USE_TLS', 'True'))
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
 
@@ -322,10 +341,8 @@ REDIS_PASSWORD = os.getenv('REDIS_PASSWORD')
 DJANGO_REDIS_LOG_IGNORED_EXCEPTIONS = True
 DJANGO_REDIS_LOGGER = 'django.request'
 
-DEBUG_VALUE = os.getenv('DEBUG', 'False').lower() == 'true'
-
 # Configure different cache backends for development vs production
-if DEBUG_VALUE:
+if DEBUG:
     # Development: Use local memory cache (no Redis required)
     CACHES = {
         "default": {
@@ -423,7 +440,7 @@ LOGGING = {
     }
 }
 # Environment-aware security settings
-IS_PRODUCTION = not DEBUG_VALUE and not TEST_MODE
+IS_PRODUCTION = not DEBUG and not TEST_MODE
 
 if IS_PRODUCTION:
     # Production-only security settings

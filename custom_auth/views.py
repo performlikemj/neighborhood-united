@@ -8,7 +8,7 @@ from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from django.core.mail import EmailMessage
 from .tokens import account_activation_token
-from .models import CustomUser, Address, UserRole, HouseholdMember
+from .models import CustomUser, Address, UserRole, HouseholdMember, OnboardingSession
 from customer_dashboard.models import GoalTracking, AssistantEmailToken, UserEmailSession, EmailAggregationSession, AggregatedMessageContent, PreAuthenticationMessage
 from chefs.models import ChefRequest
 from .forms import RegistrationForm, UserProfileForm, EmailChangeForm, AddressForm
@@ -30,6 +30,7 @@ from .serializers import (
     PostalCodeSerializer,
     UserRoleSerializer,
     HouseholdMemberSerializer,
+    OnboardingUserSerializer,
 )
 from rest_framework import serializers
 import requests
@@ -61,6 +62,11 @@ from utils.translate_html import translate_paragraphs  # Import the translation 
 from bs4 import BeautifulSoup
 from django.conf.locale import LANG_INFO
 import traceback
+from django.utils.translation import gettext_lazy as _
+from django.contrib.auth.models import AnonymousUser
+from rest_framework import status
+import logging
+
 logger = logging.getLogger(__name__)
 
 # Constants from secure_email_integration.py (or define them in a shared place)
@@ -1120,7 +1126,6 @@ def send_activation_email_to_user(user, email_subject_prefix=""):
 @api_view(['POST'])
 def resend_activation_link(request):
     try:
-        print(f"Request data: {request.data}")
         user_id = request.data.get('user_id')
         
         if not user_id:
@@ -1426,4 +1431,258 @@ def _get_language_name(language_code):
     if language_code in LANG_INFO and 'name' in LANG_INFO[language_code]:
         return LANG_INFO[language_code]['name']
     return language_code
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def onboarding_complete_registration(request):
+    """
+    Secure endpoint to complete registration by providing password for onboarding guest.
+    This combines stored onboarding data with the password to create the full account.
+    """
+    try:
+        
+        # Extract guest_id and password from request
+        guest_id = request.data.get('guest_id')
+        password = request.data.get('password')
+        
+        
+        if not guest_id:
+            return Response({'errors': 'Guest ID is required'}, status=400)
+        
+        if not password:
+            return Response({'errors': 'Password is required'}, status=400)
+        
+        # Retrieve stored onboarding data
+        try:
+            onboarding_session = OnboardingSession.objects.get(guest_id=guest_id)
+            stored_data = onboarding_session.data or {}
+        except OnboardingSession.DoesNotExist:
+            return Response({'errors': 'No onboarding data found for this guest ID'}, status=400)
+        
+        # Validate that we have the minimum required data
+        username = stored_data.get('username')
+        email = stored_data.get('email')
+        
+        if not username:
+            return Response({'errors': 'Username is required but not found in onboarding data'}, status=400)
+        
+        if not email:
+            return Response({'errors': 'Email is required but not found in onboarding data'}, status=400)
+        
+        # Check if user already exists with this username or email
+        if CustomUser.objects.filter(username=username).exists():
+            return Response({'errors': f"Username '{username}' is already taken"}, status=400)
+        
+        if CustomUser.objects.filter(email=email).exists():
+            return Response({'errors': f"Email '{email}' is already registered"}, status=400)
+        
+        # Prepare data for register_api_view format
+        user_data = {
+            'username': stored_data['username'],
+            'email': stored_data['email'],
+            'password': password,
+        }
+        
+        # Add optional user fields if they exist in stored data
+        optional_user_fields = [
+            'first_name', 'last_name', 'phone_number', 'preferred_language',
+            'allergies', 'custom_allergies', 'dietary_preferences', 
+            'custom_dietary_preferences', 'timezone', 'emergency_supply_goal',
+            'household_member_count', 'household_members'
+        ]
+        
+        for field in optional_user_fields:
+            if field in stored_data:
+                user_data[field] = stored_data[field]
+        
+        
+        # Prepare address data if available
+        address_data = None
+        if any(field in stored_data for field in ['street', 'city', 'state', 'postalcode', 'country']):
+            address_data = {}
+            address_fields = ['street', 'city', 'state', 'country']
+            for field in address_fields:
+                if field in stored_data:
+                    address_data[field] = stored_data[field]
+            
+            # Handle postal code mapping (frontend might send 'postalcode' but model expects 'input_postalcode')
+            if 'postalcode' in stored_data:
+                address_data['postalcode'] = stored_data['postalcode']
+        
+        # Prepare goal data if available
+        goal_data = None
+        if 'goal_name' in stored_data or 'goal_description' in stored_data:
+            goal_data = {
+                'goal_name': stored_data.get('goal_name', ''),
+                'goal_description': stored_data.get('goal_description', '')
+            }
+        
+        # Create the registration request data structure that register_api_view expects
+        registration_data = {
+            'user': user_data
+        }
+        
+        if address_data:
+            registration_data['address'] = address_data
+            
+        if goal_data:
+            registration_data['goal'] = goal_data
+        
+        # Create a mock request for register_api_view
+        class MockRequest:
+            def __init__(self, data):
+                self.data = data
+                self.method = 'POST'
+        
+        mock_request = MockRequest(registration_data)
+        
+        # Call the existing register_api_view logic
+        with transaction.atomic():
+            # Use the same logic as register_api_view but with our prepared data
+            custom_diet_prefs_input = user_data.pop('custom_dietary_preferences', None)
+            new_custom_prefs = []
+            
+            # Handle custom dietary preferences
+            if custom_diet_prefs_input:
+                for custom_pref in custom_diet_prefs_input:
+                    custom_pref_obj, created = CustomDietaryPreference.objects.get_or_create(name=custom_pref.strip())
+                    handle_custom_dietary_preference.delay([custom_pref])
+                    new_custom_prefs.append(custom_pref_obj)
+            
+            # Create the user via onboarding serializer
+            user_serializer = OnboardingUserSerializer(data=user_data)
+            
+            if not user_serializer.is_valid():
+                logger.error(f"Onboarding user serializer errors in onboarding completion: {user_serializer.errors}")
+                return Response({'errors': f"Error creating user account: {user_serializer.errors}"}, status=400)
+            
+            user = user_serializer.save()
+            
+            UserRole.objects.create(user=user, current_role='customer')
+            
+            # Add custom dietary preferences to the user
+            if new_custom_prefs:
+                user.custom_dietary_preferences.set(new_custom_prefs)
+            
+            # Handle optional user fields
+            if 'emergency_supply_goal' in user_serializer.validated_data:
+                user.emergency_supply_goal = user_serializer.validated_data['emergency_supply_goal']
+                user.save()
+                
+            if 'household_member_count' in user_serializer.validated_data:
+                user.household_member_count = user_serializer.validated_data['household_member_count']
+                user.save()
+                
+            if 'household_members' in user_serializer.validated_data:
+                user.household_members.set(user_serializer.validated_data['household_members'])
+                user.save()
+            
+            # Handle address if provided
+            if address_data and any(value.strip() if isinstance(value, str) else value for value in address_data.values()):
+                # Correct field name mapping
+                if 'postalcode' in address_data:
+                    address_data['input_postalcode'] = address_data.pop('postalcode', '')
+                
+                address_data['user'] = user.id
+                address_serializer = AddressSerializer(data=address_data)
+                if not address_serializer.is_valid():
+                    logger.error(f"Address serializer errors in onboarding completion: {address_serializer.errors}")
+                    # Don't fail the registration for address errors, just log them
+                    logger.warning(f"Skipping address creation due to validation errors: {address_serializer.errors}")
+                else:
+                    address_serializer.save()
+            
+            # Handle goal data
+            if goal_data:
+                GoalTracking.objects.create(
+                    user=user,
+                    goal_name=goal_data.get('goal_name', ''),
+                    goal_description=goal_data.get('goal_description', '')
+                )
+            
+            # Send activation email (same as register_api_view)
+            mail_subject = 'Activate your account.'
+            uid = urlsafe_base64_encode(force_bytes(user.pk))
+            token = account_activation_token.make_token(user)
+            activation_link = f"{os.getenv('STREAMLIT_URL')}/account?uid={uid}&token={token}&action=activate"
+            
+            # Create HTML message content (same as register_api_view)
+            message = f"""
+            <html>
+            <body>
+                <div style="text-align: center;">
+                    <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+                </div>
+                <h2 style="color: #333;">Welcome to SautAI, {user.username}!</h2>
+                <p>Thank you for signing up! We're excited to have you on board.</p>
+                <p>To get started, please confirm your email address by clicking the button below:</p>
+                <div style="text-align: center; margin: 20px 0;">
+                    <a href="{activation_link}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Activate Your Account</a>
+                </div>
+                <p>If the button above doesn't work, you can copy and paste the following link into your web browser:</p>
+                <p><a href="{activation_link}" style="color: #4CAF50;">{activation_link}</a></p>
+                <p>If you have any issues, feel free to reach out to us at <a href="mailto:support@sautAI.com">support@sautAI.com</a>.</p>
+                <p>Thanks,<br>The SautAI Support Team</p>
+            </body>
+            </html>
+            """
+            
+            to_email = user.email
+            
+            # Prepare email data for n8n (SAME FORMAT AS register_api_view)
+            email_data = {
+                'subject': mail_subject,
+                'message': message,
+                'to': to_email,
+                'from': 'support@sautai.com',
+                'username': user.username,
+                'activation_link': activation_link,
+                'html': True  # Indicate that the message is in HTML format
+            }
+            
+            try:
+                requests.post(os.getenv('N8N_REGISTER_URL'), json=email_data)
+                logger.info(f"Sent activation email data to n8n for onboarding completion: {to_email}")
+            except Exception as e:
+                logger.error(f"Error sending activation email data to n8n for onboarding completion: {to_email}, error: {str(e)}")
+                # Don't fail registration for email sending errors
+            
+            # Mark onboarding session as completed
+            onboarding_session.completed = True
+            onboarding_session.save()
+            
+            # Generate tokens for immediate login
+            refresh = RefreshToken.for_user(user)
+            
+            
+            return Response({
+                'refresh': str(refresh),
+                'access': str(refresh.access_token),
+                'status': 'User registered successfully through onboarding',
+                'navigate_to': 'Assistant',
+                'user_id': user.id,
+                'username': user.username,
+                'email': user.email
+            })
+            
+    except serializers.ValidationError as ve:
+        logger.error(f"Validation Error during onboarding completion: {str(ve)}")
+        # n8n traceback
+        n8n_traceback = {
+            'error': str(ve),
+            'source': 'onboarding_complete_registration',
+            'traceback': f"Guest ID: {guest_id} | Stored data: {stored_data} | {traceback.format_exc()}"
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        return Response({'errors': ve.detail}, status=400)
+    except Exception as e:
+        logger.error(f"Exception Error during onboarding completion: {str(e)}")
+        # n8n traceback
+        n8n_traceback = {
+            'error': str(e),
+            'source': 'onboarding_complete_registration',
+            'traceback': f"Guest ID: {guest_id} | {traceback.format_exc()}"
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        return Response({'errors': str(e)}, status=500)
 

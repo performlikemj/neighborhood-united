@@ -1503,74 +1503,146 @@ def guest_new_conversation(request):
 @api_view(['POST'])
 def onboarding_stream_message(request):
     """Stream onboarding chat messages for guest users via SSE."""
+    print(f"ONBOARDING_STREAM: ----- Starting onboarding_stream_message -----")
+    print(f"ONBOARDING_STREAM: Request method: {request.method}")
+    print(f"ONBOARDING_STREAM: Request data: {request.data}")
+    print(f"ONBOARDING_STREAM: Session data: {dict(request.session)}")
+    
     guest_id = request.data.get('guest_id') or request.session.get('guest_id')
+    print(f"ONBOARDING_STREAM: Initial guest_id: {guest_id}")
+    
     if not guest_id:
         guest_id = generate_guest_id()
         request.session['guest_id'] = guest_id
         request.session.save()
+        print(f"ONBOARDING_STREAM: Generated new guest_id: {guest_id}")
+    else:
+        print(f"ONBOARDING_STREAM: Using existing guest_id: {guest_id}")
 
     message = request.data.get('message')
     thread_id = request.data.get('response_id')
+    
+    print(f"ONBOARDING_STREAM: Message: {message}")
+    print(f"ONBOARDING_STREAM: Thread ID: {thread_id}")
 
     assistant = OnboardingAssistant(guest_id)
+    print(f"ONBOARDING_STREAM: Created OnboardingAssistant with guest_id: {guest_id}")
 
     def event_stream():
+        print(f"ONBOARDING_STREAM: Starting event_stream generator")
         emitted_id = False
+        chunk_count = 0
+        
         try:
-            for chunk in assistant.stream_message(message, thread_id):
+            print(f"ONBOARDING_STREAM: Calling assistant.stream_message('{message}')")
+            for chunk in assistant.stream_message(message):
+                chunk_count += 1
+                print(f"ONBOARDING_STREAM: Chunk #{chunk_count}: {chunk}")
+                
                 if not isinstance(chunk, dict):
+                    print(f"ONBOARDING_STREAM: Skipping non-dict chunk: {type(chunk)}")
                     continue
 
+                chunk_type = chunk.get("type", "unknown")
+                print(f"ONBOARDING_STREAM: Processing chunk type: {chunk_type}")
+
                 if not emitted_id and chunk.get("type") == "response_id":
-                    yield f"data: {json.dumps({'type': 'response.created', 'id': chunk.get('id')})}\n\n"
+                    response_id = chunk.get('id')
+                    print(f"ONBOARDING_STREAM: Emitting response.created with ID: {response_id}")
+                    payload = {'type': 'response.created', 'id': response_id}
+                    yield f"data: {json.dumps(payload)}\n\n"
                     emitted_id = True
                     continue
 
                 if chunk.get("type") == "tool_result":
+                    tool_call_id = chunk.get("tool_call_id")
+                    tool_name = chunk.get("name")
+                    tool_output = chunk.get("output")
+                    print(f"ONBOARDING_STREAM: Tool result - ID: {tool_call_id}, Name: {tool_name}")
+                    print(f"ONBOARDING_STREAM: Tool output: {tool_output}")
+                    
                     payload = {
                         "type": "response.tool",
-                        "id": chunk.get("tool_call_id"),
-                        "name": chunk.get("name"),
-                        "output": chunk.get("output"),
+                        "id": tool_call_id,
+                        "name": tool_name,
+                        "output": tool_output,
                     }
                     yield f"data: {json.dumps(payload)}\n\n"
                     continue
 
                 if chunk.get("type") == "text":
+                    text_content = chunk.get('content')
+                    print(f"ONBOARDING_STREAM: Text chunk: {text_content}")
+                    
                     payload = {
                         "type": "response.output_text.delta",
-                        "delta": {"text": chunk.get('content')},
+                        "delta": {"text": text_content},
+                    }
+                    yield f"data: {json.dumps(payload)}\n\n"
+                    continue
+
+                if chunk.get("type") == "password_request":
+                    is_password_request = chunk.get('is_password_request', False)
+                    print(f"ONBOARDING_STREAM: Password request status: {is_password_request}")
+                    
+                    payload = {
+                        "type": "password_request",
+                        "is_password_request": is_password_request,
                     }
                     yield f"data: {json.dumps(payload)}\n\n"
                     continue
 
                 if chunk.get("type") == "response.completed":
+                    print(f"ONBOARDING_STREAM: Response completed")
                     yield f"data: {json.dumps({'type': 'response.completed'})}\n\n"
                     continue
+                    
+                # Log unhandled chunk types
+                print(f"ONBOARDING_STREAM: Unhandled chunk type: {chunk_type}, full chunk: {chunk}")
+                
         except Exception as e:
+            print(f"ONBOARDING_STREAM: Exception in event_stream: {str(e)}")
             logger.error(f"Error in onboarding_stream_message: {str(e)}")
             traceback.print_exc()
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
+        print(f"ONBOARDING_STREAM: Ending event_stream - processed {chunk_count} chunks")
         yield 'event: close\n\n'
 
+    print(f"ONBOARDING_STREAM: Creating StreamingHttpResponse")
     response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
     response["X-Guest-ID"] = guest_id
+    print(f"ONBOARDING_STREAM: Returning response with guest_id: {guest_id}")
     return response
 
 
 @api_view(['POST'])
 def onboarding_new_conversation(request):
     """Start a fresh onboarding chat."""
+    print(f"ONBOARDING_NEW: ----- Starting onboarding_new_conversation -----")
+    print(f"ONBOARDING_NEW: Request method: {request.method}")
+    print(f"ONBOARDING_NEW: Request data: {request.data}")
+    print(f"ONBOARDING_NEW: Session data: {dict(request.session)}")
+    
     try:
         guest_id = request.data.get('guest_id') or request.session.get('guest_id')
+        print(f"ONBOARDING_NEW: Initial guest_id: {guest_id}")
+        
         if not guest_id:
             guest_id = generate_guest_id()
             request.session['guest_id'] = guest_id
             request.session.save()
+            print(f"ONBOARDING_NEW: Generated new guest_id: {guest_id}")
+        else:
+            print(f"ONBOARDING_NEW: Using existing guest_id: {guest_id}")
 
+        print(f"ONBOARDING_NEW: Creating OnboardingAssistant with guest_id: {guest_id}")
         assistant = OnboardingAssistant(guest_id)
+        
+        print(f"ONBOARDING_NEW: Calling assistant.reset_conversation()")
         assistant.reset_conversation()
+        
+        print(f"ONBOARDING_NEW: Conversation reset successfully for guest_id: {guest_id}")
 
         return JsonResponse({
             "status": "success",
@@ -1578,7 +1650,9 @@ def onboarding_new_conversation(request):
             "message": "Onboarding conversation reset successfully."
         })
     except Exception as e:
+        print(f"ONBOARDING_NEW: Exception occurred: {str(e)}")
         logging.error(f"Error in onboarding_new_conversation: {str(e)}")
+        traceback.print_exc()
         return JsonResponse({
             'status': 'error',
             'message': f'Failed to start new onboarding conversation: {str(e)}'

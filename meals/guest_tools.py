@@ -4,7 +4,7 @@ Guest tools for the OpenAI Responses API integration.
 This module implements the tools available to guest users:
  - Search dishes
  - Search chefs
- - Get the current week’s meal plan
+ - Get the current week's meal plan
  - Search ingredients
 """
 
@@ -102,26 +102,72 @@ GUEST_TOOLS = [
             "type": "object",
             "properties": {
                 "guest_id": {"type": "string", "description": "Guest session identifier"},
-                "user": {"type": "object", "description": "Fields for the CustomUser model (username, email, password, etc.)", "properties": {}, "additionalProperties": true},
-                "address": {"type": "object", "description": "Optional address fields such as street, city and postalcode", "properties": {}, "additionalProperties": true},
-                "goal": {"type": "object", "description": "Optional goal information (goal_name and goal_description)", "properties": {}, "additionalProperties": true}
+                "user": {"type": "object", "description": "Fields for the CustomUser model (username, email, password, etc.)"},
+                "address": {"type": "object", "description": "Optional address fields such as street, city and postalcode"},
+                "goal": {"type": "object", "description": "Optional goal information (goal_name and goal_description)"}
             },
             "required": ["guest_id", "user"],
-            "additionalProperties": false
+            "additionalProperties": False
         }
     },
     {
         "type": "function",
         "name": "onboarding_save_progress",
-        "description": "Persist partial registration details during onboarding.",
+        "description": "Persist partial registration details during onboarding. Save only the specific data you just collected.",
         "parameters": {
             "type": "object",
             "properties": {
                 "guest_id": {"type": "string"},
-                "data": {"type": "object", "additionalProperties": true}
+                "username": {"type": "string", "description": "Username for the account"},
+                "email": {"type": "string", "description": "Email address for the account"},
+                "preferred_language": {"type": "string", "description": "User's preferred language (e.g., 'en', 'es', 'fr')"},
+                "dietary_preferences": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of standard dietary preferences (e.g., 'Vegan', 'Vegetarian', 'Gluten-Free', 'Keto', 'Paleo', 'Halal', 'Kosher', 'Low-Calorie', 'Low-Sodium', 'High-Protein', 'Dairy-Free', 'Nut-Free', 'Raw Food', 'Whole 30', 'Low-FODMAP', 'Diabetic-Friendly', 'Everything')"
+                },
+                "custom_dietary_preferences": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of custom dietary preferences not in the standard list"
+                },
+                "allergies": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of standard allergies (e.g., 'Peanuts', 'Tree nuts', 'Milk', 'Egg', 'Wheat', 'Soy', 'Fish', 'Shellfish', 'Sesame', 'Mustard', 'Celery', 'Lupin', 'Sulfites', 'Molluscs', 'Corn', 'Gluten', 'Kiwi', 'Latex', 'Pine Nuts', 'Sunflower Seeds', 'Poppy Seeds', 'Fennel', 'Peach', 'Banana', 'Avocado', 'Chocolate', 'Coffee', 'Cinnamon', 'Garlic', 'Chickpeas', 'Lentils', 'None')"
+                },
+                "custom_allergies": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of custom allergies not in the standard list"
+                },
+                "household_members": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "age": {"type": "integer"},
+                            "dietary_preferences": {"type": "string"}
+                        }
+                    }
+                }
             },
-            "required": ["guest_id", "data"],
-            "additionalProperties": false
+            "required": ["guest_id"],
+            "additionalProperties": False
+        }
+    },
+    {
+        "type": "function",
+        "name": "onboarding_request_password",
+        "description": "Mark that the onboarding assistant is ready to request the user's password.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "guest_id": {"type": "string"}
+            },
+            "required": ["guest_id"],
+            "additionalProperties": False
         }
     }
 ]
@@ -143,7 +189,14 @@ def guest_search_dishes(query: str) -> Dict[str, Any]:
         return {"status": "success", "query": query, "dishes": results}
     except Exception as e:
         # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
-        requests.post(n8n_traceback_url, json={"error": str(e), "source":"guest_search_dishes", "traceback": traceback.format_exc()})
+        if n8n_traceback_url:
+            try:
+                requests.post(n8n_traceback_url, json={"error": str(e), "source":"guest_search_dishes", "traceback": traceback.format_exc()})
+            except Exception:
+                pass  # Don't let N8N webhook errors break the main functionality
+        
+        logger.error(f"Error in guest_search_dishes: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return {"status": "error", "message": f"Failed to search dishes"}
 
 
@@ -160,7 +213,14 @@ def guest_search_chefs(query: str) -> Dict[str, Any]:
         return {"status": "success", "query": query, "chefs": results}
     except Exception as e:
         # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
-        requests.post(n8n_traceback_url, json={"error": str(e), "source":"guest_search_chefs", "traceback": traceback.format_exc()})
+        if n8n_traceback_url:
+            try:
+                requests.post(n8n_traceback_url, json={"error": str(e), "source":"guest_search_chefs", "traceback": traceback.format_exc()})
+            except Exception:
+                pass  # Don't let N8N webhook errors break the main functionality
+        
+        logger.error(f"Error in guest_search_chefs: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return {"status": "error", "message": f"Failed to search chefs"}
 
 
@@ -210,7 +270,14 @@ def guest_get_meal_plan(user_id: int) -> Dict[str, Any]:
         }
     except Exception as e:
         # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
-        requests.post(n8n_traceback_url, json={"error": str(e), "source":"guest_get_meal_plan", "traceback": traceback.format_exc()})
+        if n8n_traceback_url:
+            try:
+                requests.post(n8n_traceback_url, json={"error": str(e), "source":"guest_get_meal_plan", "traceback": traceback.format_exc()})
+            except Exception:
+                pass  # Don't let N8N webhook errors break the main functionality
+        
+        logger.error(f"Error in guest_get_meal_plan: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return {"status": "error", "message": f"Failed to get meal plan"}
 
 
@@ -227,7 +294,14 @@ def guest_search_ingredients(query: str) -> Dict[str, Any]:
         return {"status": "success", "query": query, "ingredients": results}
     except Exception as e: 
         # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
-        requests.post(n8n_traceback_url, json={"error": str(e), "source":"guest_search_ingredients", "traceback": traceback.format_exc()})
+        if n8n_traceback_url:
+            try:
+                requests.post(n8n_traceback_url, json={"error": str(e), "source":"guest_search_ingredients", "traceback": traceback.format_exc()})
+            except Exception:
+                pass  # Don't let N8N webhook errors break the main functionality
+        
+        logger.error(f"Error in guest_search_ingredients: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return {"status": "error", "message": f"Failed to search ingredients"}
 
 
@@ -263,23 +337,131 @@ def guest_register_user(guest_id: str, user: Dict[str, Any], address: Optional[D
 
         return result
     except Exception as e:
-        requests.post(n8n_traceback_url, json={"error": str(e), "source": "guest_register_user", "traceback": traceback.format_exc()})
+        if n8n_traceback_url:
+            try:
+                requests.post(n8n_traceback_url, json={"error": str(e), "source": "guest_register_user", "traceback": traceback.format_exc()})
+            except Exception:
+                pass  # Don't let N8N webhook errors break the main functionality
+        
+        logger.error(f"Error in guest_register_user: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return {"status": "error", "message": "Failed to register user"}
 
 
-def onboarding_save_progress(guest_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+def onboarding_request_password(guest_id: str) -> Dict[str, Any]:
+    """
+    Mark that the onboarding assistant is ready to request the user's password.
+    This is called when all other required data has been collected and the 
+    assistant is ready to trigger the secure password modal.
+    """
+    logger.info(f"ONBOARDING_REQUEST_PASSWORD: Called for guest_id={guest_id}")
+    print(f"ONBOARDING_REQUEST_PASSWORD: Called for guest_id={guest_id}")
+    
+    try:
+        from custom_auth.models import OnboardingSession
+        
+        session, created = OnboardingSession.objects.get_or_create(guest_id=guest_id)
+        
+        # Mark that we're ready for password
+        if not session.data:
+            session.data = {}
+        session.data['ready_for_password'] = True
+        session.save()
+        
+        logger.info(f"ONBOARDING_REQUEST_PASSWORD: Marked session {session.id} as ready for password")
+        print(f"ONBOARDING_REQUEST_PASSWORD: Marked session {session.id} as ready for password")
+        
+        return {
+            "status": "success", 
+            "message": "Ready for secure password collection",
+            "ready_for_password": True
+        }
+    except Exception as e:
+        if n8n_traceback_url:
+            try:
+                requests.post(n8n_traceback_url, json={"error": str(e), "source": "onboarding_request_password", "traceback": traceback.format_exc()})
+            except Exception:
+                pass
+        
+        logger.error(f"Error in onboarding_request_password: {str(e)}")
+        print(f"ONBOARDING_REQUEST_PASSWORD ERROR: {str(e)}")
+        return {"status": "error", "message": "Failed to mark ready for password"}
+
+
+def onboarding_save_progress(
+    guest_id: str, 
+    username: str = None, 
+    email: str = None, 
+    preferred_language: str = None,
+    dietary_preferences: List[str] = None,
+    custom_dietary_preferences: List[str] = None,
+    allergies: List[str] = None,
+    custom_allergies: List[str] = None,
+    household_members: List[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """Save partial onboarding data for a guest."""
+    # Create data dict from provided parameters
+    data = {}
+    if username is not None:
+        data['username'] = username
+    if email is not None:
+        data['email'] = email
+    if preferred_language is not None:
+        data['preferred_language'] = preferred_language
+    if dietary_preferences is not None:
+        data['dietary_preferences'] = dietary_preferences
+    if custom_dietary_preferences is not None:
+        data['custom_dietary_preferences'] = custom_dietary_preferences
+    if allergies is not None:
+        data['allergies'] = allergies
+    if custom_allergies is not None:
+        data['custom_allergies'] = custom_allergies
+    if household_members is not None:
+        data['household_members'] = household_members
+    
+    logger.info(f"ONBOARDING_SAVE_PROGRESS: Starting with guest_id={guest_id}, data={data}")
+    print(f"ONBOARDING_SAVE_PROGRESS: Starting with guest_id={guest_id}, data={data}")
+    
     try:
         from custom_auth.models import OnboardingSession
 
-        session, _ = OnboardingSession.objects.get_or_create(guest_id=guest_id)
+        logger.info(f"ONBOARDING_SAVE_PROGRESS: Attempting to get or create OnboardingSession for guest_id={guest_id}")
+        print(f"ONBOARDING_SAVE_PROGRESS: Attempting to get or create OnboardingSession for guest_id={guest_id}")
+        
+        session, created = OnboardingSession.objects.get_or_create(guest_id=guest_id)
+        
+        logger.info(f"ONBOARDING_SAVE_PROGRESS: Session {'created' if created else 'found'}: {session.id}")
+        print(f"ONBOARDING_SAVE_PROGRESS: Session {'created' if created else 'found'}: {session.id}")
+        
         if not session.data:
             session.data = {}
+            
+        logger.info(f"ONBOARDING_SAVE_PROGRESS: Existing session data: {session.data}")
+        print(f"ONBOARDING_SAVE_PROGRESS: Existing session data: {session.data}")
+        
         session.data.update(data)
+        
+        logger.info(f"ONBOARDING_SAVE_PROGRESS: Updated session data: {session.data}")
+        print(f"ONBOARDING_SAVE_PROGRESS: Updated session data: {session.data}")
+        
         session.save()
+        
+        logger.info(f"ONBOARDING_SAVE_PROGRESS: Session saved successfully")
+        print(f"ONBOARDING_SAVE_PROGRESS: Session saved successfully")
+        
         return {"status": "success", "data": session.data}
     except Exception as e:
-        requests.post(n8n_traceback_url, json={"error": str(e), "source": "onboarding_save_progress", "traceback": traceback.format_exc()})
+        # Only send traceback if N8N_TRACEBACK_URL is configured
+        if n8n_traceback_url:
+            try:
+                requests.post(n8n_traceback_url, json={"error": str(e), "source": "onboarding_save_progress", "traceback": traceback.format_exc()})
+            except Exception:
+                pass  # Don't let N8N webhook errors break the main functionality
+        
+        logger.error(f"Error in onboarding_save_progress: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        print(f"ONBOARDING_SAVE_PROGRESS ERROR: {str(e)}")
+        print(f"ONBOARDING_SAVE_PROGRESS TRACEBACK: {traceback.format_exc()}")
         return {"status": "error", "message": "Failed to save progress"}
 
 

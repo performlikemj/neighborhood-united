@@ -5,7 +5,7 @@ from pgvector.django import VectorField
 
 class Chef(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
-    experience = models.CharField(max_length=200, blank=True)
+    experience = models.CharField(max_length=500, blank=True)
     bio = models.TextField(blank=True)
     serving_postalcodes = models.ManyToManyField(
         PostalCode,

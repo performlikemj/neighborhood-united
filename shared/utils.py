@@ -1617,9 +1617,12 @@ def build_age_safety_note(user) -> str:
     if hm_qs is None or not hm_qs.exists():
         return ""
 
-    babies    : List = [m for m in hm_qs if m.age and m.age <  2]
-    toddlers  : List = [m for m in hm_qs if m.age and 2 <= m.age < 5]
-    children  : List = [m for m in hm_qs if m.age and 5 <= m.age < 12]
+    # Get the actual queryset from the RelatedManager
+    household_members = hm_qs.all()
+    
+    babies    : List = [m for m in household_members if m.age and m.age <  2]
+    toddlers  : List = [m for m in household_members if m.age and 2 <= m.age < 5]
+    children  : List = [m for m in household_members if m.age and 5 <= m.age < 12]
 
     lines = []
     if babies:

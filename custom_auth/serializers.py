@@ -245,3 +245,91 @@ class UserRoleSerializer(serializers.ModelSerializer):
         instance.is_chef = validated_data.get('is_chef', instance.is_chef)
         instance.save()
         return instance
+
+class OnboardingUserSerializer(serializers.ModelSerializer):
+    """
+    Streamlined serializer for onboarding process.
+    Only requires essential fields and provides sensible defaults.
+    """
+    household_members = HouseholdMemberSerializer(many=True, required=False)
+    
+    # Handle dietary_preferences as ManyToManyField
+    dietary_preferences = serializers.SlugRelatedField(
+        many=True,
+        slug_field='name',  # Using 'name' to represent dietary preferences
+        queryset=DietaryPreference.objects.all(),
+        required=False
+    )
+    
+    # Handle custom_dietary_preferences as ManyToManyField
+    custom_dietary_preferences = serializers.SlugRelatedField(
+        many=True,
+        slug_field='name',
+        queryset=CustomDietaryPreference.objects.all(),
+        required=False
+    )
+    
+    class Meta:
+        model = get_user_model()
+        fields = [
+            'id', 'username', 'email', 'password',
+            'phone_number', 'preferred_language', 'timezone',
+            'dietary_preferences', 'custom_dietary_preferences',
+            'allergies', 'custom_allergies',
+            'emergency_supply_goal', 'household_member_count', 'household_members'
+        ]
+        extra_kwargs = {
+            'password': {'write_only': True},
+            'username': {'required': True},
+            'email': {'required': True},
+            'phone_number': {'required': False},
+            'preferred_language': {'required': False},
+            'timezone': {'required': False},
+            'dietary_preferences': {'required': False},
+            'custom_dietary_preferences': {'required': False},
+            'allergies': {'required': False},
+            'custom_allergies': {'required': False},
+            'emergency_supply_goal': {'required': False},
+            'household_member_count': {'required': False},
+        }
+    
+    def create(self, validated_data):
+        """Create user with sensible defaults for optional fields."""
+        # Remove nested fields
+        household_members_data = validated_data.pop('household_members', [])
+        dietary_preferences_data = validated_data.pop('dietary_preferences', [])
+        custom_dietary_preferences_data = validated_data.pop('custom_dietary_preferences', [])
+        
+        # Set defaults for optional fields
+        defaults = {
+            'phone_number': '',
+            'preferred_language': 'en',
+            'timezone': 'America/New_York',
+            'allergies': [],
+            'custom_allergies': [],
+            'emergency_supply_goal': 7,
+            'household_member_count': 1,
+            'is_active': True,
+        }
+        
+        # Apply defaults for missing fields
+        for field, default_value in defaults.items():
+            if field not in validated_data:
+                validated_data[field] = default_value
+        
+        # Create user using Django's create_user method
+        user = get_user_model().objects.create_user(**validated_data)
+        
+        # Set ManyToMany relationships
+        if dietary_preferences_data:
+            user.dietary_preferences.set(dietary_preferences_data)
+        if custom_dietary_preferences_data:
+            user.custom_dietary_preferences.set(custom_dietary_preferences_data)
+        
+        # Create household members if provided
+        if household_members_data:
+            for member_data in household_members_data:
+                member_data['user'] = user
+                HouseholdMember.objects.create(**member_data)
+        
+        return user

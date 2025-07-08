@@ -226,7 +226,7 @@ class MealPlanMealInline(admin.TabularInline):
     meal_id_display.short_description = 'Meal ID'
 
 class MealPlanAdmin(admin.ModelAdmin):
-    list_display = ('id', 'user', 'week_start_date', 'week_end_date', 'is_approved', 'has_changes', 'get_meals_count', 'average_rating_display')
+    list_display = ('id', 'user', 'week_start_date', 'week_end_date', 'is_approved', 'has_changes', 'get_meals_count')
     list_filter = ('week_start_date', 'week_end_date', 'is_approved', 'has_changes')
     search_fields = ('user__username', 'meal__name')
     inlines = [MealPlanMealInline, ReviewInline]

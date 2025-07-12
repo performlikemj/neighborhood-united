@@ -32,7 +32,6 @@ def get_redis_connection():
             socket_keepalive_options={},
             health_check_interval=30,
             retry_on_error=[redis.exceptions.ReadOnlyError, redis.exceptions.ConnectionError],
-            ssl_cert_reqs="required",  # Use string instead of ssl.CERT_REQUIRED for newer redis-py versions
             ssl_check_hostname=False,  # Azure Redis doesn't need hostname verification
         )
     except Exception as e:

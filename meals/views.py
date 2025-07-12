@@ -2608,7 +2608,6 @@ def api_create_stripe_account_link(request):
                     "name": f"{request.user.first_name} {request.user.last_name}",
                     "product_description": "Chef prepared meals"
                 },
-                tos_acceptance={"service_agreement": "recipient"},
                 capabilities={
                     "transfers": {"requested": True},
                     "card_payments": {"requested": True}  # Often needed for Express accounts

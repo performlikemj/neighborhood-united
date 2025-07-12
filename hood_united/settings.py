@@ -387,7 +387,7 @@ CELERY_REDIS_MAX_CONNECTIONS = 10
 CELERY_BROKER_TRANSPORT_OPTIONS = {
     'visibility_timeout': 3600,  # Task visibility timeout
     'ssl': {
-        'ssl_cert_reqs': 'CERT_REQUIRED',  # You can also set this to 'CERT_OPTIONAL' or 'CERT_NONE'
+        'ssl_cert_reqs': 'required',  # You can also set this to 'CERT_OPTIONAL' or 'CERT_NONE'
         'ssl_ca_certs': '/etc/ssl/certs/ca-certificates.crt',  # Path to your CA certificates
     }
 }

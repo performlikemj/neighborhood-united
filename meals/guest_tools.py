@@ -17,9 +17,10 @@ from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 
 from custom_auth.models import CustomUser
-from meals.models import Dish, MealPlan, MealPlanMeal, Ingredient
+from meals.models import Dish, MealPlan, MealPlanMeal, Ingredient, Meal
 from chefs.models import Chef
 
 logger = logging.getLogger(__name__)
@@ -224,49 +225,57 @@ def guest_search_chefs(query: str) -> Dict[str, Any]:
         return {"status": "error", "message": f"Failed to search chefs"}
 
 
-def guest_get_meal_plan(user_id: int) -> Dict[str, Any]:
+def guest_get_meal_plan(user_id: str) -> Dict[str, Any]:
     """
-    Retrieve the guest user's current-week meal plan.
+    Retrieve a sample meal plan for guest users.
+    Guest users don't have database records, so we generate a sample meal plan.
     """
     try:
-        user = get_object_or_404(CustomUser, id=user_id)
         today = date.today()
-        start_of_week = today - timedelta(days=today.weekday())
+        start_of_week = today - timedelta(days=today.weekday())  # Start of the week is always Monday
         end_of_week = start_of_week + timedelta(days=6)
 
-        plan = MealPlan.objects.filter(
-            user=user,
-            week_start_date=start_of_week,
-            week_end_date=end_of_week
-        ).first()
+        # Define meal types
+        meal_types = ['Breakfast', 'Lunch', 'Dinner']
 
-        if not plan:
-            return {
-                "status": "info",
-                "message": "No meal plan found for the current week."
-            }
+        # Store guest meal plan details
+        guest_meal_plan = []
+        used_meals = set()
 
-        items = MealPlanMeal.objects.filter(meal_plan=plan)
-        plan_items = [
-            {
-                "day": item.day,
-                "meal_type": item.meal_type,
-                "meal": {
-                    "id": item.meal.id,
-                    "name": item.meal.name
-                }
-            }
-            for item in items
-        ]
+        # Fetch and limit meals for each type, randomizing the selection
+        for meal_type in meal_types:
+            # Get up to 33 meals of the current type, randomizing using `.order_by('?')`
+            possible_meals = Meal.objects.filter(meal_type=meal_type, start_date__gte=today, start_date__lte=end_of_week).order_by('?')[:33]
+
+            if not possible_meals.exists():
+                # If no meals available for the specific type, provide a fallback
+                fallback_meals = Meal.objects.filter(meal_type=meal_type).order_by('?')[:33]
+                possible_meals = fallback_meals
+
+            # Select a subset of meals for the week, ensuring no duplicates across meal types
+            for chosen_meal in possible_meals:
+                if chosen_meal.id not in used_meals:
+                    used_meals.add(chosen_meal.id)
+
+                    chef_username = chosen_meal.chef.user.username if chosen_meal.chef else 'User Created Meal'
+                    meal_type = chosen_meal.mealplanmeal_set.first().meal_type if chosen_meal.mealplanmeal_set.exists() else meal_type
+                    is_available_msg = "Available for exploration - orderable by registered users." if chosen_meal.can_be_ordered() else "Sample meal only."
+
+                    # Construct meal details
+                    meal_details = {
+                        "meal_id": chosen_meal.id,
+                        "name": chosen_meal.name,
+                        "start_date": chosen_meal.start_date.strftime('%Y-%m-%d') if chosen_meal.start_date else "N/A",
+                        "is_available": is_available_msg,
+                        "dishes": [{"id": dish.id, "name": dish.name} for dish in chosen_meal.dishes.all()],
+                        "meal_type": meal_type
+                    }
+                    guest_meal_plan.append(meal_details)
 
         return {
             "status": "success",
-            "meal_plan": {
-                "id": plan.id,
-                "week_start_date": str(plan.week_start_date),
-                "week_end_date": str(plan.week_end_date),
-                "items": plan_items
-            }
+            "guest_meal_plan": guest_meal_plan,
+            "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')
         }
     except Exception as e:
         # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 

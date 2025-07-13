@@ -726,7 +726,7 @@ class PaymentInfoSchema(BaseModel):
 
 class IngredientSubstitution(BaseModel):
     """A single ingredient and its safe alternatives."""
-
+    model_config = ConfigDict(extra="forbid")
     ingredient: str = Field(..., description="Name of the flagged ingredient")
     alternatives: List[str] = Field(
         ..., description="Array of safe substitution suggestions for the ingredient"

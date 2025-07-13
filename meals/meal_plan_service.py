@@ -2052,8 +2052,7 @@ def get_substitution_suggestions(flagged_ingredients, user_allergies, meal_name)
                 "format": {
                     "type": "json_schema",
                     "name": "ingredient_substitutions",
-                    "schema": IngredientSubstitutions.model_json_schema(),
-                    "strict": True
+                    "schema": IngredientSubstitutions.model_json_schema()
                 }
             }
         )

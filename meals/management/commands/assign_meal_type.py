@@ -106,7 +106,6 @@ class Command(BaseCommand):
                             "schema": MealTypeAssignment.model_json_schema()  # Pydantic v2 method
                         }
                     },
-                    max_tokens=50,
                     temperature=0  # Set to 0 for deterministic output
                 )
 

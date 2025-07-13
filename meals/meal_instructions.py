@@ -355,7 +355,6 @@ def generate_instructions(meal_plan_meal_ids):
                         }
                     },
                     temperature=0.4,
-                    max_tokens=400,
                 )
 
                 instructions_content = response.output_text

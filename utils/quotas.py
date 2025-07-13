@@ -23,6 +23,7 @@ def get_redis_connection():
     
     try:
         # Parse the Redis URL and create connection with SSL verification
+        # Use ssl_cert_reqs instead of ssl_check_hostname for compatibility with older Celery/Kombu
         return redis.Redis.from_url(
             redis_url,
             decode_responses=True,
@@ -30,7 +31,7 @@ def get_redis_connection():
             socket_keepalive_options={},
             health_check_interval=30,
             retry_on_error=[redis.exceptions.ReadOnlyError, redis.exceptions.ConnectionError],
-            ssl_check_hostname=False,  # Azure Redis doesn't need hostname verification
+            ssl_cert_reqs=ssl.CERT_NONE,  # Skip SSL certificate verification (compatible with older packages)
         )
     except Exception as e:
         logger.error(f"Failed to create Redis connection: {str(e)}")

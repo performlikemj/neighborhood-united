@@ -28,6 +28,7 @@ class RedisClient:
                 return None
             
             try:
+                # Use ssl_cert_reqs instead of ssl_check_hostname for compatibility with older Celery/Kombu
                 self._connection = redis.Redis.from_url(
                     self._redis_url,
                     decode_responses=True,
@@ -35,7 +36,7 @@ class RedisClient:
                     socket_keepalive_options={},
                     health_check_interval=30,
                     retry_on_error=[redis.exceptions.ReadOnlyError, redis.exceptions.ConnectionError],
-                    ssl_check_hostname=False,  # Azure Redis doesn't need hostname verification
+                    ssl_cert_reqs=ssl.CERT_NONE,  # Skip SSL certificate verification (compatible with older packages)
                 )
                 logger.info("Redis connection established successfully")
             except Exception as e:

@@ -169,12 +169,13 @@ class CustomUserSerializer(serializers.ModelSerializer):
             # Clear existing household members
             instance.household_members.all().delete()
             
-            # Create new household members
+            # Create new household members using the serializer
             for member_data in household_members_data:
-                dietary_prefs = member_data.pop('dietary_preferences', [])
-                member = HouseholdMember.objects.create(user=instance, **member_data)
-                if dietary_prefs:
-                    member.dietary_preferences.set(dietary_prefs)
+                member_serializer = HouseholdMemberSerializer(data=member_data)
+                if member_serializer.is_valid():
+                    member_serializer.save(user=instance)
+                else:
+                    raise ValidationError(f"Invalid household member data: {member_serializer.errors}")
                     
         instance.save()
         return instance

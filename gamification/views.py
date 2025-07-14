@@ -12,6 +12,8 @@ from rest_framework.response import Response
 from .services import (
     get_or_create_profile,
     update_streak,
+    award_points,
+    register_meal_planned,
     get_leaderboard,
     get_unnotified_achievements,
     mark_achievements_as_notified,
@@ -77,6 +79,7 @@ def user_gamification_profile(request):
     return Response({
         'points': profile.points,
         'level': profile.level,
+        'level_name': profile.level_name,
         'streak_count': current_streak,
         'total_meals_planned': profile.total_meals_planned,
         'achievements_count': achievements_count,
@@ -112,11 +115,12 @@ def leaderboard(request):
         # Count users with more points than current user
         higher_ranks = UserProfile.objects.filter(points__gt=profile.points).count()
         user_rank = higher_ranks + 1
-        
+
         user_data = {
             'username': user.username,
             'points': profile.points,
             'level': profile.level,
+            'level_name': profile.level_name,
             'streak': profile.streak_count,
             'rank': user_rank,
             'is_current_user': True
@@ -256,7 +260,7 @@ def streamlit_data(request):
         # Format for Streamlit
         try:
             data = {
-                'user_level': profile.level,
+                'user_level': profile.level_name,
                 'meal_plan_streak': profile.streak_count,
                 'total_meals_planned': profile.total_meals_planned,
                 'points': profile.points,
@@ -291,36 +295,31 @@ def event_handler(request):
         }
     }
     """
-    # TODO: Add event type actions to the database
     user = request.user
     try:
-        event_data = request.data  # Django REST Framework automatically parses JSON
-        
-        # Retrieve the event type from the payload
+        event_data = request.data  # DRF parses JSON automatically
         event_type = event_data.get('event_type')
+        details = event_data.get('details', {})
+
         if not event_type:
-            pass
-        
-        # Process the event based on its type
-        # You could create a separate service function, e.g., process_event(user, event_data),
-        # which encapsulates the event handling logic.
-        # For demonstration, we'll use a simple conditional:
+            return Response({'error': 'event_type is required'}, status=400)
+
+        # Always record an analytics event
+        AnalyticsEvent.objects.create(
+            user=user,
+            event_type=event_type,
+            additional_data=details,
+        )
+
         if event_type == 'meal_planned':
-            # For example, update the user's streak or meal plan count.
-            # update_streak(user)  # Uncomment if you wish to update the streak.
-            # Optionally, add other processing logic here.
-            pass
+            register_meal_planned(user)
         elif event_type == 'login':
-            # Handle login event, or any other event types.
-            pass
-        elif event_type == 'meal_plan_approved':
-            # Handle meal plan approval event, or any other event types.
-            pass
+            update_streak(user)
+        elif event_type in EVENT_POINTS:
+            award_points(user, EVENT_POINTS[event_type], 'other', event_type)
         else:
-            # You can handle other event types or return an error if unsupported.
             return Response({'error': f'Unsupported event type: {event_type}'}, status=400)
-        
-        # Return a success response after processing the event
+
         return Response({'status': 'Event processed successfully', 'event_type': event_type})
     except Exception as e:
         return Response({'error': str(e)}, status=500)

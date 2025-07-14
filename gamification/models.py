@@ -19,9 +19,15 @@ class UserProfile(models.Model):
     streak_count = models.IntegerField(default=0)
     last_active_date = models.DateField(null=True, blank=True)
     total_meals_planned = models.IntegerField(default=0)
-    
+
     def __str__(self):
         return f"{self.user.username}'s Gamification Profile"
+
+    @property
+    def level_name(self):
+        """Return a friendly title for the current level."""
+        from .services import get_level_name  # avoid import cycle at top level
+        return get_level_name(self.level)
     
     def add_points(self, amount):
         """Add points and update level if threshold reached."""

@@ -12,6 +12,16 @@ A Django application for adding gamification features to the Hood United platfor
 - **Leaderboard**: Compare progress with other users
 - **Analytics**: Track gamification events for analysis
 
+### Level Tiers
+
+User levels map to fun chef-themed titles that appear in the API responses:
+
+| Level Range | Title |
+|-------------|-------|
+| 1-4         | Dish Washer |
+| 5-9         | Sous Chef |
+| 10+         | Head Chef |
+
 ## Installation
 
 The app is installed as part of the main Hood United project. Make sure it's included in your `INSTALLED_APPS` in settings.py:

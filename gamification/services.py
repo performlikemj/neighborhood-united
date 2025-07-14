@@ -31,6 +31,38 @@ POINTS = {
 # Streak milestones that trigger additional rewards
 STREAK_MILESTONES = [7, 14, 30, 60, 90, 180, 365]
 
+# Mapping of numeric levels to role titles. Levels are based on the
+# ``UserProfile.level`` value which increases every 100 points.  The
+# titles provide a more fun representation of a user's standing.
+#
+# Levels 1-4   -> "Dish Washer"
+# Levels 5-9   -> "Sous Chef"
+# Level 10+    -> "Head Chef"
+LEVEL_TIERS = [
+    (10, "Head Chef"),
+    (5, "Sous Chef"),
+    (1, "Dish Washer"),
+]
+
+# Default points awarded for miscellaneous gamification events that are
+# triggered from the front‑end via the ``/api/event/`` endpoint.
+EVENT_POINTS = {
+    'meal_plan_approved': 15,
+    'meal_plan_reviewed': 5,
+    'meal_reviewed': 5,
+    'replaced_with_chef_meal': 10,
+    'meals_updated': 5,
+    'cooking_instructions_generated': 2,
+}
+
+
+def get_level_name(level: int) -> str:
+    """Return a human friendly level title for a numeric level."""
+    for threshold, name in LEVEL_TIERS:
+        if level >= threshold:
+            return name
+    return "Dish Washer"
+
 
 def get_or_create_profile(user):
     """Get or create a gamification profile for a user."""
@@ -209,6 +241,7 @@ def get_leaderboard(limit=10):
                 'username': profile.user.username,
                 'points': profile.points,
                 'level': profile.level,
+                'level_name': get_level_name(profile.level),
                 'streak': profile.streak_count
             }
             for profile in top_profiles

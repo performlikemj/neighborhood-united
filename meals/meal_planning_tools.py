@@ -592,17 +592,14 @@ def modify_meal_plan(user_id: int, meal_plan_id: int, day: str = None, meal_type
         Dict containing the modified meal plan details
     """
     try:
-        print(f"DEBUG modify_meal_plan: Starting with params: user_id={user_id}, meal_plan_id={meal_plan_id}, day={day}, meal_type={meal_type}, user_prompt={user_prompt}")
         
         # Get the user and meal plan
         user = get_object_or_404(CustomUser, id=user_id)
         meal_plan = get_object_or_404(MealPlan, id=meal_plan_id, user=user)
-        print(f"DEBUG modify_meal_plan: Found meal_plan with id={meal_plan.id}, user={user.username}")
         
         # Check if meal plan is from a previous week
         current_date = timezone.now().date()
         if meal_plan.week_end_date < current_date:
-            print(f"DEBUG modify_meal_plan: Cannot modify a meal plan from a previous week (ID: {meal_plan_id})")
             return {
                 "status": "error",
                 "message": "Cannot modify a meal plan from a previous week. Only the current week's meal plan can be modified."
@@ -623,15 +620,12 @@ def modify_meal_plan(user_id: int, meal_plan_id: int, day: str = None, meal_type
             # Create valid prioritized_meals dictionary
             prioritized_meals = {day: [meal_type]}
             days_to_modify = [day]
-            print(f"DEBUG modify_meal_plan: Using prioritized_meals={prioritized_meals}, days_to_modify={days_to_modify}")
         
-        print(f"DEBUG modify_meal_plan: Final prompt: {prompt}")
         
         # Use the new apply_modifications function from meal_plan_service
         from meals.meal_plan_service import apply_modifications
         
         request_id = str(uuid.uuid4())
-        print(f"DEBUG modify_meal_plan: About to call apply_modifications with request_id={request_id}")
         
         try:
             updated_meal_plan = apply_modifications(
@@ -642,17 +636,13 @@ def modify_meal_plan(user_id: int, meal_plan_id: int, day: str = None, meal_type
             )
             
             if updated_meal_plan is None:
-                print(f"DEBUG modify_meal_plan: apply_modifications returned None, likely because the meal plan is from a previous week")
                 return {
                     "status": "error",
                     "message": "Cannot modify a meal plan from a previous week. Only the current week's meal plan can be modified."
                 }
                 
-            print(f"DEBUG modify_meal_plan: Successfully called apply_modifications, updated_meal_plan.id={updated_meal_plan.id}")
         except Exception as e:
             import traceback
-            print(f"DEBUG modify_meal_plan: Error in apply_modifications: {str(e)}")
-            print(f"DEBUG modify_meal_plan: Traceback: {traceback.format_exc()}")
             n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
             # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
             requests.post(n8n_traceback_url, json={"error": str(e), "source":"modify_meal_plan", "traceback": traceback.format_exc()})
@@ -663,7 +653,6 @@ def modify_meal_plan(user_id: int, meal_plan_id: int, day: str = None, meal_type
         
         # Fetch the updated meal plan meals to return in the response
         meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=updated_meal_plan).select_related("meal")
-        print(f"DEBUG modify_meal_plan: Found {meal_plan_meals.count()} meals in the updated plan")
         
         # Format response data
         meals_data = []
@@ -679,9 +668,11 @@ def modify_meal_plan(user_id: int, meal_plan_id: int, day: str = None, meal_type
                     "is_chef_meal": is_chef
                 })
             except Exception as e:
-                print(f"DEBUG modify_meal_plan: Error processing meal {mpm.id}: {str(e)}")
+                # n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+                requests.post(n8n_traceback_url, json={"error": str(e), "source":"modify_meal_plan", "traceback": traceback.format_exc()})
         
-        print(f"DEBUG modify_meal_plan: Successfully prepared response with {len(meals_data)} meals")
         return {
             "status": "success",
             "message": "Meal plan modified successfully",
@@ -788,7 +779,6 @@ def get_meal_plan(user_id: int, meal_plan_id: int = None) -> Dict[str, Any]:
     Returns:
         Dict containing the meal plan details
     """
-    print(f"DEBUG get_meal_plan: user_id={user_id}, meal_plan_id={meal_plan_id}")
     try:
         req = HttpRequest()
         req.data = {"user_id": user_id}

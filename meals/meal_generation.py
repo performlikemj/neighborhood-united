@@ -12,7 +12,8 @@ from openai import OpenAI
 import uuid
 import time
 import traceback
-
+import os
+import requests
 from custom_auth.models import CustomUser
 from meals.models import Meal, MealPlan, MealPlanMeal, PantryItem, MealPlanMealPantryUsage, MealCompatibility
 from meals.pydantic_models import MealOutputSchema, SanitySchema, UsageList
@@ -610,7 +611,6 @@ def generate_meal_details(
                         break
 
                 if similar_meal_found:
-                    logger.debug(f"[{request_id}] [Attempt {attempt+1}] Found a similar meal. Retrying.")
                     continue
 
                 # If no similarity found, we return the new meal data
@@ -623,7 +623,9 @@ def generate_meal_details(
                 }
 
             except Exception as e:
-                logger.error(f"[{request_id}] [Attempt {attempt+1}] Error generating meal: {e}")
+                # n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_meal_details", "traceback": traceback.format_exc()})
                 continue
 
         logger.error(f"[{request_id}] Failed to generate a unique meal after {max_attempts} attempts.")

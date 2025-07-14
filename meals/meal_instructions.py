@@ -83,7 +83,6 @@ def send_daily_meal_instructions():
                 if meal_plan_meals_for_next_day.exists():
                     # Get the IDs of the MealPlanMeals for the next day
                     meal_plan_meal_ids = list(meal_plan_meals_for_next_day.values_list('id', flat=True))
-                    logger.debug(f"MealPlanMeal IDs for user {user.email} on {next_day_name}: {meal_plan_meal_ids}")
                     generate_instructions.delay(meal_plan_meal_ids)
             elif meal_plan.meal_prep_preference == 'one_day_prep':
                 # Check for follow-up instructions scheduled for next_day
@@ -165,9 +164,6 @@ def generate_instructions(meal_plan_meal_ids):
     Includes fetching/generating macro info using existing functions.
     """
     logger.info(f"=== MEAL INSTRUCTIONS DEBUG: generate_instructions called for meal_plan_meal_ids={meal_plan_meal_ids}")
-    print(f"=== MEAL INSTRUCTIONS DEBUG: generate_instructions called for meal_plan_meal_ids={meal_plan_meal_ids}")
-    print(f"=== MEAL INSTRUCTIONS DEBUG: THIS IS NOT THE EMERGENCY PANTRY PLAN FUNCTION!")
-    logger.info(f"MEAL INSTRUCTIONS DEBUG: THIS IS NOT THE EMERGENCY PANTRY PLAN FUNCTION!")
     
     from meals.models import MealAllergenSafety
     from meals.meal_assistant_implementation import MealPlanningAssistant
@@ -200,13 +196,17 @@ def generate_instructions(meal_plan_meal_ids):
         # Ensure expiring_pantry_items is a list of strings (names) if needed by the prompt later
         expiring_items_str = ', '.join([item['name'] for item in expiring_pantry_items]) if expiring_pantry_items else 'None'
     except Exception as e:
-        logger.error(f"Error retrieving pantry items for user {user.id}: {e}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_instructions", "traceback": traceback.format_exc()})
         expiring_items_str = 'None'
 
     try:
         user_context = generate_user_context(user)
     except Exception as e:
-        logger.error(f"Error generating user context: {e}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_instructions", "traceback": traceback.format_exc()})
         user_context = 'No additional user context provided.'
 
     instructions_list = []
@@ -231,7 +231,9 @@ def generate_instructions(meal_plan_meal_ids):
                 else:
                     logger.info(f"No macro info found/generated for meal {meal.id}.")
             except Exception as e:
-                logger.error(f"Error fetching macro info for meal {meal.id}: {e}", exc_info=True)
+                # n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_instructions", "traceback": traceback.format_exc()})
 
         if metadata_updated:
             meals_to_update.append(meal) # Add meal to list for bulk update later
@@ -272,7 +274,9 @@ def generate_instructions(meal_plan_meal_ids):
             try:
                 meal_data_json = json.dumps(meal_plan_meal_data) # Serialize specific MealPlanMeal
             except Exception as e:
-                logger.error(f"Serialization error for MealPlanMeal ID {meal_plan_meal.id}: {e}")
+                # n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_instructions", "traceback": traceback.format_exc()})
                 continue  # Skip this meal
 
             try:
@@ -368,10 +372,14 @@ def generate_instructions(meal_plan_meal_ids):
                 )
 
             except OpenAIError as e:
-                logger.error(f"OpenAI API error generating instructions for MealPlanMeal ID {meal_plan_meal.id}: {e}")
+                # n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_instructions", "traceback": traceback.format_exc()})
                 continue # Skip this meal
             except ValidationError as e:
-                 logger.error(f"Pydantic validation error for generated instructions for meal {meal.id}: {e}")
+                 # n8n traceback
+                 n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                 requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_instructions", "traceback": traceback.format_exc()})
                  continue # Skip this meal
             except Exception as e:
                 logger.error(f"Unexpected error generating instructions for MealPlanMeal ID {meal_plan_meal.id}: {e}", exc_info=True)
@@ -411,9 +419,13 @@ def generate_instructions(meal_plan_meal_ids):
                 'meal_date': meal_plan_meal.meal_date, # Use the date from MealPlanMeal
             })
         except (json.JSONDecodeError, ValidationError) as e:
-            logger.error(f"Error parsing or validating instructions JSON for MealPlanMeal ID {meal_plan_meal.id}: {e}. Raw content: {instructions_content}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_instructions", "traceback": traceback.format_exc()})
         except Exception as e:
-            logger.error(f"Unexpected error formatting instructions for MealPlanMeal ID {meal_plan_meal.id}: {e}", exc_info=True)
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_instructions", "traceback": traceback.format_exc()})
 
 
     # --- Bulk update meals with new metadata ---
@@ -424,7 +436,9 @@ def generate_instructions(meal_plan_meal_ids):
             Meal.objects.bulk_update(list(unique_meals_to_update), ['macro_info'])
             logger.info(f"Bulk updated metadata for {len(unique_meals_to_update)} meals.")
         except Exception as e:
-            logger.error(f"Error bulk updating meal metadata: {e}", exc_info=True)
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_instructions", "traceback": traceback.format_exc()})
     # --- End bulk update ---
 
     if not instructions_list:
@@ -657,14 +671,18 @@ def generate_bulk_prep_instructions(meal_plan_id):
         expiring_pantry_items = get_expiring_pantry_items(user)
         expiring_items_str = ', '.join(item['name'] for item in expiring_pantry_items) if expiring_pantry_items else 'None'
     except Exception as e:
-        logger.error(f"Error retrieving expiring pantry items for user {user.id}: {e}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_instructions", "traceback": traceback.format_exc()})
         expiring_items_str = 'None'
 
     # Generate the user context
     try:
         user_context = generate_user_context(user)
     except Exception as e:
-        logger.error(f"Error generating user context: {e}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_instructions", "traceback": traceback.format_exc()})
         user_context = 'No additional user context provided.'
 
     # Add age safety note
@@ -823,7 +841,9 @@ def generate_bulk_prep_instructions(meal_plan_id):
                     
                 except Exception as e:
                     # Fallback to simple notification if parsing fails
-                    logger.error(f"Error parsing bulk prep instructions: {e}")
+                    # n8n traceback
+                    n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                    requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_instructions", "traceback": traceback.format_exc()})
                     message_content = (
                         "Your bulk meal-prep instructions for the upcoming week are ready! "
                         "Open the chat to review them."
@@ -843,10 +863,9 @@ def generate_bulk_prep_instructions(meal_plan_id):
                         f"Failed to send bulk-prep notification to MealPlanningAssistant for user {user.email}"
                     )
             except Exception as e:
-                logger.error(
-                    f"Failed to notify MealPlanningAssistant for bulk-prep (user {user.email}): {e}",
-                    exc_info=True,
-                )
+                # n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_instructions", "traceback": traceback.format_exc()})
             
             # Send an email with the bulk prep instructions
             send_bulk_prep_instructions.delay(meal_plan_id)
@@ -873,11 +892,6 @@ def send_bulk_prep_instructions(meal_plan_id):
     """
     Send a generated bulk prep instructions to the user via the meal planning assistant.
     """
-    logger.info(f"=== MEAL INSTRUCTIONS DEBUG: send_bulk_prep_instructions called for meal_plan_id={meal_plan_id}")
-    print(f"=== MEAL INSTRUCTIONS DEBUG: send_bulk_prep_instructions called for meal_plan_id={meal_plan_id}")
-    print(f"=== MEAL INSTRUCTIONS DEBUG: THIS IS NOT THE EMERGENCY PANTRY PLAN FUNCTION!")
-    logger.info(f"MEAL INSTRUCTIONS DEBUG: THIS IS NOT THE EMERGENCY PANTRY PLAN FUNCTION!")
-    
     from meals.models import MealPlan, MealPlanInstruction
     from meals.meal_assistant_implementation import MealPlanningAssistant
     
@@ -902,7 +916,9 @@ def send_bulk_prep_instructions(meal_plan_id):
             instruction_data = json.loads(instruction.instruction_text)
             validated_prep = BulkPrepInstructions.model_validate(instruction_data)
         except Exception as e:
-            logger.error(f"Failed to parse bulk prep instructions for meal plan {meal_plan_id}: {e}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"send_bulk_prep_instructions", "traceback": traceback.format_exc()})
             return {"status": "error", "reason": f"invalid_instruction_format: {str(e)}"}
         
         # Format bulk prep steps
@@ -977,10 +993,14 @@ def send_bulk_prep_instructions(meal_plan_id):
         return result
             
     except MealPlan.DoesNotExist:
-        logger.error(f"Meal plan with ID {meal_plan_id} not found")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": "Meal plan with ID {meal_plan_id} not found", "source":"send_bulk_prep_instructions", "traceback": traceback.format_exc()})
         return {"status": "error", "reason": "meal_plan_not_found"}
     except Exception as e:
-        logger.error(f"Error in send_bulk_prep_instructions for meal plan {meal_plan_id}: {e}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"send_bulk_prep_instructions", "traceback": traceback.format_exc()})
         traceback.print_exc()
         return {"status": "error", "reason": str(e)}
 
@@ -1111,7 +1131,9 @@ def send_follow_up_instructions(meal_plan_id):
                 logger.error(f"Failed to send follow-up instructions to MealPlanningAssistant for user {user.id}")
             
         except Exception as e:
-            logger.error(f"Failed to send follow-up instructions for user {user.id}: {e}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"send_follow_up_instructions", "traceback": traceback.format_exc()})
             continue
 
 def build_metadata_prompt_part(meal_plan_meals):

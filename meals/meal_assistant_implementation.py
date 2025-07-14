@@ -392,7 +392,6 @@ class MealPlanningAssistant:
             
             final_response_id = resp.id
             # Log the raw response object from OpenAI to understand its structure
-            logger.debug(f"OpenAI API Response object for user {self.user_id} (response_id: {final_response_id}): {resp}")
             
             # Check for tool calls in response
             tool_calls_in_response = [item for item in getattr(resp, "output", []) if getattr(item, 'type', None) == "function_call"]
@@ -723,9 +722,6 @@ class MealPlanningAssistant:
                 # Fix the user_id in the arguments if needed
                 fixed_args_json = self._fix_function_args(call["name"], call["args"] or "{}")
                 if fixed_args_json != (call["args"] or "{}"):
-                    logger.info(f"DEBUG: Fixed user_id in arguments before execution")
-                    logger.info(f"DEBUG: Original: {call['args']}")
-                    logger.info(f"DEBUG: Fixed to: {fixed_args_json}")
                     args_obj = json.loads(fixed_args_json)
                 
                 try:
@@ -1042,14 +1038,11 @@ class MealPlanningAssistant:
     def _fix_function_args(self, function_name: str, args_str: str) -> str:
         """Ensure that user_id is correctly set in function arguments."""
         try:
-            logger.info(f"DEBUG: Fixing function args for {function_name}")
             args = json.loads(args_str)
             
             # If the function has a user_id parameter and it's not the current user
             if "user_id" in args:
-                logger.info(f"DEBUG: Args contains user_id: {args['user_id']}, current user: {self.user_id}")
                 if args["user_id"] != self.user_id:
-                    logger.info(f"DEBUG: Correcting user_id from {args['user_id']} to {self.user_id}")
                     args["user_id"] = self.user_id
                     return json.dumps(args)
             
@@ -1327,8 +1320,9 @@ class MealPlanningAssistant:
                    "message": "Summary generation is taking longer than expected. Please check back later."}
                        
         except Exception as e:
-            logger.error(f"Error in stream_user_summary for user {self.user_id}: {str(e)}")
-            traceback.print_exc()
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"stream_user_summary", "traceback": traceback.format_exc()})
             yield {"type": "error", "message": f"An error occurred: {str(e)}"}
             return
 
@@ -1382,7 +1376,9 @@ class MealPlanningAssistant:
             )
 
         except Exception as e:
-            logger.error(f"Error getting local chef information: {str(e)}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"_local_chef_and_meal_events", "traceback": traceback.format_exc()})
             return "Unable to retrieve local chef information at this time."
 
     def _get_user_chat_summary(self, user: CustomUser) -> str:
@@ -1400,7 +1396,9 @@ class MealPlanningAssistant:
             
             return ""
         except Exception as e:
-            logger.error(f"Error retrieving user chat summary: {str(e)}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"_get_user_chat_summary", "traceback": traceback.format_exc()})
             return ""
 
     # ────────────────────────────────────────────────────────────────────
@@ -1431,100 +1429,21 @@ class MealPlanningAssistant:
         # Only clean up excess whitespace
         raw_text = re.sub(r'\s+', ' ', raw_text).strip()
 
+        # ────────────────── URL PROTECTION WITH PLACEHOLDERS ──────────────────
+        # Extract URLs and replace with placeholders to prevent LLM corruption
+        url_pattern = r'https?://[^\s<>"\'()]+[^\s<>"\'.!?;,)]'
+        urls = re.findall(url_pattern, raw_text)
+        url_placeholders = {}
+        
+        # Replace URLs with placeholders
+        protected_text = raw_text
+        for i, url in enumerate(urls):
+            placeholder = f"__URL_PLACEHOLDER_{i}__"
+            url_placeholders[placeholder] = url
+            protected_text = protected_text.replace(url, placeholder)
+        
+
         # ----------------------- build LLM prompt -------------------------
-        html_template = """
-            <!DOCTYPE html>
-            {% load meal_filters i18n %}
-            <html>
-            <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-            <title>{% blocktrans %}Message from your sautAI assistant{% endblocktrans %}</title>
-
-            <!-- 📧  Inline‑safe CSS  -->
-            <style>
-            body{margin:0;padding:0;width:100%!important;background:#f8f8f8;}
-            .container{max-width:600px;margin:0 auto;padding:20px;background:#ffffff;}
-            h1,h2,h3,p{margin-top:0;font-family:Arial,sans-serif;color:#333;}
-            h1{font-size:24px;color:#4CAF50;}
-            h2{font-size:20px;color:#5cb85c;border-bottom:1px solid #ddd;padding-bottom:10px;}
-            h3{font-size:18px;}
-            p{font-size:16px;line-height:1.5;margin:0 0 10px;}
-            .email-body{padding:20px 30px;line-height:1.6;font-size:16px;}
-            .email-body ul{margin:8px 0 16px;padding-left:18px;list-style-position:inside;}
-            .email-body li{margin:0 0 6px;line-height:1.4;}
-            .button{display:inline-block;background:#2196F3;color:#fff;padding:12px 28px;border-radius:5px;text-decoration:none;font-weight:bold;font-size:16px;white-space:nowrap;}
-            .footer{color:#777;font-size:12px;text-align:center;margin-top:20px;line-height:1.4;}
-            .table-slim{width:100%;border-collapse:collapse;table-layout:fixed;}
-            .table-slim td{padding:4px 0;font-size:16px;line-height:1.4;word-wrap:break-word;}
-            .table-slim td.qty{text-align:right;font-weight:bold;white-space:nowrap;}
-            .logo img{max-width:200px;height:auto;}
-            /* graphs */
-            .email-body img.graph{max-width:100%;height:auto;border:0;outline:none;text-decoration:none;}
-            </style>
-            </head>
-
-            <body>
-            <!-- invisible pre‑header -->
-            <span style="display:none;max-height:0;overflow:hidden;">{{ preheader_text|default:_("Your latest meal plan & tips inside.") }}</span>
-
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f8f8f8;">
-            <tr><td align="center">
-
-            <div class="container">
-
-            <!-- Logo -->
-            <div class="logo">
-                <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI" role="presentation" />
-            </div>
-
-            <!-- Greeting -->
-            <div class="email-body">
-                <p>{% blocktrans with name=user_name|default:"there" %}Hi {{ name }},{% endblocktrans %}</p>
-
-                <!-- Assistant contact (only once) -->
-                {% if personal_assistant_email %}
-                <div style="background:#f0f8ff;border-left:4px solid #4CAF50;border-radius:8px;margin:24px 0;padding:20px 16px;">
-                    <h3 style="margin:0 0 8px;font-family:Arial,sans-serif;color:#2196F3;font-size:18px;">🤖 {% trans "Contact Your AI Assistant" %}</h3>
-                    <p style="margin:0 0 12px;">{% trans "Need something personalised?  Just reply or e‑mail:" %}</p>
-                    <a href="mailto:{{ personal_assistant_email }}" class="button" style="background:#4CAF50;">📧 {% trans "Your sautAI Assistant" %}</a>
-                </div>
-                {% endif %}
-
-                <!-- ===== MAIN CONTENT ===== -->
-                {% autoescape off %}
-                {{ email_body_main|safe }}
-                {{ email_body_data|safe }}
-                {{ email_body_final|safe }}
-                {% endautoescape %}
-
-                <!-- Dashboard CTA (optional) -->
-                {% if profile_url %}
-                <p style="text-align:center;margin:28px 0;">
-                    <a href="{{ profile_url }}" class="button">{% trans "Open Your sautAI Dashboard" %}</a>
-                </p>
-                {% endif %}
-            </div><!-- /email‑body -->
-
-            <!-- Footer -->
-            <div class="footer">
-                <p><strong>{% trans "Disclaimer:" %}</strong> {% trans "SautAI uses generative AI. Please double‑check critical information." %}</p>
-                <p><a href="{{ profile_url }}">{% trans "Unsubscribe or update e‑mail preferences" %}</a></p>
-            </div>
-
-            </div><!-- /container -->
-            </td></tr></table>
-            </body>
-            </html>
-        """
-        if not raw_text.strip():
-            return ""
-
-        # Fallback if the OpenAI client is not available
-        if not getattr(self, "client", None):
-            safe_fallback = raw_text.replace("\n", "<br>")
-            return f"<p>{safe_fallback}</p>"
-
         prompt_content = f"""
         You are an **EmailBody HTML formatter**.
 
@@ -1554,9 +1473,10 @@ class MealPlanningAssistant:
         6. Links must include `target="_blank" rel="noopener noreferrer"`.  
         7. Return only body content — omit `<html>`, `<head>`, `<body>`.  
         8. **Absolutely no follow-up questions, commentary, or feedback requests.**
+        9. **IMPORTANT: Preserve all __URL_PLACEHOLDER_X__ tokens exactly as they appear.**
 
         --- BEGIN RAW TEXT ---
-        {raw_text}
+        {protected_text}
         --- END RAW TEXT ---
         """
 
@@ -1564,7 +1484,7 @@ class MealPlanningAssistant:
             response = self.client.responses.create(
                 model="gpt-4o-mini",  
                 input=[
-                    {"role": "developer", "content": "You are a precise HTML email formatter. Return ONLY HTML content without follow-up questions. PRESERVE ALL text exactly as written - do not modify numbers, measurements, or Unicode characters like °, ½, ¼, etc."},
+                    {"role": "developer", "content": "You are a precise HTML email formatter. Return ONLY HTML content without follow-up questions. PRESERVE ALL text exactly as written - do not modify numbers, measurements, Unicode characters like °, ½, ¼, etc., or any __URL_PLACEHOLDER_X__ tokens."},
                     {"role": "user", "content": prompt_content}
                 ],
                 stream=False,
@@ -1594,8 +1514,16 @@ class MealPlanningAssistant:
                     formatted_text = response.output_text.strip()
                     logger.warning(f"Email body not in expected JSON format, using raw output")
             except Exception as e:
-                logger.error(f"Failed to validate email body format: {e}")
+                # n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                requests.post(n8n_traceback_url, json={"error": str(e), "source":"_format_text_for_email_body", "traceback": traceback.format_exc()})
                 formatted_text = response.output_text.strip()
+            
+            # ────────────────── RESTORE ORIGINAL URLS ──────────────────
+            # Replace placeholders back with original URLs
+            for placeholder, original_url in url_placeholders.items():
+                formatted_text = formatted_text.replace(placeholder, original_url)
+            
             
             # ------------------- MINIMAL FINAL CLEAN-UP --------------------
             import re
@@ -1617,21 +1545,27 @@ class MealPlanningAssistant:
                 
                 # Use the BeautifulSoup helper function to replace Instacart links
                 formatted_text = _replace_instacart_links(formatted_text, copy_type)
-                logger.debug("Successfully processed Instacart links with BeautifulSoup")
             except Exception as e:
-                logger.error(f"Error processing Instacart links: {e}")
+                # n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                requests.post(n8n_traceback_url, json={"error": str(e), "source":"_format_text_for_email_body", "traceback": traceback.format_exc()})
                 # Continue with the original text if there's an error
 
             return formatted_text.strip()
             
         except Exception as e:
-            # Log and fall back to simple formatting
-            logger.error(f"Email body formatting via LLM failed for user {self.user_id}: {e}")
-            traceback.print_exc()
-            # Provide a simple HTML fallback
-            paragraphs = raw_text.split('\n\n')
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"_format_text_for_email_body", "traceback": traceback.format_exc()})
+            
+            # Fallback: Restore URLs in the original text and provide simple HTML
+            fallback_text = raw_text
+            for placeholder, original_url in url_placeholders.items():
+                fallback_text = fallback_text.replace(placeholder, original_url)
+            
+            paragraphs = fallback_text.split('\n\n')
             html_paragraphs = [f"<p>{p.replace(chr(10), '<br>')}</p>" for p in paragraphs if p.strip()]
-            return ''.join(html_paragraphs) if html_paragraphs else f"<p>{raw_text.replace(chr(10), '<br>')}</p>"
+            return ''.join(html_paragraphs) if html_paragraphs else f"<p>{fallback_text.replace(chr(10), '<br>')}</p>"
 
     # ────────────────────────────────────────────────────────────────────
     #  Email Processing Method
@@ -1698,7 +1632,6 @@ class MealPlanningAssistant:
         try:
             while iterations < max_tool_iterations:
                 iterations += 1
-                logger.debug(f"generate_email_response: Iteration {iterations}/{max_tool_iterations} for user {self.user_id}. History length: {len(current_history)}")
                 
 
                 
@@ -1714,7 +1647,6 @@ class MealPlanningAssistant:
                             call_ids.add(item['call_id'])
                         elif item.get('type') == 'function_call_output' and 'call_id' in item:
                             output_ids.add(item['call_id'])
-                    logger.debug(f"History structure: {len(call_ids)} function calls, {len(output_ids)} outputs, call_ids match: {call_ids == output_ids}")
                 
                 # OpenAI API Call - Standard call for all iterations
                 try:
@@ -1744,7 +1676,9 @@ class MealPlanningAssistant:
                                 previous_response_id=None,  # Don't use previous response ID on retry
                             )
                         except Exception as retry_error:
-                            logger.error(f"Failed even with aggressive truncation for user {self.user_id}: {retry_error}")
+                            # n8n traceback
+                            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                            requests.post(n8n_traceback_url, json={"error": str(retry_error), "source":"generate_email_response", "traceback": traceback.format_exc()})
                             raise retry_error
                     else:
                         # Re-raise if it's not a context length error
@@ -1752,7 +1686,6 @@ class MealPlanningAssistant:
                 
                 final_response_id = resp.id
                 prev_resp_id_for_api = final_response_id
-                logger.debug(f"generate_email_response: OpenAI API Response for user {self.user_id} (iter {iterations}, resp_id: {final_response_id}): {resp}")
                 
                 # Extract Tool Calls
                 tool_calls_in_response = [item for item in getattr(resp, "output", []) if getattr(item, 'type', None) == "function_call"]
@@ -1786,7 +1719,6 @@ class MealPlanningAssistant:
                         "call_id": tool_call_item.call_id
                     }
                     current_history.append(call_entry)
-                    logger.debug(f"generate_email_response: Appended tool call to history: {tool_call_item.name} (ID: {tool_call_item.call_id}) for user {self.user_id}")
                     
                     # Execute Tool
                     args_json_str = tool_call_item.arguments
@@ -1828,7 +1760,6 @@ class MealPlanningAssistant:
                         "output": json.dumps(tool_result_data)
                     }
                     current_history.append(output_entry)
-                    logger.debug(f"generate_email_response: Appended tool output to history for call_id {tool_call_item.call_id} for user {self.user_id}")
                 
                 # Max Iterations Check
                 if iterations >= max_tool_iterations and tool_calls_in_response:
@@ -2056,10 +1987,12 @@ class MealPlanningAssistant:
             
             return result
         except CustomUser.DoesNotExist:
-            logger.error(f"User with ID {user_id} not found when sending notification")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": "User with ID {user_id} not found when sending notification", "source":"send_notification_via_assistant", "traceback": traceback.format_exc()})
             return {"status": "error", "reason": "user_not_found"}
         except Exception as e:
-            logger.error(f"Error sending notification via assistant for user {user_id}: {e}")
+            # n8n traceback
             n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
             # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
             requests.post(n8n_traceback_url, json={"error": str(e), "source":"send_notification_via_assistant", "traceback": traceback.format_exc()})
@@ -2370,7 +2303,9 @@ class OnboardingAssistant:
                         "response_id": resp.id
                     }
                 except Exception as e:
-                    logger.error(f"Error parsing PasswordPrompt response: {e}")
+                    # n8n traceback
+                    n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                    requests.post(n8n_traceback_url, json={"error": str(e), "source":"_parse_password_prompt_response", "traceback": traceback.format_exc()})
                     # Fall back to regular response
                     response_text = resp.output_text
             else:
@@ -2549,7 +2484,9 @@ class OnboardingAssistant:
                         break
                         
                     except Exception as e:
-                        logger.error(f"Error parsing PasswordPrompt: {e}")
+                        # n8n traceback
+                        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                        requests.post(n8n_traceback_url, json={"error": str(e), "source":"_process_onboarding_stream", "traceback": traceback.format_exc()})
                         # Fall back to regular streaming
                         response_text = resp.output_text
                         yield {"type": "text", "content": response_text}
@@ -2728,7 +2665,6 @@ class OnboardingAssistant:
                             if has_username and has_email and has_language and has_dietary and has_allergies and not has_pw_request:
                                 should_continue_for_password = True
                     except Exception as e:
-                        logger.error(f"ONBOARDING_DEBUG: Error checking onboarding progress: {e}")
                         # n8n traceback
                         n8n_traceback = {
                             'error': str(e),
@@ -2855,25 +2791,24 @@ class OnboardingAssistant:
             )
             
         except Exception as e:
-            import traceback
-            traceback.print_exc()
-            logger.error(f"Error in OnboardingAssistant.stream_message: {e}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"stream_message", "traceback": traceback.format_exc()})
             yield {"type": "error", "message": str(e)}
 
     def reset_conversation(self) -> Dict[str, Any]:
         """Reset the onboarding conversation."""
-        if str(self.user_id) in GLOBAL_GUEST_STATE:
-            # Clear onboarding history but keep other guest state
-            if "onboarding_history" in GLOBAL_GUEST_STATE[str(self.user_id)]:
-                old_history_length = len(GLOBAL_GUEST_STATE[str(self.user_id)]["onboarding_history"])
-                del GLOBAL_GUEST_STATE[str(self.user_id)]["onboarding_history"]
-            else:
-                logger.error(f"ONBOARDING_DEBUG: No onboarding history found to delete")
-        else:
-            logger.error(f"ONBOARDING_DEBUG: No guest state found for {self.user_id}")
-        
-        logger.info(f"ONBOARDING_DEBUG: Conversation reset completed for guest {self.user_id}")
-        return {"status": "success", "message": "Onboarding conversation reset."}
+        try:
+            if str(self.user_id) in GLOBAL_GUEST_STATE:
+                # Clear onboarding history but keep other guest state
+                if "onboarding_history" in GLOBAL_GUEST_STATE[str(self.user_id)]:
+                    old_history_length = len(GLOBAL_GUEST_STATE[str(self.user_id)]["onboarding_history"])
+                    del GLOBAL_GUEST_STATE[str(self.user_id)]["onboarding_history"]
+            return {"status": "success", "message": "Onboarding conversation reset."}
+        except Exception as e:
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"reset_conversation", "traceback": traceback.format_exc()})
 
     def _should_use_password_prompt(self) -> bool:
         """
@@ -2983,7 +2918,9 @@ class OnboardingAssistant:
             
             return json.dumps(args)
         except Exception as e:
-            logger.error(f"Error fixing onboarding args: {e}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"_fix_onboarding_args", "traceback": traceback.format_exc()})
             # If JSON parsing fails, create minimal valid args
             return json.dumps({"guest_id": str(self.user_id)})
 

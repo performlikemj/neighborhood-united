@@ -451,7 +451,6 @@ def api_get_meal_plans(request):
         user = request.user
 
         week_start_date_str = request.query_params.get('week_start_date')
-        print(f'[DEBUG] Week Start Date: {week_start_date_str}')
         
         if week_start_date_str:
             week_start_date = datetime.strptime(week_start_date_str, '%Y-%m-%d').date()
@@ -1344,245 +1343,182 @@ def get_user_postal_code(user):
 @permission_classes([IsAuthenticated])
 def api_generate_meal_plan(request):
     """
-    Generate a meal plan for a specific week. The week_start_date should be provided
-    in the request parameters in YYYY-MM-DD format.
+    Start asynchronous meal plan generation for a specific week.
+    Returns a task ID that can be used to check the status.
     """
-    # Add at the start of the function
-
-    
-    # Generate a unique request ID for tracking this request through logs
-    request_id = str(uuid.uuid4())
-    logger.info(f"[{request_id}] Received meal plan generation request for user {request.user.username}")
-    logger.debug(f"[{request_id}] Request data: {request.data}")
-    logger.debug(f"[{request_id}] Query params: {request.query_params}")
-
+    print(f"🎯 DEBUG: api_generate_meal_plan called by user {request.user.username} ({request.user.id})")
     try:
         # Get week_start_date from request parameters
         week_start_date_str = request.data.get('week_start_date') or request.query_params.get('week_start_date')
         if not week_start_date_str:
-            logger.warning(f"[{request_id}] Missing week_start_date parameter in request from user {request.user.username}")
-            return standardize_response(
-                status="error",
-                message="week_start_date parameter is required in YYYY-MM-DD format",
-                details="The parameter was not found in either request body or query parameters",
-                status_code=400
-            )
+            return Response({
+                "status": "error",
+                "message": "week_start_date parameter is required in YYYY-MM-DD format"
+            }, status=400)
 
-        # Parse the date
+        # Basic date validation
         try:
             week_start_date = datetime.strptime(week_start_date_str, '%Y-%m-%d').date()
             week_end_date = week_start_date + timedelta(days=6)
-            logger.info(f"[{request_id}] Parsed dates - Start: {week_start_date}, End: {week_end_date}")
-        except ValueError as e:
-            logger.warning(f"[{request_id}] Invalid date format provided: {week_start_date_str}")
-            return standardize_response(
-                status="error",
-                message="Invalid date format. Please use YYYY-MM-DD",
-                details={
-                    "provided_date": week_start_date_str,
-                    "example": "2024-03-25",
-                    "error": str(e)
-                },
-                status_code=400
-            )
+        except ValueError:
+            return Response({
+                "status": "error",
+                "message": "Invalid date format. Please use YYYY-MM-DD"
+            }, status=400)
 
         # Check if the date is in the past
         today = timezone.now().date()
         if week_end_date < today:
-            logger.warning(f"[{request_id}] Past date provided: {week_start_date}")
-            return standardize_response(
-                status="error",
-                message="Cannot generate meal plans for past weeks",
-                details={
+            return Response({
+                "status": "error",
+                "message": "Cannot generate meal plans for past weeks",
+                "details": {
                     "current_date": today.strftime('%Y-%m-%d'),
-                    "earliest_allowed": today.strftime('%Y-%m-%d'),
-                    "provided_date": week_start_date.strftime('%Y-%m-%d'),
-                    "message": "Meal plans can only be generated for current or future weeks."
+                    "provided_date": week_start_date.strftime('%Y-%m-%d')
+                }
+            }, status=400)
+
+        # Quick check for existing meal plan to avoid unnecessary task creation
+        existing_plan = MealPlan.objects.filter(
+            user=request.user,
+            week_start_date=week_start_date,
+            week_end_date=week_end_date
+        ).first()
+
+        if existing_plan:
+            meal_count = MealPlanMeal.objects.filter(meal_plan=existing_plan).count()
+            if meal_count > 0:
+                status_message = "approved" if existing_plan.is_approved else "pending approval"
+                return Response({
+                    "status": "existing_plan",
+                    "message": f"A meal plan already exists for this week ({status_message})",
+                    "details": {
+                        "meal_plan_id": existing_plan.id,
+                        "is_approved": existing_plan.is_approved,
+                        "has_changes": existing_plan.has_changes,
+                        "meal_count": meal_count,
+                        "week_start_date": existing_plan.week_start_date.strftime('%Y-%m-%d'),
+                        "week_end_date": existing_plan.week_end_date.strftime('%Y-%m-%d')
+                    },
+                    "meal_plan": {
+                        "id": existing_plan.id,
+                        "week_start_date": existing_plan.week_start_date.strftime('%Y-%m-%d'),
+                        "week_end_date": existing_plan.week_end_date.strftime('%Y-%m-%d'),
+                        "is_approved": existing_plan.is_approved
+                    }
+                })
+
+        # Generate deterministic task ID to prevent duplicate tasks
+        task_id = f"meal_plan_generation_{request.user.id}_{week_start_date.strftime('%Y_%m_%d')}"
+        print(f"🔍 DEBUG: Generated task_id: {task_id}")
+        
+        # Check if task is already running/pending
+        from celery.result import AsyncResult
+        existing_task = AsyncResult(task_id)
+        print(f"🔍 DEBUG: Existing task state: {existing_task.state}")
+        if existing_task.state in ['PENDING', 'STARTED', 'RETRY']:
+            logger.info(f"Task {task_id} already running for user {request.user.username}")
+            return Response({
+                "status": "processing", 
+                "message": "Meal plan generation already in progress",
+                "task_id": task_id,
+                "polling_url": f"/meals/api/meal_plan_status/{task_id}",
+                "estimated_time": "30-60 seconds"
+            }, status=202)
+        
+        # Start the async task using existing meal plan service with custom task ID
+        from .meal_plan_service import create_meal_plan_for_user
+        print(f"🚀 DEBUG: About to dispatch Celery task with task_id={task_id}")
+        print(f"🚀 DEBUG: User ID: {request.user.id}, Week: {week_start_date} to {week_end_date}")
+        
+        try:
+            task = create_meal_plan_for_user.apply_async(
+                args=[],
+                kwargs={
+                    'user_id': request.user.id,
+                    'start_of_week': week_start_date,
+                    'end_of_week': week_end_date,
+                    'request_id': str(uuid.uuid4()),
+                    'user_prompt': request.data.get('user_prompt') if request.data else None
                 },
-                status_code=400
+                task_id=task_id  # Use deterministic task ID
             )
+            print(f"✅ DEBUG: Task dispatched successfully! Task object: {task}")
+            print(f"✅ DEBUG: Task ID: {task.id}, Task state: {task.state}")
+        except Exception as e:
+            print(f"❌ DEBUG: Error dispatching task: {str(e)}")
+            import traceback
+            print(f"❌ DEBUG: Traceback: {traceback.format_exc()}")
+            raise
 
-        # Use a transaction to prevent race conditions
-        with transaction.atomic():
-            # Check if any meal plan already exists for this week (approved or not)
-            existing_plan = MealPlan.objects.select_for_update().filter(
-                user=request.user,
-                week_start_date=week_start_date,
-                week_end_date=week_end_date
-            ).first()
+        logger.info(f"Started meal plan generation task {task.id} for user {request.user.username}")
 
-            if existing_plan:
-                # Check if the plan has meals
-                meal_count = MealPlanMeal.objects.filter(meal_plan=existing_plan).count()
-                
-                if meal_count > 0:
-                    logger.info(f"[{request_id}] Found existing meal plan (ID: {existing_plan.id}) with {meal_count} meals")
-                    status_message = "approved" if existing_plan.is_approved else "pending approval"
-                    
-                    return standardize_response(
-                        status="existing_plan",
-                        message=f"A meal plan already exists for this week ({status_message}). "
-                                "If you want a new plan, please delete all meals in the existing plan and generate a new one.",
-                        details={
-                            "meal_plan_id": existing_plan.id,
-                            "is_approved": existing_plan.is_approved,
-                            "has_changes": existing_plan.has_changes,
-                            "meal_count": meal_count,
-                            "week_start_date": existing_plan.week_start_date.strftime('%Y-%m-%d'),
-                            "week_end_date": existing_plan.week_end_date.strftime('%Y-%m-%d'),
-                            "action_required": "To make changes, please modify individual meals in the existing plan"
-                        },
-                        meal_plan=existing_plan
-                    )
-                else:
-                    # We found an empty meal plan - log and delete it
-                    logger.warning(f"[{request_id}] Found empty meal plan (ID: {existing_plan.id}) for user {request.user.username}")
-                    existing_plan_id = existing_plan.id
-                    existing_plan.delete()
-                    logger.info(f"[{request_id}] Deleted empty meal plan (ID: {existing_plan_id})")
-                    # Continue to meal plan creation
-
-            # Use the existing create_meal_plan_for_user function
-            from meals.meal_plan_service import create_meal_plan_for_user
-            
-            logger.info(f"[{request_id}] Calling create_meal_plan_for_user for user {request.user.username}")
-            
-            # Wrap the meal plan creation in a try-except block to catch specific errors
-            try:
-                meal_plan = create_meal_plan_for_user(
-                    user=request.user,
-                    start_of_week=week_start_date,
-                    end_of_week=week_end_date,
-                    monday_date=week_start_date,
-                    request_id=request_id
-                )
-            except Exception as e:
-                logger.error(f"[{request_id}] Error in create_meal_plan_for_user: {str(e)}")
-                logger.error(f"[{request_id}] Full traceback: {traceback.format_exc()}")
-                
-                return standardize_response(
-                    status="error",
-                    message="Error creating meal plan",
-                    details={
-                        "error_details": str(e),
-                        "error_type": e.__class__.__name__,
-                        "suggestion": "Please try again later or contact support"
-                    },
-                    status_code=500
-                )
-
-            # Check if meal_plan is None (shouldn't happen with our updated function, but just in case)
-            if not meal_plan:
-                logger.error(f"[{request_id}] Failed to generate meal plan for user {request.user.username}")
-                
-                # Get user's postal code safely
-                user_postal_code = get_user_postal_code(request.user)
-                
-                # Get user's dietary preferences safely
-                dietary_preferences = get_user_dietary_preferences(request.user.id)
-                
-                # Get count of available meals for better context
-                available_meals_count = get_available_meals_count(request.user.id)
-
-                return standardize_response(
-                    status="error",
-                    message="Could not generate meal plan. No suitable meals available.",
-                    details={
-                        "user_postal_code": user_postal_code,
-                        "dietary_preferences": dietary_preferences,
-                        "available_meals_count": available_meals_count,
-                        "possible_reasons": [
-                            "No chefs are currently serving your area",
-                            "No meals match your dietary preferences",
-                            "No meals are available for the selected dates"
-                        ],
-                        "suggestion": "Try adjusting your dietary preferences or choosing a different week"
-                    },
-                    status_code=400
-                )
-
-            # Get the meal plan meals
-            meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan).select_related('meal')
-            meals_added = meal_plan_meals.count()
-            
-            # Check if we actually added any meals
-            if meals_added == 0:
-                logger.warning(f"[{request_id}] Created meal plan (ID: {meal_plan.id}) but no meals were added")
-                meal_plan.delete()
-                return standardize_response(
-                    status="error",
-                    message="Could not generate meal plan. No suitable meals available.",
-                    details={
-                        "reason": "Failed to add any meals to the plan",
-                        "suggestion": "Try again later or contact support"
-                    },
-                    status_code=400
-                )
-
-            # Verify day names match dates for each meal
-            day_mismatches = []
-            for mpm in meal_plan_meals:
-                expected_day = mpm.meal_date.strftime("%A")
-                if mpm.day != expected_day:
-                    day_mismatches.append({
-                        "meal_id": mpm.meal.id,
-                        "meal_name": mpm.meal.name,
-                        "stored_day": mpm.day,
-                        "expected_day": expected_day,
-                        "date": mpm.meal_date.strftime("%Y-%m-%d")
-                    })
-            
-            if day_mismatches:
-                logger.warning(f"[{request_id}] Found {len(day_mismatches)} day mismatches in meal plan {meal_plan.id}")
-                for mismatch in day_mismatches:
-                    logger.warning(f"[{request_id}] Day mismatch: {mismatch}")
-            
-            logger.info(f"[{request_id}] Successfully generated meal plan (ID: {meal_plan.id}) with {meals_added} meals")
-            
-            # Add where dietary preferences are retrieved/processed
-            user_prefs = get_user_dietary_preferences(request.user.id)
-
-            
-            # Add where user postal code is retrieved
-            user_postal = get_user_postal_code(request.user)
-
-            
-            # Add where chef meals are matched to user preferences
-
-            
-            # Add after meal plan is created with recommendations
-
-            chef_meals = [meal for meal in meal_plan.meal.all() if hasattr(meal, 'chef') and meal.chef is not None]
-
-            
-            # Return the generated meal plan
-            return standardize_response(
-                status="success",
-                message="Meal plan generated successfully",
-                details={
-                    "meals_added": meals_added,
-                    "week_start_date": meal_plan.week_start_date.strftime('%Y-%m-%d'),
-                    "week_end_date": meal_plan.week_end_date.strftime('%Y-%m-%d'),
-                    "used_pantry_items": any(hasattr(mpm, 'pantry_usage') and mpm.pantry_usage.exists() for mpm in meal_plan_meals),
-                    "day_mismatches": day_mismatches if day_mismatches else None
-                },
-                meal_plan=meal_plan,
-                status_code=201
-            )
+        return Response({
+            "status": "processing",
+            "message": "Meal plan generation started",
+            "task_id": task.id,
+            "polling_url": f"/meals/api/meal_plan_status/{task.id}",
+            "estimated_time": "30-60 seconds"
+        }, status=202)  # 202 Accepted
 
     except Exception as e:
-        logger.error(f"[{request_id}] Error generating meal plan: {str(e)}")
-        logger.error(f"[{request_id}] Full traceback: {traceback.format_exc()}")
-        return standardize_response(
-            status="error",
-            message="An error occurred while generating the meal plan",
-            details={
-                "error_details": str(e),
-                "error_type": e.__class__.__name__,
-                "suggestion": "Please try again later or contact support"
-            },
-            status_code=500
-        )
+        logger.error(f"Error starting meal plan generation: {str(e)}")
+        traceback.print_exc()
+        return Response({
+            "status": "error",
+            "message": "Failed to start meal plan generation",
+            "details": str(e)
+                 }, status=500)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def api_meal_plan_status(request, task_id):
+    """
+    Check the status of a meal plan generation task.
+    """
+    try:
+        from utils.redis_client import get
+        from celery.result import AsyncResult
+        
+        # Get task result from Redis first (more detailed)
+        task_result = get(f"meal_plan_task_{task_id}")
+        
+        if task_result:
+            return Response(task_result)
+        
+        # Fallback to Celery task state
+        task = AsyncResult(task_id)
+        
+        if task.state == 'PENDING':
+            return Response({
+                "status": "processing",
+                "message": "Task is queued or starting...",
+                "progress": 5
+            })
+        elif task.state == 'SUCCESS':
+            return Response(task.result or {
+                "status": "success",
+                "message": "Task completed successfully"
+            })
+        elif task.state == 'FAILURE':
+            return Response({
+                "status": "error",
+                "message": "Task failed",
+                "details": str(task.info)
+            }, status=500)
+        else:
+            return Response({
+                "status": "processing",
+                "message": f"Task is {task.state.lower()}",
+                "progress": 50
+            })
+    
+    except Exception as e:
+        logger.error(f"Error checking task status {task_id}: {str(e)}")
+        return Response({
+            "status": "error",
+            "message": "Failed to check task status"
+        }, status=500)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])

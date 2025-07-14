@@ -60,7 +60,9 @@ def is_saturday_in_timezone(user_timezone_str):
         # Check if it's Saturday (weekday 5)
         return user_local_time.weekday() == 5
     except Exception as e:
-        logger.error(f"Error determining if it's Saturday in timezone {user_timezone_str}: {str(e)}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"is_saturday_in_timezone", "traceback": traceback.format_exc()})
         # Default to server's timezone if there's an error
         return timezone.now().weekday() == 5
 
@@ -189,7 +191,9 @@ def analyze_meal_compatibility(meal, dietary_preference):
         }
         
     except Exception as e:
-        logger.error(f"Error analyzing meal compatibility: {str(e)}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"analyze_meal_compatibility", "traceback": traceback.format_exc()})
         return {
             "is_compatible": False, 
             "confidence": 0.0,
@@ -290,7 +294,9 @@ def get_compatible_meals_for_user(user, meal_pool=None):
                         reasoning=result.get("reasoning", "")
                     )
                 except Exception as e:
-                    logger.error(f"Error caching compatibility result: {str(e)}")
+                    # n8n traceback
+                    n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                    requests.post(n8n_traceback_url, json={"error": str(e), "source":"get_compatible_meals_for_user", "traceback": traceback.format_exc()})
                 
                 if not result["is_compatible"] or result["confidence"] < 0.7:
                     is_compatible = False
@@ -336,11 +342,14 @@ def create_meal_plan_for_new_user(user_id):
                 from meals.email_service import send_meal_plan_approval_email
                 send_meal_plan_approval_email(meal_plan.id)
             except Exception as e:
-                logger.error(f"Error sending approval email for user {user.username}: {e}")
-                traceback.print_exc()
+                # n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                requests.post(n8n_traceback_url, json={"error": str(e), "source":"create_meal_plan_for_new_user", "traceback": traceback.format_exc()})
             
     except CustomUser.DoesNotExist:
-        logger.error(f"User with id {user_id} does not exist.")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": "User with id {user_id} does not exist.", "source":"create_meal_plan_for_new_user", "traceback": traceback.format_exc()})
 
 @shared_task
 @handle_task_failure
@@ -374,7 +383,7 @@ def create_meal_plan_for_all_users():
             end_of_week = start_of_week + timedelta(days=6)  # Sunday after next Monday
             
             # Create meal plan for the user
-            meal_plan = create_meal_plan_for_user(user, start_of_week, end_of_week)
+            meal_plan = create_meal_plan_for_user(user=user, start_of_week=start_of_week, end_of_week=end_of_week)
             
             if meal_plan and not meal_plan.approval_email_sent:
                 try:
@@ -382,10 +391,9 @@ def create_meal_plan_for_all_users():
                     send_meal_plan_approval_email(meal_plan.id)
                     logger.info(f"Sent meal plan approval email to user {user.username} for week starting {start_of_week}")
                 except Exception as e:
-                    logger.error(f"Error sending approval email for user {user.username}: {e}")
-                    traceback.print_exc()
-        else:
-            logger.debug(f"It's not Saturday in {user.timezone} for user {user.username}. Skipping meal plan creation.")
+                    # n8n traceback
+                    n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                    requests.post(n8n_traceback_url, json={"error": str(e), "source":"create_meal_plan_for_all_users", "traceback": traceback.format_exc()})
 
 
 def day_to_offset(day_name: str) -> int:
@@ -396,8 +404,11 @@ def day_to_offset(day_name: str) -> int:
     }
     return mapping.get(day_name, 0)
 
+@shared_task
+@handle_task_failure
 def create_meal_plan_for_user(
-    user,
+    user=None,
+    user_id=None,
     start_of_week: Optional[datetime.date] = None,
     end_of_week: Optional[datetime.date] = None,
     monday_date: Optional[datetime.date] = None,
@@ -414,7 +425,8 @@ def create_meal_plan_for_user(
     If start_of_week and end_of_week are not provided, they must be calculable.
     
     Parameters:
-    - user: The user to create the meal plan for.
+    - user: The user object to create the meal plan for (for direct calls).
+    - user_id: The user ID to create the meal plan for (for Celery task calls).
     - start_of_week: The start date of the week.
     - end_of_week: The end date of the week.
     - monday_date: The Monday date of the week (optional, used for plan identification).
@@ -431,6 +443,21 @@ def create_meal_plan_for_user(
     """
     from meals.pantry_management import get_expiring_pantry_items
     from meals.models import (STATUS_SCHEDULED, STATUS_OPEN)
+    from custom_auth.models import CustomUser
+
+    # Handle both user object and user_id parameters
+    if user is not None and user_id is not None:
+        raise ValueError("Cannot provide both 'user' and 'user_id' parameters")
+    elif user is None and user_id is None:
+        raise ValueError("Must provide either 'user' or 'user_id' parameter")
+    elif user_id is not None:
+        # Fetch user object from user_id (for Celery task calls)
+        try:
+            user = CustomUser.objects.get(id=user_id)
+        except CustomUser.DoesNotExist:
+            logger.error(f"[{request_id}] User with ID {user_id} not found")
+            return None
+    # If user object was provided directly, continue using it
 
     # Generate a request ID if not provided
     if request_id is None:
@@ -439,6 +466,8 @@ def create_meal_plan_for_user(
     logger.info(f"[{request_id}] Creating meal plan for user {user.username} from {start_of_week} to {end_of_week}")
     # Capture user's stored goal description, if available
     user_goal_description = getattr(getattr(user, "goals", None), "goal_description", "")
+    if user_prompt is None:
+        user_prompt = user_goal_description
     today = timezone.localdate()
     if start_of_week is None or end_of_week is None:
         # Calculate Monday and Sunday around today
@@ -447,7 +476,6 @@ def create_meal_plan_for_user(
     # Use a transaction to prevent race conditions
     with transaction.atomic():
         logger.info(f"[{request_id}] Starting transaction for meal plan creation")
-        print(f"[DEBUG] Entering create_meal_plan_for_user: user_id={user.id}, days_to_plan={days_to_plan}, prioritized_meals={prioritized_meals}, user_prompt={user_prompt}, goal={user_goal_description}")
         # Check for existing meal plan with select_for_update to lock the rows
         existing_meal_plan = MealPlan.objects.select_for_update().filter(
             user=user,
@@ -484,7 +512,9 @@ def create_meal_plan_for_user(
                 )
             logger.info(f"[{request_id}] Created new meal plan (ID: {meal_plan.id}) for user {user.username}")
         except Exception as e:
-            logger.error(f"[{request_id}] Error creating meal plan for user {user.username}: {str(e)}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"create_meal_plan_for_user", "traceback": traceback.format_exc()})
             return None
 
         user_id = user.id
@@ -564,7 +594,6 @@ def create_meal_plan_for_user(
             planning_days = sorted(valid_week_days)
 
         logger.info(f"[{request_id}] Planning meals for days: {', '.join(planning_days)}")
-        print(f"[DEBUG] planning_days = {planning_days}")
 
         # Map planning days to their offset from the start_of_week for date calculation
         day_offset_map = {
@@ -578,8 +607,6 @@ def create_meal_plan_for_user(
         for day_name in planning_days:
             day_offset = day_offset_map[day_name]
             meal_date = start_of_week + timedelta(days=day_offset)
-            print(f"[DEBUG] Processing day: {day_name} (date={meal_date})")
-            logger.debug(f"[{request_id}] Processing day: {day_name} ({meal_date})")
     
             # Determine meal type order for the current day
             day_meal_types = meal_types.copy()  # Default order
@@ -590,7 +617,6 @@ def create_meal_plan_for_user(
                     prios = [m for m in day_priorities if m in meal_types]
                     # Append remaining meal types in their original order
                     day_meal_types = prios + [m for m in meal_types if m not in prios]
-                    logger.debug(f"[{request_id}] Using prioritized meal types for {day_name}: {day_meal_types}")
     
             # If user_prompt produced an allowed_map, restrict meal_types to only requested ones for this day
             if allowed_map:
@@ -603,7 +629,6 @@ def create_meal_plan_for_user(
                     continue
 
             for meal_type in day_meal_types:
-                print(f"[DEBUG] Checking existing MealPlanMeal for {day_name} {meal_type}")
                 # Check if a meal already exists for this day and meal type
                 if MealPlanMeal.objects.filter(
                     meal_plan=meal_plan,
@@ -611,16 +636,13 @@ def create_meal_plan_for_user(
                     day=day_name,
                     meal_type=meal_type
                 ).exists():
-                    logger.debug(f"[{request_id}] Meal already exists for {day_name} {meal_type}. Skipping.")
                     continue
     
                 attempt = 0
                 meal_added = False
     
                 while attempt < MAX_ATTEMPTS and not meal_added:
-                    print(f"[DEBUG] Attempt {attempt+1} for {day_name} {meal_type}")
                     attempt += 1
-                    logger.debug(f"[{request_id}] Attempt {attempt} to add meal for {day_name} {meal_type}")
     
                     # If we have soon-to-expire items, prefer generating new meal 
                     # rather than reusing an existing one
@@ -640,19 +662,31 @@ def create_meal_plan_for_user(
                     if meal_found is None:
                         # Create new meal
                         logger.info(f"[{request_id}] No suitable existing meal found. Generating new meal for {day_name} {meal_type}.")
-                        result = generate_and_create_meal(
-                            user=user,
-                            meal_plan=meal_plan,
-                            meal_type=meal_type,
-                            existing_meal_names=existing_meal_names,
-                            existing_meal_embeddings=existing_meal_embeddings,
-                            user_id=user_id,
-                            day_name=day_name,
-                            request_id=request_id,
-                            user_goal_description=user_goal_description,
-                            user_prompt=user_prompt
-                        )
-                        print(f"[DEBUG] generate_and_create_meal result: {result}")
+                        if user_prompt is None:
+                            result = generate_and_create_meal(
+                                user=user,
+                                meal_plan=meal_plan,
+                                meal_type=meal_type,
+                                existing_meal_names=existing_meal_names,
+                                existing_meal_embeddings=existing_meal_embeddings,
+                                user_id=user_id,
+                                day_name=day_name,
+                                request_id=request_id,
+                                user_goal_description=user_goal_description,
+                            )
+                        else:
+                            result = generate_and_create_meal(
+                                user=user,
+                                meal_plan=meal_plan,
+                                meal_type=meal_type,
+                                existing_meal_names=existing_meal_names,
+                                existing_meal_embeddings=existing_meal_embeddings,
+                                user_id=user_id,
+                                day_name=day_name,
+                                request_id=request_id,
+                                user_goal_description=user_goal_description,
+                                user_prompt=user_prompt
+                            )
                         if result['status'] == 'success':
                             meal = result['meal']
                             
@@ -732,7 +766,6 @@ def create_meal_plan_for_user(
                         # If it's a chef meal, verify event availability for this specific date
                         is_valid_chef_meal_for_date = True # Assume valid unless proven otherwise
                         if meal_found.chef is not None:
-                            logger.debug(f"[{request_id}] Meal '{meal_found.name}' is a chef meal. Verifying event for date {target_meal_date}...")
                             event_exists = ChefMealEvent.objects.filter(
                                 meal=meal_found,
                                 chef=meal_found.chef,
@@ -745,8 +778,6 @@ def create_meal_plan_for_user(
                                 logger.warning(f"[{request_id}] No active ChefMealEvent found for meal '{meal_found.name}' on {target_meal_date}. Skipping for this day/type.")
                                 is_valid_chef_meal_for_date = False
                                 skipped_meal_ids.add(meal_found.id) # Add to skipped so we don't keep finding it for wrong dates
-                            else:
-                                 logger.debug(f"[{request_id}] Verified active ChefMealEvent exists for meal '{meal_found.name}' on {target_meal_date}.")
                         # Proceed only if basic sanity check passes AND (it's not a chef meal OR it's a chef meal with a valid event for the date)
                         if perform_comprehensive_sanity_check(meal_found, user, request_id) and is_valid_chef_meal_for_date:
                             try:
@@ -775,7 +806,9 @@ def create_meal_plan_for_user(
                                 existing_meal_embeddings.append(meal_found.meal_embedding)
                                 meal_added = True
                             except Exception as e:
-                                logger.error(f"[{request_id}] Error adding/updating meal '{meal_found.name}' to meal plan: {e}")
+                                # n8n traceback
+                                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                                requests.post(n8n_traceback_url, json={"error": str(e), "source":"create_meal_plan_for_user", "traceback": traceback.format_exc()})
                                 skipped_meal_ids.add(meal_found.id)
                         else:
                              # Log reason for skipping
@@ -789,8 +822,6 @@ def create_meal_plan_for_user(
 
                     if attempt >= MAX_ATTEMPTS and not meal_added:
                         logger.error(f"[{request_id}] Failed to add meal for {day_name} {meal_type} after {MAX_ATTEMPTS} attempts.")
-
-            print(f"[DEBUG] Total meals added so far: {MealPlanMeal.objects.filter(meal_plan=meal_plan).count()}")
 
         # Check if we added any meals - still inside the transaction
         meal_count = MealPlanMeal.objects.filter(meal_plan=meal_plan).count()
@@ -931,7 +962,6 @@ def modify_existing_meal_plan(
                 
                 # Add safety check to avoid processing days with no meal types to modify
                 if not day_meal_types:
-                    logger.debug(f"{log_prefix} No meal types flagged for modification for {day_name}; skipping day.")
                     continue
 
                 for meal_type in day_meal_types:
@@ -956,7 +986,6 @@ def modify_existing_meal_plan(
 
                     while attempt < MAX_ATTEMPTS and not meal_added:
                         attempt += 1
-                        logger.debug(f"{log_ctx} attempt {attempt}")
 
                         # Re‑use the existing helper that prefers pantry items / uniqueness
                         result = generate_and_create_meal(
@@ -983,6 +1012,9 @@ def modify_existing_meal_plan(
                     if not meal_added:
                         logger.error(f"{log_ctx} failed after {MAX_ATTEMPTS} attempts")
     except MealPlan.DoesNotExist:
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": "MealPlan does not exist or is not owned by user.", "source":"modify_existing_meal_plan", "traceback": traceback.format_exc()})
         logger.error(f"{log_prefix} MealPlan {meal_plan_id} does not exist or is not owned by user.")
         return None
 
@@ -995,7 +1027,9 @@ def modify_existing_meal_plan(
         from meals.email_service import send_meal_plan_approval_email
         send_meal_plan_approval_email(meal_plan.id)
     except Exception as e:
-        logger.error(f"{log_prefix} Error sending approval email: {e}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"modify_existing_meal_plan", "traceback": traceback.format_exc()})
 
     logger.info(f"{log_prefix} Meal plan modification complete.")
     return meal_plan
@@ -1134,7 +1168,9 @@ def analyze_and_replace_meals(user, meal_plan, meal_types, request_id=None):
             # Step 2: Validate the parsed response with Pydantic
             meals_to_replace = MealsToReplaceSchema.model_validate(parsed_response)
         except Exception as e:
-            logger.error(f"Error parsing assistant's response: {e}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"analyze_and_replace_meals", "traceback": traceback.format_exc()})
             return
 
         # Initialize existing_meal_ids before replacements
@@ -1229,8 +1265,9 @@ def analyze_and_replace_meals(user, meal_plan, meal_types, request_id=None):
                     logger.error(f"[{request_id}] Could not find a suitable replacement for meal ID {old_meal_id} on {day} ({meal_type}).")
 
     except Exception as e:
-        logger.error(f"Error during meal plan analysis and replacement: {e}")
-        traceback.print_exc()
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"analyze_and_replace_meals", "traceback": traceback.format_exc()})
         return
 
 
@@ -1359,20 +1396,14 @@ def find_existing_meal(
         user_postal_code = user.address.input_postalcode
         user_country = user.address.country if hasattr(user.address, 'country') else None
     current_date = timezone.now().date()
-    
-    logger.info(f"DEBUG - Checking for chef meals. User postal code: {user_postal_code}, Meal type: {meal_type}")
-    logger.info(f"DEBUG - User dietary preferences: {[p.name for p in regular_dietary_prefs]}")
-    logger.info(f"DEBUG - User has 'Everything' preference: {everything_pref is not None}")
-    
+        
     if user_postal_code:
         # Find chefs serving user's postal code - FIXED to query by code field
         chef_ids = ChefPostalCode.objects.filter(
             postal_code__code=user_postal_code,
             postal_code__country=user_country
         ).values_list('chef_id', flat=True)
-        
-        logger.info(f"DEBUG - Found {len(chef_ids)} chefs serving postal code {user_postal_code}: {list(chef_ids)}")
-        
+                
         # Find upcoming chef meal events
         upcoming_chef_events = ChefMealEvent.objects.filter(
             chef_id__in=chef_ids,
@@ -1382,25 +1413,16 @@ def find_existing_meal(
             order_cutoff_time__gt=timezone.now(),
             orders_count__lt=F('max_orders')
         )
-        
-        logger.info(f"DEBUG - Found {upcoming_chef_events.count()} upcoming chef events for meal type {meal_type}")
-        
-        for event in upcoming_chef_events:
-            logger.info(f"DEBUG - Event details: ID={event.id}, Chef={event.chef_id}, Meal={event.meal_id}, Date={event.event_date}, Status={event.status}, Orders={event.orders_count}/{event.max_orders}")
-        
+
         chef_meal_ids = upcoming_chef_events.values_list('meal_id', flat=True).distinct()
-        
-        logger.info(f"DEBUG - Chef meal IDs: {list(chef_meal_ids)}")
-        
+
         # Get chef meals with exclusions
         if chef_meal_ids:
             all_chef_meals = Meal.objects.filter(
                 id__in=chef_meal_ids,
                 meal_type=meal_type
             )
-            
-            logger.info(f"DEBUG - All chef meals before filtering: {[(meal.id, meal.name) for meal in all_chef_meals]}")
-            
+
             # Apply the same dietary filters for chef meals (unless "Everything" preference)
             chef_meals = all_chef_meals
             if not (everything_pref and len(regular_dietary_prefs) == 1 and not custom_dietary_prefs):
@@ -1408,10 +1430,8 @@ def find_existing_meal(
                 for meal in all_chef_meals:
                     meal_prefs = [pref.name for pref in meal.dietary_preferences.all()]
                     meal_custom_prefs = [pref.custom_name for pref in meal.custom_dietary_preferences.all()]
-                    logger.info(f"DEBUG - Meal {meal.id} '{meal.name}' has dietary prefs: {meal_prefs} and custom prefs: {meal_custom_prefs}")
                 
                 chef_meals = all_chef_meals.filter(combined_filter)
-                logger.info(f"DEBUG - After dietary filter: {[(meal.id, meal.name) for meal in chef_meals]}")
             
             # Check each meal to see why it might be excluded
             for meal in all_chef_meals:
@@ -1434,11 +1454,6 @@ def find_existing_meal(
                     excluded = True
                     reason.append("Meal was previously skipped")
                 
-                if not excluded:
-                    logger.info(f"DEBUG - Meal {meal.id} '{meal.name}' passes basic filters")
-                else:
-                    logger.info(f"DEBUG - Meal {meal.id} '{meal.name}' excluded because: {', '.join(reason)}")
-
             chef_meals = chef_meals.exclude(
                 name__in=existing_meal_names_lower
             ).exclude(
@@ -1449,15 +1464,10 @@ def find_existing_meal(
                 id__in=skipped_meal_ids
             )
             
-            logger.info(f"DEBUG - Final chef meals count after filtering: {chef_meals.count()}")
-            logger.info(f"DEBUG - Final chef meals: {[(meal.id, meal.name) for meal in chef_meals]}")
-            
             # Combine with potential meals
             potential_meals = potential_meals.union(chef_meals)
             
             logger.info(f"Including {chef_meals.count()} chef-created meals in recommendations for user {user.username}")
-        else:
-            logger.info(f"DEBUG - No chef meal IDs found for the given criteria")
 
     # If no potential meals, return None
     if not potential_meals.exists():
@@ -1524,7 +1534,6 @@ def find_existing_meal(
                         "confidence": cached_result.confidence,
                         "reasoning": cached_result.reasoning
                     }
-                    logger.debug(f"Using cached compatibility result for meal '{meal.name}' with {pref_name}")
                 else:
                     # Perform new analysis
                     result = analyze_meal_compatibility(meal, pref_name)
@@ -1538,9 +1547,10 @@ def find_existing_meal(
                             confidence=result.get("confidence", 0.0),
                             reasoning=result.get("reasoning", "")
                         )
-                        logger.debug(f"Cached new compatibility result for meal '{meal.name}' with {pref_name}")
                     except Exception as e:
-                        logger.error(f"Error caching compatibility result: {str(e)}")
+                        # n8n traceback
+                        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                        requests.post(n8n_traceback_url, json={"error": str(e), "source":"analyze_meal_compatibility", "traceback": traceback.format_exc()})
                 
                 if not result.get("is_compatible", False) or result.get("confidence", 0.0) < min_confidence:
                     is_compatible = False
@@ -1552,7 +1562,9 @@ def find_existing_meal(
                 return meal
                 
         except Exception as e:
-            logger.error(f"Error analyzing compatibility for meal '{meal.name}': {str(e)}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"analyze_meal_compatibility", "traceback": traceback.format_exc()})
             continue
     
     # If no meal passes all checks
@@ -1659,7 +1671,9 @@ def guess_meal_ingredients_gpt(meal_name: str, meal_description: str) -> List[st
         data = json.loads(response.output_text)
         return data.get("likely_ingredients", [])
     except Exception as e:
-        logger.error(f"Failed to guess ingredients for {meal_name}: {e}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"guess_meal_ingredients_gpt", "traceback": traceback.format_exc()})
         return []
 
 def is_chef_meal(meal):
@@ -1748,7 +1762,9 @@ def check_meal_for_allergens_gpt(meal, user) -> Tuple[bool, List[str], Dict[str,
                 }
             )
         except Exception as e:
-            logger.error(f"Error caching allergy safety result: {e}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"check_meal_for_allergens_gpt", "traceback": traceback.format_exc()})
         
         return False, ["No ingredients found to analyze"], {}
     
@@ -1772,7 +1788,9 @@ def check_meal_for_allergens_gpt(meal, user) -> Tuple[bool, List[str], Dict[str,
             try:
                 substitutions = get_substitution_suggestions(flagged_ingredients, user_allergies, meal.name)
             except Exception as e:
-                logger.error(f"Error getting substitution suggestions: {e}")
+                # n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                requests.post(n8n_traceback_url, json={"error": str(e), "source":"check_meal_for_allergens_gpt", "traceback": traceback.format_exc()})
         else:
             logger.info(f"Meal '{meal.name}' is chef-created, not offering substitutions")
             
@@ -1792,7 +1810,9 @@ def check_meal_for_allergens_gpt(meal, user) -> Tuple[bool, List[str], Dict[str,
                 }
             )
         except Exception as e:
-            logger.error(f"Error caching allergy safety result: {e}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"check_meal_for_allergens_gpt", "traceback": traceback.format_exc()})
             
         return False, flagged_ingredients, substitutions
     
@@ -1920,7 +1940,6 @@ def check_meal_for_allergens_gpt(meal, user) -> Tuple[bool, List[str], Dict[str,
         if is_chef and not is_safe:
             reasoning += " (Chef-created meal, no substitutions available)"
         
-        # Log the reasoning for debugging
         if not is_safe:
             logger.info(f"Meal '{meal.name}' flagged for potential allergens: {', '.join(gpt_flagged)}. Reasoning: {reasoning}")
             if not is_chef and substitutions:
@@ -1941,11 +1960,17 @@ def check_meal_for_allergens_gpt(meal, user) -> Tuple[bool, List[str], Dict[str,
                 }
             )
         except Exception as e:
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"check_meal_for_allergens_gpt", "traceback": traceback.format_exc()})
             logger.error(f"Error caching allergy safety result: {e}")
         
         return is_safe, gpt_flagged, substitutions
     
     except Exception as e:
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"check_meal_for_allergens_gpt", "traceback": traceback.format_exc()})
         logger.error(f"Error in GPT allergen check for meal '{meal.name}': {e}")
         
         # Cache the error result
@@ -1961,6 +1986,9 @@ def check_meal_for_allergens_gpt(meal, user) -> Tuple[bool, List[str], Dict[str,
                 }
             )
         except Exception as cache_error:
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(cache_error), "source":"check_meal_for_allergens_gpt", "traceback": traceback.format_exc()})
             logger.error(f"Error caching allergy safety error result: {cache_error}")
         
         # If API call fails, fall back to being cautious - flag as unsafe
@@ -2408,8 +2436,9 @@ def apply_substitutions_to_meal(meal, substitutions, user):
         try:
             data = json.loads(response.output_text)
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse OpenAI response as JSON for meal '{meal.name}': {e}")
-            logger.error(f"Raw response: {response.output_text}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"apply_substitutions_to_meal", "traceback": traceback.format_exc()})
             return None
         
         # Validate that required fields are present
@@ -2481,6 +2510,9 @@ def apply_substitutions_to_meal(meal, substitutions, user):
                             else:
                                 logger.warning(f"Invalid ingredient change format: {change}")
                     except (KeyError, TypeError) as e:
+                        # n8n traceback
+                        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                        requests.post(n8n_traceback_url, json={"error": str(e), "source":"apply_substitutions_to_meal", "traceback": traceback.format_exc()})
                         logger.error(f"Error processing ingredient changes: {e}")
                         continue  # Skip this dish if ingredient changes are malformed
                     
@@ -2505,10 +2537,10 @@ def apply_substitutions_to_meal(meal, substitutions, user):
                                 )
                                 new_dish.ingredients.add(substitute_ingredient)
                                 ingredients_added += 1
-                                if created:
-                                    logger.debug(f"Created new substitute ingredient '{substitute_name}' for chef {dish_chef.user.username}")
                             except Exception as e:
-                                logger.error(f"Failed to create/add substitute ingredient '{substitute_name}': {e}")
+                                # n8n traceback
+                                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                                requests.post(n8n_traceback_url, json={"error": str(e), "source":"apply_substitutions_to_meal", "traceback": traceback.format_exc()})
                                 # Fall back to using the original ingredient
                                 new_dish.ingredients.add(original_ingredient)
                                 ingredients_added += 1
@@ -2543,6 +2575,9 @@ def apply_substitutions_to_meal(meal, substitutions, user):
                         else:
                             logger.warning(f"Invalid ingredient change format: {change}")
                 except (KeyError, TypeError) as e:
+                    # n8n traceback
+                    n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                    requests.post(n8n_traceback_url, json={"error": str(e), "source":"apply_substitutions_to_meal", "traceback": traceback.format_exc()})
                     logger.error(f"Error processing ingredient changes for notes: {e}")
                 
                 if substitution_notes:
@@ -2580,6 +2615,9 @@ def apply_substitutions_to_meal(meal, substitutions, user):
             except ImportError:
                 logger.info(f"Meal embedding module not available - embedding will be generated by batch process")
             except Exception as e:
+                # n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                requests.post(n8n_traceback_url, json={"error": str(e), "source":"apply_substitutions_to_meal", "traceback": traceback.format_exc()})
                 logger.error(f"Error generating embedding for modified meal '{modified_meal.name}': {e}")
                 # Continue without embedding - it will be generated by the batch process
             
@@ -2589,11 +2627,14 @@ def apply_substitutions_to_meal(meal, substitutions, user):
             return modified_meal
             
     except json.JSONDecodeError as e:
-        logger.error(f"Error parsing OpenAI response for meal '{meal.name}': {e}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"apply_substitutions_to_meal", "traceback": traceback.format_exc()})
         return None
     except Exception as e:
-        logger.error(f"Error applying substitutions to meal '{meal.name}': {e}")
-        traceback.print_exc()
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"apply_substitutions_to_meal", "traceback": traceback.format_exc()})
         return None
 
 def regenerate_replaced_meal(original_meal_id, user, meal_type, meal_plan, request_id=None):
@@ -2625,6 +2666,9 @@ def regenerate_replaced_meal(original_meal_id, user, meal_type, meal_plan, reque
             logger.error(f"[{request_id}] Failed to regenerate meal for {original_meal.name}")
             return False
     except Exception as e:
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"regenerate_replaced_meal", "traceback": traceback.format_exc()})
         logger.error(f"[{request_id}] Exception regenerating meal: {e}")
         return False
 
@@ -2641,16 +2685,14 @@ def apply_modifications(
     if request_id is None:
         request_id = str(uuid.uuid4())
 
-    print(f"DEBUG apply_modifications: Starting with request_id={request_id}, meal_plan_id={meal_plan.id}, prompt={raw_prompt}")
     logger.info("[%s] Parsing modification request for MealPlan %s", request_id, meal_plan.id)
     
     try:
         parsed_req = parse_modification_request(raw_prompt, meal_plan)
-        print(f"DEBUG apply_modifications: Got parsed_req with {len(parsed_req.slots)} slots")
     except Exception as e:
-        import traceback
-        print(f"DEBUG apply_modifications: Error in parsing: {str(e)}")
-        print(f"DEBUG apply_modifications: Traceback: {traceback.format_exc()}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"apply_modifications", "traceback": traceback.format_exc()})
         raise
 
     # Map slot IDs to DB rows once to avoid repetitive queries
@@ -2660,20 +2702,17 @@ def apply_modifications(
             mpm.id: mpm
             for mpm in meals
         }
-        print(f"DEBUG apply_modifications: Found {len(id_to_mpm)} meal plan meals, ids: {list(id_to_mpm.keys())}")
     except Exception as e:
-        import traceback
-        print(f"DEBUG apply_modifications: Error creating id_to_mpm dictionary: {str(e)}")
-        print(f"DEBUG apply_modifications: Traceback: {traceback.format_exc()}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"apply_modifications", "traceback": traceback.format_exc()})
         raise
 
     num_changes = 0
     for slot in parsed_req.slots:
-        print(f"DEBUG apply_modifications: Processing slot with meal_plan_meal_id={slot.meal_plan_meal_id}, meal_name={slot.meal_name}, change_rules={slot.change_rules}")
         
         # Check if we need to skip this slot
         if not slot.change_rules:
-            print(f"DEBUG apply_modifications: No change rules for slot {slot.meal_plan_meal_id}, skipping")
             continue  # No change -> skip
 
         try:
@@ -2681,7 +2720,6 @@ def apply_modifications(
             meal_id = int(slot.meal_plan_meal_id) if isinstance(slot.meal_plan_meal_id, str) else slot.meal_plan_meal_id
             mpm = id_to_mpm.get(meal_id)
         except Exception as e:
-            print(f"DEBUG apply_modifications: Error converting meal_plan_meal_id {slot.meal_plan_meal_id} to int: {str(e)}")
             mpm = None
 
         if not mpm:
@@ -2690,7 +2728,6 @@ def apply_modifications(
                 request_id,
                 slot.meal_plan_meal_id,
             )
-            print(f"DEBUG apply_modifications: Meal plan meal with id {slot.meal_plan_meal_id} not found in dictionary")
             continue
 
         logger.info(
@@ -2701,12 +2738,10 @@ def apply_modifications(
             mpm.meal_type,
             slot.change_rules,
         )
-        print(f"DEBUG apply_modifications: About to call modify_existing_meal_plan for slot {mpm.id}")
 
         try:
             # Join change rules into a semicolon-separated string
             rules_text = "; ".join(slot.change_rules)
-            print(f"DEBUG apply_modifications: Joined change_rules: {rules_text}")
             
             # Check if this meal should be removed without replacement
             if slot.should_remove:
@@ -2717,7 +2752,6 @@ def apply_modifications(
                     mpm.day,
                     mpm.meal_type
                 )
-                print(f"DEBUG apply_modifications: Meal marked for removal: should_remove=True")
             
             modify_existing_meal_plan(
                 user=user,
@@ -2728,30 +2762,25 @@ def apply_modifications(
                 request_id=request_id,
                 should_remove=slot.should_remove,  # Pass the should_remove flag
             )
-            print(f"DEBUG apply_modifications: Successfully called modify_existing_meal_plan for slot {mpm.id}")
             num_changes += 1
         except Exception as e:
-            import traceback
-            print(f"DEBUG apply_modifications: Error in modify_existing_meal_plan for slot {mpm.id}: {str(e)}")
-            print(f"DEBUG apply_modifications: Traceback: {traceback.format_exc()}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"apply_modifications", "traceback": traceback.format_exc()})
             raise
 
     # Re-analyse plan only once
     if num_changes:
-        print(f"DEBUG apply_modifications: Made {num_changes} changes, about to call analyze_and_replace_meals")
         try:
             analyze_and_replace_meals(user, meal_plan, ["Breakfast", "Lunch", "Dinner"], request_id)
-            print(f"DEBUG apply_modifications: Successfully called analyze_and_replace_meals")
         except Exception as e:
-            import traceback
-            print(f"DEBUG apply_modifications: Error in analyze_and_replace_meals: {str(e)}")
-            print(f"DEBUG apply_modifications: Traceback: {traceback.format_exc()}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"apply_modifications", "traceback": traceback.format_exc()})
             raise
             
         logger.info("[%s] Applied %d slot change(s) for MealPlan %s", request_id, num_changes, meal_plan.id)
     else:
         logger.info("[%s] No slot required changes – meal plan unchanged", request_id)
-        print(f"DEBUG apply_modifications: No changes were needed")
     
-    print(f"DEBUG apply_modifications: Returning meal_plan with id={meal_plan.id}")
     return meal_plan

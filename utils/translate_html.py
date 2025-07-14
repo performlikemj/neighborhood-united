@@ -151,7 +151,6 @@ def translate_paragraphs(html: str, target_lang: str) -> str:
                 continue
                 
             batch_text = "\n\n".join(batch_contents)
-            logger.debug(f"Sending batch for translation: {batch_text[:100]}...")
             
             # Call OpenAI API with the batch
             try:
@@ -173,7 +172,6 @@ def translate_paragraphs(html: str, target_lang: str) -> str:
                 )
                 
                 translated_text = response.output_text
-                logger.debug(f"Received translation response: {translated_text[:100]}...")
                 
                 # Process each block separately
                 for idx, p in enumerate(batch):

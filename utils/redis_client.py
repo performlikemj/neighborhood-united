@@ -28,17 +28,46 @@ class RedisClient:
                 return None
             
             try:
-                # Use ssl_cert_reqs instead of ssl_check_hostname for compatibility with older Celery/Kombu
-                self._connection = redis.Redis.from_url(
-                    self._redis_url,
-                    decode_responses=True,
-                    socket_keepalive=True,
-                    socket_keepalive_options={},
-                    health_check_interval=30,
-                    retry_on_error=[redis.exceptions.ReadOnlyError, redis.exceptions.ConnectionError],
-                    ssl_cert_reqs=ssl.CERT_NONE,  # Skip SSL certificate verification (compatible with older packages)
-                )
-                logger.info("Redis connection established successfully")
+                # Check if this is an SSL URL
+                is_ssl = self._redis_url.startswith('rediss://') or 'ssl=true' in self._redis_url.lower()
+                
+                if is_ssl:
+                    # Try with SSL configuration first
+                    try:
+                        self._connection = redis.Redis.from_url(
+                            self._redis_url,
+                            decode_responses=True,
+                            socket_keepalive=True,
+                            socket_keepalive_options={},
+                            health_check_interval=30,
+                            retry_on_error=[redis.exceptions.ReadOnlyError, redis.exceptions.ConnectionError],
+                            ssl_cert_reqs=ssl.CERT_NONE,  # Skip SSL certificate verification
+                        )
+                        logger.info("Redis connection established successfully with SSL")
+                    except TypeError as ssl_error:
+                        # Fall back to connection without ssl_cert_reqs if parameter not supported
+                        logger.warning(f"SSL parameter not supported, trying without ssl_cert_reqs: {ssl_error}")
+                        self._connection = redis.Redis.from_url(
+                            self._redis_url,
+                            decode_responses=True,
+                            socket_keepalive=True,
+                            socket_keepalive_options={},
+                            health_check_interval=30,
+                            retry_on_error=[redis.exceptions.ReadOnlyError, redis.exceptions.ConnectionError],
+                        )
+                        logger.info("Redis connection established successfully with basic SSL")
+                else:
+                    # Non-SSL connection
+                    self._connection = redis.Redis.from_url(
+                        self._redis_url,
+                        decode_responses=True,
+                        socket_keepalive=True,
+                        socket_keepalive_options={},
+                        health_check_interval=30,
+                        retry_on_error=[redis.exceptions.ReadOnlyError, redis.exceptions.ConnectionError],
+                    )
+                    logger.info("Redis connection established successfully (non-SSL)")
+                
             except Exception as e:
                 logger.error(f"Failed to create Redis connection: {str(e)}")
                 return None

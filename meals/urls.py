@@ -43,6 +43,7 @@ urlpatterns = [
     path('api/replace_meal_plan_meal/', views.api_replace_meal_plan_meal, name='api_replace_meal_plan_meal'),
     path('api/update_meals_with_prompt/', views.api_update_meals_with_prompt, name='api_update_meals_with_prompt'),
     path('api/generate_meal_plan/', views.api_generate_meal_plan, name='api_generate_meal_plan'),
+    path('api/meal_plan_status/<str:task_id>/', views.api_meal_plan_status, name='api_meal_plan_status'),
     path('api/modify_meal_plan/<int:meal_plan_id>/', views.api_modify_meal_plan, name='api_modify_meal_plan'),
     
     # Function-based API views for chef meal orders

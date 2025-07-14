@@ -1,6 +1,8 @@
 import json
 import textwrap
 import logging
+import os
+import requests
 from typing import List
 from openai import OpenAI
 from django.conf import settings
@@ -21,23 +23,18 @@ def parse_modification_request(
     Each MealPlanMeal row in the plan is surfaced to the LLM, which decides
     (per slot) whether the prompt implies any changes.
     """
-    print(f"DEBUG parse_modification_request: Starting with prompt={raw_prompt}, meal_plan_id={meal_plan.id}")
     
     try:
         # 1. Build context block
         context_lines: List[str] = []
-        print(f"DEBUG parse_modification_request: Building context from meal plan meals")
         
         meal_plan_meals = meal_plan.mealplanmeal_set.select_related("meal").all()
-        print(f"DEBUG parse_modification_request: Found {len(meal_plan_meals)} meals in the plan")
         
         for mpm in meal_plan_meals:
             line = f"{mpm.id} | {mpm.meal.name} on {mpm.day} {mpm.meal_type}"
             context_lines.append(line)
-            print(f"DEBUG parse_modification_request: Added line: {line}")
             
         context_block = "\n".join(context_lines)
-        print(f"DEBUG parse_modification_request: Context block built with {len(context_lines)} lines")
 
         # 2. Compose messages
         system_msg = textwrap.dedent(
@@ -67,14 +64,11 @@ def parse_modification_request(
             {"role": "developer", "content": system_msg},
             {"role": "user", "content": raw_prompt},
         ]
-        print(f"DEBUG parse_modification_request: Messages prepared, system msg length: {len(system_msg)}")
 
         # Get the schema for the MealPlanModificationRequest
         schema = MealPlanModificationRequest.model_json_schema()
-        print(f"DEBUG parse_modification_request: Got schema: {json.dumps(schema)[:200]}...")
 
         # 3. Call Responses API with Structured Outputs
-        print(f"DEBUG parse_modification_request: About to call OpenAI")
         try:
             resp = get_openai_client().responses.create(
                 model=model,
@@ -87,37 +81,32 @@ def parse_modification_request(
                     }
                 },
             )
-            print(f"DEBUG parse_modification_request: Got response from OpenAI: {resp.output_text[:200]}...")
         except Exception as e:
             import traceback
-            print(f"DEBUG parse_modification_request: Error from OpenAI API: {str(e)}")
-            print(f"DEBUG parse_modification_request: Traceback: {traceback.format_exc()}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"parse_modification_request", "traceback": traceback.format_exc()})
             raise
 
         # 4. Validate & return
         try:
             parsed = MealPlanModificationRequest.model_validate_json(resp.output_text)
-            print(f"DEBUG parse_modification_request: Validated response, got {len(parsed.slots)} slots")
             
             # Handle missing should_remove values by coercing to False
             for slot in parsed.slots:
                 slot.should_remove = bool(slot.should_remove)
                 
-            # Print details of each slot
-            for i, slot in enumerate(parsed.slots):
-                print(f"DEBUG parse_modification_request: Slot {i+1}: id={slot.meal_plan_meal_id}, name={slot.meal_name}, rules={slot.change_rules}")
-                
-            logger.debug("Parsed MealPlanModificationRequest: %s", parsed.model_dump())
             return parsed
         except Exception as e:
             import traceback
-            print(f"DEBUG parse_modification_request: Error validating response: {str(e)}")
-            print(f"DEBUG parse_modification_request: Response text: {resp.output_text}")
-            print(f"DEBUG parse_modification_request: Traceback: {traceback.format_exc()}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"parse_modification_request", "traceback": traceback.format_exc()})
             raise
             
     except Exception as e:
         import traceback
-        print(f"DEBUG parse_modification_request: Unexpected error: {str(e)}")
-        print(f"DEBUG parse_modification_request: Traceback: {traceback.format_exc()}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"parse_modification_request", "traceback": traceback.format_exc()})
         raise 

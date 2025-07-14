@@ -162,7 +162,7 @@ def process_email(request):
                 )
                 # Acknowledgment for the first message that starts the window
                 ack_message_raw = (
-                    "We've received your email. Our assistant, MJ, is on it! "
+                    "We've received your email. Your assistant, MJ, is on it! "
                     "If you have more details to add, feel free to send another email within the next 5 minutes. "
                     "All messages received in this window will be processed together.<br><br>"
                     "For urgent matters or a more interactive experience, please log in to your sautAI dashboard.<br><br>"

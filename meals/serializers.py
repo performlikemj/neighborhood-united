@@ -320,26 +320,19 @@ class MealPlanSerializer(serializers.ModelSerializer):
 
     def get_payment_required(self, obj):
         """Check if the meal plan has an associated order that is unpaid."""
-        logger.debug(f"[DEBUG] Checking payment_required for MealPlan {obj.id}")
-        logger.debug(f"[DEBUG] MealPlan.order: {obj.order}")
         
         if obj.order and not obj.order.is_paid:
             # Further check if the order actually has items requiring payment
             order_total = obj.order.total_price()
-            logger.debug(f"[DEBUG] Order #{obj.order.id} total_price: {order_total}")
             
             # Log details about order meals
             order_meals = obj.order.ordermeal_set.all()
-            logger.debug(f"[DEBUG] Order has {order_meals.count()} meal items")
             
             for om in order_meals:
                 event_price = None
                 if hasattr(om, 'chef_meal_event') and om.chef_meal_event:
                     event_price = om.chef_meal_event.current_price
                 
-                logger.debug(f"[DEBUG] OrderMeal #{om.id}: Meal '{om.meal.name}', " 
-                             f"chef_meal_event: {om.chef_meal_event.id if om.chef_meal_event else None}, "
-                             f"event_price: {event_price}, quantity: {om.quantity}")
             
             return order_total is not None and order_total > 0
         return False

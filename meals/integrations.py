@@ -7,7 +7,8 @@ import logging
 import traceback
 from typing import List, Dict, Any
 from shared.utils import get_openai_client
-
+import os
+import requests
 logger = logging.getLogger(__name__)
 
 def get_macro_info(meal_name: str, meal_description: str, ingredients: List[str]) -> Dict[str, Any]:
@@ -43,7 +44,6 @@ def get_macro_info(meal_name: str, meal_description: str, ingredients: List[str]
         """
         
         # Call OpenAI API
-        logger.debug(f"Sending request to OpenAI for macro info")
         response = get_openai_client().chat.completions.create(
             model="gpt-4.1-mini",
             messages=[
@@ -67,7 +67,9 @@ def get_macro_info(meal_name: str, meal_description: str, ingredients: List[str]
         return result
     except Exception as e:
         logger.error(f"Error getting macro information for meal '{meal_name}': {e}")
-        logger.error(traceback.format_exc())
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"get_macro_info", "traceback": traceback.format_exc()})
         return {
             'calories': 0,
             'protein': 0,
@@ -114,7 +116,6 @@ def find_youtube_videos(meal_name: str, meal_description: str) -> Dict[str, Any]
         """
         
         # Call OpenAI API
-        logger.debug(f"Sending request to OpenAI for YouTube videos")
         response = get_openai_client().chat.completions.create(
             model="gpt-4.1-mini",
             messages=[
@@ -136,7 +137,9 @@ def find_youtube_videos(meal_name: str, meal_description: str) -> Dict[str, Any]
         return result
     except Exception as e:
         logger.error(f"Error finding YouTube videos for meal '{meal_name}': {e}")
-        logger.error(traceback.format_exc())
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"find_youtube_videos", "traceback": traceback.format_exc()})
         return {
             'videos': []
         }

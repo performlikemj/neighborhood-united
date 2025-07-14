@@ -164,14 +164,12 @@ def get_embedding(text, model="text-embedding-3-small"):
         
         # Enable detailed logging when troubleshooting
         logger.info(f"Embedding API response received, type: {type(response)}")
-        logger.debug(f"Embedding API response structure: {response.__dict__.keys() if hasattr(response, '__dict__') else 'No __dict__ attribute'}")
         
         # Access the embedding data safely
         if hasattr(response, 'data') and len(response.data) > 0:
             embedding_data = response.data[0]
             logger.info(f"Successfully extracted embedding_data from response")
             
-            logger.debug(f"Embedding data attributes: {embedding_data.__dict__.keys() if hasattr(embedding_data, '__dict__') else 'No __dict__ attribute'}")
             
             if hasattr(embedding_data, 'embedding'):
                 embedding = embedding_data.embedding
@@ -2435,7 +2433,6 @@ def auth_get_meal_plan(request):
             "meal_plan_id": meal_plan.id,
         }
         meal_plan_details.append(meal_details)
-    print(f"DEBUG auth_get_meal_plan: meal_plan_details={meal_plan_details}")
     return {
         "auth_meal_plan": meal_plan_details,
         "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')

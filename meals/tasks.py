@@ -227,7 +227,6 @@ def generate_daily_user_summaries():
                 ).first()
                 
                 if existing_summary:
-                    logger.debug(f"User {user.id} ({user.username}) already has a summary for today")
                     continue
                     
                 # This user is eligible for a summary generation
@@ -451,14 +450,12 @@ def generate_user_chat_summaries():
             
             # If no session summaries, skip
             if not session_summaries.exists():
-                logger.debug(f"No session summaries found for user {user.id}, skipping")
                 continue
             
             # Check if summary exists and is up to date
             if existing_summary:
                 latest_session_date = session_summaries.first().summary_date
                 if existing_summary.last_summary_date and existing_summary.last_summary_date >= latest_session_date:
-                    logger.debug(f"User {user.id} chat summary is already up to date")
                     continue
             
             # Need to generate or update summary
@@ -581,7 +578,6 @@ def generate_chat_session_summaries():
             
             # Skip if no messages were found
             if not messages.exists():
-                logger.debug(f"No messages found for thread {thread.id} on {yesterday}, skipping")
                 continue
             
             # Check if we already have a pending summary
@@ -591,7 +587,6 @@ def generate_chat_session_summaries():
             ).first()
             
             if existing_summary and existing_summary.status == ChatSessionSummary.COMPLETED:
-                logger.debug(f"Summary already exists for thread {thread.id} on {yesterday}")
                 continue
             
             # Format the conversation into a string for the model
@@ -604,7 +599,6 @@ def generate_chat_session_summaries():
             
             # Skip if the conversation is too short
             if len(conversation) < 2:  # Need at least a message and response
-                logger.debug(f"Conversation too short for thread {thread.id}, skipping")
                 continue
             
             conversation_text = "\n\n".join(conversation)

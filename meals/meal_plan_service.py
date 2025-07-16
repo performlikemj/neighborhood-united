@@ -854,6 +854,21 @@ def create_meal_plan_for_user(
     #     logger.info(f"[{request_id}] User has emergency supply goal of {user.emergency_supply_goal} days. Generating supply list.")
     #     generate_emergency_supply_list(user.id)
 
+    # Clean up Redis lock if this task was called with lock management
+    try:
+        from utils.redis_client import delete
+        # Try to determine the lock key from the task context
+        # This is a bit tricky since we don't have direct access to the task ID here
+        # We'll use the user_id and start_of_week to construct the lock key
+        lock_key = f"meal_plan_generation_lock_{user_id}_{start_of_week.strftime('%Y_%m_%d')}"
+        deleted = delete(lock_key)
+        if deleted:
+            logger.info(f"[{request_id}] Successfully cleaned up Redis lock {lock_key} on successful completion")
+        else:
+            logger.debug(f"[{request_id}] Redis lock {lock_key} was not found or already expired")
+    except Exception as e:
+        logger.warning(f"[{request_id}] Error cleaning up Redis lock: {str(e)}")
+
     return meal_plan
 
 

@@ -317,9 +317,26 @@ class MealPlanningAssistant:
             "You are sautAI's helpful meal‑planning assistant. "
             "Answer questions about food, nutrition and meal plans."
         )
+
+        # Track function_calls that don't yet have matching outputs.
+        # We keep each orphaned call exactly one extra turn so the model
+        # can see the output and avoid repeating questions.
+        self._pending_calls: Dict[str, Dict[str, Any]] = {}
         
         # Log initialization details
         is_guest = self._is_guest(self.user_id)
+
+    # ───────────────────────────────────────── helper: persist guest state
+    def _store_guest_state(self, response_id: str, history: list) -> None:
+        """
+        Save the latest `response_id` together with the full conversation
+        history so the next HTTP request can rebuild context instead of
+        starting the onboarding over.
+        """
+        GLOBAL_GUEST_STATE[self.user_id] = {
+            "response_id": response_id,
+            "history": history,
+        }
 
     def _get_tools_for_user(self, is_guest: bool) -> List[Dict[str, Any]]:
         """Load tools fresh each time to pick up any code changes."""
@@ -416,11 +433,8 @@ class MealPlanningAssistant:
                 if chat_thread:
                     self._save_turn(self.user_id, message, final_output_text, chat_thread)
             elif is_guest:
-                # Store both response_id and history for guests
-                GLOBAL_GUEST_STATE[self.user_id] = {
-                    "response_id": final_response_id,
-                    "history": final_history
-                }
+                # Persist guest state (keeps plain text + response_id)
+                self._store_guest_state(final_response_id, final_history)
 
             return {
                 "status": "success",
@@ -689,6 +703,13 @@ class MealPlanningAssistant:
             # 4) If response was completed and we have text content, break the loop
             # This is the key fix - if response completed and we have text, we're done
             if response_completed and buf:
+                # ── persist the assistant turn for guests ───────────────
+                if buf:  # append the assistant text we just streamed
+                    current_history.append({"role": "assistant",
+                                           "content": buf})
+                if is_guest and final_response_id:
+                    self._store_guest_state(final_response_id,
+                                            current_history)
                 yield {"type": "response.completed"}
                 break
             
@@ -732,7 +753,7 @@ class MealPlanningAssistant:
                         type("Call", (), {
                             "call_id": call_id,
                             "function": type("F", (), {
-                                "name":      call["name"],
+                                "name": call["name"],
                                 "arguments": json.dumps(args_obj)
                             })
                         })
@@ -786,10 +807,7 @@ class MealPlanningAssistant:
             self._persist_state(user_id, final_response_id, is_guest, current_history)
         elif is_guest and final_response_id:
              # Update guest state with final ID
-             GLOBAL_GUEST_STATE[user_id] = {
-                 "response_id": final_response_id,
-                 "history": current_history
-             }
+             self._store_guest_state(final_response_id, current_history)
 
     # ────────────────────────────────────────────────────────────────────
     #  Prompt helpers
@@ -897,10 +915,7 @@ class MealPlanningAssistant:
         """Persist the final response ID and the full conversation history to the DB for auth users, or update guest state."""
         if is_guest:
             # Store both response_id and history for guests
-            GLOBAL_GUEST_STATE[user_id] = {
-                "response_id": resp_id,
-                "history": history
-            }
+            self._store_guest_state(resp_id, history)
             print(f"GUEST_HISTORY: Persisted conversation with {len(history)} messages")
         else:
             try:
@@ -1137,47 +1152,44 @@ class MealPlanningAssistant:
         set(cache_key, combined_blurb, 60 * 60)
         return combined_blurb or None
 
-    def _validate_and_clean_history(self, history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _validate_and_clean_history(self, history: list) -> list:
         """
-        Validate and clean history to ensure all function call outputs have matching function calls.
-        This prevents the OpenAI API error about missing tool calls for function call outputs.
+        • Keep all plain user/assistant messages.
+        • Keep function_call ⇄ function_call_output pairs.
+        • If a call lacks an output, keep it ONE extra turn; then drop it.
         """
-        # Track function calls and their outputs
-        function_calls = {}  # call_id -> function_call_item
-        function_outputs = {}  # call_id -> function_output_item
-        other_items = []  # Non-function items
-        
-        # Separate function calls, outputs, and other items
+        cleaned = []
+        pending_next: Dict[str, Dict[str, Any]] = {}
+
         for item in history:
-            if item.get('type') == 'function_call' and 'call_id' in item:
-                function_calls[item['call_id']] = item
-            elif item.get('type') == 'function_call_output' and 'call_id' in item:
-                function_outputs[item['call_id']] = item
-            else:
-                other_items.append(item)
-        
-        # Build clean history: only include function calls that have matching outputs
-        clean_history = []
-        for item in history:
-            if item.get('type') == 'function_call' and 'call_id' in item:
-                call_id = item['call_id']
-                # Only add if there's a matching output
-                if call_id in function_outputs:
-                    clean_history.append(item)
+            role = item.get("role")
+            if role in ("user", "assistant"):
+                cleaned.append(item)
+                continue
+
+            if item.get("type") == "function_call":
+                cid = item.get("id")
+                has_output = any(
+                    o.get("type") == "function_call_output"
+                    and o.get("call_id") == cid
+                    for o in history
+                )
+                if has_output:
+                    cleaned.append(item)
                 else:
-                    logger.warning(f"Removing orphaned function call with call_id {call_id}")
-            elif item.get('type') == 'function_call_output' and 'call_id' in item:
-                call_id = item['call_id']
-                # Only add if there's a matching call
-                if call_id in function_calls:
-                    clean_history.append(item)
-                else:
-                    logger.warning(f"Removing orphaned function output with call_id {call_id}")
-            else:
-                # Keep all non-function items
-                clean_history.append(item)
-        
-        return clean_history
+                    # keep for exactly one turn before discarding
+                    if cid not in self._pending_calls:
+                        pending_next[cid] = item
+                    cleaned.append(item)
+                continue
+
+            if item.get("type") == "function_call_output":
+                cleaned.append(item)
+                continue
+
+        # remember which calls we already waited on
+        self._pending_calls = pending_next
+        return cleaned
 
     def _add_previous_context(self, prev_id: Optional[str], history: List[Dict[str, Any]]) -> None:
         """Add context (function calls/outputs) from cache using the previous response ID."""
@@ -1474,7 +1486,90 @@ class MealPlanningAssistant:
         7. Return only body content — omit `<html>`, `<head>`, `<body>`.  
         8. **Absolutely no follow-up questions, commentary, or feedback requests.**
         9. **IMPORTANT: Preserve all __URL_PLACEHOLDER_X__ tokens exactly as they appear.**
+        10. EXAMPLE OF LIST-BASED OUTPUT:
+        {{
+        "main_section": "<p>Here's your shopping list:</p><ul><li>200g of flour</li><li>100g of sugar</li><li>100g of butter</li></ul>",
+        "data_visualization": "
+        🥬 PRODUCE
 
+        Eggs
+            •	21 pieces
+            •	Steamed Egg Custard w/ Spinach & Shiitake: 6
+            •	Tamago Kake Gohan w/ Umeboshi: 3
+            •	Tamago Onigiri: 6
+            •	Japanese Omelette: 6
+
+        Vegetables
+            •	Spinach: 950 g (pre-washed/chopped preferred)
+            •	Custard & Shiitake: 200 g
+            •	Steamed Side: 300 g
+            •	Savory Oatmeal: 150 g
+            •	Hash: 150 g
+            •	Omelette: 150 g
+            •	Shiitake mushrooms: 150 g (fresh or rehydrated)
+            •	Mushrooms (any kind): 150 g
+            •	Bell peppers: 24 medium (mixed colors, toddler strips)
+            •	For salmon dishes, tofu bowls, and hash
+            •	Sweet potatoes: 500 g (peeled & diced)
+            •	Eggplant: 2 medium
+            •	Daikon radish: 300 g (sliced)
+            •	Broccoli florets: 400 g
+            •	Green onions: 2 stalks (sliced)
+            •	Scallions: 2 stalks (chopped)
+            •	Garlic: 3 cloves (minced)
+            •	Fresh herbs (thyme, parsley): to taste
+            •	Fresh ginger: 1" piece (grated)
+            •	Pickled plums (umeboshi): 3 pieces
+            •	Wakame seaweed (dried): 10 g
+
+        ⸻
+
+        🐟 MEAT & FISH
+            •	Chicken breast (boneless, skinless): 1,800 g
+            •	Salmon fillets: 2,400 g
+            •	Lean protein (chicken breast or tofu): 300 g
+            •	White fish fillets (cod/flounder): 600 g
+            •	Mackerel fillets: 600 g
+
+        ⸻
+
+        🧂 CONDIMENTS & OILS
+            •	Soy sauce: 546 ml + 4 Tbsp total
+            •	Mirin: 134 ml + 3 Tbsp + 40 ml
+            •	Honey: 2 Tbsp
+            •	Miso paste: 12 Tbsp
+            •	Sesame oil: 2 Tbsp (optional)
+            •	Olive oil: 2 Tbsp (can swap for sesame oil)
+            •	Avocado oil: 2 Tbsp (can swap for sesame oil)
+            •	Toasted sunflower seeds: 2 Tbsp (alt: sesame seeds)
+            •	Pumpkin seeds: 2 Tbsp (alt: sesame seeds)
+
+        ⸻
+
+        🌾 GRAINS
+            •	Steel-cut oats: 180 g
+            •	Brown rice (uncooked): 1,200 g
+            •	White rice (cooked): 950 g
+            •	Quinoa (uncooked): 300 g
+
+        ⸻
+
+        🧊 FROZEN
+            •	Edamame pods: 400 g
+
+        ⸻
+
+        🥛 DAIRY & SOY
+            •	Soft or silken tofu: 200 g
+            •	Soft tofu: 400 g
+
+        ⸻
+
+        🍲 MISC
+            •	Vegetable broth: 600 ml
+        ",
+        "final_message": ""
+        }}
         --- BEGIN RAW TEXT ---
         {protected_text}
         --- END RAW TEXT ---
@@ -1870,19 +1965,20 @@ class MealPlanningAssistant:
         )
         
         # Translate the email content if needed
-        try:
-            email_html_content = translate_paragraphs(
-                email_html_content,
-                user_preferred_language
-            )
-            logger.info(f"Successfully translated email content to {_get_language_name(user_preferred_language)} ({user_preferred_language}) for user {self.user_id}")
-        except Exception as e:
-            logger.error(f"Error translating email content for user {self.user_id} to {_get_language_name(user_preferred_language)} ({user_preferred_language}): {e}")
-            # Continue with the original English content as fallback
-            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-            # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
-            requests.post(n8n_traceback_url, json={"error": str(e), "source":"translate_email_content", "traceback": traceback.format_exc()})
-        
+        if user_preferred_language != 'en':
+            try:
+                email_html_content = translate_paragraphs(
+                    email_html_content,
+                    user_preferred_language
+                )
+                logger.info(f"Successfully translated email content to {_get_language_name(user_preferred_language)} ({user_preferred_language}) for user {self.user_id}")
+            except Exception as e:
+                logger.error(f"Error translating email content for user {self.user_id} to {_get_language_name(user_preferred_language)} ({user_preferred_language}): {e}")
+                # Continue with the original English content as fallback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
+                requests.post(n8n_traceback_url, json={"error": str(e), "source":"translate_email_content", "traceback": traceback.format_exc()})
+            
 
         # 4. Trigger n8n to send this reply_content back to recipient_email
         n8n_webhook_url = os.getenv('N8N_EMAIL_REPLY_WEBHOOK_URL')
@@ -2115,24 +2211,17 @@ def generate_guest_id() -> str:
     return f"guest_{uuid.uuid4().hex[:8]}"
 
 
-class OnboardingAssistant:
-    """Independent assistant dedicated to chat-based user registration with PasswordPrompt support."""
+class OnboardingAssistant(MealPlanningAssistant):
+    """
+    Secure onboarding assistant that inherits the proven chat interface from MealPlanningAssistant
+    but restricts functionality to onboarding tools and flow only.
+    """
 
     def __init__(self, user_id: Optional[Union[int, str]] = None):
-        self.client = OpenAI(api_key=settings.OPENAI_KEY)
+        # Initialize with the same proven infrastructure as MealPlanningAssistant
+        super().__init__(user_id)
         
-        # Handle user ID assignment for guests
-        if user_id is not None:
-            if isinstance(user_id, numbers.Number) or (isinstance(user_id, str) and user_id.isdigit()):
-                self.user_id = int(user_id)
-            elif isinstance(user_id, str) and user_id:
-                # Keep provided string user_id (guest_id from session or request)
-                self.user_id = user_id.replace("guest:", "") if user_id.startswith("guest:") else user_id
-            else:
-                self.user_id = generate_guest_id()
-        else:
-            self.user_id = generate_guest_id()
-            
+        # Override system message for onboarding-specific flow
         self.system_message = (
             "You are MJ, sautAI's friendly onboarding assistant. "
             "Help users create their account through a simple conversation.\n\n"
@@ -2161,47 +2250,29 @@ class OnboardingAssistant:
             "• Password will be entered securely in a modal\n"
         )
 
-
-    def _get_onboarding_tools(self) -> List[Dict[str, Any]]:
-        """Get tools specific to onboarding."""
+    def _get_tools_for_user(self, is_guest: bool) -> List[Dict[str, Any]]:
+        """Override to only allow onboarding tools for security."""
+        # Always use guest tools for onboarding, but filter to onboarding-specific ones only
         from .guest_tools import get_guest_tools
-        return [t for t in get_guest_tools() if t.get("name") in {"guest_register_user", "onboarding_save_progress", "onboarding_request_password"}]
+        all_guest_tools = get_guest_tools()
+        
+        # Security restriction: Only allow onboarding-specific tools
+        allowed_tool_names = {
+            "guest_register_user", 
+            "onboarding_save_progress", 
+            "onboarding_request_password"
+        }
+        
+        return [
+            tool for tool in all_guest_tools 
+            if tool.get("name") in allowed_tool_names
+        ]
 
-    def _build_onboarding_prompt(self) -> str:
-        """
-        Build the system prompt for chat‑based onboarding.
-        Collects username, email, language, dietary preferences, allergies, then household data, then triggers secure‑password modal.
-        """
+    def _instructions(self, is_guest: bool) -> str:
+        """Override to provide onboarding-specific instructions with current progress."""
+        base_prompt = self.system_message
 
-        base_prompt = (
-            "You are MJ, sautAI's friendly onboarding assistant. "
-            "Help users create their account through a simple conversation.\n\n"
-
-            "### PROCESS\n"
-            "1. Ask for username\n"
-            "2. Ask for email\n"
-            "3. Ask for preferred language (e.g., English, Spanish, French)\n"
-            "4. Ask for dietary preferences (e.g., Vegan, Vegetarian, Gluten-Free, Keto, etc.)\n"
-            "5. Ask for allergies (e.g., Peanuts, Tree nuts, Milk, Egg, Wheat, etc.)\n"
-            "6. Optionally ask for household members (name, age, dietary preferences)\n"
-            "7. When you have username AND email AND language AND dietary preferences AND allergies, call `onboarding_request_password`\n"
-            "8. Then ask for password\n\n"
-
-            "### TOOLS\n"
-            "• `onboarding_save_progress` – call with individual params (username, email, preferred_language, dietary_preferences, custom_dietary_preferences, allergies, custom_allergies, household_members)\n"
-            "• `onboarding_request_password` – call ONLY when you have username AND email AND language AND dietary preferences AND allergies\n\n"
-
-            "### RULES\n"
-            "• Be friendly and brief\n"
-            "• Save progress after collecting data\n"
-            "• Ages should be numbers only (e.g., 3 not \"3 years\")\n"
-            "• For dietary preferences, use standard names like 'Vegan', 'Vegetarian', 'Gluten-Free', 'Keto', 'Paleo', 'Halal', 'Kosher', 'Low-Calorie', 'Low-Sodium', 'High-Protein', 'Dairy-Free', 'Nut-Free', 'Raw Food', 'Whole 30', 'Low-FODMAP', 'Diabetic-Friendly', 'Everything'\n"
-            "• For allergies, use standard names like 'Peanuts', 'Tree nuts', 'Milk', 'Egg', 'Wheat', 'Soy', 'Fish', 'Shellfish', 'Sesame', 'None'\n"
-            "• If user mentions dietary preferences or allergies not in standard list, use custom_dietary_preferences or custom_allergies arrays\n"
-            "• Password will be entered securely in a modal\n"
-        )
-
-        # ── append current saved progress ───────────────────────────────────────────
+        # Append current saved progress to help with context
         try:
             from custom_auth.models import OnboardingSession
             session = OnboardingSession.objects.filter(guest_id=str(self.user_id)).first()
@@ -2211,14 +2282,14 @@ class OnboardingAssistant:
 
                 data = session.data
                 has_username = bool(data.get('username') or data.get('user', {}).get('username'))
-                has_email    = bool(data.get('email')    or data.get('user', {}).get('email'))
+                has_email = bool(data.get('email') or data.get('user', {}).get('email'))
                 has_language = bool(data.get('preferred_language'))
-                has_dietary  = bool(data.get('dietary_preferences') or data.get('custom_dietary_preferences'))
+                has_dietary = bool(data.get('dietary_preferences') or data.get('custom_dietary_preferences'))
                 has_allergies = bool(data.get('allergies') or data.get('custom_allergies'))
-                has_pw       = bool(data.get('password') or data.get('user', {}).get('password'))
-                members      = data.get('household_members', [])
+                has_pw = bool(data.get('password') or data.get('user', {}).get('password'))
+                members = data.get('household_members', [])
 
-                # determine next question
+                # Determine next question based on what's missing
                 if not has_username:
                     base_prompt += "\nNEXT STEP → Ask for username.\n"
                 elif not has_email:
@@ -2241,42 +2312,41 @@ class OnboardingAssistant:
 
         return base_prompt
 
-
-    def _get_onboarding_history(self) -> List[Dict[str, Any]]:
-        """Get conversation history for onboarding, stored in memory."""
-        guest_data = GLOBAL_GUEST_STATE.get(str(self.user_id), {})
-        if guest_data and "onboarding_history" in guest_data:
-            history = guest_data["onboarding_history"].copy()
-            return history
-        else:
-            # Initialize with system message
-            initial_history = [{"role": "system", "content": self.system_message}]
-            return initial_history
-
-    def _save_onboarding_history(self, history: List[Dict[str, Any]]) -> None:
-        """Save conversation history for onboarding."""
-        if str(self.user_id) not in GLOBAL_GUEST_STATE:
-            GLOBAL_GUEST_STATE[str(self.user_id)] = {}
-        GLOBAL_GUEST_STATE[str(self.user_id)]["onboarding_history"] = history
-
-    def send_message(self, message: str) -> Dict[str, Any]:
-        """Send a message and get a response, potentially with PasswordPrompt structure."""
+    def send_message(self, message: str, thread_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Override to check for password prompt structure but use parent's proven send_message logic.
+        """
+        # Check if we should expect a password prompt based on the message content
+        should_use_password_prompt = self._should_use_password_prompt()
         
-        history = self._get_onboarding_history()
-        history.append({"role": "user", "content": message})
-        
-        try:
-            # Check if we should expect a password prompt based on the message content
-            should_use_password_prompt = self._should_use_password_prompt()
+        if should_use_password_prompt:
+            # Use structured output for password prompts
+            is_guest = self._is_guest(self.user_id)
             
-            if should_use_password_prompt:
+            # Get history the same way as parent class
+            if is_guest:
+                guest_data = GLOBAL_GUEST_STATE.get(self.user_id, {})
+                if guest_data and "history" in guest_data:
+                    history = guest_data["history"].copy()
+                    history.append({"role": "user", "content": message})
+                else:
+                    history = [
+                        {"role": "system", "content": self.system_message},
+                        {"role": "user", "content": message},
+                    ]
+            else:
+                # This shouldn't happen for onboarding, but handle gracefully
+                history = [
+                    {"role": "system", "content": self.system_message},
+                    {"role": "user", "content": message},
+                ]
+            
+            try:
                 # Use structured output for password prompts
-                # NOTE: Don't include tools when using structured text format - they conflict
                 resp = self.client.responses.create(
-                    model="gpt-4o-mini",  # Use a reliable model for onboarding
+                    model="gpt-4o-mini",
                     input=history,
-                    instructions=self._build_onboarding_prompt(),
-                    # tools=self._get_onboarding_tools(),  # ← REMOVED: Tools conflict with structured text format
+                    instructions=self._instructions(is_guest),
                     text={
                         "format": {
                             'type': 'json_schema',
@@ -2286,529 +2356,52 @@ class OnboardingAssistant:
                     }
                 )
                 
-                
                 # Parse the structured response
-                try:
-                    password_prompt = PasswordPrompt.model_validate_json(resp.output_text)
-                    response_text = password_prompt.assistant_message
-                    
-                    # Add to history
-                    history.append({"role": "assistant", "content": response_text})
-                    self._save_onboarding_history(history)
-                    
-                    return {
-                        "status": "success",
-                        "message": response_text,
-                        "is_password_request": password_prompt.is_password_request,
-                        "response_id": resp.id
-                    }
-                except Exception as e:
-                    # n8n traceback
-                    n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-                    requests.post(n8n_traceback_url, json={"error": str(e), "source":"_parse_password_prompt_response", "traceback": traceback.format_exc()})
-                    # Fall back to regular response
-                    response_text = resp.output_text
-            else:
-                # Regular response with tools
-                resp = self.client.responses.create(
-                    model="gpt-4o-mini",
-                    input=history,
-                    instructions=self._build_onboarding_prompt(),
-                    tools=self._get_onboarding_tools(),
-                    parallel_tool_calls=True
-                )
-                response_text = self._extract_response_text(resp)
-            
-            # Handle tool calls if present
-            tool_calls = [item for item in getattr(resp, "output", []) if getattr(item, 'type', None) == "function_call"]
-            
-            if tool_calls:
-                # Execute tool calls
-                for tool_call in tool_calls:
-                    # Add function call to history
-                    call_entry = {
-                        "type": "function_call",
-                        "name": tool_call.name,
-                        "arguments": tool_call.arguments,
-                        "call_id": tool_call.call_id
-                    }
-                    history.append(call_entry)
-                    
-                    # Execute the tool
-                    try:
-                        args_json = self._fix_onboarding_args(tool_call.name, tool_call.arguments)
-                        
-                        mock_call = type("Call", (), {
-                            "call_id": tool_call.call_id,
-                            "function": type("F", (), {
-                                "name": tool_call.name,
-                                "arguments": args_json
-                            })
-                        })
-                        
-                        from .tool_registration import handle_tool_call
-                        result = handle_tool_call(mock_call)
-                        
-                        # Add result to history
-                        output_entry = {
-                            "type": "function_call_output",
-                            "call_id": tool_call.call_id,
-                            "output": json.dumps(result)
-                        }
-                        history.append(output_entry)
-                        
-                    except Exception as e:
-                        logger.error(f"Error executing onboarding tool {tool_call.name}: {e}")
-                        # n8n traceback
-                        n8n_traceback = {
-                            'error': str(e),
-                            'source': f'onboarding_tool_{tool_call.name}',
-                            'traceback': f"Guest ID: {self.user_id} | {traceback.format_exc()}"
-                        }
-                        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
-                        error_result = {"status": "error", "message": str(e)}
-                        output_entry = {
-                            "type": "function_call_output",
-                            "call_id": tool_call.call_id,
-                            "output": json.dumps(error_result)
-                        }
-                        history.append(output_entry)
-            
-            # Add assistant response to history if we have one
-            if response_text:
+                password_prompt = PasswordPrompt.model_validate_json(resp.output_text)
+                response_text = password_prompt.assistant_message
+                
+                # Add to history and persist using parent's method
                 history.append({"role": "assistant", "content": response_text})
-            
-            self._save_onboarding_history(history)
-            
-            final_result = {
-                "status": "success",
-                "message": response_text,
-                "is_password_request": False,
-                "response_id": resp.id
-            }
-            return final_result
-            
-        except Exception as e:
-            logger.error(f"Error in OnboardingAssistant.send_message: {e}")
-            # n8n traceback
-            n8n_traceback = {
-                'error': str(e),
-                'source': 'send_message',
-                'traceback': f"Guest ID: {self.user_id} | {traceback.format_exc()}"
-            }
-            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
-            return {
-                "status": "error",
-                "message": f"An error occurred: {str(e)}",
-                "is_password_request": False
-            }
-
-    def _process_onboarding_stream(
-        self,
-        *,
-        model: str,
-        history: List[Dict[str, Any]],
-        instructions: str,
-        tools: List[Dict[str, Any]],
-        previous_response_id: Optional[str],
-        user_id: Union[int, str],
-        message: str,
-    ) -> Generator[Dict[str, Any], None, None]:
-        """
-        Streams one onboarding assistant turn, handles parallel tool calls by:
-          - yielding text and function_call events as they arrive
-          - appending both the function_call and its output into `history`
-          - looping back so the model can continue with that new context.
-        """
+                if is_guest:
+                    self._store_guest_state(resp.id, history)
+                
+                return {
+                    "status": "success",
+                    "message": response_text,
+                    "is_password_request": password_prompt.is_password_request,
+                    "response_id": resp.id
+                }
+            except Exception as e:
+                logger.error(f"Error with password prompt in onboarding: {e}")
+                # Fall back to regular send_message
+                pass
         
+        # Use parent's proven send_message logic for all other cases
+        result = super().send_message(message, thread_id)
         
-        start_ts = time.time()
-        current_history = history[:] # Work on a copy
-        final_response_id = None # Track the final OpenAI response ID
-        loop_iteration = 0
-        max_iterations = 10  # Prevent infinite loops
-
-        # Track if we processed any tool calls that might trigger password request
-        processed_password_request_tool = False
-
-        while True:
-            loop_iteration += 1
+        # Add password request flag to response
+        if isinstance(result, dict):
+            result["is_password_request"] = False
             
-            # Safety check to prevent infinite loops
-            if loop_iteration > max_iterations:
-                yield {"type": "response.completed"}
-                break
+        return result
+
+    def stream_message(self, message: str, thread_id: Optional[str] = None) -> Generator[Dict[str, Any], None, None]:
+        """
+        Override to handle password prompts but use parent's proven streaming logic.
+        """
+        is_guest = self._is_guest(self.user_id)
+        
+        # For onboarding, we need to check for password prompts after tool calls
+        # We'll handle this by intercepting the stream and checking for password prompt conditions
+        
+        for event in super().stream_message(message, thread_id):
+            # Forward all events from parent
+            yield event
             
-            # Check if we should use password prompt ONLY if we processed password request tool in previous iteration
-            if processed_password_request_tool:
+            # After response completes, check if we should prompt for password
+            if event.get("type") == "response.completed":
                 should_use_password_prompt = self._should_use_password_prompt()
-                
-                if should_use_password_prompt:
-                    # For password prompts, use non-streaming with structured output
-                    # NOTE: Don't include tools when using structured text format - they conflict
-                    resp = self.client.responses.create(
-                        model=model,
-                        input=current_history,
-                        instructions=instructions,
-                        # tools=tools,  # ← REMOVED: Tools conflict with structured text format
-                        previous_response_id=previous_response_id,
-                        text={
-                            "format": {
-                                'type': 'json_schema',
-                                'name': 'password_prompt',
-                                'schema': PasswordPrompt.model_json_schema()
-                            }
-                        }
-                    )
-                    
-                    final_response_id = resp.id
-                    
-                    # Yield response ID
-                    yield {"type": "response_id", "id": resp.id}
-                    
-                    try:
-                        # Parse the structured response
-                        password_prompt = PasswordPrompt.model_validate_json(resp.output_text)
-                        response_text = password_prompt.assistant_message
-                        
-                        # Yield the text content
-                        yield {"type": "text", "content": response_text}
-                        
-                        # Yield the password request flag
-                        yield {"type": "password_request", "is_password_request": password_prompt.is_password_request}
-                        
-                        # Add to history
-                        current_history.append({"role": "assistant", "content": response_text})
-                        
-                        yield {"type": "response.completed"}
-                        break
-                        
-                    except Exception as e:
-                        # n8n traceback
-                        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-                        requests.post(n8n_traceback_url, json={"error": str(e), "source":"_process_onboarding_stream", "traceback": traceback.format_exc()})
-                        # Fall back to regular streaming
-                        response_text = resp.output_text
-                        yield {"type": "text", "content": response_text}
-                        yield {"type": "password_request", "is_password_request": False}
-                        current_history.append({"role": "assistant", "content": response_text})
-                        yield {"type": "response.completed"}
-                        break
-            
-            # Reset flag for this iteration
-            processed_password_request_tool = False
-            
-            # 1) Start streaming from the Responses API
-            
-            stream = self.client.responses.create(
-                model=model,
-                input=current_history,
-                instructions=instructions,
-                tools=tools,
-                previous_response_id=previous_response_id,
-                stream=True,
-                parallel_tool_calls=True,
-            )
-
-            new_id = None
-            buf = ""
-            calls: List[Dict[str, Any]] = []
-            wrapper_to_call: Dict[str, str] = {}
-            latest_id_in_stream = previous_response_id
-            response_completed = False
-
-            # 2) Consume the event stream
-            for ev in stream:
-                # 2a) Capture the new response ID
-                if isinstance(ev, ResponseCreatedEvent):
-                    new_id = ev.response.id
-                    latest_id_in_stream = new_id
-                    final_response_id = new_id
-                    yield {"type": "response_id", "id": new_id}
-                    continue
-
-                # 2b) End of this assistant turn
-                if isinstance(ev, ResponseCompletedEvent):
-                    response_completed = True
-                    break
-
-                # 2c) Stream text deltas
-                if isinstance(ev, ResponseTextDeltaEvent):
-                    if ev.delta and not buf.endswith(ev.delta):
-                        # Add safeguard against extremely long text responses
-                        if len(buf) > 5000:  # 5KB limit
-                            yield {"type": "error", "message": "AI response too long - please try again"}
-                            return
-                        
-                        buf += ev.delta
-                        yield {"type": "text", "content": ev.delta}
-                    continue
-                    
-                if isinstance(ev, ResponseTextDoneEvent):
-                    if ev.text and not buf.endswith(ev.text):
-                        buf += ev.text
-                        yield {"type": "text", "content": ev.text}
-                    continue
-
-                # 2d) Function‑call argument fragments
-                if isinstance(ev, ResponseFunctionCallArgumentsDeltaEvent):
-                    # Map wrapper_id → real call_id if we haven't yet
-                    if ev.item_id not in wrapper_to_call and getattr(ev, "item", None):
-                        cid = getattr(ev.item, "call_id", None)
-                        if cid:
-                            wrapper_to_call[ev.item_id] = cid
-                    real_id = wrapper_to_call.get(ev.item_id, ev.item_id)
-
-                    # Accumulate arguments with safety check
-                    tgt = next((c for c in calls if c["id"] == real_id), None)
-                    if not tgt:
-                        tgt = {"id": real_id, "name": None, "args": ""}
-                        calls.append(tgt)
-                    
-                    # Add safeguard against extremely long arguments
-                    if len(tgt["args"]) > 5000:  # 5KB limit
-                        yield {"type": "error", "message": "AI response too long - please try again"}
-                        return
-                    
-                    tgt["args"] += ev.delta
-                    continue
-
-                # 2e) End‑of‑args: emit function_call and append to history
-                if isinstance(ev, ResponseFunctionCallArgumentsDoneEvent):
-                    real_id = wrapper_to_call.get(ev.item_id, ev.item_id)
-                    entry = next((c for c in calls if c["id"] == real_id), None)
-                    if not entry:
-                        continue
-
-                    args_json = entry["args"]
-                    
-                    
-                    # Fix the arguments if needed
-                    fixed_args_json = self._fix_onboarding_args(entry["name"], args_json)
-                    if fixed_args_json != args_json:
-                        args_json = fixed_args_json
-                    
-                    try:
-                        args_obj = json.loads(args_json)
-                    except json.JSONDecodeError as e:
-                        args_obj = {}
-                    
-                    # 1) Tell front‑end the call is happening
-                    yield {
-                        "type": "response.function_call",
-                        "name": entry["name"],
-                        "arguments": args_obj,
-                        "call_id": real_id,
-                    }
-
-                    # 2) Inject the function_call into CURRENT history
-                    call_entry = {
-                        "type": "function_call",
-                        "name": entry["name"],
-                        "arguments": args_json,
-                        "call_id": real_id
-                    }
-                    current_history.append(call_entry)
-                    continue
-
-                # 2f) Wrapper event: new function_call header
-                if isinstance(ev, ResponseOutputItemAddedEvent) and isinstance(ev.item, ResponseFunctionToolCall):
-                    item = ev.item
-                    wrapper_id = item.id
-                    call_id = item.call_id
-                    name = item.name
-
-                    wrapper_to_call[wrapper_id] = call_id
-                    calls.append({"id": call_id, "name": name, "args": ""})
-
-                    yield {
-                        "type": "response.tool",
-                        "tool_call_id": call_id,
-                        "name": name,
-                        "output": None,
-                    }
-                    continue
-
-                # 2g) Other output items – ignore
-                if isinstance(ev, ResponseOutputItemDoneEvent):
-                    continue
-
-            # 3) Flush any buffered text
-            if buf:
-                yield {"type": "text", "content": buf}
-                # Also persist the assistant's reply into the running history
-                current_history.append({
-                    "role": "assistant",
-                    "content": buf.strip()
-                })
-
-            # 4) If response was completed and we have text content, check if we need to continue
-            if response_completed and buf:
-                
-                # Check if we need to continue for password request
-                should_continue_for_password = False
-                if not processed_password_request_tool:
-                    # Check if we have all required fields but haven't called password request tool yet
-                    try:
-                        from custom_auth.models import OnboardingSession
-                        session = OnboardingSession.objects.filter(guest_id=str(user_id)).first()
-                        if session and session.data:
-                            data = session.data
-                            has_username = bool(data.get('username'))
-                            has_email = bool(data.get('email'))
-                            has_language = bool(data.get('preferred_language'))
-                            has_dietary = bool(data.get('dietary_preferences') or data.get('custom_dietary_preferences'))
-                            has_allergies = bool(data.get('allergies') or data.get('custom_allergies'))
-                            has_pw_request = bool(data.get('ready_for_password'))
-                            
-                            # If we have all required fields but haven't requested password yet, continue
-                            if has_username and has_email and has_language and has_dietary and has_allergies and not has_pw_request:
-                                should_continue_for_password = True
-                    except Exception as e:
-                        # n8n traceback
-                        n8n_traceback = {
-                            'error': str(e),
-                            'source': 'onboarding_progress_check',
-                            'traceback': f"Guest ID: {user_id} | {traceback.format_exc()}"
-                        }
-                        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
-                
-                if not should_continue_for_password:
-                    yield {"type": "password_request", "is_password_request": False}
-                    yield {"type": "response.completed"}
-                    break
-
-
-            # 4.1) If no function calls were requested, finish up
-            
-            if not calls:
-                yield {"type": "password_request", "is_password_request": False}
-                yield {"type": "response.completed"}
-                break
-            
-            # 4.2) If response was completed but there are function calls, we need to handle them first
-            if response_completed and not calls:
-                yield {"type": "password_request", "is_password_request": False}
-                yield {"type": "response.completed"}
-                break
-
-            # 5) Drop any stray wrapper‑only entries
-            calls = [c for c in calls if not c["id"].startswith("fc_")]
-            
-            # 5.1) If response was completed and we have no function calls after filtering, break
-            if response_completed and not calls:
-                yield {"type": "password_request", "is_password_request": False}
-                yield {"type": "response.completed"}
-                break
-
-            # 6) Execute all parallel calls
-            from .tool_registration import handle_tool_call
-            
-            for call in calls:
-                call_id = call["id"]
-                
-                
-                try:
-                    args_obj = json.loads(call["args"] or "{}")
-                except json.JSONDecodeError:
-                    args_obj = {}
-                
-                # Fix the arguments if needed
-                fixed_args_json = self._fix_onboarding_args(call["name"], call["args"] or "{}")
-                if fixed_args_json != (call["args"] or "{}"):
-                    try:
-                        args_obj = json.loads(fixed_args_json)
-                    except json.JSONDecodeError:
-                        args_obj = {}
-                
-                try:
-                    
-                    # Time the tool execution
-                    tool_start_time = time.time()
-                    result = handle_tool_call(
-                        type("Call", (), {
-                            "call_id": call_id,
-                            "function": type("F", (), {
-                                "name": call["name"],
-                                "arguments": json.dumps(args_obj)
-                            })
-                        })
-                    )
-                    tool_execution_time = time.time() - tool_start_time
-                    
-                        
-                except Exception as e:
-                    import traceback
-                    traceback.print_exc()
-                    result = {"status": "error", "message": str(e)}
-
-                # Emit tool_result
-                yield {
-                    "type": "tool_result",
-                    "tool_call_id": call_id,
-                    "name": call["name"],
-                    "output": result,
-                }
-                
-                # Check if this was the password request tool
-                if call["name"] == "onboarding_request_password":
-                    processed_password_request_tool = True
-
-                # 7a) Inject the function_call_output into CURRENT history
-                result_json = json.dumps(result)
-                output_entry = {
-                    "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": result_json,
-                }
-                current_history.append(output_entry)
-
-            # 8) Loop back: Prepare for the next API call within the same turn
-            previous_response_id = latest_id_in_stream
-
-        # --- End of while loop ---
-        
-        processing_time = time.time() - start_ts
-        # Save the final history
-        self._save_onboarding_history(current_history)
-
-    def stream_message(self, message: str) -> Generator[Dict[str, Any], None, None]:
-        """Stream a message response for onboarding with robust architecture."""
-        
-        history = self._get_onboarding_history()
-        history.append({"role": "user", "content": message})
-        
-        try:
-            # Use the robust streaming architecture
-            yield from self._process_onboarding_stream(
-                model="gpt-4o-mini",
-                history=history,
-                instructions=self._build_onboarding_prompt(),
-                tools=self._get_onboarding_tools(),
-                previous_response_id=None,
-                user_id=self.user_id,
-                message=message,
-            )
-            
-        except Exception as e:
-            # n8n traceback
-            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-            requests.post(n8n_traceback_url, json={"error": str(e), "source":"stream_message", "traceback": traceback.format_exc()})
-            yield {"type": "error", "message": str(e)}
-
-    def reset_conversation(self) -> Dict[str, Any]:
-        """Reset the onboarding conversation."""
-        try:
-            if str(self.user_id) in GLOBAL_GUEST_STATE:
-                # Clear onboarding history but keep other guest state
-                if "onboarding_history" in GLOBAL_GUEST_STATE[str(self.user_id)]:
-                    old_history_length = len(GLOBAL_GUEST_STATE[str(self.user_id)]["onboarding_history"])
-                    del GLOBAL_GUEST_STATE[str(self.user_id)]["onboarding_history"]
-            return {"status": "success", "message": "Onboarding conversation reset."}
-        except Exception as e:
-            # n8n traceback
-            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-            requests.post(n8n_traceback_url, json={"error": str(e), "source":"reset_conversation", "traceback": traceback.format_exc()})
+                yield {"type": "password_request", "is_password_request": should_use_password_prompt}
 
     def _should_use_password_prompt(self) -> bool:
         """
@@ -2831,98 +2424,25 @@ class OnboardingAssistant:
             has_allergies = bool(data.get('allergies') or data.get('custom_allergies'))
             has_password = bool(data.get('password'))
             
-            
             # Only prompt for password if we have all essential data but no password
             should_prompt = has_username and has_email and has_language and has_dietary and has_allergies and not has_password
             
-            logger.info(f"_should_use_password_prompt: username={has_username}, email={has_email}, language={has_language}, dietary={has_dietary}, allergies={has_allergies}, password={has_password} -> {should_prompt}")
             return should_prompt
             
         except Exception as e:
             logger.error(f"Error in _should_use_password_prompt: {e}")
-            # n8n traceback
-            n8n_traceback = {
-                'error': str(e),
-                'source': '_should_use_password_prompt',
-                'traceback': f"Guest ID: {self.user_id} | {traceback.format_exc()}"
-            }
-            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             return False
 
-    def _extract_response_text(self, response) -> str:
-        """Extract text from OpenAI response."""
-        if hasattr(response, "output_text"):
-            return response.output_text
-        
-        # Fallback extraction
-        text = ""
-        for item in getattr(response, "output", []):
-            if getattr(item, "type", None) == "message":
-                for c in getattr(item, "content", []):
-                    if getattr(c, "type", None) == "output_text":
-                        text += getattr(c, "text", "")
-            elif getattr(item, "type", None) == "text":
-                text += getattr(item, "text", "")
-        
-        return text.strip()
+    def reset_conversation(self) -> Dict[str, Any]:
+        """Use parent's proven reset logic."""
+        return super().reset_conversation()
 
-    def _fix_onboarding_args(self, function_name: str, args_str: str) -> str:
-        """Fix function arguments for onboarding tools."""
-        try:
-            # Safety check: prevent extremely long arguments (AI loop detection)
-            if len(args_str) > 5000:  # 5KB limit
-                args_str = args_str[:5000]
-            
-            args = json.loads(args_str)
-            
-            # Ensure guest_id is set correctly for onboarding functions
-            if function_name in ["onboarding_save_progress", "guest_register_user", "onboarding_request_password"]:
-                if "guest_id" in args and args["guest_id"] != str(self.user_id):
-                    args["guest_id"] = str(self.user_id)
-                elif "guest_id" not in args:
-                    args["guest_id"] = str(self.user_id)
-                    
-                # Additional safety: if guest_id is extremely long, fix it
-                if isinstance(args.get("guest_id"), str) and len(args["guest_id"]) > 50:
-                    args["guest_id"] = str(self.user_id)
-            
-            # Special handling for onboarding_save_progress with flat parameters
-            if function_name == "onboarding_save_progress":
-                # Clean up individual parameters to prevent extremely long values
-                for key in ["username", "email"]:
-                    if key in args and isinstance(args[key], str):
-                        if len(args[key]) <= 100:
-                            pass  # Keep as is
-                        else:
-                            args[key] = args[key][:100]
-                
-                # Clean up household_members if present
-                if "household_members" in args and isinstance(args["household_members"], list):
-                    cleaned_members = []
-                    for member in args["household_members"][:10]:  # Max 10 members
-                        if isinstance(member, dict):
-                            cleaned_member = {}
-                            if "name" in member and isinstance(member["name"], str):
-                                cleaned_member["name"] = member["name"][:50]  # Max 50 chars
-                            if "age" in member and isinstance(member["age"], (int, str)):
-                                try:
-                                    cleaned_member["age"] = int(member["age"])
-                                except:
-                                    pass
-                            if "dietary_preferences" in member and isinstance(member["dietary_preferences"], str):
-                                cleaned_member["dietary_preferences"] = member["dietary_preferences"][:200]  # Max 200 chars
-                            if cleaned_member:
-                                cleaned_members.append(cleaned_member)
-                    args["household_members"] = cleaned_members
-                
-            
-            return json.dumps(args)
-        except Exception as e:
-            # n8n traceback
-            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-            requests.post(n8n_traceback_url, json={"error": str(e), "source":"_fix_onboarding_args", "traceback": traceback.format_exc()})
-            # If JSON parsing fails, create minimal valid args
-            return json.dumps({"guest_id": str(self.user_id)})
+    # Remove all the custom methods that duplicated parent functionality:
+    # - _get_onboarding_history() [now uses parent's guest state]
+    # - _save_onboarding_history() [now uses parent's _store_guest_state]  
+    # - _process_onboarding_stream() [now uses parent's _process_stream]
+    # - _extract_response_text() [uses parent's _extract]
+    # - _fix_onboarding_args() [uses parent's _fix_function_args]
 
 # ────────────────────────────────────────────────────────────────────
 #  Helper: build branded Instacart CTA button

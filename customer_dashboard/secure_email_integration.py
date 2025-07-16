@@ -331,6 +331,7 @@ def process_email(request):
 
             try:
                 site_domain_raw = os.getenv('STREAMLIT_URL')
+                print(f"STREAMLIT_URL: {site_domain_raw}")
                 site_domain = site_domain_raw.strip('"\'') if site_domain_raw else ''
                 # Corrected query parameter construction for auth_link
                 if site_domain:

@@ -8,47 +8,57 @@ from django.conf import settings
 from custom_auth.models import CustomUser
 import os
 import logging
-import ssl
+import traceback
+import requests
 
 logger = logging.getLogger(__name__)
 
-# Initialize Redis connection with proper SSL handling
 def get_redis_connection():
-    """Get a properly configured Redis connection with SSL support."""
-    redis_url = os.getenv('REDIS_URL', '')
+    """Get a properly configured Redis connection with SSL support for Azure Redis."""
+    redis_url = os.getenv('REDIS_URL', '') or os.getenv('CELERY_BROKER_URL', '')
     
     if not redis_url:
-        logger.error("REDIS_URL environment variable not set")
+        logger.error("No Redis URL found in environment variables")
         return None
     
     try:
-        # Parse the Redis URL and create connection with SSL verification
-        # Use ssl_cert_reqs instead of ssl_check_hostname for compatibility with older Celery/Kombu
-        try:
-            return redis.Redis.from_url(
-                redis_url,
-                decode_responses=True,
-                socket_keepalive=True,
-                socket_keepalive_options={},
-                health_check_interval=30,
-                retry_on_error=[redis.exceptions.ReadOnlyError, redis.exceptions.ConnectionError],
-                ssl_cert_reqs=ssl.CERT_NONE,  # Skip SSL certificate verification (compatible with older packages)
-            )
-        except TypeError as ssl_error:
-            logger.warning(
-                f"SSL parameter not supported, trying without ssl_cert_reqs: {ssl_error}"
-            )
-            return redis.Redis.from_url(
-                redis_url,
-                decode_responses=True,
-                socket_keepalive=True,
-                socket_keepalive_options={},
-                health_check_interval=30,
-                retry_on_error=[redis.exceptions.ReadOnlyError, redis.exceptions.ConnectionError],
-            )
+        # Try direct connection - URL now contains lowercase ssl_cert_reqs=none
+        # that both Celery and redis-py accept
+        client = redis.Redis.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_keepalive=True,
+            socket_keepalive_options={},
+            health_check_interval=30,
+            retry_on_error=[redis.exceptions.ReadOnlyError, redis.exceptions.ConnectionError],
+            socket_connect_timeout=10,
+            socket_timeout=10,
+            retry_on_timeout=True
+        )
+        
+        # Test the connection
+        client.ping()
+        logger.info("Redis connection successful")
+        return client
+        
     except Exception as e:
-        logger.error(f"Failed to create Redis connection: {str(e)}")
-        return None
+        logger.error(f"Redis connection failed: {e}")
+        
+        # Fallback: try basic connection without SSL options
+        try:
+            client = redis.Redis.from_url(
+                redis_url,
+                decode_responses=True,
+                socket_connect_timeout=5,
+                socket_timeout=5
+            )
+            client.ping()
+            logger.warning("Redis connected with basic configuration (fallback)")
+            return client
+            
+        except Exception as fallback_error:
+            logger.error(f"Redis fallback connection failed: {fallback_error}")
+            return None
 
 # Initialize Redis connection
 r = get_redis_connection()
@@ -135,9 +145,15 @@ def hit_quota(user_id: str, model: str, limit: int) -> bool:
     
     except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError) as e:
         logger.error(f"Redis connection error in quota check: {str(e)}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"hit_quota", "traceback": traceback.format_exc()})
         # If Redis is down, allow the request (fail open)
         return False
     except Exception as e:
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"hit_quota", "traceback": traceback.format_exc()})
         logger.error(f"Unexpected error in quota check for user {user_id}, model {model}: {str(e)}")
         # For unexpected errors, also fail open
         return False

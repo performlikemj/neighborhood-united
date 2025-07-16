@@ -15,6 +15,7 @@ import os
 import sys
 from dotenv import load_dotenv
 from datetime import timedelta
+import logging
 
 # Load environment variables - check for dev.env first (development), then .env (production)
 if os.path.exists(os.path.join(os.path.dirname(__file__), '..', 'dev.env')):
@@ -361,7 +362,7 @@ else:
         # assume host[:port][/db]   →  prepend scheme & default port/db
         RAW_REDIS_URL = f"rediss://{RAW_REDIS_URL}:6380/0"
 
-    # Append SSL flag only once
+    # Append SSL flag only once - use 'none' for better compatibility
     if "ssl_cert_reqs=" not in RAW_REDIS_URL:
         RAW_REDIS_URL = RAW_REDIS_URL + "?ssl_cert_reqs=required"
 
@@ -384,13 +385,34 @@ else:
 CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL')
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CELERY_REDIS_MAX_CONNECTIONS = 10
-CELERY_BROKER_TRANSPORT_OPTIONS = {
-    'visibility_timeout': 3600,  # Task visibility timeout
-    'ssl': {
-        'ssl_cert_reqs': 'required',  # You can also set this to 'CERT_OPTIONAL' or 'CERT_NONE'
-        'ssl_ca_certs': '/etc/ssl/certs/ca-certificates.crt',  # Path to your CA certificates
+
+# Ensure Celery doesn't fallback to localhost if broker URL is not available
+if not CELERY_BROKER_URL:
+    import logging
+    logging.getLogger(__name__).error("CELERY_BROKER_URL environment variable not set! Celery will not function properly.")
+    # Don't set a default localhost URL - better to fail explicitly
+
+# Add additional Celery configuration to prevent localhost fallback
+CELERY_TASK_ALWAYS_EAGER = False  # Set to True only for testing
+CELERY_TASK_EAGER_PROPAGATES = True
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_BROKER_CONNECTION_RETRY = True
+CELERY_BROKER_CONNECTION_MAX_RETRIES = 3
+
+# Celery broker transport options with more robust SSL handling
+if DEBUG:
+    # Development: minimal SSL configuration or no SSL
+    CELERY_BROKER_TRANSPORT_OPTIONS = {
+        'visibility_timeout': 3600,
     }
-}
+else:
+    # Production: Try flexible SSL configuration
+    CELERY_BROKER_TRANSPORT_OPTIONS = {
+        'visibility_timeout': 3600,
+        'ssl': {
+            'ssl_cert_reqs': 'required',  # Skip SSL certificate verification for compatibility
+        }
+    }
 CELERYD_LOG_FILE = "/var/log/celery/celery.log"
 CELERYD_LOG_LEVEL = "DEBUG"
 
@@ -447,9 +469,8 @@ if IS_PRODUCTION:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     CSRF_TRUSTED_ORIGINS = [
-        'https://sautai.azurewebsites.net',
-        'https://www.sautai.com',
         'https://sautai.com',
+        'https://www.sautai.com',
         'https://*.127.0.0.1'
     ]
 

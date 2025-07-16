@@ -2,11 +2,13 @@ import re
 import uuid
 import os
 import redis
-import ssl
-from openai import OpenAI
 from bs4 import BeautifulSoup
 import logging
 from django.conf.locale import LANG_INFO
+import requests
+import traceback
+from openai import OpenAI
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 logger = logging.getLogger(__name__)
 
@@ -15,75 +17,107 @@ client = OpenAI(api_key=os.environ.get("OPENAI_KEY"))
 VAR_RX = re.compile(r"({{.*?}}|{%.*?%})", re.S)
 
 # Initialize Redis connection with proper SSL handling
-def get_redis_connection():
-    """Get a properly configured Redis connection with SSL support."""
-    redis_url = os.getenv('REDIS_URL', '')
+def get_redis_client():
+    """Get Redis client with proper SSL configuration for Azure Redis."""
+    redis_url = os.getenv('REDIS_URL', '') or os.getenv('CELERY_BROKER_URL', '')
     
     if not redis_url:
-        logger.error("REDIS_URL environment variable not set")
+        logger.warning("No Redis URL found in environment variables")
         return None
     
     try:
-        # Parse the Redis URL and create connection with SSL verification
-        # Use ssl_cert_reqs instead of ssl_check_hostname for compatibility with older Celery/Kombu
-        try:
-            return redis.Redis.from_url(
-                redis_url,
-                decode_responses=True,
-                socket_keepalive=True,
-                socket_keepalive_options={},
-                health_check_interval=30,
-                retry_on_error=[redis.exceptions.ReadOnlyError, redis.exceptions.ConnectionError],
-                ssl_cert_reqs=ssl.CERT_NONE,  # Skip SSL certificate verification (compatible with older packages)
-            )
-        except TypeError as ssl_error:
-            logger.warning(
-                f"SSL parameter not supported, trying without ssl_cert_reqs: {ssl_error}"
-            )
-            return redis.Redis.from_url(
-                redis_url,
-                decode_responses=True,
-                socket_keepalive=True,
-                socket_keepalive_options={},
-                health_check_interval=30,
-                retry_on_error=[redis.exceptions.ReadOnlyError, redis.exceptions.ConnectionError],
-            )
+        # Try direct connection - URL now contains lowercase ssl_cert_reqs=none
+        # that both Celery and redis-py accept
+        client = redis.Redis.from_url(
+            redis_url,
+            socket_connect_timeout=10,
+            socket_timeout=10,
+            retry_on_timeout=True,
+            decode_responses=True
+        )
+        
+        # Test the connection
+        client.ping()
+        logger.info("Redis connection successful")
+        return client
+        
     except Exception as e:
-        logger.error(f"Failed to create Redis connection: {str(e)}")
-        return None
+        logger.error(f"Redis connection failed: {e}")
+        
+        # Fallback: try basic connection without SSL options
+        try:
+            client = redis.Redis.from_url(
+                redis_url,
+                socket_connect_timeout=5,
+                socket_timeout=5,
+                decode_responses=True
+            )
+            client.ping()
+            logger.warning("Redis connected with basic configuration (fallback)")
+            return client
+            
+        except Exception as fallback_error:
+            logger.error(f"Redis fallback connection failed: {fallback_error}")
+            return None
 
 # Global Redis connection instance
 _redis_connection = None
 
+def _reset_redis_connection():
+    """Reset the global Redis connection."""
+    global _redis_connection
+    _redis_connection = None
+
+def _get_or_create_redis_connection():
+    """Get or create Redis connection with automatic retry on failure."""
+    global _redis_connection
+    
+    if _redis_connection is None:
+        _redis_connection = get_redis_client()
+    
+    # Test the connection and reset if it's not working
+    if _redis_connection is not None:
+        try:
+            _redis_connection.ping()
+        except Exception as e:
+            logger.warning(f"Redis connection test failed, resetting: {e}")
+            _redis_connection = get_redis_client()
+    
+    return _redis_connection
+
 def get_cached_translation(cache_key):
     """Get cached translation from Redis."""
-    global _redis_connection
     try:
-        if _redis_connection is None:
-            _redis_connection = get_redis_connection()
+        connection = _get_or_create_redis_connection()
         
-        if _redis_connection is None:
+        if connection is None:
             logger.warning("Redis connection not available for caching")
             return None
             
-        return _redis_connection.get(cache_key)
+        return connection.get(cache_key)
+    except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError) as conn_error:
+        logger.warning(f"Redis connection error while retrieving cache, resetting connection: {conn_error}")
+        _reset_redis_connection()
+        return None
     except Exception as e:
         logger.error(f"Error retrieving from Redis cache: {str(e)}")
         return None
 
 def set_cached_translation(cache_key, value, timeout=3600):
     """Set cached translation in Redis."""
-    global _redis_connection
     try:
-        if _redis_connection is None:
-            _redis_connection = get_redis_connection()
+        connection = _get_or_create_redis_connection()
         
-        if _redis_connection is None:
+        if connection is None:
             logger.warning("Redis connection not available for caching")
             return False
             
-        _redis_connection.setex(cache_key, timeout, value)
+        connection.setex(cache_key, timeout, value)
         return True
+    except (redis.exceptions.ConnectionError, redis.exceptions.TimeoutError) as conn_error:
+        logger.warning(f"Redis connection error while setting cache, resetting connection: {conn_error}")
+        _reset_redis_connection()
+        return False
     except Exception as e:
         logger.error(f"Error setting Redis cache: {str(e)}")
         return False

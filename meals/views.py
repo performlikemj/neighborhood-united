@@ -71,6 +71,168 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
+# Helper functions for Redis lock management
+def _cleanup_lock_on_task_completion(task_id, user_id, week_start_date):
+    """
+    Clean up Redis lock when task completes (success or failure).
+    This should be called from the Celery task or signal handlers.
+    """
+    try:
+        from utils.redis_client import delete
+        lock_key = f"meal_plan_generation_lock_{user_id}_{week_start_date.strftime('%Y_%m_%d')}"
+        deleted = delete(lock_key)
+        if deleted:
+            logger.info(f"Successfully cleaned up Redis lock {lock_key} for completed task {task_id}")
+        else:
+            logger.warning(f"Redis lock {lock_key} was not found or already expired for task {task_id}")
+    except Exception as e:
+        logger.error(f"Error cleaning up Redis lock for task {task_id}: {str(e)}")
+
+def _cleanup_meal_plan_locks_for_task(task_id, user_id):
+    """
+    Clean up Redis locks associated with a specific task ID and user.
+    Used when a task completes (success or failure).
+    """
+    from utils.redis_client import get, delete
+    from datetime import datetime, timedelta
+    import re
+    
+    try:
+        # Find locks that contain this task_id
+        # Pattern: meal_plan_generation_lock_{user_id}_{YYYY_MM_DD}
+        lock_pattern = f"meal_plan_generation_lock_{user_id}_*"
+        
+        # Since Redis doesn't have a scan pattern in our utils, we'll check common date ranges
+        # Check last 30 days to find potential locks
+        today = datetime.now().date()
+        for i in range(30):
+            check_date = today - timedelta(days=i)
+            lock_key = f"meal_plan_generation_lock_{user_id}_{check_date.strftime('%Y_%m_%d')}"
+            lock_value = get(lock_key)
+            
+            if lock_value == task_id:
+                delete(lock_key)
+                logger.info(f"Cleaned up meal plan lock {lock_key} for completed task {task_id}")
+                break
+                
+    except Exception as e:
+        logger.warning(f"Error during lock cleanup for task {task_id}: {str(e)}")
+
+def _check_and_cleanup_stale_locks(task_id, user_id):
+    """
+    Check if a lock exists for the given task and clean up if stale.
+    Returns True if a valid lock exists, False if no lock or lock was cleaned up.
+    """
+    from utils.redis_client import get, delete
+    from datetime import datetime, timedelta
+    from celery.result import AsyncResult
+    
+    try:
+        # Check last 7 days for potential locks
+        today = datetime.now().date()
+        for i in range(7):
+            check_date = today - timedelta(days=i)
+            lock_key = f"meal_plan_generation_lock_{user_id}_{check_date.strftime('%Y_%m_%d')}"
+            lock_value = get(lock_key)
+            
+            if lock_value == task_id:
+                # Found the lock, now check if task is actually running
+                try:
+                    task = AsyncResult(task_id)
+                    # If task is genuinely pending/started, keep the lock
+                    if task.state in ['PENDING', 'STARTED', 'RETRY']:
+                        return True
+                    else:
+                        # Task is not actually running, clean up the lock
+                        delete(lock_key)
+                        logger.info(f"Cleaned up stale lock {lock_key} for task {task_id} (state: {task.state})")
+                        return False
+                except Exception:
+                    # If we can't check task state, assume it's stale and clean up
+                    delete(lock_key)
+                    logger.info(f"Cleaned up stale lock {lock_key} for unreachable task {task_id}")
+                    return False
+        
+        # No lock found for this task
+        return False
+        
+    except Exception as e:
+        logger.warning(f"Error checking stale locks for task {task_id}: {str(e)}")
+        return False
+
+def cleanup_expired_meal_plan_locks(user_id=None, max_age_hours=6):
+    """
+    Utility function to clean up expired meal plan generation locks.
+    Can be called manually or from a periodic task for maintenance.
+    
+    Args:
+        user_id: If provided, only clean locks for this user. Otherwise clean all.
+        max_age_hours: Remove locks older than this many hours (default: 6 hours)
+    
+    Returns:
+        dict: Summary of cleanup results
+    """
+    from utils.redis_client import get, delete
+    from datetime import datetime, timedelta
+    from celery.result import AsyncResult
+    
+    cleanup_stats = {
+        'locks_checked': 0,
+        'locks_removed': 0,
+        'active_locks_kept': 0,
+        'errors': []
+    }
+    
+    try:
+        # Determine date range to check
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=7)  # Check last 7 days
+        cutoff_time = datetime.now() - timedelta(hours=max_age_hours)
+        
+        # If user_id provided, check only that user's locks
+        if user_id:
+            user_ids = [user_id]
+        else:
+            # For maintenance mode, we'd need to check all users
+            # This is a simplified version - in production you might want to 
+            # store a list of user IDs that have active locks
+            logger.warning("cleanup_expired_meal_plan_locks called without user_id - limited cleanup")
+            return cleanup_stats
+        
+        for uid in user_ids:
+            current_date = start_date
+            while current_date <= end_date:
+                lock_key = f"meal_plan_generation_lock_{uid}_{current_date.strftime('%Y_%m_%d')}"
+                cleanup_stats['locks_checked'] += 1
+                
+                try:
+                    lock_value = get(lock_key)
+                    if lock_value:
+                        # Check if task is still running
+                        task = AsyncResult(lock_value)
+                        if task.state in ['PENDING', 'STARTED', 'RETRY']:
+                            # Task is active, keep the lock
+                            cleanup_stats['active_locks_kept'] += 1
+                        else:
+                            # Task is complete or failed, remove lock
+                            delete(lock_key)
+                            cleanup_stats['locks_removed'] += 1
+                            logger.info(f"Cleaned up expired lock {lock_key} (task state: {task.state})")
+                
+                except Exception as e:
+                    cleanup_stats['errors'].append(f"Error processing {lock_key}: {str(e)}")
+                    logger.warning(f"Error processing lock {lock_key}: {str(e)}")
+                
+                current_date += timedelta(days=1)
+        
+        logger.info(f"Lock cleanup completed: {cleanup_stats}")
+        return cleanup_stats
+        
+    except Exception as e:
+        cleanup_stats['errors'].append(f"General cleanup error: {str(e)}")
+        logger.error(f"Error in cleanup_expired_meal_plan_locks: {str(e)}")
+        return cleanup_stats
+
 def is_chef(user):
     if user.is_authenticated:
         try:
@@ -1412,19 +1574,26 @@ def api_generate_meal_plan(request):
         task_id = f"meal_plan_generation_{request.user.id}_{week_start_date.strftime('%Y_%m_%d')}"
         print(f"🔍 DEBUG: Generated task_id: {task_id}")
         
-        # Check if task is already running/pending
-        from celery.result import AsyncResult
-        existing_task = AsyncResult(task_id)
-        print(f"🔍 DEBUG: Existing task state: {existing_task.state}")
-        if existing_task.state in ['PENDING', 'STARTED', 'RETRY']:
-            logger.info(f"Task {task_id} already running for user {request.user.username}")
+        # Use Redis marker key to prevent duplicate requests for this user/week combination
+        lock_key = f"meal_plan_generation_lock_{request.user.id}_{week_start_date.strftime('%Y_%m_%d')}"
+        lock_duration = 300  # 5 minutes lock duration
+        
+        # Check if a generation is already in progress for this user/week
+        from utils.redis_client import get, set, delete
+        existing_lock = get(lock_key)
+        if existing_lock:
+            logger.info(f"Meal plan generation already in progress for user {request.user.username}, week {week_start_date}")
             return Response({
                 "status": "processing", 
-                "message": "Meal plan generation already in progress",
-                "task_id": task_id,
-                "polling_url": f"/meals/api/meal_plan_status/{task_id}",
+                "message": "Meal plan generation already in progress for this week",
+                "task_id": existing_lock if isinstance(existing_lock, str) else task_id,
+                "polling_url": f"/meals/api/meal_plan_status/{existing_lock if isinstance(existing_lock, str) else task_id}",
                 "estimated_time": "30-60 seconds"
             }, status=202)
+        
+        # Set the lock with the task ID and expiration
+        set(lock_key, task_id, lock_duration)
+        print(f"🔒 DEBUG: Set Redis lock {lock_key} with task_id {task_id} for {lock_duration} seconds")
         
         # Start the async task using existing meal plan service with custom task ID
         from .meal_plan_service import create_meal_plan_for_user
@@ -1447,6 +1616,9 @@ def api_generate_meal_plan(request):
             print(f"✅ DEBUG: Task ID: {task.id}, Task state: {task.state}")
         except Exception as e:
             print(f"❌ DEBUG: Error dispatching task: {str(e)}")
+            # Clean up the lock if task dispatch fails
+            delete(lock_key)
+            print(f"🔓 DEBUG: Cleaned up Redis lock {lock_key} due to task dispatch failure")
             import traceback
             print(f"❌ DEBUG: Traceback: {traceback.format_exc()}")
             raise
@@ -1462,6 +1634,15 @@ def api_generate_meal_plan(request):
         }, status=202)  # 202 Accepted
 
     except Exception as e:
+        # Clean up the lock if any error occurs
+        try:
+            from utils.redis_client import delete
+            lock_key = f"meal_plan_generation_lock_{request.user.id}_{week_start_date.strftime('%Y_%m_%d')}"
+            delete(lock_key)
+            logger.info(f"Cleaned up Redis lock {lock_key} due to error: {str(e)}")
+        except Exception as cleanup_error:
+            logger.warning(f"Failed to cleanup lock during error handling: {str(cleanup_error)}")
+        
         logger.error(f"Error starting meal plan generation: {str(e)}")
         traceback.print_exc()
         return Response({
@@ -1470,37 +1651,104 @@ def api_generate_meal_plan(request):
             "details": str(e)
                  }, status=500)
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_cleanup_meal_plan_locks(request):
+    """
+    Manual cleanup endpoint for meal plan generation locks.
+    Useful for debugging or maintenance.
+    
+    POST data:
+    - user_id (optional): Clean locks for specific user, defaults to current user
+    - max_age_hours (optional): Remove locks older than this, defaults to 6 hours
+    """
+    try:
+        # Only allow users to clean their own locks, unless they're staff
+        target_user_id = request.data.get('user_id', request.user.id)
+        if target_user_id != request.user.id and not request.user.is_staff:
+            return Response({
+                "status": "error",
+                "message": "You can only clean up your own locks"
+            }, status=403)
+        
+        max_age_hours = int(request.data.get('max_age_hours', 6))
+        if max_age_hours < 1 or max_age_hours > 168:  # 1 hour to 1 week
+            return Response({
+                "status": "error",
+                "message": "max_age_hours must be between 1 and 168 (1 week)"
+            }, status=400)
+        
+        # Perform cleanup
+        results = cleanup_expired_meal_plan_locks(
+            user_id=target_user_id,
+            max_age_hours=max_age_hours
+        )
+        
+        return Response({
+            "status": "success",
+            "message": "Lock cleanup completed",
+            "results": results
+        })
+        
+    except ValueError as e:
+        return Response({
+            "status": "error",
+            "message": f"Invalid input: {str(e)}"
+        }, status=400)
+    except Exception as e:
+        logger.error(f"Error in manual lock cleanup: {str(e)}")
+        return Response({
+            "status": "error",
+            "message": "Failed to cleanup locks"
+        }, status=500)
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def api_meal_plan_status(request, task_id):
     """
     Check the status of a meal plan generation task.
+    Also handles cleanup of expired locks.
     """
     try:
-        from utils.redis_client import get
+        from utils.redis_client import get, delete
         from celery.result import AsyncResult
         
         # Get task result from Redis first (more detailed)
         task_result = get(f"meal_plan_task_{task_id}")
         
         if task_result:
+            # If we have a result, the task is complete, so clean up any locks
+            _cleanup_meal_plan_locks_for_task(task_id, request.user.id)
             return Response(task_result)
         
         # Fallback to Celery task state
         task = AsyncResult(task_id)
         
         if task.state == 'PENDING':
+            # Check if this is a real pending task or a stale lock
+            lock_exists = _check_and_cleanup_stale_locks(task_id, request.user.id)
+            if not lock_exists:
+                return Response({
+                    "status": "error",
+                    "message": "Task not found or expired. Please try generating again.",
+                    "code": "TASK_EXPIRED"
+                }, status=404)
+            
             return Response({
                 "status": "processing",
                 "message": "Task is queued or starting...",
                 "progress": 5
             })
         elif task.state == 'SUCCESS':
+            # Clean up locks on successful completion
+            _cleanup_meal_plan_locks_for_task(task_id, request.user.id)
             return Response(task.result or {
                 "status": "success",
                 "message": "Task completed successfully"
             })
         elif task.state == 'FAILURE':
+            # Clean up locks on failure
+            _cleanup_meal_plan_locks_for_task(task_id, request.user.id)
             return Response({
                 "status": "error",
                 "message": "Task failed",

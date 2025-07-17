@@ -1570,6 +1570,12 @@ class MealPlanningAssistant:
         ",
         "final_message": ""
         }}
+        11. EXAMPLE OF TABLE-BASED OUTPUT:
+        {{
+        "main_section": "<h3>Meal Plan</h3><table><thead><tr><th>Day</th><th>Meal</th></tr></thead><tbody><tr><td>Mon</td><td>Veggie curry</td></tr><tr><td>Tue</td><td>Grilled salmon</td></tr></tbody></table>",
+        "data_visualization": "",
+        "final_message": "<p>Enjoy!</p>"
+        }}
         --- BEGIN RAW TEXT ---
         {protected_text}
         --- END RAW TEXT ---
@@ -1646,6 +1652,7 @@ class MealPlanningAssistant:
                 requests.post(n8n_traceback_url, json={"error": str(e), "source":"_format_text_for_email_body", "traceback": traceback.format_exc()})
                 # Continue with the original text if there's an error
 
+            formatted_text = _clean_email_html(formatted_text)
             return formatted_text.strip()
             
         except Exception as e:
@@ -1660,7 +1667,8 @@ class MealPlanningAssistant:
             
             paragraphs = fallback_text.split('\n\n')
             html_paragraphs = [f"<p>{p.replace(chr(10), '<br>')}</p>" for p in paragraphs if p.strip()]
-            return ''.join(html_paragraphs) if html_paragraphs else f"<p>{fallback_text.replace(chr(10), '<br>')}</p>"
+            fallback_html = ''.join(html_paragraphs) if html_paragraphs else f"<p>{fallback_text.replace(chr(10), '<br>')}</p>"
+            return _clean_email_html(fallback_html)
 
     # ────────────────────────────────────────────────────────────────────
     #  Email Processing Method
@@ -2515,6 +2523,21 @@ def _replace_instacart_links(html: str, copy_type: str = "recipe") -> str:
             a.replace_with(BeautifulSoup(cta_html, "html.parser"))
     
     return str(soup)
+
+# ────────────────────────────────────────────────────────────────────
+#  Helper: tidy up HTML formatting for email
+# ────────────────────────────────────────────────────────────────────
+def _clean_email_html(html: str) -> str:
+    """Return a minimally formatted HTML string."""
+    soup = BeautifulSoup(html, "html.parser")
+    pretty = soup.prettify()
+    if "<body>" in pretty:
+        body = soup.body
+        if body:
+            body_pretty = body.prettify()
+            lines = body_pretty.splitlines()[1:-1]
+            pretty = "\n".join(lines)
+    return pretty.strip()
 
 # ────────────────────────────────────────────────────────────────────
 #  Tool information and debugging helpers

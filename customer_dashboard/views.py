@@ -1503,156 +1503,455 @@ def guest_new_conversation(request):
 @api_view(['POST'])
 def onboarding_stream_message(request):
     """Stream onboarding chat messages for guest users via SSE."""
-    print(f"ONBOARDING_STREAM: ----- Starting onboarding_stream_message -----")
-    print(f"ONBOARDING_STREAM: Request method: {request.method}")
-    print(f"ONBOARDING_STREAM: Request data: {request.data}")
-    print(f"ONBOARDING_STREAM: Session data: {dict(request.session)}")
+    import traceback
+    import requests
+    import os
     
-    guest_id = request.data.get('guest_id') or request.session.get('guest_id')
-    print(f"ONBOARDING_STREAM: Initial guest_id: {guest_id}")
-    
-    if not guest_id:
-        guest_id = generate_guest_id()
-        request.session['guest_id'] = guest_id
-        request.session.save()
-        print(f"ONBOARDING_STREAM: Generated new guest_id: {guest_id}")
-    else:
-        print(f"ONBOARDING_STREAM: Using existing guest_id: {guest_id}")
-
-    message = request.data.get('message')
-    thread_id = request.data.get('response_id')
-    
-    print(f"ONBOARDING_STREAM: Message: {message}")
-    print(f"ONBOARDING_STREAM: Thread ID: {thread_id}")
-
-    assistant = OnboardingAssistant(guest_id)
-    print(f"ONBOARDING_STREAM: Created OnboardingAssistant with guest_id: {guest_id}")
-
-    def event_stream():
-        print(f"ONBOARDING_STREAM: Starting event_stream generator")
-        emitted_id = False
-        chunk_count = 0
+    try:
+        # Validate request method
+        if request.method != 'POST':
+            logger.error(f"onboarding_stream_message: Invalid method {request.method}, expected POST")
+            return JsonResponse({
+                'status': 'error',
+                'message': f'Method {request.method} not allowed. Use POST.'
+            }, status=405)
         
+        # Check request data access
         try:
-            print(f"ONBOARDING_STREAM: Calling assistant.stream_message('{message}')")
-            for chunk in assistant.stream_message(message):
-                chunk_count += 1
-                print(f"ONBOARDING_STREAM: Chunk #{chunk_count}: {chunk}")
-                
-                if not isinstance(chunk, dict):
-                    print(f"ONBOARDING_STREAM: Skipping non-dict chunk: {type(chunk)}")
-                    continue
+            request_data = request.data
+        except Exception as data_error:
+            logger.error(f"onboarding_stream_message: Error accessing request.data: {str(data_error)}", exc_info=True)
+            # Try to access request.POST as fallback
+            try:
+                request_data = request.POST
+            except Exception as post_error:
+                logger.error(f"onboarding_stream_message: Error accessing request.POST: {str(post_error)}", exc_info=True)
+                # n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                if n8n_traceback_url:
+                    requests.post(n8n_traceback_url, json={
+                        "error": f"Data access error: {str(data_error)}, POST error: {str(post_error)}", 
+                        "source": "onboarding_stream_message.data_access", 
+                        "request_method": request.method,
+                        "content_type": request.content_type,
+                        "raw_body": str(request.body),
+                        "traceback": traceback.format_exc()
+                    })
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Unable to parse request data'
+                }, status=400)
+        
+        # Check session access
+        try:
+            session_data = dict(request.session)
+        except Exception as session_error:
+            logger.error(f"onboarding_stream_message: Error accessing session: {str(session_error)}", exc_info=True)
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            if n8n_traceback_url:
+                requests.post(n8n_traceback_url, json={
+                    "error": str(session_error), 
+                    "source": "onboarding_stream_message.session_access", 
+                    "traceback": traceback.format_exc()
+                })
+            session_data = {}
+        
+        # Ensure session exists
+        try:
+            if not request.session.session_key:
+                request.session.create()
+        except Exception as session_create_error:
+            logger.error(f"onboarding_stream_message: Error creating session: {str(session_create_error)}", exc_info=True)
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            if n8n_traceback_url:
+                requests.post(n8n_traceback_url, json={
+                    "error": str(session_create_error), 
+                    "source": "onboarding_stream_message.session_create", 
+                    "traceback": traceback.format_exc()
+                })
+        
+        # Extract guest_id
+        try:
+            guest_id = request_data.get('guest_id') if hasattr(request_data, 'get') else None
+            if not guest_id and hasattr(request, 'session'):
+                guest_id = request.session.get('guest_id')
+        except Exception as guest_id_error:
+            logger.error(f"onboarding_stream_message: Error extracting guest_id: {str(guest_id_error)}", exc_info=True)
+            guest_id = None
+        
+        # Generate guest_id if needed
+        if not guest_id:
+            try:
+                from meals.meal_assistant_implementation import generate_guest_id
+                guest_id = generate_guest_id()
+                if hasattr(request, 'session'):
+                    request.session['guest_id'] = guest_id
+                    request.session.save()
+            except Exception as generate_error:
+                logger.error(f"onboarding_stream_message: Error generating guest_id: {str(generate_error)}", exc_info=True)
+                # n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                if n8n_traceback_url:
+                    requests.post(n8n_traceback_url, json={
+                        "error": str(generate_error), 
+                        "source": "onboarding_stream_message.generate_guest_id", 
+                        "traceback": traceback.format_exc()
+                    })
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Failed to generate guest ID'
+                }, status=500)
+        
+        # Extract message and thread_id
+        try:
+            message = request_data.get('message') if hasattr(request_data, 'get') else None
+            thread_id = request_data.get('response_id') if hasattr(request_data, 'get') else None
+        except Exception as extract_error:
+            logger.error(f"onboarding_stream_message: Error extracting message/thread_id: {str(extract_error)}", exc_info=True)
+            message = None
+            thread_id = None
+        
+        # Validate message
+        if not message:
+            logger.error(f"onboarding_stream_message: Missing message parameter")
+            return JsonResponse({
+                'status': 'error',
+                'message': 'Missing required parameter: message'
+            }, status=400)
+        
+        # Clear any existing conversation history to prevent context confusion
+        # (In case this is the first onboarding message without calling new_conversation first)
+        try:
+            from meals.meal_assistant_implementation import GLOBAL_GUEST_STATE
+            if guest_id in GLOBAL_GUEST_STATE:
+                del GLOBAL_GUEST_STATE[guest_id]
+                logger.info(f"onboarding_stream_message: Cleared existing conversation history for guest_id={guest_id}")
+        except Exception as clear_error:
+            logger.warning(f"onboarding_stream_message: Failed to clear existing history for guest_id={guest_id}: {str(clear_error)}")
+            # Don't fail the request for this - just log and continue
+        
+        # Clear any existing conversation history to prevent context confusion
+        # (In case this is the first onboarding message without calling new_conversation first)
+        try:
+            from meals.meal_assistant_implementation import GLOBAL_GUEST_STATE
+            if guest_id in GLOBAL_GUEST_STATE:
+                del GLOBAL_GUEST_STATE[guest_id]
+                logger.info(f"onboarding_stream_message: Cleared existing conversation history for guest_id={guest_id}")
+        except Exception as clear_error:
+            logger.warning(f"onboarding_stream_message: Failed to clear existing history for guest_id={guest_id}: {str(clear_error)}")
+            # Don't fail the request for this - just log and continue
+        
+        # Create OnboardingAssistant
+        try:
+            from meals.meal_assistant_implementation import OnboardingAssistant
+            assistant = OnboardingAssistant(guest_id)
+        except Exception as assistant_error:
+            logger.error(f"onboarding_stream_message: Error creating OnboardingAssistant: {str(assistant_error)}", exc_info=True)
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            if n8n_traceback_url:
+                requests.post(n8n_traceback_url, json={
+                    "error": str(assistant_error), 
+                    "source": "onboarding_stream_message.create_assistant", 
+                    "guest_id": guest_id,
+                    "traceback": traceback.format_exc()
+                })
+            return JsonResponse({
+                'status': 'error',
+                'message': f'Failed to create onboarding assistant: {str(assistant_error)}'
+            }, status=500)
 
-                chunk_type = chunk.get("type", "unknown")
-                print(f"ONBOARDING_STREAM: Processing chunk type: {chunk_type}")
+        def event_stream():
+            emitted_id = False
+            chunk_count = 0
+            
+            try:
+                for chunk in assistant.stream_message(message, thread_id):
+                    chunk_count += 1
+                    if not isinstance(chunk, dict):
+                        continue
 
-                if not emitted_id and chunk.get("type") == "response_id":
-                    response_id = chunk.get('id')
-                    print(f"ONBOARDING_STREAM: Emitting response.created with ID: {response_id}")
-                    payload = {'type': 'response.created', 'id': response_id}
-                    yield f"data: {json.dumps(payload)}\n\n"
-                    emitted_id = True
-                    continue
-
-                if chunk.get("type") == "tool_result":
-                    tool_call_id = chunk.get("tool_call_id")
-                    tool_name = chunk.get("name")
-                    tool_output = chunk.get("output")
-                    print(f"ONBOARDING_STREAM: Tool result - ID: {tool_call_id}, Name: {tool_name}")
-                    print(f"ONBOARDING_STREAM: Tool output: {tool_output}")
+                    chunk_type = chunk.get("type", "unknown")
                     
-                    payload = {
-                        "type": "response.tool",
-                        "id": tool_call_id,
-                        "name": tool_name,
-                        "output": tool_output,
-                    }
-                    yield f"data: {json.dumps(payload)}\n\n"
-                    continue
+                    if not emitted_id and chunk.get("type") == "response_id":
+                        response_id = chunk.get('id')
+                        payload = {'type': 'response.created', 'id': response_id}
+                        yield f"data: {json.dumps(payload)}\n\n"
+                        emitted_id = True
+                        continue
 
-                if chunk.get("type") == "text":
-                    text_content = chunk.get('content')
-                    print(f"ONBOARDING_STREAM: Text chunk: {text_content}")
+                    if chunk.get("type") == "tool_result":
+                        tool_call_id = chunk.get("tool_call_id")
+                        tool_name = chunk.get("name")
+                        tool_output = chunk.get("output")
+                        
+                        payload = {
+                            "type": "response.tool",
+                            "id": tool_call_id,
+                            "name": tool_name,
+                            "output": tool_output,
+                        }
+                        yield f"data: {json.dumps(payload)}\n\n"
+                        continue
+
+                    if chunk.get("type") == "text":
+                        text_content = chunk.get('content')
+                        
+                        payload = {
+                            "type": "response.output_text.delta",
+                            "delta": {"text": text_content},
+                        }
+                        yield f"data: {json.dumps(payload)}\n\n"
+                        continue
+
+                    if chunk.get("type") == "password_request":
+                        is_password_request = chunk.get('is_password_request', False)
+                        
+                        payload = {
+                            "type": "password_request",
+                            "is_password_request": is_password_request,
+                        }
+                        yield f"data: {json.dumps(payload)}\n\n"
+                        continue
+
+                    if chunk.get("type") == "response.completed":
+                        yield f"data: {json.dumps({'type': 'response.completed'})}\n\n"
+                        continue
                     
-                    payload = {
-                        "type": "response.output_text.delta",
-                        "delta": {"text": text_content},
-                    }
-                    yield f"data: {json.dumps(payload)}\n\n"
-                    continue
-
-                if chunk.get("type") == "password_request":
-                    is_password_request = chunk.get('is_password_request', False)
-                    print(f"ONBOARDING_STREAM: Password request status: {is_password_request}")
+                    if chunk.get("type") == "error":
+                        error_message = chunk.get('message', 'Unknown error')
+                        logger.error(f"onboarding_stream_message: Error chunk received: {error_message}")
+                        yield f"data: {json.dumps(chunk)}\n\n"
+                        continue
                     
-                    payload = {
-                        "type": "password_request",
-                        "is_password_request": is_password_request,
-                    }
-                    yield f"data: {json.dumps(payload)}\n\n"
-                    continue
+            except Exception as stream_error:
+                logger.error(f"onboarding_stream_message: Exception in event_stream for guest_id {guest_id}: {str(stream_error)}", exc_info=True)
+                # n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                if n8n_traceback_url:
+                    requests.post(n8n_traceback_url, json={
+                        "error": str(stream_error), 
+                        "source": "onboarding_stream_message.event_stream", 
+                        "guest_id": guest_id,
+                        "message": message,
+                        "thread_id": thread_id,
+                        "traceback": traceback.format_exc()
+                    })
+                yield f"data: {json.dumps({'type': 'error', 'message': str(stream_error)})}\n\n"
 
-                if chunk.get("type") == "response.completed":
-                    print(f"ONBOARDING_STREAM: Response completed")
-                    yield f"data: {json.dumps({'type': 'response.completed'})}\n\n"
-                    continue
-                    
-                # Log unhandled chunk types
-                print(f"ONBOARDING_STREAM: Unhandled chunk type: {chunk_type}, full chunk: {chunk}")
-                
-        except Exception as e:
-            print(f"ONBOARDING_STREAM: Exception in event_stream: {str(e)}")
-            logger.error(f"Error in onboarding_stream_message: {str(e)}")
-            traceback.print_exc()
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            yield 'event: close\n\n'
 
-        print(f"ONBOARDING_STREAM: Ending event_stream - processed {chunk_count} chunks")
-        yield 'event: close\n\n'
-
-    print(f"ONBOARDING_STREAM: Creating StreamingHttpResponse")
-    response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
-    response["X-Guest-ID"] = guest_id
-    print(f"ONBOARDING_STREAM: Returning response with guest_id: {guest_id}")
-    return response
+        response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+        response["X-Guest-ID"] = guest_id
+        return response
+        
+    except Exception as e:
+        logger.error(f"onboarding_stream_message: Unhandled exception: {str(e)}", exc_info=True)
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        if n8n_traceback_url:
+            try:
+                requests.post(n8n_traceback_url, json={
+                    "error": str(e), 
+                    "source": "onboarding_stream_message.unhandled", 
+                    "request_method": request.method if hasattr(request, 'method') else 'unknown',
+                    "content_type": request.content_type if hasattr(request, 'content_type') else 'unknown',
+                    "traceback": traceback.format_exc()
+                })
+            except Exception as webhook_error:
+                logger.error(f"onboarding_stream_message: Failed to send error to n8n webhook: {str(webhook_error)}")
+        
+        return JsonResponse({
+            'status': 'error',
+            'message': f'Failed to process onboarding stream: {str(e)}'
+        }, status=500)
 
 
 @api_view(['POST'])
 def onboarding_new_conversation(request):
     """Start a fresh onboarding chat."""
-    print(f"ONBOARDING_NEW: ----- Starting onboarding_new_conversation -----")
-    print(f"ONBOARDING_NEW: Request method: {request.method}")
-    print(f"ONBOARDING_NEW: Request data: {request.data}")
-    print(f"ONBOARDING_NEW: Session data: {dict(request.session)}")
+    import traceback
+    import requests
+    import os
     
     try:
-        guest_id = request.data.get('guest_id') or request.session.get('guest_id')
-        print(f"ONBOARDING_NEW: Initial guest_id: {guest_id}")
+        # Validate request method
+        if request.method != 'POST':
+            logger.error(f"onboarding_new_conversation: Invalid method {request.method}, expected POST")
+            return JsonResponse({
+                'status': 'error',
+                'message': f'Method {request.method} not allowed. Use POST.'
+            }, status=405)
         
-        if not guest_id:
-            guest_id = generate_guest_id()
-            request.session['guest_id'] = guest_id
-            request.session.save()
-            print(f"ONBOARDING_NEW: Generated new guest_id: {guest_id}")
-        else:
-            print(f"ONBOARDING_NEW: Using existing guest_id: {guest_id}")
+        # Check request data access
+        try:
+            request_data = request.data
+        except Exception as data_error:
+            logger.error(f"onboarding_new_conversation: Error accessing request.data: {str(data_error)}", exc_info=True)
+            # Try to access request.POST as fallback
+            try:
+                request_data = request.POST
+            except Exception as post_error:
+                logger.error(f"onboarding_new_conversation: Error accessing request.POST: {str(post_error)}", exc_info=True)
+                # n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                if n8n_traceback_url:
+                    requests.post(n8n_traceback_url, json={
+                        "error": f"Data access error: {str(data_error)}, POST error: {str(post_error)}", 
+                        "source": "onboarding_new_conversation.data_access", 
+                        "request_method": request.method,
+                        "content_type": request.content_type,
+                        "raw_body": str(request.body),
+                        "traceback": traceback.format_exc()
+                    })
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Unable to parse request data'
+                }, status=400)
+        
+        # Check session access
+        try:
+            session_data = dict(request.session)
+        except Exception as session_error:
+            logger.error(f"onboarding_new_conversation: Error accessing session: {str(session_error)}", exc_info=True)
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            if n8n_traceback_url:
+                requests.post(n8n_traceback_url, json={
+                    "error": str(session_error), 
+                    "source": "onboarding_new_conversation.session_access", 
+                    "traceback": traceback.format_exc()
+                })
+            session_data = {}
+        
+        # Ensure session exists
+        try:
+            if not request.session.session_key:
+                request.session.create()
+        except Exception as session_create_error:
+            logger.error(f"onboarding_new_conversation: Error creating session: {str(session_create_error)}", exc_info=True)
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            if n8n_traceback_url:
+                requests.post(n8n_traceback_url, json={
+                    "error": str(session_create_error), 
+                    "source": "onboarding_new_conversation.session_create", 
+                    "traceback": traceback.format_exc()
+                })
+        
+        # Extract guest_id
+        try:
+            guest_id = request_data.get('guest_id') if hasattr(request_data, 'get') else None
+            if not guest_id and hasattr(request, 'session'):
+                guest_id = request.session.get('guest_id')
 
-        print(f"ONBOARDING_NEW: Creating OnboardingAssistant with guest_id: {guest_id}")
-        assistant = OnboardingAssistant(guest_id)
+        except Exception as guest_id_error:
+            logger.error(f"onboarding_new_conversation: Error extracting guest_id: {str(guest_id_error)}", exc_info=True)
+            guest_id = None
         
-        print(f"ONBOARDING_NEW: Calling assistant.reset_conversation()")
-        assistant.reset_conversation()
+        # Generate guest_id if needed
+        if not guest_id:
+            try:
+                from meals.meal_assistant_implementation import generate_guest_id
+                guest_id = generate_guest_id()
+                if hasattr(request, 'session'):
+                    request.session['guest_id'] = guest_id
+                    request.session.save()
+
+            except Exception as generate_error:
+                logger.error(f"onboarding_new_conversation: Error generating guest_id: {str(generate_error)}", exc_info=True)
+                # n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                if n8n_traceback_url:
+                    requests.post(n8n_traceback_url, json={
+                        "error": str(generate_error), 
+                        "source": "onboarding_new_conversation.generate_guest_id", 
+                        "traceback": traceback.format_exc()
+                    })
+                return JsonResponse({
+                    'status': 'error',
+                    'message': 'Failed to generate guest ID'
+                                }, status=500)
         
-        print(f"ONBOARDING_NEW: Conversation reset successfully for guest_id: {guest_id}")
+        # Clear any existing conversation history to prevent context confusion
+        try:
+            from meals.meal_assistant_implementation import GLOBAL_GUEST_STATE
+            if guest_id in GLOBAL_GUEST_STATE:
+                del GLOBAL_GUEST_STATE[guest_id]
+                logger.info(f"onboarding_new_conversation: Cleared existing conversation history for guest_id={guest_id}")
+        except Exception as clear_error:
+            logger.warning(f"onboarding_new_conversation: Failed to clear existing history for guest_id={guest_id}: {str(clear_error)}")
+            # Don't fail the request for this - just log and continue
+        
+        # Create OnboardingAssistant
+        try:
+
+            from meals.meal_assistant_implementation import OnboardingAssistant
+            assistant = OnboardingAssistant(guest_id)
+
+        except Exception as assistant_error:
+            logger.error(f"onboarding_new_conversation: Error creating OnboardingAssistant: {str(assistant_error)}", exc_info=True)
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            if n8n_traceback_url:
+                requests.post(n8n_traceback_url, json={
+                    "error": str(assistant_error), 
+                    "source": "onboarding_new_conversation.create_assistant", 
+                    "guest_id": guest_id,
+                    "traceback": traceback.format_exc()
+                })
+            return JsonResponse({
+                'status': 'error',
+                'message': f'Failed to create onboarding assistant: {str(assistant_error)}'
+            }, status=500)
+        
+        # Reset conversation
+        try:
+
+            reset_result = assistant.reset_conversation()
+
+        except Exception as reset_error:
+            logger.error(f"onboarding_new_conversation: Error resetting conversation: {str(reset_error)}", exc_info=True)
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            if n8n_traceback_url:
+                requests.post(n8n_traceback_url, json={
+                    "error": str(reset_error), 
+                    "source": "onboarding_new_conversation.reset_conversation", 
+                    "guest_id": guest_id,
+                    "traceback": traceback.format_exc()
+                })
+            return JsonResponse({
+                'status': 'error',
+                'message': f'Failed to reset conversation: {str(reset_error)}'
+            }, status=500)
+        
+        
 
         return JsonResponse({
             "status": "success",
             "guest_id": guest_id,
             "message": "Onboarding conversation reset successfully."
         })
+        
     except Exception as e:
-        print(f"ONBOARDING_NEW: Exception occurred: {str(e)}")
-        logging.error(f"Error in onboarding_new_conversation: {str(e)}")
-        traceback.print_exc()
+        logger.error(f"onboarding_new_conversation: Unhandled exception: {str(e)}", exc_info=True)
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        if n8n_traceback_url:
+            try:
+                requests.post(n8n_traceback_url, json={
+                    "error": str(e), 
+                    "source": "onboarding_new_conversation.unhandled", 
+                    "request_method": request.method if hasattr(request, 'method') else 'unknown',
+                    "content_type": request.content_type if hasattr(request, 'content_type') else 'unknown',
+                    "traceback": traceback.format_exc()
+                })
+            except Exception as webhook_error:
+                logger.error(f"onboarding_new_conversation: Failed to send error to n8n webhook: {str(webhook_error)}")
+        
         return JsonResponse({
             'status': 'error',
             'message': f'Failed to start new onboarding conversation: {str(e)}'

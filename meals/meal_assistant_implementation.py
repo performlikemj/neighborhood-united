@@ -704,9 +704,7 @@ class MealPlanningAssistant:
             # This is the key fix - if response completed and we have text, we're done
             if response_completed and buf:
                 # ── persist the assistant turn for guests ───────────────
-                if buf:  # append the assistant text we just streamed
-                    current_history.append({"role": "assistant",
-                                           "content": buf})
+                # Note: assistant message already added to history in step 3, don't duplicate
                 if is_guest and final_response_id:
                     self._store_guest_state(final_response_id,
                                             current_history)
@@ -792,6 +790,15 @@ class MealPlanningAssistant:
             # Debug: Print the history being sent to the next request
             for i, item in enumerate(current_history):
                 item_type = item.get("type", item.get("role", "unknown"))
+
+            # 7b) If we had text AND function calls in the same response, we're done
+            # Don't make another API call as this was a complete response
+            if buf and calls:
+                # Persist the final state before breaking
+                if is_guest and final_response_id:
+                    self._store_guest_state(final_response_id, current_history)
+                yield {"type": "response.completed"}
+                break
 
             # 8) Loop back: Prepare for the next API call within the same turn
             previous_response_id = latest_id_in_stream # Use the ID from the segment just processed
@@ -1051,7 +1058,7 @@ class MealPlanningAssistant:
         return formatted_text
 
     def _fix_function_args(self, function_name: str, args_str: str) -> str:
-        """Ensure that user_id is correctly set in function arguments."""
+        """Ensure that user_id and guest_id are correctly set in function arguments."""
         try:
             args = json.loads(args_str)
             
@@ -1059,6 +1066,13 @@ class MealPlanningAssistant:
             if "user_id" in args:
                 if args["user_id"] != self.user_id:
                     args["user_id"] = self.user_id
+                    return json.dumps(args)
+            
+            # Fix guest_id for onboarding tools (common issue where AI confuses username with guest_id)
+            onboarding_funcs = ['onboarding_save_progress', 'onboarding_request_password', 'guest_register_user']
+            if function_name in onboarding_funcs and "guest_id" in args:
+                if args["guest_id"] != self.user_id:
+                    args["guest_id"] = self.user_id
                     return json.dumps(args)
             
             # Special case for chef-meal related functions
@@ -2218,224 +2232,379 @@ class OnboardingAssistant(MealPlanningAssistant):
     """
 
     def __init__(self, user_id: Optional[Union[int, str]] = None):
-        # Initialize with the same proven infrastructure as MealPlanningAssistant
-        super().__init__(user_id)
-        
-        # Override system message for onboarding-specific flow
-        self.system_message = (
-            "You are MJ, sautAI's friendly onboarding assistant. "
-            "Help users create their account through a simple conversation.\n\n"
+        try:
+            # Initialize with the same proven infrastructure as MealPlanningAssistant
+            super().__init__(user_id)
+            
+            # Override system message for onboarding-specific flow
+            self.system_message = (
+                "You are MJ, sautAI's friendly onboarding assistant. "
+                "Help users create their account through a simple conversation.\n\n"
 
-            "### PROCESS\n"
-            "1. Ask for username\n"
-            "2. Ask for email\n"
-            "3. Ask for preferred language (e.g., English, Spanish, French, Japanese, etc)\n"
-            "4. Ask for dietary preferences (e.g., Vegan, Vegetarian, Gluten-Free, Keto, etc.)\n"
-            "5. Ask for allergies (e.g., Peanuts, Tree nuts, Milk, Egg, Wheat, etc.)\n"
-            "6. Optionally ask for household members (name, age, dietary preferences)\n"
-            "7. When you have username AND email AND language AND dietary preferences AND allergies, call `onboarding_request_password`\n"
-            "8. Then ask for password\n\n"
+                "### PROCESS\n"
+                "1. Ask for username\n"
+                "2. Ask for email\n"
+                "3. Ask for preferred language (e.g., English, Spanish, French, Japanese, etc)\n"
+                "4. Ask for dietary preferences (e.g., Vegan, Vegetarian, Gluten-Free, Keto, etc.)\n"
+                "5. Ask for allergies (e.g., Peanuts, Tree nuts, Milk, Egg, Wheat, etc.)\n"
+                "6. Optionally ask for household members (name, age, dietary preferences)\n"
+                "7. When you have username AND email AND language AND dietary preferences AND allergies, call `onboarding_request_password`\n"
+                "8. Then ask for password\n\n"
 
-            "### TOOLS\n"
-            "• `onboarding_save_progress` – call with individual params (username, email, preferred_language, dietary_preferences, custom_dietary_preferences, allergies, custom_allergies, household_members)\n"
-            "• `onboarding_request_password` – call ONLY when you have username AND email AND language AND dietary preferences AND allergies\n\n"
+                "### TOOLS\n"
+                "• `onboarding_save_progress` – call with individual params (username, email, preferred_language, dietary_preferences, custom_dietary_preferences, allergies, custom_allergies, household_members)\n"
+                "• `onboarding_request_password` – call ONLY when you have username AND email AND language AND dietary preferences AND allergies\n\n"
 
-            "### RULES\n"
-            "• Be friendly and brief\n"
-            "• Save progress after collecting data\n"
-            "• Ages should be numbers only (e.g., 3 not \"3 years\")\n"
-            "• For dietary preferences, use standard names like 'Vegan', 'Vegetarian', 'Gluten-Free', 'Keto', 'Paleo', 'Halal', 'Kosher', 'Low-Calorie', 'Low-Sodium', 'High-Protein', 'Dairy-Free', 'Nut-Free', 'Raw Food', 'Whole 30', 'Low-FODMAP', 'Diabetic-Friendly', 'Everything'\n"
-            "• For allergies, use standard names like 'Peanuts', 'Tree nuts', 'Milk', 'Egg', 'Wheat', 'Soy', 'Fish', 'Shellfish', 'Sesame', 'None'\n"
-            "• If user mentions dietary preferences or allergies not in standard list, use custom_dietary_preferences or custom_allergies arrays\n"
-            "• Password will be entered securely in a modal\n"
-        )
+                "### RULES\n"
+                "• Be friendly and brief\n"
+                "• Save progress after collecting data\n"
+                "• Ages should be numbers only (e.g., 3 not \"3 years\")\n"
+                "• For dietary preferences, use standard names like 'Vegan', 'Vegetarian', 'Gluten-Free', 'Keto', 'Paleo', 'Halal', 'Kosher', 'Low-Calorie', 'Low-Sodium', 'High-Protein', 'Dairy-Free', 'Nut-Free', 'Raw Food', 'Whole 30', 'Low-FODMAP', 'Diabetic-Friendly', 'Everything'\n"
+                "• For allergies, use standard names like 'Peanuts', 'Tree nuts', 'Milk', 'Egg', 'Wheat', 'Soy', 'Fish', 'Shellfish', 'Sesame', 'None'\n"
+                "• If user mentions dietary preferences or allergies not in standard list, use custom_dietary_preferences or custom_allergies arrays\n"
+                "• Password will be entered securely in a modal\n"
+            )
+            
+        except Exception as e:
+            logger.error(f"OnboardingAssistant.__init__: Error initializing onboarding assistant for user_id={user_id}: {str(e)}", exc_info=True)
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            if n8n_traceback_url:
+                requests.post(n8n_traceback_url, json={
+                    "error": str(e), 
+                    "source": "OnboardingAssistant.__init__", 
+                    "user_id": user_id,
+                    "traceback": traceback.format_exc()
+                })
+            raise
 
     def _get_tools_for_user(self, is_guest: bool) -> List[Dict[str, Any]]:
         """Override to only allow onboarding tools for security."""
-        # Always use guest tools for onboarding, but filter to onboarding-specific ones only
-        from .guest_tools import get_guest_tools
-        all_guest_tools = get_guest_tools()
-        
-        # Security restriction: Only allow onboarding-specific tools
-        allowed_tool_names = {
-            "guest_register_user", 
-            "onboarding_save_progress", 
-            "onboarding_request_password"
-        }
-        
-        return [
-            tool for tool in all_guest_tools 
-            if tool.get("name") in allowed_tool_names
-        ]
+        try:
+            # Always use guest tools for onboarding, but filter to onboarding-specific ones only
+            from .guest_tools import get_guest_tools
+            all_guest_tools = get_guest_tools()
+            
+            # Security restriction: Only allow onboarding-specific tools
+            allowed_tool_names = {
+                "guest_register_user", 
+                "onboarding_save_progress", 
+                "onboarding_request_password"
+            }
+            
+            filtered_tools = [
+                tool for tool in all_guest_tools 
+                if tool.get("name") in allowed_tool_names
+            ]
+            
+            return filtered_tools
+            
+        except Exception as e:
+            logger.error(f"OnboardingAssistant._get_tools_for_user: Error getting tools for user_id={self.user_id}: {str(e)}", exc_info=True)
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            if n8n_traceback_url:
+                requests.post(n8n_traceback_url, json={
+                    "error": str(e), 
+                    "source": "OnboardingAssistant._get_tools_for_user", 
+                    "user_id": self.user_id,
+                    "is_guest": is_guest,
+                    "traceback": traceback.format_exc()
+                })
+            # Return empty list as fallback to prevent complete failure
+            return []
 
     def _instructions(self, is_guest: bool) -> str:
         """Override to provide onboarding-specific instructions with current progress."""
-        base_prompt = self.system_message
-
-        # Append current saved progress to help with context
         try:
-            from custom_auth.models import OnboardingSession
-            session = OnboardingSession.objects.filter(guest_id=str(self.user_id)).first()
-            if session and session.data:
-                progress = json.dumps(session.data, indent=2)
-                base_prompt += f"\n### CURRENT SAVED DATA\n```json\n{progress}\n```\n"
+            base_prompt = self.system_message
 
-                data = session.data
-                has_username = bool(data.get('username') or data.get('user', {}).get('username'))
-                has_email = bool(data.get('email') or data.get('user', {}).get('email'))
-                has_language = bool(data.get('preferred_language'))
-                has_dietary = bool(data.get('dietary_preferences') or data.get('custom_dietary_preferences'))
-                has_allergies = bool(data.get('allergies') or data.get('custom_allergies'))
-                has_pw = bool(data.get('password') or data.get('user', {}).get('password'))
-                members = data.get('household_members', [])
+            # Append current saved progress to help with context
+            try:
+                from custom_auth.models import OnboardingSession
+                session = OnboardingSession.objects.filter(guest_id=str(self.user_id)).first()
+                
+                if session and session.data:
+                    progress = json.dumps(session.data, indent=2)
+                    base_prompt += f"\n### CURRENT SAVED DATA\n```json\n{progress}\n```\n"
 
-                # Determine next question based on what's missing
-                if not has_username:
-                    base_prompt += "\nNEXT STEP → Ask for username.\n"
-                elif not has_email:
-                    base_prompt += "\nNEXT STEP → Ask for email address.\n"
-                elif not has_language:
-                    base_prompt += "\nNEXT STEP → Ask for preferred language (e.g., English, Spanish, French).\n"
-                elif not has_dietary:
-                    base_prompt += "\nNEXT STEP → Ask for dietary preferences. If user says 'none' or 'everything', use 'Everything'.\n"
-                elif not has_allergies:
-                    base_prompt += "\nNEXT STEP → Ask for allergies. If user says 'none', use 'None'.\n"
-                elif has_username and has_email and has_language and has_dietary and has_allergies and not members:
-                    base_prompt += (
-                        "\nNEXT STEP → Offer to collect household‑member details "
-                        "(name, age, dietary notes). If the user says 'skip', continue.\n"
-                    )
-                elif has_username and has_email and has_language and has_dietary and has_allergies and not has_pw:
-                    base_prompt += "\nNEXT STEP → Call `onboarding_request_password` and then ask for password.\n"
+                    data = session.data
+                    has_username = bool(data.get('username') or data.get('user', {}).get('username'))
+                    has_email = bool(data.get('email') or data.get('user', {}).get('email'))
+                    has_language = bool(data.get('preferred_language'))
+                    has_dietary = bool(data.get('dietary_preferences') or data.get('custom_dietary_preferences'))
+                    has_allergies = bool(data.get('allergies') or data.get('custom_allergies'))
+                    has_pw = bool(data.get('password') or data.get('user', {}).get('password'))
+                    members = data.get('household_members', [])
+
+                    # Determine next question based on what's missing
+                    if not has_username:
+                        base_prompt += "\nNEXT STEP → Ask for username.\n"
+                    elif not has_email:
+                        base_prompt += "\nNEXT STEP → Ask for email address.\n"
+                    elif not has_language:
+                        base_prompt += "\nNEXT STEP → Ask for preferred language (e.g., English, Spanish, French).\n"
+                    elif not has_dietary:
+                        base_prompt += "\nNEXT STEP → Ask for dietary preferences. If user says 'none' or 'everything', use 'Everything'.\n"
+                    elif not has_allergies:
+                        base_prompt += "\nNEXT STEP → Ask for allergies. If user says 'none', use 'None'.\n"
+                    elif has_username and has_email and has_language and has_dietary and has_allergies and not members:
+                        base_prompt += (
+                            "\nNEXT STEP → Offer to collect household‑member details "
+                            "(name, age, dietary notes). If the user says 'skip', continue.\n"
+                        )
+                    elif has_username and has_email and has_language and has_dietary and has_allergies and not has_pw:
+                        base_prompt += "\nNEXT STEP → Call `onboarding_request_password` and then ask for password.\n"
+                    
+            except Exception as session_error:
+                logger.warning(f"OnboardingAssistant._instructions: Could not load onboarding progress for user_id={self.user_id}: {session_error}", exc_info=True)
+                # n8n traceback for session loading errors
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                if n8n_traceback_url:
+                    requests.post(n8n_traceback_url, json={
+                        "error": str(session_error), 
+                        "source": "OnboardingAssistant._instructions.session_load", 
+                        "user_id": self.user_id,
+                        "traceback": traceback.format_exc()
+                    })
+
+            return base_prompt
+            
         except Exception as e:
-            logger.warning(f"Could not load onboarding progress for {self.user_id}: {e}")
-
-        return base_prompt
+            logger.error(f"OnboardingAssistant._instructions: Error building instructions for user_id={self.user_id}: {str(e)}", exc_info=True)
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            if n8n_traceback_url:
+                requests.post(n8n_traceback_url, json={
+                    "error": str(e), 
+                    "source": "OnboardingAssistant._instructions", 
+                    "user_id": self.user_id,
+                    "is_guest": is_guest,
+                    "traceback": traceback.format_exc()
+                })
+            # Return basic fallback prompt
+            return self.system_message
 
     def send_message(self, message: str, thread_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Override to check for password prompt structure but use parent's proven send_message logic.
         """
-        # Check if we should expect a password prompt based on the message content
-        should_use_password_prompt = self._should_use_password_prompt()
-        
-        if should_use_password_prompt:
-            # Use structured output for password prompts
-            is_guest = self._is_guest(self.user_id)
+        try:
+            # Check if we should expect a password prompt based on the message content
+            should_use_password_prompt = self._should_use_password_prompt()
             
-            # Get history the same way as parent class
-            if is_guest:
-                guest_data = GLOBAL_GUEST_STATE.get(self.user_id, {})
-                if guest_data and "history" in guest_data:
-                    history = guest_data["history"].copy()
-                    history.append({"role": "user", "content": message})
+            if should_use_password_prompt:
+                # Use structured output for password prompts
+                is_guest = self._is_guest(self.user_id)
+                
+                # Get history the same way as parent class
+                if is_guest:
+                    guest_data = GLOBAL_GUEST_STATE.get(self.user_id, {})
+                    if guest_data and "history" in guest_data:
+                        history = guest_data["history"].copy()
+                        history.append({"role": "user", "content": message})
+                    else:
+                        history = [
+                            {"role": "system", "content": self.system_message},
+                            {"role": "user", "content": message},
+                        ]
                 else:
+                    # This shouldn't happen for onboarding, but handle gracefully
+                    logger.warning(f"OnboardingAssistant.send_message: Non-guest user in onboarding (unexpected) for user_id={self.user_id}")
                     history = [
                         {"role": "system", "content": self.system_message},
                         {"role": "user", "content": message},
                     ]
-            else:
-                # This shouldn't happen for onboarding, but handle gracefully
-                history = [
-                    {"role": "system", "content": self.system_message},
-                    {"role": "user", "content": message},
-                ]
-            
-            try:
-                # Use structured output for password prompts
-                resp = self.client.responses.create(
-                    model="gpt-4o-mini",
-                    input=history,
-                    instructions=self._instructions(is_guest),
-                    text={
-                        "format": {
-                            'type': 'json_schema',
-                            'name': 'password_prompt',
-                            'schema': PasswordPrompt.model_json_schema()
+                
+                try:
+                    # Use structured output for password prompts
+                    resp = self.client.responses.create(
+                        model="gpt-4o-mini",
+                        input=history,
+                        instructions=self._instructions(is_guest),
+                        text={
+                            "format": {
+                                'type': 'json_schema',
+                                'name': 'password_prompt',
+                                'schema': PasswordPrompt.model_json_schema()
+                            }
                         }
+                    )
+                    
+                    # Parse the structured response
+                    password_prompt = PasswordPrompt.model_validate_json(resp.output_text)
+                    response_text = password_prompt.assistant_message
+                    
+                    # Add to history and persist using parent's method
+                    history.append({"role": "assistant", "content": response_text})
+                    if is_guest:
+                        self._store_guest_state(resp.id, history)
+                    
+                    return {
+                        "status": "success",
+                        "message": response_text,
+                        "is_password_request": password_prompt.is_password_request,
+                        "response_id": resp.id
                     }
-                )
-                
-                # Parse the structured response
-                password_prompt = PasswordPrompt.model_validate_json(resp.output_text)
-                response_text = password_prompt.assistant_message
-                
-                # Add to history and persist using parent's method
-                history.append({"role": "assistant", "content": response_text})
-                if is_guest:
-                    self._store_guest_state(resp.id, history)
-                
-                return {
-                    "status": "success",
-                    "message": response_text,
-                    "is_password_request": password_prompt.is_password_request,
-                    "response_id": resp.id
-                }
-            except Exception as e:
-                logger.error(f"Error with password prompt in onboarding: {e}")
-                # Fall back to regular send_message
-                pass
-        
-        # Use parent's proven send_message logic for all other cases
-        result = super().send_message(message, thread_id)
-        
-        # Add password request flag to response
-        if isinstance(result, dict):
-            result["is_password_request"] = False
+                    
+                except Exception as structured_error:
+                    logger.error(f"OnboardingAssistant.send_message: Error with structured password prompt for user_id={self.user_id}: {structured_error}", exc_info=True)
+                    # n8n traceback
+                    n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                    if n8n_traceback_url:
+                        requests.post(n8n_traceback_url, json={
+                            "error": str(structured_error), 
+                            "source": "OnboardingAssistant.send_message.structured_output", 
+                            "user_id": self.user_id,
+                            "traceback": traceback.format_exc()
+                        })
+                    # Fall back to regular send_message
             
-        return result
+            # Use parent's proven send_message logic for all other cases
+            result = super().send_message(message, thread_id)
+            
+            # Add password request flag to response
+            if isinstance(result, dict):
+                result["is_password_request"] = False
+            else:
+                logger.warning(f"OnboardingAssistant.send_message: Unexpected result type {type(result)} from parent send_message for user_id={self.user_id}")
+                
+            return result
+            
+        except Exception as e:
+            logger.error(f"OnboardingAssistant.send_message: Unhandled error for user_id={self.user_id}, message='{message[:100]}...': {str(e)}", exc_info=True)
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            if n8n_traceback_url:
+                requests.post(n8n_traceback_url, json={
+                    "error": str(e), 
+                    "source": "OnboardingAssistant.send_message", 
+                    "user_id": self.user_id,
+                    "message_preview": message[:100],
+                    "thread_id": thread_id,
+                    "traceback": traceback.format_exc()
+                })
+            
+            return {
+                "status": "error", 
+                "message": f"An error occurred during onboarding: {str(e)}", 
+                "is_password_request": False
+            }
 
     def stream_message(self, message: str, thread_id: Optional[str] = None) -> Generator[Dict[str, Any], None, None]:
         """
         Override to handle password prompts but use parent's proven streaming logic.
         """
-        is_guest = self._is_guest(self.user_id)
-        
-        # For onboarding, we need to check for password prompts after tool calls
-        # We'll handle this by intercepting the stream and checking for password prompt conditions
-        
-        for event in super().stream_message(message, thread_id):
-            # Forward all events from parent
-            yield event
+        try:
+            is_guest = self._is_guest(self.user_id)
             
-            # After response completes, check if we should prompt for password
-            if event.get("type") == "response.completed":
-                should_use_password_prompt = self._should_use_password_prompt()
-                yield {"type": "password_request", "is_password_request": should_use_password_prompt}
+            # For onboarding, we need to check for password prompts after tool calls
+            # We'll handle this by intercepting the stream and checking for password prompt conditions
+            
+            for event in super().stream_message(message, thread_id):
+                # Forward all events from parent
+                yield event
+                
+                # After response completes, check if we should prompt for password
+                if event.get("type") == "response.completed":
+                    try:
+                        # Refresh session data to pick up any changes made by tool calls during this request
+                        from custom_auth.models import OnboardingSession
+                        try:
+                            session = OnboardingSession.objects.filter(guest_id=str(self.user_id)).first()
+                            if session:
+                                session.refresh_from_db()
+                        except Exception as refresh_error:
+                            logger.warning(f"OnboardingAssistant.stream_message: Could not refresh session for user_id={self.user_id}: {refresh_error}")
+                        
+                        should_use_password_prompt = self._should_use_password_prompt()
+                        yield {"type": "password_request", "is_password_request": should_use_password_prompt}
+                    except Exception as password_check_error:
+                        logger.error(f"OnboardingAssistant.stream_message: Error checking password prompt for user_id={self.user_id}: {password_check_error}", exc_info=True)
+                        # n8n traceback
+                        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                        if n8n_traceback_url:
+                            requests.post(n8n_traceback_url, json={
+                                "error": str(password_check_error), 
+                                "source": "OnboardingAssistant.stream_message.password_check", 
+                                "user_id": self.user_id,
+                                "traceback": traceback.format_exc()
+                            })
+                        # Yield safe default
+                        yield {"type": "password_request", "is_password_request": False}
+            
+        except Exception as e:
+            logger.error(f"OnboardingAssistant.stream_message: Unhandled error for user_id={self.user_id}, message='{message[:100]}...': {str(e)}", exc_info=True)
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            if n8n_traceback_url:
+                requests.post(n8n_traceback_url, json={
+                    "error": str(e), 
+                    "source": "OnboardingAssistant.stream_message", 
+                    "user_id": self.user_id,
+                    "message_preview": message[:100],
+                    "thread_id": thread_id,
+                    "traceback": traceback.format_exc()
+                })
+            
+            # Yield error event
+            yield {"type": "error", "message": f"Stream error: {str(e)}"}
 
     def _should_use_password_prompt(self) -> bool:
         """
         Determine if we should request a password prompt from the user.
-        This should only happen when we have username, email, and all essential onboarding data.
+        This should happen when onboarding_request_password tool was called and marked ready_for_password=True.
         """
         try:
             from custom_auth.models import OnboardingSession
             session = OnboardingSession.objects.filter(guest_id=str(self.user_id)).first()
+            
             if not session or not session.data:
                 return False
             
             data = session.data
             
-            # Check if we have all required fields
-            has_username = bool(data.get('username'))
-            has_email = bool(data.get('email'))
-            has_language = bool(data.get('preferred_language'))
-            has_dietary = bool(data.get('dietary_preferences') or data.get('custom_dietary_preferences'))
-            has_allergies = bool(data.get('allergies') or data.get('custom_allergies'))
+            # Check if the onboarding_request_password tool was called and marked ready
+            ready_for_password = bool(data.get('ready_for_password'))
             has_password = bool(data.get('password'))
             
-            # Only prompt for password if we have all essential data but no password
-            should_prompt = has_username and has_email and has_language and has_dietary and has_allergies and not has_password
+            # Only prompt for password if:
+            # 1. The onboarding_request_password tool marked us as ready AND
+            # 2. We don't already have a password
+            should_prompt = ready_for_password and not has_password
             
             return should_prompt
             
         except Exception as e:
-            logger.error(f"Error in _should_use_password_prompt: {e}")
+            logger.error(f"OnboardingAssistant._should_use_password_prompt: Error checking password prompt for user_id={self.user_id}: {str(e)}", exc_info=True)
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            if n8n_traceback_url:
+                requests.post(n8n_traceback_url, json={
+                    "error": str(e), 
+                    "source": "OnboardingAssistant._should_use_password_prompt", 
+                    "user_id": self.user_id,
+                    "traceback": traceback.format_exc()
+                })
             return False
 
     def reset_conversation(self) -> Dict[str, Any]:
         """Use parent's proven reset logic."""
-        return super().reset_conversation()
+        try:
+            result = super().reset_conversation()
+            return result
+        except Exception as e:
+            logger.error(f"OnboardingAssistant.reset_conversation: Error resetting conversation for user_id={self.user_id}: {str(e)}", exc_info=True)
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            if n8n_traceback_url:
+                requests.post(n8n_traceback_url, json={
+                    "error": str(e), 
+                    "source": "OnboardingAssistant.reset_conversation", 
+                    "user_id": self.user_id,
+                    "traceback": traceback.format_exc()
+                })
+            return {"status": "error", "message": f"Error resetting conversation: {str(e)}"}
 
     # Remove all the custom methods that duplicated parent functionality:
     # - _get_onboarding_history() [now uses parent's guest state]

@@ -1,5 +1,8 @@
 from rest_framework.authentication import BaseAuthentication
 from django.contrib.auth.models import AnonymousUser
+import logging
+
+logger = logging.getLogger(__name__)
 
 class GuestIDAuthentication(BaseAuthentication):
     """
@@ -27,7 +30,7 @@ class GuestIDAuthentication(BaseAuthentication):
         if guest_id:
             request.session['guest_id'] = guest_id
             request.session.modified = True
-            print(f"AUTH: Saved guest_id {guest_id} to session")
+            logger.info(f"AUTH: Saved guest_id {guest_id} to session")
             
         # Return None to let Django continue the auth chain
         return None 

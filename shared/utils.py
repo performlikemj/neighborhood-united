@@ -247,7 +247,7 @@ def find_nearby_supermarkets(request):
             from shared.pydantic_models import GeoCoordinates
             user_address_string = f"The user's postal code is {address.input_postalcode} in the country of {address.country}"
             response = get_openai_client().responses.create(
-                model="gpt-4.1-nano",
+                model="gpt-4.1-mini",
                 input=[
                     {
                         "role": "developer",

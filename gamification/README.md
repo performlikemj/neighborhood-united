@@ -101,21 +101,38 @@ To add new achievement types:
 2. Modify the `check_achievements` function in `services.py` to check for the new criteria
 3. Add any necessary signal handlers in `signals.py` to trigger achievement checks
 
-### Modifying Point Values
+### Point System
 
-Point values for different activities are defined as constants in `services.py`:
+The app uses a unified point system defined in `services.py` as `UNIFIED_EVENT_POINTS`. Points are organized by engagement level:
 
 ```python
-POINTS = {
-    'daily_login': 5,
-    'streak_day': 10,
-    'streak_milestone': 50,
-    'meal_planned': 15,
-    'weekly_goal_completed': 100,
+UNIFIED_EVENT_POINTS = {
+    # Basic engagement (1-5 points) - Daily activities
+    'login': 2,
+    'streak_update': 1,
+    'meal_planned': 3,
+    'cooking_instructions_generated': 2,
+    
+    # Active participation (5-15 points) - Meaningful interactions
+    'review': 8,
+    'meal_reviewed': 8,
+    'meal_plan_reviewed': 10,
+    'meals_updated': 5,
+    'chef_connect': 12,
+    'cooking': 15,
+    
+    # Major actions (15-25 points) - Significant platform activities
+    'meal_plan_approved': 20,
+    'replaced_with_chef_meal': 18,
+    'achievement': 15,
+    'level_up': 25,
+    
+    # Major milestones (50+ points) - Weekly/rare achievements
+    'goal_completed': 100,
 }
 ```
 
-Modify these values to adjust the point economy.
+This unified system ensures consistent point values across all gamification events and maintains logical hierarchy between different activity types.
 
 ## Contributing
 

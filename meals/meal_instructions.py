@@ -58,7 +58,7 @@ def send_daily_meal_instructions():
         user_time = current_utc_time.astimezone(user_timezone)
 
         # # Check if it's 8 PM in the user's time zone
-        if user_time.hour == 20 and user_time.minute == 0:
+        if user_time.hour == 20:
 
             # Get the next day's date in the user's time zone
             next_day = user_time.date() + timedelta(days=1)
@@ -801,11 +801,14 @@ def generate_bulk_prep_instructions(meal_plan_id):
                     for meal_type in meal_types_order:
                         steps = steps_by_meal_type.get(meal_type, [])
                         if steps:
-                            steps_formatted += f"\n{meal_type} Prep:\n"
-                            for i, step in enumerate(steps, 1):
-                                steps_formatted += f"{i}. {step.description}\n"
-                                if step.notes:
-                                    steps_formatted += f"   Note: {step.notes}\n"
+                            # Filter out steps with empty descriptions before numbering
+                            non_empty_steps = [step for step in steps if step and step.description and step.description.strip()]
+                            if non_empty_steps:
+                                steps_formatted += f"\n{meal_type} Prep:\n"
+                                for i, step in enumerate(non_empty_steps, 1):
+                                    steps_formatted += f"{i}. {step.description}\n"
+                                    if step.notes:
+                                        steps_formatted += f"   Note: {step.notes}\n"
                     
                     # Format the daily tasks by day
                     daily_tasks_formatted = ""
@@ -820,15 +823,16 @@ def generate_bulk_prep_instructions(meal_plan_id):
                     ordered_day_names = [day_names[i] for i in ordered_days]
                     
                     for day_name in ordered_day_names:
-                        tasks = tasks_by_day.get(day_name, [])
-                        if tasks:
+                        daily_tasks_for_day = tasks_by_day.get(day_name, [])
+                        if daily_tasks_for_day:
                             daily_tasks_formatted += f"\n{day_name}:\n"
-                            for task in tasks:
-                                # Handle cases where task might not have meal_type attribute
-                                meal_type = getattr(task, 'meal_type', 'Other')
-                                daily_tasks_formatted += f"- {meal_type}: {task.description}\n"
-                                if task.notes:
-                                    daily_tasks_formatted += f"  Note: {task.notes}\n"
+                            for daily_task in daily_tasks_for_day:
+                                # Each daily_task has a list of task steps
+                                for task_step in daily_task.tasks:
+                                    if task_step.description and task_step.description.strip():
+                                        daily_tasks_formatted += f"- {task_step.meal_type}: {task_step.description}\n"
+                                        if task_step.notes:
+                                            daily_tasks_formatted += f"  Note: {task_step.notes}\n"
                     
                     # Create detailed message with full context
                     message_content = (
@@ -937,11 +941,14 @@ def send_bulk_prep_instructions(meal_plan_id):
         for meal_type in meal_types_order:
             steps = steps_by_meal_type.get(meal_type, [])
             if steps:
-                steps_formatted += f"\n{meal_type} Prep:\n"
-                for i, step in enumerate(steps, 1):
-                    steps_formatted += f"{i}. {step.description}\n"
-                    if step.notes:
-                        steps_formatted += f"   Note: {step.notes}\n"
+                # Filter out steps with empty descriptions before numbering
+                non_empty_steps = [step for step in steps if step and step.description and step.description.strip()]
+                if non_empty_steps:
+                    steps_formatted += f"\n{meal_type} Prep:\n"
+                    for i, step in enumerate(non_empty_steps, 1):
+                        steps_formatted += f"{i}. {step.description}\n"
+                        if step.notes:
+                            steps_formatted += f"   Note: {step.notes}\n"
         
         # Format the daily tasks by day
         daily_tasks_formatted = ""
@@ -956,15 +963,16 @@ def send_bulk_prep_instructions(meal_plan_id):
         ordered_day_names = [day_names[i] for i in ordered_days]
         
         for day_name in ordered_day_names:
-            tasks = tasks_by_day.get(day_name, [])
-            if tasks:
+            daily_tasks_for_day = tasks_by_day.get(day_name, [])
+            if daily_tasks_for_day:
                 daily_tasks_formatted += f"\n{day_name}:\n"
-                for task in tasks:
-                    # Handle cases where task might not have meal_type attribute
-                    meal_type = getattr(task, 'meal_type', 'Other')
-                    daily_tasks_formatted += f"- {meal_type}: {task.description}\n"
-                    if task.notes:
-                        daily_tasks_formatted += f"  Note: {task.notes}\n"
+                for daily_task in daily_tasks_for_day:
+                    # Each daily_task has a list of task steps
+                    for task_step in daily_task.tasks:
+                        if task_step.description and task_step.description.strip():
+                            daily_tasks_formatted += f"- {task_step.meal_type}: {task_step.description}\n"
+                            if task_step.notes:
+                                daily_tasks_formatted += f"  Note: {task_step.notes}\n"
         
         # Format the message for the assistant
         message_to_assistant = (

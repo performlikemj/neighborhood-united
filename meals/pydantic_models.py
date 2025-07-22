@@ -163,7 +163,7 @@ class ShoppingList(BaseModel):
 class InstructionStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
     step_number: int
-    description: str
+    description: str = Field(..., min_length=1, description="Detailed description of the step. Cannot be empty.")
     duration: Optional[str] = Field(..., description="Estimated duration. If not provided, defaults to 'N/A'.")
 
 class Instructions(BaseModel):
@@ -368,7 +368,7 @@ class BulkPrepStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
     step_number: int = Field(..., description="Step number in the bulk preparation sequence.")
     meal_type: str = Field(..., description="Type of meal for the step (e.g., Breakfast, Lunch, Dinner).")
-    description: str = Field(..., description="Detailed description of the step.")
+    description: str = Field(..., min_length=1, description="Detailed description of the step. Cannot be empty.")
     duration: Optional[str] = Field(..., description="Estimated duration for the step. If not provided, defaults to None.")
     ingredients: Optional[List[str]] = Field(..., description="List of ingredients needed for this step.")
     cooking_temperature: Optional[str] = Field(..., description="Cooking temperature if applicable.")
@@ -391,7 +391,7 @@ class DailyTaskStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
     step_number: int = Field(..., description="Step number in the daily task sequence.")
     meal_type: str = Field(..., description="Type of meal for the step (e.g., Breakfast, Lunch, Dinner).")
-    description: str = Field(..., description="Detailed description of the step.")
+    description: str = Field(..., min_length=1, description="Detailed description of the step. Cannot be empty.")
     duration: Optional[str] = Field(..., description="Estimated duration for the step. If not provided, defaults to None.")
     ingredients: Optional[List[str]] = Field(..., description="List of ingredients needed for this step.")
     cooking_temperature: Optional[str] = Field(..., description="Cooking temperature if applicable.")

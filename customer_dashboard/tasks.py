@@ -15,6 +15,12 @@ import os
 from .models import ChatThread, ChatSessionSummary, UserChatSummary, EmailAggregationSession, AggregatedMessageContent
 from custom_auth.models import CustomUser
 from meals.meal_assistant_implementation import MealPlanningAssistant
+from meals.enhanced_email_processor import process_email_with_enhanced_formatting
+from customer_dashboard.tool_specific_formatters_instacart_compliant import ToolSpecificFormatterManager
+from utils.translate_html import translate_paragraphs, _get_language_name
+from shared.utils import get_openai_client
+from django.template.loader import render_to_string
+import re
 
 # Define constants for cache keys. These should ideally match those in secure_email_integration.py
 EMAIL_AGGREGATION_MESSAGES_KEY_PREFIX = "email_aggregation_messages_user_"
@@ -542,114 +548,474 @@ def generate_consolidated_user_summary(user_id):
         requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return f"Error for user summary {user_id}: {str(e)}"
 
-@shared_task
-def process_aggregated_emails(session_identifier_str: str):
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def process_aggregated_emails(self, session_identifier_str, use_enhanced_formatting=False):
     """
-    Processes aggregated emails for a user from a DB-backed EmailAggregationSession.
+    ENHANCED Celery task to process aggregated emails with intent-based formatting
+    
     Args:
-        session_identifier_str: The UUID string of the EmailAggregationSession.
+        session_identifier_str: UUID string of the EmailAggregationSession
+        use_enhanced_formatting: Boolean flag to enable enhanced formatting (NEW)
     """
-    task_id_str = process_aggregated_emails.request.id if process_aggregated_emails.request else 'N/A'
-
-    active_session_flag_key = None # Will be set if session is found
-    db_session = None
-
     try:
-        session_uuid = uuid.UUID(session_identifier_str)
-        db_session = EmailAggregationSession.objects.select_related('user').get(session_identifier=session_uuid)
-
-        if not db_session.is_active:
-            logger.warning(f"Task {task_id_str}: EmailAggregationSession {session_identifier_str} is already marked inactive. Skipping.")
-            return
-
-        user = db_session.user
-        active_session_flag_key = f"{ACTIVE_DB_AGGREGATION_SESSION_FLAG_PREFIX}{user.id}"
-
-        # Retrieve all messages for this session, ordered by timestamp
-        aggregated_messages = db_session.messages.all().order_by('timestamp')
-        print(f"DEBUG: Aggregated messages for user {user.id} (DB session {session_identifier_str}):\n{aggregated_messages}")
-        if not aggregated_messages:
-            logger.warning(f"Task {task_id_str}: No messages found in DB for EmailAggregationSession {session_identifier_str} for user {user.id}. Marking session inactive.")
-            db_session.is_active = False
-            db_session.save()
-            delete(active_session_flag_key)
-            return
-
-        # Combine message content
-        # Consider if subjects of individual messages need to be part of combined_content
-        combined_content = "\n\n---\n\n".join([item.content for item in aggregated_messages])
-
-        assistant = MealPlanningAssistant(user_id=user.id)
-        # Call the method in MealPlanningAssistant to handle processing and n8n reply
-        # Pass metadata from the db_session object
-        email_reply_result = assistant.process_and_reply_to_email(
-            message_content=combined_content,
-            recipient_email=db_session.recipient_email, # From the first email that started the session
-            user_email_token=db_session.user_email_token, # User's main token stored in session
-            original_subject=db_session.original_subject, # From the first email
-            in_reply_to_header=db_session.in_reply_to_header, # From the first email
-            email_thread_id=db_session.email_thread_id, # From the first email
-            openai_thread_context_id_initial=db_session.openai_thread_context_id_initial # From the first email
-        )
-
-        if email_reply_result.get("status") == "success":
-            logger.info(f"Task {task_id_str}: Successfully processed and triggered email reply for user {user.id} (DB session {session_identifier_str}). Result: {email_reply_result.get('message')}")
+        from customer_dashboard.models import EmailAggregationSession, AggregatedMessageContent
+        from meals.meal_assistant_implementation import MealPlanningAssistant
+        
+        logger.info(f"Processing aggregated emails for session {session_identifier_str} (enhanced: {use_enhanced_formatting})")
+        
+        # Get the session
+        try:
+            session = EmailAggregationSession.objects.get(
+                session_identifier=uuid.UUID(session_identifier_str),
+                is_active=True
+            )
+        except EmailAggregationSession.DoesNotExist:
+            # Check if the session exists but is inactive (already processed)
+            try:
+                inactive_session = EmailAggregationSession.objects.get(
+                    session_identifier=uuid.UUID(session_identifier_str),
+                    is_active=False
+                )
+                logger.info(f"📨 Session {session_identifier_str} already processed (scheduled task arrived after immediate processing) - this is normal behavior")
+                return {
+                    'status': 'success', 
+                    'message': 'Session already processed by earlier task',
+                    'session_id': session_identifier_str,
+                    'note': 'This occurs when immediate processing completed before the scheduled 5-minute task'
+                }
+            except EmailAggregationSession.DoesNotExist:
+                # Session truly doesn't exist - this is a real error
+                logger.error(f"❌ EmailAggregationSession {session_identifier_str} not found in database - this is unexpected")
+                return {'status': 'error', 'message': 'Session not found in database'}
+        
+        # Mark session as inactive
+        session.is_active = False
+        session.save()
+        
+        # Clear the cache flag
+        active_session_flag_key = f"{ACTIVE_DB_AGGREGATION_SESSION_FLAG_PREFIX}{session.user.id}"
+        delete(active_session_flag_key)
+        
+        # Aggregate all messages
+        messages = AggregatedMessageContent.objects.filter(session=session).order_by('timestamp')
+        
+        # 🔍 DIAGNOSTIC: Log each individual message
+        logger.info(f"=== HEADER DIAGNOSTIC START - Session {session_identifier_str} ===")
+        for i, msg in enumerate(messages):
+            content_preview = repr(msg.content[:300])
+            logger.info(f"MESSAGE {i} CONTENT: {content_preview}")
+            
+            # Check for headers in individual messages
+            if any(header in msg.content for header in ['From:', 'Date:', 'Subject:']):
+                logger.warning(f"⚠️ HEADERS FOUND IN MESSAGE {i}: {content_preview}")
+        
+        combined_message = "\n\n---\n\n".join([msg.content for msg in messages])
+        
+        # 🔍 DIAGNOSTIC: Log combined message
+        combined_preview = repr(combined_message[:500])
+        logger.info(f"COMBINED MESSAGE: {combined_preview}")
+        
+        if any(header in combined_message for header in ['From:', 'Date:', 'Subject:']):
+            logger.warning(f"⚠️ HEADERS FOUND IN COMBINED MESSAGE: {combined_preview}")
+        
+        # Strip email headers from combined message before processing  
+        def strip_email_headers(message_content: str) -> str:
+            """Strip email headers from the message content"""
+            if not message_content:
+                return message_content
+                
+            # Define header patterns to detect and remove
+            header_patterns = [
+                r'From:\s*[^\n\r]+',
+                r'Date:\s*[^\n\r]+', 
+                r'Subject:\s*[^\n\r]+',
+                r'To:\s*[^\n\r]+',
+                r'Message-ID:\s*[^\n\r]+',
+                r'In-Reply-To:\s*[^\n\r]+',
+                r'References:\s*[^\n\r]+',
+                r'Return-Path:\s*[^\n\r]+',
+                r'Message from your sautAI assistant[^\n\r]*',
+                r'Your latest meal plan[^\n\r]*',
+                r'-IMAGE REMOVED-[^\n\r]*'
+            ]
+            
+            cleaned_content = message_content
+            
+            # Remove each header pattern
+            for pattern in header_patterns:
+                cleaned_content = re.sub(pattern, '', cleaned_content, flags=re.IGNORECASE)
+            
+            # Clean up extra whitespace and line breaks
+            cleaned_content = re.sub(r'\s+', ' ', cleaned_content)
+            cleaned_content = cleaned_content.strip()
+            
+            return cleaned_content
+        
+        # Clean the combined message
+        cleaned_combined_message = strip_email_headers(combined_message)
+        
+        # 🔍 DIAGNOSTIC: Log header stripping results
+        logger.info(f"=== HEADER STRIPPING IN CELERY TASK ===")
+        logger.info(f"Original length: {len(combined_message)}, Cleaned length: {len(cleaned_combined_message)}")
+        if len(cleaned_combined_message) != len(combined_message):
+            logger.info(f"✅ Headers removed: {len(combined_message) - len(cleaned_combined_message)} characters")
         else:
-            logger.error(f"Task {task_id_str}: Failed to process/send email reply for user {user.id} (DB session {session_identifier_str}). Error: {email_reply_result.get('message')}")
-            # Decide on retry logic or if session should remain active for a manual check
-
-        # Mark session as processed (inactive)
-        db_session.is_active = False
-        db_session.save()
-
-    except EmailAggregationSession.DoesNotExist:
-        logger.error(f"Task {task_id_str}: EmailAggregationSession with identifier {session_identifier_str} not found in DB. Cannot process.")
-        # n8n traceback
-        n8n_traceback = {
-            'error': f"Task {task_id_str}: EmailAggregationSession with identifier {session_identifier_str} not found in DB. Cannot process.",
-            'source': 'process_aggregated_emails',
-            'traceback': traceback.format_exc()
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
-        # No specific user ID to clear a flag if session not found by identifier alone
-    except ValueError: # Invalid UUID format
-        logger.error(f"Task {task_id_str}: Invalid UUID format for session identifier '{session_identifier_str}'. Cannot process.")
-        # n8n traceback
-        n8n_traceback = {
-            'error': f"Task {task_id_str}: Invalid UUID format for session identifier '{session_identifier_str}'. Cannot process.",
-            'source': 'process_aggregated_emails',
-            'traceback': traceback.format_exc()
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
-    except CustomUser.DoesNotExist: # Should not happen if session exists and has a user
-        logger.error(f"Task {task_id_str}: User not found for DB session {session_identifier_str}. Session might be corrupted.")
-        # n8n traceback
-        n8n_traceback = {
-            'error': f"Task {task_id_str}: User not found for DB session {session_identifier_str}. Session might be corrupted.",
-            'source': 'process_aggregated_emails',
-            'traceback': traceback.format_exc()
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+            logger.warning(f"⚠️ No headers detected/removed in Celery task")
+        
+        logger.info(f"Processing {messages.count()} aggregated messages for user {session.user.id}")
+        
+        # Initialize variables for email content
+        email_body_main = ""
+        email_body_data = ""
+        email_body_final = ""
+        css_classes = []
+        processing_metadata = {}
+        
+        # ENHANCED PROCESSING - This is the key enhancement
+        if use_enhanced_formatting:
+            try:
+                logger.info(f"Starting enhanced processing for session {session_identifier_str}")
+                
+                # Use intent analysis but with Django formatter instead of tool-specific override
+                openai_client = get_openai_client()
+                assistant = MealPlanningAssistant(str(session.user.id))
+                
+                # Prepare user context for intent analysis
+                dietary_prefs = getattr(session.user, 'dietary_preferences', None)
+                user_preferences = []
+                if dietary_prefs is not None:
+                    try:
+                        user_preferences = [str(pref) for pref in dietary_prefs.all()]
+                    except AttributeError:
+                        user_preferences = []
+                
+                user_context = {
+                    'user_id': str(session.user.id),
+                    'sender_email': session.recipient_email,
+                    'session_id': session_identifier_str,
+                    'message_count': messages.count(),
+                    'original_subject': session.original_subject,
+                    'email_thread_id': session.email_thread_id,
+                    'openai_thread_context_id': session.openai_thread_context_id_initial,
+                    'user_preferences': user_preferences,
+                    'user_language': getattr(session.user, 'preferred_language', 'en')
+                }
+                
+                # Step 1: Analyze intent (keeping this valuable analysis)
+                from meals.intent_analyzer import EmailIntentAnalyzer
+                intent_analyzer = EmailIntentAnalyzer(openai_client)
+                intent_result = intent_analyzer.analyze_intent(cleaned_combined_message, user_context)
+                
+                logger.info(f"Intent analysis: {intent_result.intent.primary_intent} (confidence: {intent_result.intent.confidence:.2f})")
+                
+                # Step 2: Process with assistant (standard processing)
+                logger.info(f"Processing with assistant (predicted tools: {intent_result.intent.predicted_tools})")
+                assistant_response = assistant.send_message(cleaned_combined_message)
+                
+                # Step 3: Use Django Template Formatter with intent context (NOT tool-specific override!)
+                raw_reply_content = assistant_response.get('message', str(assistant_response))
+                
+                # Create intent context for Django formatter
+                intent_context = {
+                    'primary_intent': intent_result.intent.primary_intent,
+                    'predicted_tools': intent_result.intent.predicted_tools,
+                    'content_structure': intent_result.intent.content_structure,
+                    'confidence': intent_result.intent.confidence,
+                    'user_action_required': intent_result.intent.user_action_required
+                }
+                
+                # Get structured Django template sections with intent awareness
+                django_body = assistant._get_django_template_sections(raw_reply_content, intent_context)
+                
+                # Extract the Django formatting results
+                email_body_main = django_body.email_body_main
+                email_body_data = django_body.email_body_data
+                email_body_final = django_body.email_body_final
+                css_classes = ['enhanced-formatting', 'intent-aware', f'intent-{intent_result.intent.primary_intent}']
+                
+                processing_metadata = {
+                    'formatting_type': 'django_intent_aware',
+                    'intent_analysis': intent_result.intent.model_dump(),
+                    'content_analysis': django_body.content_analysis.model_dump(),
+                    'processing_time': 0,  # Will be calculated later
+                    'tools_used': [],  # Extract from assistant_response if needed
+                    'formatting_applied': True,
+                    'session_id': session_identifier_str,
+                    'message_count': messages.count(),
+                    'enhanced_processing': True,
+                    'user_id': str(session.user.id)
+                }
+                
+                logger.info(f"✅ Django template formatting applied successfully for session {session_identifier_str}")
+                logger.info(f"Intent detected: {intent_result.intent.primary_intent}")
+                logger.info(f"Django sections - Main: {len(email_body_main)}, Data: {len(email_body_data)}, Final: {len(email_body_final)}")
+                
+            except Exception as e:
+                logger.error(f"Enhanced processing failed for session {session_identifier_str}: {str(e)}")
+                logger.warning("Falling back to original processing")
+                use_enhanced_formatting = False
+                
+            except Exception as e:
+                logger.error(f"Enhanced processing error for session {session_identifier_str}: {str(e)}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                
+                # Send error to n8n traceback for monitoring
+                try:
+                    n8n_traceback = {
+                        'error': f"Enhanced processing failed: {str(e)}",
+                        'source': 'process_aggregated_emails_enhanced',
+                        'session_id': session_identifier_str,
+                        'user_id': str(session.user.id),
+                        'traceback': traceback.format_exc()
+                    }
+                    requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback, timeout=5)
+                except:
+                    pass  # Don't let traceback reporting break the main flow
+                
+                # Fall back to original processing
+                use_enhanced_formatting = False
+        
+        # Original processing (fallback or when enhanced is disabled)
+        if not use_enhanced_formatting:
+            logger.info(f"Using original processing for session {session_identifier_str}")
+            
+            try:
+                assistant = MealPlanningAssistant(str(session.user.id))
+                response = assistant.send_message(cleaned_combined_message)
+                
+                # Extract content from original response
+                if isinstance(response, dict):
+                    message_content = response.get('message', str(response))
+                else:
+                    message_content = str(response)
+                
+                # Apply basic formatting to match the three-section structure
+                email_body_main = f"<h2>📧 Response from your SautAI Assistant</h2><p>Here's the response to your message:</p>"
+                
+                # Format the message content with basic HTML
+                formatted_content = message_content.replace('\n\n', '</p><p>').replace('\n', '<br>')
+                if formatted_content:
+                    formatted_content = f'<p>{formatted_content}</p>'
+                
+                email_body_data = f"<div class='assistant-response'>{formatted_content}</div>"
+                email_body_final = f"<p>Need more help? Just reply to this email or visit your <a href='{os.getenv('STREAMLIT_URL')}/'>SautAI dashboard</a>!</p>"
+                css_classes = ['original-formatting']
+                
+                processing_metadata = {
+                    'session_id': session_identifier_str,
+                    'message_count': messages.count(),
+                    'enhanced_processing': False,
+                    'user_id': str(session.user.id),
+                    'processing_type': 'original'
+                }
+                
+                logger.info(f"Original processing completed for session {session_identifier_str}")
+                
+            except Exception as e:
+                logger.error(f"Original processing error for session {session_identifier_str}: {str(e)}")
+                logger.error(f"Original processing traceback: {traceback.format_exc()}")
+                # Create error email content
+                email_body_main = "<h2>❌ Processing Error</h2>"
+                email_body_data = "<p>We encountered an error processing your request. Please try again.</p>"
+                email_body_final = "<p>If the problem persists, please contact support.</p>"
+                css_classes = ['error-formatting']
+                
+                processing_metadata = {
+                    'session_id': session_identifier_str,
+                    'message_count': messages.count(),
+                    'enhanced_processing': False,
+                    'user_id': str(session.user.id),
+                    'processing_type': 'error',
+                    'error': str(e)
+                }
+        
+        logger.info(f"=== HEADER DIAGNOSTIC END ===")
+        
+        # Get user preferred language
+        user_preferred_language = _get_language_name(getattr(session.user, 'preferred_language', 'en'))
+        
+        # Render the email template with the processed content
+        try:
+            email_html_content = render_to_string(
+                'customer_dashboard/assistant_email_template.html',
+                {
+                    'user_name': session.user.get_full_name() or session.user.username,
+                    'email_body_main': email_body_main,
+                    'email_body_data': email_body_data,
+                    'email_body_final': email_body_final,
+                    'css_classes': ' '.join(css_classes),
+                    'profile_url': f"{os.getenv('STREAMLIT_URL')}/",
+                    'personal_assistant_email': getattr(session.user, 'personal_assistant_email', f"mj+{session.user.email_token}@sautai.com"),
+                    # Add metadata for debugging (optional)
+                    'debug_info': processing_metadata if os.getenv('DEBUG') == 'True' else {}
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error rendering email template for session {session_identifier_str}: {str(e)}")
+            # Create a simple fallback email
+            email_html_content = f"""
+            <html>
+            <body>
+                <h2>Response from your SautAI Assistant</h2>
+                {email_body_data}
+                <p>Best regards,<br>Your SautAI Team</p>
+            </body>
+            </html>
+            """
+        
+        # Translate the email content
+        try:
+            email_html_content = translate_paragraphs(email_html_content, user_preferred_language)
+            logger.info(f"Email content translated to {user_preferred_language} for session {session_identifier_str}")
+        except Exception as e:
+            logger.error(f"Error translating email content for session {session_identifier_str}: {e}")
+            # Continue with untranslated content
+        
+        # Send the email via n8n
+        if not getattr(session.user, 'unsubscribed_from_emails', False):
+            n8n_webhook_url = os.getenv('N8N_EMAIL_REPLY_WEBHOOK_URL')
+            if n8n_webhook_url:
+                payload = {
+                    'status': 'success',
+                    'action': 'send_response',
+                    'reply_content': email_html_content,
+                    'recipient_email': session.recipient_email,
+                    'from_email': getattr(session.user, 'personal_assistant_email', f"mj+{session.user.email_token}@sautai.com"),
+                    'original_subject': "Re: " + session.original_subject if session.original_subject else "Response from your SautAI Assistant",
+                    'in_reply_to_header': session.in_reply_to_header,
+                    'email_thread_id': session.email_thread_id,
+                    # Include metadata for tracking and analytics
+                    'enhanced_formatting': use_enhanced_formatting,
+                    'intent_detected': processing_metadata.get('intent_analysis', {}).get('primary_intent', 'unknown') if use_enhanced_formatting else 'original_processing',
+                    'tools_used': processing_metadata.get('tools_used', []) if use_enhanced_formatting else [],
+                    'processing_time': processing_metadata.get('processing_time', 0),
+                    'message_count': messages.count()
+                }
+                
+                try:
+                    response = requests.post(n8n_webhook_url, json=payload, timeout=30)
+                    response.raise_for_status()
+                    logger.info(f"Email successfully sent for session {session_identifier_str} (enhanced: {use_enhanced_formatting})")
+                    
+                    return {
+                        'status': 'success',
+                        'message': 'Email processed and sent successfully',
+                        'session_id': session_identifier_str,
+                        'enhanced_formatting': use_enhanced_formatting,
+                        'metadata': processing_metadata
+                    }
+                    
+                except requests.RequestException as e:
+                    logger.error(f"Failed to send email for session {session_identifier_str}: {e}")
+                    
+                    # Send error to n8n traceback
+                    try:
+                        n8n_traceback = {
+                            'error': f"Failed to send email: {str(e)}",
+                            'source': 'process_aggregated_emails_send_email',
+                            'session_id': session_identifier_str,
+                            'user_id': str(session.user.id),
+                            'traceback': traceback.format_exc()
+                        }
+                        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback, timeout=5)
+                    except:
+                        pass
+                    
+                    # Retry the task
+                    raise self.retry(exc=e, countdown=60)
+            else:
+                logger.error("N8N_EMAIL_REPLY_WEBHOOK_URL not configured")
+                return {
+                    'status': 'error',
+                    'message': 'Email service not configured',
+                    'session_id': session_identifier_str
+                }
+        else:
+            logger.info(f"User {session.user.username} has unsubscribed from emails")
+            return {
+                'status': 'success',
+                'message': 'Processing completed but email not sent due to user preferences',
+                'session_id': session_identifier_str
+            }
+        
     except Exception as e:
-        logger.error(f"Task {task_id_str}: Error processing aggregated emails for DB session {session_identifier_str}: {str(e)}\nTraceback: {traceback.format_exc()}.")
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(e),
-            'source': 'process_aggregated_emails',
-            'traceback': traceback.format_exc()
+        logger.error(f"Critical error in process_aggregated_emails for session {session_identifier_str}: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        
+        # Send critical error to n8n traceback
+        try:
+            n8n_traceback = {
+                'error': f"Critical task error: {str(e)}",
+                'source': 'process_aggregated_emails_critical',
+                'session_id': session_identifier_str,
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback, timeout=5)
+        except:
+            pass
+        
+        # Retry the task with exponential backoff
+        raise self.retry(exc=e, countdown=60 * (2 ** self.request.retries))
+
+# Additional helper tasks for monitoring and maintenance
+
+@shared_task
+def cleanup_expired_sessions():
+    """
+    Cleanup task to remove expired email aggregation sessions
+    """
+    try:
+        from customer_dashboard.models import EmailAggregationSession
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        # Clean up sessions older than 24 hours
+        cutoff_time = timezone.now() - timedelta(hours=24)
+        expired_sessions = EmailAggregationSession.objects.filter(
+            created_at__lt=cutoff_time,
+            is_active=False
+        )
+        
+        count = expired_sessions.count()
+        expired_sessions.delete()
+        
+        logger.info(f"Cleaned up {count} expired email aggregation sessions")
+        return {'status': 'success', 'cleaned_sessions': count}
+        
+    except Exception as e:
+        logger.error(f"Error in cleanup_expired_sessions: {str(e)}")
+        return {'status': 'error', 'message': str(e)}
+
+@shared_task
+def monitor_enhanced_formatting_performance():
+    """
+    Monitoring task to track enhanced formatting performance
+    """
+    try:
+        from customer_dashboard.models import EmailAggregationSession
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        # Get sessions from the last 24 hours
+        yesterday = timezone.now() - timedelta(hours=24)
+        recent_sessions = EmailAggregationSession.objects.filter(
+            created_at__gte=yesterday,
+            is_active=False
+        )
+        
+        total_sessions = recent_sessions.count()
+        
+        # This would require additional tracking in your models to be fully functional
+        # For now, it's a placeholder for performance monitoring
+        
+        logger.info(f"Performance monitoring: {total_sessions} sessions processed in last 24h")
+        
+        return {
+            'status': 'success',
+            'total_sessions_24h': total_sessions,
+            'timestamp': timezone.now().isoformat()
         }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
-        # Consider if db_session should be marked inactive on general error, or if it should be retried.
-        # If db_session was fetched, it might be good to mark it inactive to prevent re-processing of a failing task unless retries are configured.
-        if db_session and db_session.is_active:
-            # db_session.is_active = False # Potentially mark as inactive on failure too
-            # db_session.save()
-            pass # Decide on error handling strategy for is_active
-    finally:
-        # Clean up cache flag for this user if we identified the user and session
-        if active_session_flag_key: # This key is set if db_session was found and user identified
-            delete(active_session_flag_key)
-        else:
-            # This case can happen if EmailAggregationSession.DoesNotExist or ValueError on UUID occurred early.
-            # We don't have a user.id to construct the cache key for cleanup in that scenario.
-            logger.info(f"Task {task_id_str}: No cache flag to clean as user/session was not fully identified for session_id {session_identifier_str}.")
+        
+    except Exception as e:
+        logger.error(f"Error in monitor_enhanced_formatting_performance: {str(e)}")
+        return {'status': 'error', 'message': str(e)}

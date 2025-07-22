@@ -5,6 +5,9 @@ from django.utils.deprecation import MiddlewareMixin
 from utils.model_selection import choose_model, MODEL_GPT41_MINI, MODEL_GPT41_NANO
 from utils.openai_helpers import token_length
 from utils.redis_client import get, set, delete
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ModelSelectionMiddleware(MiddlewareMixin):
     """
@@ -42,7 +45,7 @@ class ModelSelectionMiddleware(MiddlewareMixin):
             # Check request.data for guest_id (for POST/PUT JSON requests)
             if hasattr(request, 'data') and isinstance(request.data, dict) and 'guest_id' in request.data:
                 guest_id = request.data.get('guest_id')
-                print(f"MIDDLEWARE: Found guest_id {guest_id} in request.data")
+                logger.info(f"MIDDLEWARE: Found guest_id {guest_id} in request.data")
             
             # Fallback to session if not in data
             if not guest_id:
@@ -53,7 +56,7 @@ class ModelSelectionMiddleware(MiddlewareMixin):
                 guest_id = session_key
             
             # Diagnostic logging
-            print(f"MIDDLEWARE: Session key: {session_key}, Guest ID: {guest_id}")
+            logger.info(f"MIDDLEWARE: Session key: {session_key}, Guest ID: {guest_id}")
             
             # Use the guest_id from session if available, otherwise use session_key
             user_id = guest_id

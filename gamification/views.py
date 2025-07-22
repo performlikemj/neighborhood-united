@@ -18,7 +18,8 @@ from .services import (
     get_unnotified_achievements,
     mark_achievements_as_notified,
     get_weekly_goal_progress,
-    check_achievements
+    check_achievements,
+    UNIFIED_EVENT_POINTS
 )
 
 from .models import (
@@ -26,7 +27,8 @@ from .models import (
     Achievement,
     UserAchievement,
     WeeklyGoal,
-    PointsTransaction
+    PointsTransaction,
+    AnalyticsEvent
 )
 
 import json
@@ -304,19 +306,24 @@ def event_handler(request):
         if not event_type:
             return Response({'error': 'event_type is required'}, status=400)
 
-        # Always record an analytics event
+        # Always record an analytics event with the appropriate score
+        event_score = UNIFIED_EVENT_POINTS.get(event_type, 0)
         AnalyticsEvent.objects.create(
             user=user,
             event_type=event_type,
+            value=event_score,
             additional_data=details,
         )
 
+        # Handle specific gamification events based on unified point system
         if event_type == 'meal_planned':
             register_meal_planned(user)
         elif event_type == 'login':
             update_streak(user)
-        elif event_type in EVENT_POINTS:
-            award_points(user, EVENT_POINTS[event_type], 'other', event_type)
+        elif event_type in UNIFIED_EVENT_POINTS:
+            # Award points for any event in our unified system (except already handled above)
+            if event_type not in ['meal_planned', 'login']:
+                award_points(user, UNIFIED_EVENT_POINTS[event_type], 'other', event_type)
         else:
             return Response({'error': f'Unsupported event type: {event_type}'}, status=400)
 

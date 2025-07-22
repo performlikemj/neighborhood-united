@@ -1,7 +1,7 @@
 # meals/meal_assistant_implementation.py
 import json, logging, uuid, traceback
 import time
-from typing import Dict, Any, List, Generator, Optional, Union, ClassVar
+from typing import Dict, Any, List, Generator, Optional, Union, ClassVar, Literal, Tuple
 import numbers
 from datetime import date, datetime
 import re
@@ -29,7 +29,7 @@ from openai.types.responses import (
     ResponseFunctionCallArgumentsDoneEvent,
 )
 from openai import BadRequestError
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, ValidationError
 from .tool_registration import get_all_tools, get_all_guest_tools, handle_tool_call
 from customer_dashboard.models import ChatThread, UserMessage, WeeklyAnnouncement, UserDailySummary, UserChatSummary, AssistantEmailToken
 from custom_auth.models import CustomUser
@@ -47,9 +47,27 @@ from django.template.loader import render_to_string # Added for rendering email 
 
 # Add the translation utility
 from utils.translate_html import translate_paragraphs
+import unicodedata
+from enum import Enum
 
 
 load_dotenv()
+
+# Control character regex for JSON sanitization
+CTRL_CHARS = re.compile(r'[\x00-\x1F]')
+
+def _safe_load_and_validate(model_cls, raw: str):
+    """
+    Load JSON from OpenAI output_text, sanitising control chars once if needed.
+    """
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        cleaned = CTRL_CHARS.sub(
+            lambda m: '\\u%04x' % ord(m.group()), raw
+        )
+        data = json.loads(cleaned)
+    return model_cls.model_validate(data)
 
 class PasswordPrompt(BaseModel):
     """Structured output emitted by the model whenever it wants the user to enter
@@ -86,6 +104,646 @@ class EmailBody(BaseModel):
     final_message: str = Field(..., description="Closing message in HTML. This should be a short message that guides the user on next steps or summarises key points without being too verbose.")
 
 # EmailResponse model removed - EmailBody now handles all email formatting
+
+# ────────────────────────────────────────────────────────────────────
+#  Django Template-Compatible Enhanced Email Formatter
+# ────────────────────────────────────────────────────────────────────
+
+# Define content and format types as string literals to avoid OpenAI JSON schema issues
+CONTENT_TYPES = [
+    "recipe", "shopping_list", "meal_plan", "nutrition_info", 
+    "instructions", "general_text", "data_table", "comparison"
+]
+
+FORMAT_TYPES = [
+    "paragraph", "unordered_list", "ordered_list", 
+    "table", "definition_list", "heading"
+]
+
+class ContentSection(BaseModel):
+    """Individual content section with intelligent formatting"""
+    model_config = ConfigDict(extra="forbid")
+    
+    title: Optional[str] = Field(None, description="Section title if applicable")
+    content_type: Literal["recipe", "shopping_list", "meal_plan", "nutrition_info", "instructions", "general_text", "data_table", "comparison"] = Field(..., description="Type of content for intelligent formatting")
+    format_type: Literal["paragraph", "unordered_list", "ordered_list", "table", "definition_list", "heading"] = Field(..., description="HTML format to use")
+    content: str = Field(..., description="HTML formatted content")
+    priority: int = Field(1, description="Display priority (1=highest, 5=lowest)")
+    template_section: Literal["main", "data", "final"] = Field("main", description="Which Django template section this belongs to")
+
+class ContentAnalysis(BaseModel):
+    """Analysis of the input content for intelligent formatting decisions"""
+    model_config = ConfigDict(extra="forbid")
+    
+    primary_content_type: Literal["recipe", "shopping_list", "meal_plan", "nutrition_info", "instructions", "general_text", "data_table", "comparison"] = Field(..., description="Main type of content detected")
+    has_structured_data: bool = Field(..., description="Whether content contains tables/lists")
+    has_actionable_items: bool = Field(..., description="Whether content has action items/CTAs")
+    complexity_level: Literal["simple", "moderate", "complex"] = Field(..., description="Content complexity")
+    recommended_organization: str = Field(..., description="Recommended content organization approach")
+
+class DjangoEmailBody(BaseModel):
+    """Django template-compatible email body structure"""
+    model_config = ConfigDict(extra="forbid")
+    
+    # Content analysis for intelligent formatting decisions
+    content_analysis: ContentAnalysis = Field(..., description="Analysis of content structure and type")
+    
+    # Organized content sections in priority order
+    sections: List[ContentSection] = Field(..., description="Content sections in display order")
+    
+    # Django template sections
+    email_body_main: str = Field(..., description="Main content for {{ email_body_main|safe }}")
+    email_body_data: str = Field(..., description="Data visualization for {{ email_body_data|safe }}")
+    email_body_final: str = Field(..., description="Final message for {{ email_body_final|safe }}")
+    
+    # Metadata for rendering
+    email_subject_suggestion: Optional[str] = Field(None, description="Suggested email subject line")
+    estimated_read_time: Optional[str] = Field(None, description="Estimated reading time")
+
+class DjangoTemplateEmailFormatter:
+    """Django template-compatible enhanced email formatter"""
+    
+    def __init__(self, openai_client):
+        self.client = openai_client
+        
+    def format_text_for_email_body(self, raw_text: str) -> str:
+        """
+        Transform plain text into Django template-compatible HTML sections.
+        Returns the main content section for backward compatibility.
+        Use get_django_template_sections() for full template integration.
+        
+        Args:
+            raw_text: The raw text content to format
+            
+        Returns:
+            Formatted HTML string for email_body_main (backward compatible)
+        """
+        django_body = self.get_django_template_sections(raw_text)
+        return django_body.email_body_main
+    
+    def get_django_template_sections(self, raw_text: str, intent_context: Optional[Dict] = None) -> DjangoEmailBody:
+        """
+        Get all Django template sections for complete integration.
+        
+        Args:
+            raw_text: The raw text content to format
+            intent_context: Optional intent analysis context for better formatting
+            
+        Returns:
+            DjangoEmailBody with email_body_main, email_body_data, and email_body_final
+        """
+        
+        # Guard rails
+        if not raw_text.strip():
+            return DjangoEmailBody(
+                content_analysis=ContentAnalysis(
+                    primary_content_type="general_text",
+                    has_structured_data=False,
+                    has_actionable_items=False,
+                    complexity_level="simple",
+                    recommended_organization="Empty content"
+                ),
+                sections=[],
+                email_body_main="",
+                email_body_data="",
+                email_body_final=""
+            )
+            
+        if not self.client:
+            # Offline fallback
+            safe_fallback = raw_text.replace("\n", "<br>")
+            fallback_html = f"<p>{safe_fallback}</p>"
+            return DjangoEmailBody(
+                content_analysis=ContentAnalysis(
+                    primary_content_type="general_text",
+                    has_structured_data=False,
+                    has_actionable_items=False,
+                    complexity_level="simple",
+                    recommended_organization="Fallback formatting"
+                ),
+                sections=[],
+                email_body_main=fallback_html,
+                email_body_data="",
+                email_body_final=""
+            )
+        
+        try:
+            # Clean up input text
+            cleaned_text = self._clean_input_text(raw_text)
+            
+            # Protect URLs with placeholders
+            protected_text, url_placeholders = self._protect_urls(cleaned_text)
+            
+            # Get structured formatting from OpenAI
+            django_body = self._get_structured_django_formatting(protected_text, intent_context)
+            
+            # Render sections to HTML
+            self._render_django_sections(django_body)
+            
+            # Restore URLs in all sections
+            django_body.email_body_main = self._restore_urls(django_body.email_body_main, url_placeholders)
+            django_body.email_body_data = self._restore_urls(django_body.email_body_data, url_placeholders)
+            django_body.email_body_final = self._restore_urls(django_body.email_body_final, url_placeholders)
+            
+            # Apply final formatting to all sections
+            django_body.email_body_main = self._apply_final_formatting(django_body.email_body_main)
+            django_body.email_body_data = self._apply_final_formatting(django_body.email_body_data)
+            django_body.email_body_final = self._apply_final_formatting(django_body.email_body_final)
+            
+            # 🔍 DIAGNOSTIC: Log what OpenAI produced for each section analysis
+            logger.info(f"=== DJANGO TEMPLATE SECTIONS ANALYSIS ===")
+            logger.info(f"Content Analysis: {django_body.content_analysis.primary_content_type} (complexity: {django_body.content_analysis.complexity_level})")
+            logger.info(f"Sections Count: {len(django_body.sections)}")
+            
+            for i, section in enumerate(django_body.sections):
+                logger.info(f"Section {i}: {section.content_type} -> {section.template_section} (priority: {section.priority})")
+                logger.info(f"  Title: {section.title}")
+                logger.info(f"  Format: {section.format_type}")
+                logger.info(f"  Content preview: {repr(section.content[:200])}")
+            
+            return django_body
+            
+        except Exception as e:
+            logger.error(f"Error in get_django_template_sections: {str(e)}")
+            self._send_error_to_n8n(e, "get_django_template_sections")
+            
+            # Fallback formatting
+            return self._create_fallback_django_body(raw_text)
+    
+    def _clean_input_text(self, text: str) -> str:
+        """Clean and normalize input text"""
+        
+        try:
+            # Ensure proper UTF-8 encoding
+            text = text.encode('utf-8', errors='replace').decode('utf-8')
+            # Normalize Unicode characters
+            text = unicodedata.normalize('NFC', text)
+        except (UnicodeEncodeError, UnicodeDecodeError) as e:
+            text = unicodedata.normalize('NFC', text)
+            logger.warning(f"Unicode encoding issue: {e}")
+        
+        # Remove control characters
+        text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", text)
+        
+        # Clean up whitespace
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        return text
+    
+    def _protect_urls(self, text: str) -> tuple[str, dict]:
+        """Protect URLs with placeholders to prevent corruption"""
+        url_pattern = r'https?://[^\s<>"\'()]+[^\s<>"\'.!?;,)]'
+        urls = re.findall(url_pattern, text)
+        url_placeholders = {}
+        
+        protected_text = text
+        for i, url in enumerate(urls):
+            placeholder = f"__URL_PLACEHOLDER_{i}__"
+            url_placeholders[placeholder] = url
+            protected_text = protected_text.replace(url, placeholder)
+        
+        return protected_text, url_placeholders
+    
+    def _restore_urls(self, html: str, url_placeholders: dict) -> str:
+        """Restore original URLs from placeholders"""
+        for placeholder, original_url in url_placeholders.items():
+            html = html.replace(placeholder, original_url)
+        return html
+    
+    def _get_structured_django_formatting(self, text: str, intent_context: Optional[Dict] = None) -> DjangoEmailBody:
+        """Get structured formatting from OpenAI responses API for Django template"""
+        
+        # Build intent-aware prompt
+        intent_guidance = ""
+        if intent_context:
+            primary_intent = intent_context.get('primary_intent', 'general')
+            predicted_tools = intent_context.get('predicted_tools', [])
+            content_structure = intent_context.get('content_structure', 'simple')
+            
+            intent_guidance = f"""
+            
+        INTENT CONTEXT:
+        - Primary Intent: {primary_intent}
+        - Predicted Tools: {', '.join(predicted_tools)}
+        - Content Structure: {content_structure}
+        
+        INTENT-SPECIFIC FORMATTING RULES:
+        - If intent is 'meal_planning': Focus main section on meal plans, data section on shopping lists/nutrition
+        - If intent is 'recipe': Main section for recipes, data section for ingredients/instructions
+        - If intent is 'shopping': Main section for overview, data section for structured shopping lists
+        - If intent is 'dietary': Main section for dietary guidance, data section for comparison tables
+        - Always use final section for next steps and call-to-action
+        """
+        
+        prompt_content = f"""
+        You are an expert email content formatter that creates beautifully structured HTML emails for Django templates.
+
+        TASK: Analyze the input text and return a structured JSON response following the DjangoEmailBody schema.
+
+        DJANGO TEMPLATE INTEGRATION:
+        The output will be used in a Django template with three sections:
+        - email_body_main: Primary content (recipes, instructions, main text)
+        - email_body_data: Data visualization (tables, charts, structured data)
+        - email_body_final: Closing message (call-to-action, next steps, summary)
+
+        SECTION ASSIGNMENT RULES:
+        - Main section: Core content, recipes, instructions, primary information
+        - Data section: Tables, nutrition info, structured lists, comparisons
+        - Final section: Call-to-action, next steps, closing thoughts, summaries
+
+        CONTENT ANALYSIS REQUIREMENTS:
+        1. Identify primary content type: recipe, shopping_list, meal_plan, nutrition_info, instructions, general_text, data_table, comparison
+        2. Detect structured data (tables, lists, hierarchical content)
+        3. Identify actionable items or calls-to-action
+        4. Assess complexity: simple, moderate, complex
+
+        SECTION ORGANIZATION:
+        - Assign template_section: "main", "data", or "final" for each content section
+        - Priority 1-2: Usually "main" section
+        - Priority 3: Usually "data" section (tables, structured info)
+        - Priority 4-5: Usually "final" section (CTAs, summaries)
+
+        HTML CONTENT REQUIREMENTS:
+        - Use semantic HTML optimized for the existing Django template CSS
+        - The template has styles for: h1, h2, h3, p, ul, li, tables
+        - Font family: Arial, sans-serif (already in template)
+        - Preserve all numbers, measurements, and Unicode characters exactly
+        - Preserve all __URL_PLACEHOLDER_X__ tokens exactly
+        - Use existing CSS classes: .table-slim for tables
+
+        {intent_guidance}
+
+        RESPONSE FORMAT:
+        Return ONLY a valid JSON object matching the DjangoEmailBody schema. No additional text.
+
+        INPUT TEXT:
+        {text}
+        """
+        
+        try:
+            # Clean the schema to remove OpenAI incompatible constructs
+            schema = self._clean_schema_for_openai(DjangoEmailBody.model_json_schema())
+            
+            response = self.client.responses.create(
+                model="gpt-4o-mini",
+                input=[
+                    {"role": "developer", "content": "You are a precise Django template email formatter. Return ONLY structured JSON without commentary. Preserve all text exactly including measurements and placeholders."},
+                    {"role": "user", "content": prompt_content}
+                ],
+                text={
+                    "format": {
+                        'type': 'json_schema',
+                        'name': 'django_email_body',
+                        'schema': schema,
+                        'strict': True
+                    }
+                }
+            )
+            
+            # Parse and validate the response
+            try:
+                django_body = _safe_load_and_validate(DjangoEmailBody, response.output_text)
+            except Exception as validation_error:
+                logger.error(f"Pydantic validation failed even after JSON cleaning: {str(validation_error)}")
+                logger.error(f"Cleaned JSON that failed: {repr(response.output_text[:500])}")
+                # Force fallback to create_fallback_django_body
+                raise Exception(f"JSON validation failed: {str(validation_error)}")
+            
+            # 🔍 DIAGNOSTIC: Log what OpenAI produced for each section analysis
+            logger.info(f"=== DJANGO TEMPLATE SECTIONS ANALYSIS ===")
+            logger.info(f"Content Analysis: {django_body.content_analysis.primary_content_type} (complexity: {django_body.content_analysis.complexity_level})")
+            logger.info(f"Sections Count: {len(django_body.sections)}")
+            
+            for i, section in enumerate(django_body.sections):
+                logger.info(f"Section {i}: {section.content_type} -> {section.template_section} (priority: {section.priority})")
+                logger.info(f"  Title: {section.title}")
+                logger.info(f"  Format: {section.format_type}")
+                logger.info(f"  Content preview: {repr(section.content[:200])}")
+            
+            return django_body
+            
+        except Exception as e:
+            logger.error(f"Error getting structured Django formatting: {str(e)}")
+            self._send_error_to_n8n(e, "_get_structured_django_formatting")
+            
+            # Create fallback structured response
+            return self._create_fallback_django_body(text)
+    
+    def _clean_schema_for_openai(self, schema: dict) -> dict:
+        """
+        Clean Pydantic v2 generated schema to be compatible with OpenAI's structured output API.
+        Removes unsupported constructs like allOf, anyOf, default values, format fields, etc.
+        """
+        import copy
+        
+        def clean_recursively(obj):
+            if isinstance(obj, dict):
+                # Create a new dict to avoid modifying the original
+                cleaned = {}
+                
+                for key, value in obj.items():
+                    # Skip unsupported schema properties
+                    if key in ['allOf', 'anyOf', 'oneOf', 'default', 'format', 'examples', 'const']:
+                        continue
+                    
+                    # Handle Literal fields that might create allOf constructs
+                    if key == 'enum' and isinstance(value, list):
+                        cleaned[key] = value
+                    elif key == 'type' and value == 'null':
+                        # Skip null types as they're usually part of Optional which creates allOf
+                        continue
+                    else:
+                        cleaned[key] = clean_recursively(value)
+                
+                # Ensure additionalProperties is explicitly set to False for objects
+                if cleaned.get('type') == 'object' and 'additionalProperties' not in cleaned:
+                    cleaned['additionalProperties'] = False
+                
+                # CRITICAL: Ensure all properties are in the required array for OpenAI
+                if cleaned.get('type') == 'object' and 'properties' in cleaned:
+                    all_property_keys = list(cleaned['properties'].keys())
+                    cleaned['required'] = all_property_keys
+                    
+                    # Handle optional fields by making their types unions with null
+                    for prop_name, prop_schema in cleaned['properties'].items():
+                        if isinstance(prop_schema, dict):
+                            # Check if this was an optional field (originally had anyOf with null)
+                            if prop_name in ['title', 'email_subject_suggestion', 'estimated_read_time']:
+                                # Make these fields nullable
+                                if 'type' in prop_schema and prop_schema['type'] != 'null':
+                                    prop_schema['type'] = [prop_schema['type'], 'null']
+                
+                # Handle Literal types and nested model references
+                if 'allOf' in obj or 'anyOf' in obj:
+                    # Try to extract a simple enum if possible
+                    enum_values = []
+                    ref_found = None
+                    
+                    if 'allOf' in obj:
+                        for item in obj['allOf']:
+                            if isinstance(item, dict):
+                                if 'const' in item:
+                                    enum_values.append(item['const'])
+                                elif '$ref' in item:
+                                    ref_found = item['$ref']
+                    if 'anyOf' in obj:
+                        for item in obj['anyOf']:
+                            if isinstance(item, dict):
+                                if 'const' in item:
+                                    enum_values.append(item['const'])
+                                elif '$ref' in item:
+                                    ref_found = item['$ref']
+                    
+                    if enum_values:
+                        return {
+                            'type': 'string',
+                            'enum': enum_values
+                        }
+                    elif ref_found:
+                        # For nested model references, return the $ref directly
+                        return {'$ref': ref_found}
+                    else:
+                        # Fallback to string type for complex Literal fields
+                        return {'type': 'string'}
+                
+                return cleaned
+                
+            elif isinstance(obj, list):
+                return [clean_recursively(item) for item in obj]
+            else:
+                return obj
+        
+        return clean_recursively(schema)
+    
+    def _render_django_sections(self, django_body: DjangoEmailBody) -> None:
+        """Render the structured content to Django template sections"""
+        
+        # Initialize sections
+        main_parts = []
+        data_parts = []
+        final_parts = []
+        
+        # Sort sections by priority
+        sorted_sections = sorted(django_body.sections, key=lambda x: (x.priority, x.content_type))
+        
+        # Render each section to appropriate template section
+        for section in sorted_sections:
+            section_html = self._render_section(section)
+            if section_html:
+                if section.template_section == "main":
+                    main_parts.append(section_html)
+                elif section.template_section == "data":
+                    data_parts.append(section_html)
+                elif section.template_section == "final":
+                    final_parts.append(section_html)
+        
+        # Combine sections
+        django_body.email_body_main = '\n'.join(main_parts)
+        django_body.email_body_data = '\n'.join(data_parts)
+        django_body.email_body_final = '\n'.join(final_parts)
+        
+        # 🔍 DIAGNOSTIC: Log final rendered sections
+        logger.info(f"=== FINAL DJANGO TEMPLATE SECTIONS ===")
+        logger.info(f"EMAIL_BODY_MAIN length: {len(django_body.email_body_main)}")
+        logger.info(f"EMAIL_BODY_MAIN preview: {repr(django_body.email_body_main[:300])}")
+        logger.info(f"EMAIL_BODY_DATA length: {len(django_body.email_body_data)}")
+        logger.info(f"EMAIL_BODY_DATA preview: {repr(django_body.email_body_data[:300])}")
+        logger.info(f"EMAIL_BODY_FINAL length: {len(django_body.email_body_final)}")
+        logger.info(f"EMAIL_BODY_FINAL preview: {repr(django_body.email_body_final[:300])}")
+    
+    def _render_section(self, section: ContentSection) -> str:
+        """Render an individual content section with Django template-compatible styling"""
+        html_parts = []
+        
+        # Add section title if present
+        if section.title:
+            html_parts.append(f'<h3>{section.title}</h3>')
+        
+        # Render content based on format type with Django template CSS compatibility
+        if section.format_type == "paragraph":
+            html_parts.append(f'<p>{section.content}</p>')
+        
+        elif section.format_type == "unordered_list":
+            html_parts.append(f'<ul>{section.content}</ul>')
+        
+        elif section.format_type == "ordered_list":
+            html_parts.append(f'<ol>{section.content}</ol>')
+        
+        elif section.format_type == "table":
+            # Use Django template's table-slim class
+            html_parts.append(f'<table class="table-slim">{section.content}</table>')
+        
+        elif section.format_type == "definition_list":
+            html_parts.append(f'<dl>{section.content}</dl>')
+        
+        elif section.format_type == "heading":
+            html_parts.append(f'<h3>{section.content}</h3>')
+        
+        else:
+            # Default to paragraph
+            html_parts.append(f'<p>{section.content}</p>')
+        
+        return '\n'.join(html_parts)
+
+    def _format_instacart_button(self, url: str, text: str) -> str:
+        """
+        Return the Instacart call‑to‑action HTML that meets the latest
+        partner‑branding specifications.
+
+        • Height: 46px (div container)
+        • Dynamic width: grows with text
+        • Padding: 16px vertical × 18px horizontal
+        • Logo: 22px tall
+        • Border: #E8E9EB solid 0.5px
+        • Background: #FFFFFF
+        • Text color: #000000, 16px, semi-bold
+        
+        Button text options:
+        • "Get Recipe Ingredients" (for recipe context)
+        • "Get Ingredients" (when recipes are not included)
+        • "Shop with Instacart" (legal approved)
+        • "Order with Instacart" (legal approved)
+        """
+        # Validate button text is one of the approved options
+        approved_texts = [
+            "Get Recipe Ingredients", 
+            "Get Ingredients", 
+            "Shop with Instacart", 
+            "Order with Instacart"
+        ]
+        
+        if text not in approved_texts:
+            # Default to "Shop with Instacart" if not an approved text
+            text = "Shop with Instacart"
+        
+        # Append UTM parameters for affiliate tracking
+        url_with_utm = _append_instacart_utm_params(url)
+        
+        return (
+            f'<a href="{url_with_utm}" target="_blank" style="text-decoration:none;">'
+            f'<div style="height:46px;display:inline-flex;align-items:center;'
+            f'padding:16px 18px;background:#FFFFFF;border:0.5px solid #E8E9EB;'
+            f'border-radius:8px;">'
+            f'<img src="https://live.staticflickr.com/65535/54538897116_fb233f397f_m.jpg" '
+            f'alt="Instacart" style="height:22px;width:auto;margin-right:10px;">'
+            f'<span style="font-family:Arial,sans-serif;font-size:16px;'
+            f'font-weight:500;color:#000000;white-space:nowrap;">{text}</span>'
+            f'</div></a>'
+        )
+        
+    def _apply_final_formatting(self, html: str) -> str:
+        """Apply final formatting including Instacart links and cleanup"""
+        if not html.strip():
+            return html
+            
+        # Replace Instacart links with branded buttons
+        html = self._replace_instacart_links(html)
+        
+        # Clean up HTML (minimal for Django template compatibility)
+        html = self._clean_email_html(html)
+        
+        return html
+    
+    def _replace_instacart_links(self, html: str) -> str:
+        """Replace Instacart links with branded CTA buttons"""
+        soup = BeautifulSoup(html, "html.parser")
+        
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if "instacart.com" in href or "instacart.tools" in href or "instacart.tool" in href:
+                btn_text = "Get Ingredients"
+                cta_html = self._format_instacart_button(href, btn_text)
+                a.replace_with(BeautifulSoup(cta_html, "html.parser"))
+        
+        return str(soup)
+    
+    def _clean_email_html(self, html: str) -> str:
+        """Minimal HTML cleanup for Django template compatibility"""
+        if not html.strip():
+            return html
+            
+        # Remove extra whitespace but preserve structure
+        html = re.sub(r'\n\s*\n', '\n', html)
+        html = html.strip()
+        
+        return html
+    
+    def _create_fallback_django_body(self, raw_text: str) -> DjangoEmailBody:
+        """Create a fallback Django body when OpenAI call fails"""
+        
+        # Simple content type detection
+        content_type = "general_text"
+        if any(word in raw_text.lower() for word in ['recipe', 'ingredients', 'cook']):
+            content_type = "recipe"
+        elif any(word in raw_text.lower() for word in ['shopping', 'grocery', 'buy']):
+            content_type = "shopping_list"
+        elif any(word in raw_text.lower() for word in ['meal plan', 'weekly', 'daily']):
+            content_type = "meal_plan"
+        
+        # Create basic section
+        section = ContentSection(
+            title=None,
+            content_type=content_type,
+            format_type="paragraph",
+            content=raw_text.replace('\n', '<br>'),
+            priority=1,
+            template_section="main"
+        )
+        
+        # Create analysis
+        analysis = ContentAnalysis(
+            primary_content_type=content_type,
+            has_structured_data=False,
+            has_actionable_items=False,
+            complexity_level="simple",
+            recommended_organization="Single paragraph format"
+        )
+        
+        # Create fallback HTML
+        paragraphs = raw_text.split('\n\n')
+        html_paragraphs = []
+        for p in paragraphs:
+            if p.strip():
+                html_paragraphs.append(f"<p>{p.replace(chr(10), '<br>')}</p>")
+        fallback_html = '\n'.join(html_paragraphs) if html_paragraphs else f"<p>{raw_text.replace(chr(10), '<br>')}</p>"
+        
+        return DjangoEmailBody(
+            content_analysis=analysis,
+            sections=[section],
+            email_body_main=fallback_html,
+            email_body_data="",
+            email_body_final="",
+            email_subject_suggestion=None,
+            estimated_read_time=None
+        )
+    
+    def _send_error_to_n8n(self, error: Exception, source: str):
+        """Send error information to n8n webhook for tracking"""
+        try:
+            n8n_traceback_url = os.getenv('N8N_TRACEBACK_URL')
+            if n8n_traceback_url:
+                requests.post(n8n_traceback_url, json={
+                    "error": str(error),
+                    "source": source,
+                    "traceback": traceback.format_exc()
+                })
+        except Exception:
+            # Silently fail if we can't send to n8n
+            pass
+
+    def _protect_urls(self, text: str) -> tuple[str, dict]:
+        """Protect URLs with placeholders to prevent corruption"""
+        url_pattern = r'https?://[^\s<>"\'()]+[^\s<>"\'.!?;,)]'
+        urls = re.findall(url_pattern, text)
+        url_placeholders = {}
+        
+        protected_text = text
+        for i, url in enumerate(urls):
+            placeholder = f"__URL_PLACEHOLDER_{i}__"
+            url_placeholders[placeholder] = url
+            protected_text = protected_text.replace(url, placeholder)
+        
+        return protected_text, url_placeholders
 
 # Global dictionary to maintain guest state across request instances
 GLOBAL_GUEST_STATE: Dict[str, Dict[str, Any]] = {}
@@ -313,6 +971,9 @@ class MealPlanningAssistant:
         # Don't cache tools - load them fresh each time to pick up changes
         # self.auth_tools and self.guest_tools are loaded in _get_tools_for_user()
         
+        # Initialize Django Template Email Formatter
+        self._django_email_formatter = DjangoTemplateEmailFormatter(self.client)
+        
         self.system_message = (
             "You are sautAI's helpful meal‑planning assistant. "
             "Answer questions about food, nutrition and meal plans."
@@ -356,6 +1017,13 @@ class MealPlanningAssistant:
         """Send a message using database-backed history (non-streaming)."""
         is_guest = self._is_guest(self.user_id)
         
+        # 🔍 DIAGNOSTIC: Log input to OpenAI
+        input_preview = repr(message[:300])
+        logger.info(f"INPUT TO OPENAI: {input_preview}")
+        
+        if any(header in message for header in ['From:', 'Date:', 'Subject:']):
+            logger.warning(f"⚠️ HEADERS IN OPENAI INPUT: {input_preview}")
+        
         # Select the appropriate model based on user status and message complexity
         model = choose_model(
             user_id=self.user_id,
@@ -395,62 +1063,137 @@ class MealPlanningAssistant:
             prev_resp_id = None # Send full history
 
 
-        try:
-            resp = self.client.responses.create(
-                model=model,
-                input=history,
-                instructions=self._instructions(is_guest),
-                tools=self._get_tools_for_user(is_guest),
-                parallel_tool_calls=True,
-                # We send full history for auth, maybe not needed for guest either?
-                # Consider setting previous_response_id=None always if full history works
-                previous_response_id=prev_resp_id, 
-            )
-            
-            final_response_id = resp.id
-            # Log the raw response object from OpenAI to understand its structure
-            
-            # Check for tool calls in response
-            tool_calls_in_response = [item for item in getattr(resp, "output", []) if getattr(item, 'type', None) == "function_call"]
-            
-            # If the response involved tool calls, OpenAI might implicitly add them to resp.input
-            # Or we might need to reconstruct history if tools were called (less common in non-streaming)
-            # For simplicity, let's assume resp.input contains the final state or reconstruct minimally.
-            
-            final_output_text = self._extract(resp) # Extract text before modifying history
+        current_history = history.copy()
+        final_response_id = None
+        
+        # Handle tool calls in a loop until we get a final response
+        while True:
+            try:
+                resp = self.client.responses.create(
+                    model=model,
+                    input=current_history,
+                    instructions=self._instructions(is_guest),
+                    tools=self._get_tools_for_user(is_guest),
+                    parallel_tool_calls=True,
+                    previous_response_id=prev_resp_id, 
+                )
+                
+                final_response_id = resp.id
+                print(f"Response from send_message: {resp}")
+                
+                # Check for tool calls in response
+                tool_calls_in_response = [item for item in getattr(resp, "output", []) if getattr(item, 'type', None) == "function_call"]
+                
+                # Extract any text response
+                response_text = self._extract(resp)
+                print(f"Response text: {response_text}")
+                
+                # If there's text content, add it to history
+                if response_text:
+                    current_history.append({"role": "assistant", "content": response_text})
+                
+                # If no tool calls, we're done
+                if not tool_calls_in_response:
+                    print("No tool calls found, finishing response")
+                    break
+                
+                print(f"Found {len(tool_calls_in_response)} tool calls to execute")
+                
+                # Execute all tool calls
+                for tool_call_item in tool_calls_in_response:
+                    call_id = getattr(tool_call_item, 'call_id', None)
+                    name = getattr(tool_call_item, 'name', None)
+                    arguments = getattr(tool_call_item, 'arguments', '{}')
+                    
+                    print(f"Executing tool call: {name} with call_id: {call_id}")
+                    
+                    # Fix user_id in arguments if needed
+                    fixed_args = self._fix_function_args(name, arguments)
+                    if fixed_args != arguments:
+                        print(f"Fixed user_id in arguments: {arguments} -> {fixed_args}")
+                        arguments = fixed_args
+                    
+                    # Add function call to history
+                    current_history.append({
+                        "type": "function_call",
+                        "name": name,
+                        "arguments": arguments,
+                        "call_id": call_id
+                    })
+                    
+                    try:
+                        # Create a tool call object that handle_tool_call expects
+                        tool_call_obj = type("Call", (), {
+                            "call_id": call_id,
+                            "function": type("F", (), {
+                                "name": name,
+                                "arguments": arguments
+                            })
+                        })
+                        
+                        # Execute the tool call
+                        from .tool_registration import handle_tool_call
+                        result = handle_tool_call(tool_call_obj)
+                        print(f"Tool call result: {result}")
+                        
+                    except Exception as e:
+                        print(f"Error executing tool call {name}: {str(e)}")
+                        import traceback
+                        traceback.print_exc()
+                        result = {"status": "error", "message": str(e)}
+                    
+                    # Add function result to history
+                    current_history.append({
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps(result)
+                    })
+                
+                # Continue the loop with updated history to get final response
+                prev_resp_id = final_response_id
+                print(f"Continuing with updated history, previous_response_id={prev_resp_id}")
+                
+            except Exception as e:
+                logger.error(f"Error in send_message loop: {str(e)}")
+                traceback.print_exc()
+                return {"status": "error", "message": f"An error occurred: {str(e)}"}
+        
+        # Get the final response text
+        final_output_text = response_text
+        
+        # 🔍 DIAGNOSTIC: Log raw OpenAI response
+        response_preview = repr(final_output_text[:500]) if final_output_text else "''"
+        logger.info(f"RAW OPENAI RESPONSE: {response_preview}")
+        
+        if final_output_text and any(header in final_output_text for header in ['From:', 'Date:', 'Subject:']):
+            logger.warning(f"⚠️ HEADERS IN OPENAI RESPONSE: {response_preview}")
 
-            final_history = history.copy() # Start with what we sent
-            # Add assistant response
-            if final_output_text:
-                 final_history.append({"role": "assistant", "content": final_output_text})
-            # TODO: If non-streaming responses can include tool calls, need to add them here correctly.
-            # Example: Check resp.output for function calls/outputs and append them.
-            
-            # Persist the final state
-            if not is_guest:
-                self._persist_state(self.user_id, final_response_id, is_guest, final_history)
-                # Also save the user message and response text in UserMessage model
-                if chat_thread:
-                    self._save_turn(self.user_id, message, final_output_text, chat_thread)
-            elif is_guest:
-                # Persist guest state (keeps plain text + response_id)
-                self._store_guest_state(final_response_id, final_history)
+        final_history = current_history
+        
+        # Persist the final state
+        if not is_guest:
+            self._persist_state(self.user_id, final_response_id, is_guest, final_history)
+            # Also save the user message and response text in UserMessage model
+            if chat_thread:
+                self._save_turn(self.user_id, message, final_output_text, chat_thread)
+        elif is_guest:
+            # Persist guest state (keeps plain text + response_id)
+            self._store_guest_state(final_response_id, final_history)
 
-            return {
-                "status": "success",
-                "message": final_output_text,
-                "response_id": final_response_id,
-            }
-        except Exception as e:
-             logger.error(f"Error in send_message for user {self.user_id}: {str(e)}")
-             # n8n traceback
-             n8n_traceback = {
-                 'error': str(e),
-                 'source': 'send_message',
-                 'traceback': f"Guest ID: {self.user_id} | {traceback.format_exc()}"
-             }
-             requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
-             return {"status": "error", "message": f"An error occurred: {str(e)}"}
+        # 🔍 DIAGNOSTIC: Log after formatting
+        if hasattr(self, '_format_text_for_email_body'):
+            formatted_response = self._format_text_for_email_body(final_output_text)
+            formatted_preview = repr(formatted_response[:500])
+            logger.info(f"AFTER FORMATTING: {formatted_preview}")
+            
+            if any(header in formatted_response for header in ['From:', 'Date:', 'Subject:']):
+                logger.warning(f"⚠️ HEADERS AFTER FORMATTING: {formatted_preview}")
+
+        return {
+            "status": "success",
+            "message": final_output_text,
+            "response_id": final_response_id,
+        }
 
     def stream_message(
         self, message: str, thread_id: Optional[str] = None # thread_id is the DB ChatThread ID, not OpenAI's
@@ -1432,257 +2175,30 @@ class MealPlanningAssistant:
     # ────────────────────────────────────────────────────────────────────
     def _format_text_for_email_body(self, raw_text: str) -> str:
         """
-        Ask the LLM to transform a plain-text assistant reply into
-        tight, semantic HTML (p/ul/ol/li/h3 and table markup only),
-        then run a final sanitation pass so no hidden bytes or weird
-        punctuation break Mail clients.
-
-        It returns **just** the inner-HTML string ready to drop into
-        our Django template.
+        Transform plain text into Django template-compatible HTML sections.
+        Returns the main content section for backward compatibility.
+        Use _get_django_template_sections() for full template integration.
+        
+        Args:
+            raw_text: The raw text content to format
+            
+        Returns:
+            Formatted HTML string for email_body_main (backward compatible)
         """
-
-        # --------------------------- guard rails ---------------------------
-        if not raw_text.strip():
-            return ""
-
-        if not getattr(self, "client", None):      # Offline fallback
-            safe_fallback = raw_text.replace("\n", "<br>")
-            return f"<p>{safe_fallback}</p>"
-
-        # ── Minimal text cleanup - preserve Unicode characters ──────────────────
-        import re
-        
-        # Only clean up excess whitespace
-        raw_text = re.sub(r'\s+', ' ', raw_text).strip()
-
-        # ────────────────── URL PROTECTION WITH PLACEHOLDERS ──────────────────
-        # Extract URLs and replace with placeholders to prevent LLM corruption
-        url_pattern = r'https?://[^\s<>"\'()]+[^\s<>"\'.!?;,)]'
-        urls = re.findall(url_pattern, raw_text)
-        url_placeholders = {}
-        
-        # Replace URLs with placeholders
-        protected_text = raw_text
-        for i, url in enumerate(urls):
-            placeholder = f"__URL_PLACEHOLDER_{i}__"
-            url_placeholders[placeholder] = url
-            protected_text = protected_text.replace(url, placeholder)
-        
-
-        # ----------------------- build LLM prompt -------------------------
-        prompt_content = f"""
-        You are an **EmailBody HTML formatter**.
-
-        --- TASK ---
-        Convert the RAW TEXT below into **valid HTML strings** and return them
-        inside a **single JSON object** that EXACTLY matches the `EmailBody`
-        schema:
-
-        {{
-        "main_section": "HTML-string",
-        "data_visualization": "HTML-string or empty string",
-        "final_message": "HTML-string"
-        }}
-
-        • **No extra keys.**  
-        • **Do not wrap** the JSON in code-fences or Markdown.  
-        • If no chart/table is needed, set `"data_visualization": ""`.
-
-        --- HTML RULES ---
-        1. Use only: `<p>`, `<h3>`, `<ul>/<li>`, `<ol>/<li>`, `<table>` (plus
-        `<thead>/<tbody>/<tr>/<th>/<td>` as needed).  
-        2. Lists → `<ul>` or `<ol>` with nested `<li>`.  
-        3. Headings → promote clear section titles (e.g., "Shopping List") to `<h3>`.  
-        4. **No structural `<div>` or `<span>` wrappers.**  
-        5. Preserve **all** numbers, units, and Unicode exactly
-        (e.g., `200°C`, `2 ½ cups`).  
-        6. Links must include `target="_blank" rel="noopener noreferrer"`.  
-        7. Return only body content — omit `<html>`, `<head>`, `<body>`.  
-        8. **Absolutely no follow-up questions, commentary, or feedback requests.**
-        9. **IMPORTANT: Preserve all __URL_PLACEHOLDER_X__ tokens exactly as they appear.**
-        10. EXAMPLE OF LIST-BASED OUTPUT:
-        {{
-        "main_section": "<p>Here's your shopping list:</p><ul><li>200g of flour</li><li>100g of sugar</li><li>100g of butter</li></ul>",
-        "data_visualization": "
-        🥬 PRODUCE
-
-        Eggs
-            •	21 pieces
-            •	Steamed Egg Custard w/ Spinach & Shiitake: 6
-            •	Tamago Kake Gohan w/ Umeboshi: 3
-            •	Tamago Onigiri: 6
-            •	Japanese Omelette: 6
-
-        Vegetables
-            •	Spinach: 950 g (pre-washed/chopped preferred)
-            •	Custard & Shiitake: 200 g
-            •	Steamed Side: 300 g
-            •	Savory Oatmeal: 150 g
-            •	Hash: 150 g
-            •	Omelette: 150 g
-            •	Shiitake mushrooms: 150 g (fresh or rehydrated)
-            •	Mushrooms (any kind): 150 g
-            •	Bell peppers: 24 medium (mixed colors, toddler strips)
-            •	For salmon dishes, tofu bowls, and hash
-            •	Sweet potatoes: 500 g (peeled & diced)
-            •	Eggplant: 2 medium
-            •	Daikon radish: 300 g (sliced)
-            •	Broccoli florets: 400 g
-            •	Green onions: 2 stalks (sliced)
-            •	Scallions: 2 stalks (chopped)
-            •	Garlic: 3 cloves (minced)
-            •	Fresh herbs (thyme, parsley): to taste
-            •	Fresh ginger: 1" piece (grated)
-            •	Pickled plums (umeboshi): 3 pieces
-            •	Wakame seaweed (dried): 10 g
-
-        ⸻
-
-        🐟 MEAT & FISH
-            •	Chicken breast (boneless, skinless): 1,800 g
-            •	Salmon fillets: 2,400 g
-            •	Lean protein (chicken breast or tofu): 300 g
-            •	White fish fillets (cod/flounder): 600 g
-            •	Mackerel fillets: 600 g
-
-        ⸻
-
-        🧂 CONDIMENTS & OILS
-            •	Soy sauce: 546 ml + 4 Tbsp total
-            •	Mirin: 134 ml + 3 Tbsp + 40 ml
-            •	Honey: 2 Tbsp
-            •	Miso paste: 12 Tbsp
-            •	Sesame oil: 2 Tbsp (optional)
-            •	Olive oil: 2 Tbsp (can swap for sesame oil)
-            •	Avocado oil: 2 Tbsp (can swap for sesame oil)
-            •	Toasted sunflower seeds: 2 Tbsp (alt: sesame seeds)
-            •	Pumpkin seeds: 2 Tbsp (alt: sesame seeds)
-
-        ⸻
-
-        🌾 GRAINS
-            •	Steel-cut oats: 180 g
-            •	Brown rice (uncooked): 1,200 g
-            •	White rice (cooked): 950 g
-            •	Quinoa (uncooked): 300 g
-
-        ⸻
-
-        🧊 FROZEN
-            •	Edamame pods: 400 g
-
-        ⸻
-
-        🥛 DAIRY & SOY
-            •	Soft or silken tofu: 200 g
-            •	Soft tofu: 400 g
-
-        ⸻
-
-        🍲 MISC
-            •	Vegetable broth: 600 ml
-        ",
-        "final_message": ""
-        }}
-        11. EXAMPLE OF TABLE-BASED OUTPUT:
-        {{
-        "main_section": "<h3>Meal Plan</h3><table><thead><tr><th>Day</th><th>Meal</th></tr></thead><tbody><tr><td>Mon</td><td>Veggie curry</td></tr><tr><td>Tue</td><td>Grilled salmon</td></tr></tbody></table>",
-        "data_visualization": "",
-        "final_message": "<p>Enjoy!</p>"
-        }}
-        --- BEGIN RAW TEXT ---
-        {protected_text}
-        --- END RAW TEXT ---
+        return self._django_email_formatter.format_text_for_email_body(raw_text)
+    
+    def _get_django_template_sections(self, raw_text: str, intent_context: Optional[Dict] = None) -> DjangoEmailBody:
         """
-
-        try:
-            response = self.client.responses.create(
-                model="gpt-4o-mini",  
-                input=[
-                    {"role": "developer", "content": "You are a precise HTML email formatter. Return ONLY HTML content without follow-up questions. PRESERVE ALL text exactly as written - do not modify numbers, measurements, Unicode characters like °, ½, ¼, etc., or any __URL_PLACEHOLDER_X__ tokens."},
-                    {"role": "user", "content": prompt_content}
-                ],
-                stream=False,
-                text={
-                    "format": {
-                        'type': 'json_schema',
-                        'name': 'email_body',
-                        'schema': EmailBody.model_json_schema()
-                    }
-                }
-            )
+        Get all Django template sections for complete integration.
+        
+        Args:
+            raw_text: The raw text content to format
+            intent_context: Optional intent analysis context for better formatting
             
-            # Parse the response with Pydantic to ensure format consistency
-            try:
-                # First check if it looks like valid JSON
-                if response.output_text.strip().startswith("{"):
-                    email_body = EmailBody.model_validate_json(response.output_text)
-                    formatted_text = "".join(
-                        part for part in [
-                            email_body.main_section,
-                            email_body.data_visualization or "",
-                            email_body.final_message
-                        ] if part
-                    )
-                else:
-                    # Try to extract just the HTML content if it's not in expected format
-                    formatted_text = response.output_text.strip()
-                    logger.warning(f"Email body not in expected JSON format, using raw output")
-            except Exception as e:
-                # n8n traceback
-                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-                requests.post(n8n_traceback_url, json={"error": str(e), "source":"_format_text_for_email_body", "traceback": traceback.format_exc()})
-                formatted_text = response.output_text.strip()
-            
-            # ────────────────── RESTORE ORIGINAL URLS ──────────────────
-            # Replace placeholders back with original URLs
-            for placeholder, original_url in url_placeholders.items():
-                formatted_text = formatted_text.replace(placeholder, original_url)
-            
-            
-            # ------------------- MINIMAL FINAL CLEAN-UP --------------------
-            import re
-            
-            # Clean up excess whitespace only
-            formatted_text = re.sub(r'\s+', ' ', formatted_text)
-
-            # nuke any "Subject: …" line the model accidentally prepends
-            formatted_text = re.sub(r"^Subject:[^\n\r]*[\n\r]+", "", formatted_text, flags=re.IGNORECASE)
-
-            # ------------------- INSTACART BUTTON FORMATTING --------------------
-            # Replace any Instacart links with properly formatted buttons according to brand guidelines
-            
-            # Use BeautifulSoup to properly parse and process the HTML
-            try:
-                # Determine if the content appears to be recipe-related
-                is_recipe = "recipe" in formatted_text.lower()
-                copy_type = "recipe" if is_recipe else "ingredients"
-                
-                # Use the BeautifulSoup helper function to replace Instacart links
-                formatted_text = _replace_instacart_links(formatted_text, copy_type)
-            except Exception as e:
-                # n8n traceback
-                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-                requests.post(n8n_traceback_url, json={"error": str(e), "source":"_format_text_for_email_body", "traceback": traceback.format_exc()})
-                # Continue with the original text if there's an error
-
-            formatted_text = _clean_email_html(formatted_text)
-            return formatted_text.strip()
-            
-        except Exception as e:
-            # n8n traceback
-            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-            requests.post(n8n_traceback_url, json={"error": str(e), "source":"_format_text_for_email_body", "traceback": traceback.format_exc()})
-            
-            # Fallback: Restore URLs in the original text and provide simple HTML
-            fallback_text = raw_text
-            for placeholder, original_url in url_placeholders.items():
-                fallback_text = fallback_text.replace(placeholder, original_url)
-            
-            paragraphs = fallback_text.split('\n\n')
-            html_paragraphs = [f"<p>{p.replace(chr(10), '<br>')}</p>" for p in paragraphs if p.strip()]
-            fallback_html = ''.join(html_paragraphs) if html_paragraphs else f"<p>{fallback_text.replace(chr(10), '<br>')}</p>"
-            return _clean_email_html(fallback_html)
+        Returns:
+            DjangoEmailBody with email_body_main, email_body_data, and email_body_final
+        """
+        return self._django_email_formatter.get_django_template_sections(raw_text, intent_context)
 
     # ────────────────────────────────────────────────────────────────────
     #  Email Processing Method
@@ -1938,9 +2454,12 @@ class MealPlanningAssistant:
         # Get the current active thread for this user
         chat_thread = self._get_or_create_thread(self.user_id)
         
+        # Strip email headers from the message content
+        cleaned_message_content = self._strip_email_headers(message_content)
+        
         # 1. Get the assistant's response using generate_email_response logic
         # This handles history, model selection, tool calls, iterations, and persistence.
-        assistant_response_data = self.generate_email_response(message_content=message_content)
+        assistant_response_data = self.generate_email_response(message_content=cleaned_message_content)
         if assistant_response_data.get("status") == "error":
             logger.error(f"MealPlanningAssistant: Error getting response from generate_email_response for user {self.user_id}: {assistant_response_data.get('message')}")
             # Still attempt to send a generic error reply via email
@@ -1951,10 +2470,10 @@ class MealPlanningAssistant:
             new_openai_response_id = assistant_response_data.get('response_id', None)
             logger.info(f"MealPlanningAssistant: Received response for user {self.user_id}. OpenAI response ID: {new_openai_response_id}")
 
-        # 2. Format the raw reply content for email body
-        formatted_email_body = self._format_text_for_email_body(raw_reply_content)
+        # 2. Get structured Django template sections instead of single formatted content
+        django_email_body = self._get_django_template_sections(raw_reply_content)
 
-        # 3. Render the full email using the new template
+        # 3. Render the full email using the Django template with structured sections
         try:
             user = CustomUser.objects.get(id=self.user_id) # Fetch user for their name
             user_name = user.get_full_name() or user.username
@@ -1978,9 +2497,9 @@ class MealPlanningAssistant:
             'customer_dashboard/assistant_email_template.html',
             {
                 'user_name': user_name,
-                'email_body_main': formatted_email_body,
-                'email_body_data': '',  # Empty for now, can be used for structured data
-                'email_body_final': '',  # Empty for now, can be used for closing messages
+                'email_body_main': django_email_body.email_body_main,
+                'email_body_data': django_email_body.email_body_data,
+                'email_body_final': django_email_body.email_body_final,
                 'profile_url': profile_url,
                 'personal_assistant_email': user.personal_assistant_email if hasattr(user, 'personal_assistant_email') else None
             }
@@ -2007,7 +2526,7 @@ class MealPlanningAssistant:
         if not n8n_webhook_url:
             logger.error(f"MealPlanningAssistant: N8N_EMAIL_REPLY_WEBHOOK_URL not configured. Cannot send email reply for user {self.user_id}.")
             # Log the intended reply locally if n8n is not configured
-            logger.info(f"Intended email reply for {recipient_email} (User ID: {self.user_id}):\nSubject: Re: {original_subject}\nBody:\n{formatted_email_body}")
+            logger.info(f"Intended email reply for {recipient_email} (User ID: {self.user_id}):\nSubject: Re: {original_subject}\nBody:\n{email_html_content}")
             return {"status": "error", "message": "N8N_EMAIL_REPLY_WEBHOOK_URL not configured."}
 
         # Ensure original_subject has content
@@ -2043,7 +2562,7 @@ class MealPlanningAssistant:
         except requests.RequestException as e:
             logger.error(f"MealPlanningAssistant: Failed to post assistant reply to n8n for user {self.user_id}: {e}. Payload: {json.dumps(payload)}")
             # Log the intended reply if n8n call failed
-            logger.info(f"Failed n8n call. Intended email reply for {recipient_email} (User ID: {self.user_id}):\nSubject: {final_subject}\nBody:\n{formatted_email_body}")
+            logger.info(f"Failed n8n call. Intended email reply for {recipient_email} (User ID: {self.user_id}):\nSubject: {final_subject}\nBody:\n{email_html_content}")
             return {"status": "error", "message": f"Failed to send email via n8n: {str(e)}"}
         except Exception as e_general: # Catch any other unexpected errors during payload prep or call
             logger.error(f"MealPlanningAssistant: Unexpected error during n8n email sending for user {self.user_id}: {e_general}. Payload: {json.dumps(payload if 'payload' in locals() else 'Payload not generated')}", exc_info=True)
@@ -2228,6 +2747,94 @@ class MealPlanningAssistant:
             logger.warning(f"Truncated conversation history from {len(history)} to {len(truncated_history)} messages to fit context window (estimated {current_tokens + system_tokens} tokens)")
         
         return truncated_history
+
+    def _strip_email_headers(self, message_content: str) -> str:
+        """
+        Strip email headers from the message content.
+        Handles various header patterns including embedded headers.
+        """
+        if not message_content:
+            return message_content
+            
+        # Define header patterns to detect and remove
+        header_patterns = [
+            r'From:\s*[^\n\r]+',
+            r'Date:\s*[^\n\r]+', 
+            r'Subject:\s*[^\n\r]+',
+            r'To:\s*[^\n\r]+',
+            r'Message-ID:\s*[^\n\r]+',
+            r'In-Reply-To:\s*[^\n\r]+',
+            r'References:\s*[^\n\r]+',
+            r'Return-Path:\s*[^\n\r]+',
+            r'Message from your sautAI assistant[^\n\r]*',
+            r'Your latest meal plan[^\n\r]*',
+            r'-IMAGE REMOVED-[^\n\r]*'
+        ]
+        
+        cleaned_content = message_content
+        
+        # Remove each header pattern
+        for pattern in header_patterns:
+            cleaned_content = re.sub(pattern, '', cleaned_content, flags=re.IGNORECASE)
+        
+        # Clean up extra whitespace and line breaks
+        cleaned_content = re.sub(r'\s+', ' ', cleaned_content)
+        cleaned_content = cleaned_content.strip()
+        
+        # If the content is dramatically reduced, it might be mostly headers
+        # In that case, try to extract the actual user message
+        if len(cleaned_content) < len(message_content) * 0.3:
+            # Look for common user message indicators
+            user_message_patterns = [
+                r'(send that again please|please send|can you|could you|i need|i want)',
+                r'(provide|create|make|give me|show me)',
+            ]
+            
+            for pattern in user_message_patterns:
+                match = re.search(pattern, message_content, re.IGNORECASE)
+                if match:
+                    # Extract from the start of the user message
+                    start_pos = match.start()
+                    potential_message = message_content[start_pos:]
+                    
+                    # Clean this extracted message
+                    for header_pattern in header_patterns:
+                        potential_message = re.sub(header_pattern, '', potential_message, flags=re.IGNORECASE)
+                    
+                    potential_message = re.sub(r'\s+', ' ', potential_message).strip()
+                    
+                    if len(potential_message) > len(cleaned_content):
+                        cleaned_content = potential_message
+                    break
+        
+        # Final fallback - if we removed too much, return the original with basic cleanup
+        if len(cleaned_content) < 10 and len(message_content) > 50:
+            # Just remove obvious email artifacts but keep the rest
+            fallback_content = message_content
+            obvious_headers = [
+                r'From:\s*[^\s]+@[^\s]+',
+                r'Date:\s*\d{2}/\d{2}/\d{4}[^\n\r]*',
+                r'Subject:\s*Re:\s*[^\n\r]*'
+            ]
+            for pattern in obvious_headers:
+                fallback_content = re.sub(pattern, '', fallback_content, flags=re.IGNORECASE)
+            
+            fallback_content = re.sub(r'\s+', ' ', fallback_content).strip()
+            if len(fallback_content) > len(cleaned_content):
+                cleaned_content = fallback_content
+        
+        logger.info(f"Header stripping: original length={len(message_content)}, cleaned length={len(cleaned_content)}")
+        
+        # 🔍 DIAGNOSTIC: Log header stripping details
+        logger.info(f"=== HEADER STRIPPING DIAGNOSTIC ===")
+        logger.info(f"Original content preview: {repr(message_content[:200])}")
+        logger.info(f"Cleaned content preview: {repr(cleaned_content[:200])}")
+        if len(cleaned_content) != len(message_content):
+            logger.info(f"✅ Headers removed: {len(message_content) - len(cleaned_content)} characters")
+        else:
+            logger.warning(f"⚠️ No headers detected/removed")
+        
+        return cleaned_content if cleaned_content else message_content
 
 def generate_guest_id() -> str:
     return f"guest_{uuid.uuid4().hex[:8]}"
@@ -2434,13 +3041,13 @@ class OnboardingAssistant(MealPlanningAssistant):
                             "format": {
                                 'type': 'json_schema',
                                 'name': 'password_prompt',
-                                'schema': PasswordPrompt.model_json_schema()
+                                'schema': self._clean_schema_for_openai(PasswordPrompt.model_json_schema())
                             }
                         }
                     )
                     
                     # Parse the structured response
-                    password_prompt = PasswordPrompt.model_validate_json(resp.output_text)
+                    password_prompt = _safe_load_and_validate(PasswordPrompt, resp.output_text)
                     response_text = password_prompt.assistant_message
                     
                     # Add to history and persist using parent's method
@@ -2621,99 +3228,58 @@ class OnboardingAssistant(MealPlanningAssistant):
     # - _extract_response_text() [uses parent's _extract]
     # - _fix_onboarding_args() [uses parent's _fix_function_args]
 
-# ────────────────────────────────────────────────────────────────────
-#  Helper: build branded Instacart CTA button
-# ────────────────────────────────────────────────────────────────────
-def _format_instacart_button(url: str, text: str) -> str:
-    """
-    Return the Instacart call‑to‑action HTML that meets the latest
-    partner‑branding specifications.
 
-    • Height: 46px (div container)
-    • Dynamic width: grows with text
-    • Padding: 16px vertical × 18px horizontal
-    • Logo: 22px tall
-    • Border: #E8E9EB solid 0.5px
-    • Background: #FFFFFF
-    • Text color: #000000, 16px, semi-bold
-    
-    Button text options:
-    • "Get Recipe Ingredients" (for recipe context)
-    • "Get Ingredients" (when recipes are not included)
-    • "Shop with Instacart" (legal approved)
-    • "Order with Instacart" (legal approved)
-    """
-    # Validate button text is one of the approved options
-    approved_texts = [
-        "Get Recipe Ingredients", 
-        "Get Ingredients", 
-        "Shop with Instacart", 
-        "Order with Instacart"
-    ]
-    
-    if text not in approved_texts:
-        # Default to "Shop with Instacart" if not an approved text
-        text = "Shop with Instacart"
-    
-    return (
-        f'<a href="{url}" target="_blank" style="text-decoration:none;">'
-        f'<div style="height:46px;display:inline-flex;align-items:center;'
-        f'padding:16px 18px;background:#FFFFFF;border:0.5px solid #E8E9EB;'
-        f'border-radius:8px;">'
-        f'<img src="https://live.staticflickr.com/65535/54538897116_fb233f397f_m.jpg" '
-        f'alt="Instacart" style="height:22px;width:auto;margin-right:10px;">'
-        f'<span style="font-family:Arial,sans-serif;font-size:16px;'
-        f'font-weight:500;color:#000000;white-space:nowrap;">{text}</span>'
-        f'</div></a>'
-    )
 
 # ────────────────────────────────────────────────────────────────────
 #  Helper: replace Instacart hyperlinks with branded CTA (BeautifulSoup)
 # ────────────────────────────────────────────────────────────────────
-def _replace_instacart_links(html: str, copy_type: str = "recipe") -> str:
-    """
-    Scan the HTML for <a> tags pointing to Instacart and replace each with
-    our branded CTA button.
+# ────────────────────────────────────────────────────────────────────
+#  Integration Factory Functions for Django Template Email Formatting
+# ────────────────────────────────────────────────────────────────────
 
-    Args:
-        html:      Raw HTML fragment.
-        copy_type: Not used anymore, always uses "Get Ingredients"
-
-    Returns:
-        Modified HTML with Instacart links swapped out.
+def create_django_template_format_function(openai_client):
     """
-    soup = BeautifulSoup(html, "html.parser")
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        if "instacart.com" in href or "instacart.tools" in href or "instacart.tool" in href:
-            # Always use "Get Ingredients" as the button text
-            btn_text = "Get Ingredients"
-            cta_html = _format_instacart_button(href, btn_text)
-            a.replace_with(BeautifulSoup(cta_html, "html.parser"))
+    Factory function to create the Django template-compatible email formatting function
+    that can be used as a drop-in replacement for _format_text_for_email_body
+    """
+    formatter = DjangoTemplateEmailFormatter(openai_client)
+    return formatter.format_text_for_email_body
+
+def create_django_template_sections_function(openai_client):
+    """
+    Factory function to create the full Django template sections function
+    for complete template integration
+    """
+    formatter = DjangoTemplateEmailFormatter(openai_client)
+    return formatter.get_django_template_sections
+
+# ────────────────────────────────────────────────────────────────────
+#  Email Processing Helper Functions
+# ────────────────────────────────────────────────────────────────────
+
+# ────────────────────────────────────────────────────────────────────
+#  Helper: append UTM parameters to Instacart URLs
+# ────────────────────────────────────────────────────────────────────
+def _append_instacart_utm_params(url: str) -> str:
+    """
+    Append required UTM parameters to Instacart URLs for affiliate tracking.
     
-    return str(soup)
+    Args:
+        url: The original Instacart URL
+        
+    Returns:
+        URL with UTM parameters appended
+    """
+    utm_params = "utm_campaign=instacart-idp&utm_medium=affiliate&utm_source=instacart_idp&utm_term=partnertype-mediapartner&utm_content=campaignid-20313_partnerid-6356307"
+    
+    # Check if URL already has query parameters
+    if "?" in url:
+        # URL already has query parameters, append with &
+        return f"{url}&{utm_params}"
+    else:
+        # URL doesn't have query parameters, append with ?
+        return f"{url}?{utm_params}"
 
 # ────────────────────────────────────────────────────────────────────
-#  Helper: tidy up HTML formatting for email
-# ────────────────────────────────────────────────────────────────────
-def _clean_email_html(html: str) -> str:
-    """Return a minimally formatted HTML string."""
-    soup = BeautifulSoup(html, "html.parser")
-    pretty = soup.prettify()
-    if "<body>" in pretty:
-        body = soup.body
-        if body:
-            body_pretty = body.prettify()
-            lines = body_pretty.splitlines()[1:-1]
-            pretty = "\n".join(lines)
-    return pretty.strip()
-
-# ────────────────────────────────────────────────────────────────────
-#  Tool information and debugging helpers
-# ────────────────────────────────────────────────────────────────────
-
-
-
-# ────────────────────────────────────────────────────────────────────
-#  Conversation‑reset helper
+#  Helper: build branded Instacart CTA button
 # ────────────────────────────────────────────────────────────────────

@@ -30,12 +30,14 @@ from meals.meal_modification_parser import parse_modification_request
 from shared.utils import (generate_user_context, get_embedding, cosine_similarity, replace_meal_in_plan,
                           remove_meal_from_plan, get_openai_client)
 from django.db import transaction
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 logger = logging.getLogger(__name__)
 
 class DietaryCompatibilityResponse(BaseModel):
     """Schema for OpenAI's response on dietary compatibility"""
+    model_config = ConfigDict(extra="forbid")
+
     is_compatible: bool = Field(..., description="Whether the meal is compatible with the dietary preference")
     confidence: float = Field(..., description="Confidence score between 0.0 and 1.0")
     reasoning: str = Field(..., description="Brief explanation for the compatibility assessment")
@@ -404,7 +406,7 @@ def day_to_offset(day_name: str) -> int:
     }
     return mapping.get(day_name, 0)
 
-@shared_task
+@shared_task(ignore_result=True)
 @handle_task_failure
 def create_meal_plan_for_user(
     user=None,

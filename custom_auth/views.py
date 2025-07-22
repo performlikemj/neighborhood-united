@@ -140,16 +140,34 @@ def email_authentication_view(request, auth_token):
 
             process_aggregated_emails.apply_async(
                 args=[str(db_aggregation_session.session_identifier)],
+                kwargs={'use_enhanced_formatting': True},
                 countdown=AGGREGATION_WINDOW_MINUTES * 60
             )
 
             # Optionally, send an acknowledgment for the processed pending message
             ack_subject = f"Re: {pending_message.original_subject}" if pending_message.original_subject else "Your SautAI Assistant is Ready"
+            # Create the process now button URL
+            try:
+                base_url = os.getenv('STREAMLIT_URL', 'http://localhost:8501')
+                process_now_url = f"{base_url}/account?token={user.email_token}&action=process_now"
+            except Exception as e:
+                logger.error(f"Error creating process now URL: {e}")
+                process_now_url = ""
+            
+            # Acknowledgment for the first message that starts the window
             ack_message_raw = (
-                "<p>Thank you for authenticating! Your previous message has now been received and is being processed by MJ. "
+                "We've received your email. Your assistant, MJ, is on it! "
                 "If you have more details to add, feel free to send another email within the next 5 minutes. "
-                "All messages received in this window will be processed together.</p><p>Best,<br>The sautAI Team</p>"
+                "All messages received in this window will be processed together.<br><br>"
+                "Can't wait 5 minutes? Click the button below to process your message immediately:<br><br>"
+                f"<div style='text-align: center; margin: 20px 0;'>"
+                f"<a href='{process_now_url}' style='display: inline-block; background: #4CAF50; color: white; "
+                f"padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;'>"
+                f"🚀 Process My Message Now</a></div><br>"
+                "For urgent matters or a more interactive experience, please log in to your sautAI dashboard.<br><br>"
+                "Best,<br>The sautAI Team"
             )
+            
             user_name_for_template = user.get_full_name() or user.username
             site_domain_for_template = os.getenv('STREAMLIT_URL') # Ensure STREAMLIT_URL is available
             profile_url_for_template = f"{site_domain_for_template}/"
@@ -225,6 +243,85 @@ def email_authentication_view(request, auth_token):
         'status': 'success',
         'message': 'Email session activated successfully. If you had a pending message, it is now being processed.'
     }, status=200)
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def process_now_view(request):
+    """
+    Handles the process_now action from email button clicks.
+    Similar to email_authentication_view but for immediate processing.
+    """
+    try:
+        # Get user token from query parameters
+        user_token = request.data.get('token')
+        
+        if not user_token:
+            logger.error("process_now_view: Missing token parameter")
+            return Response({
+                'status': 'error', 
+                'message': 'User token is required to process your message.',
+                'show_dashboard_link': False
+            }, status=400)
+        
+        # Find user by email token
+        try:
+            user = CustomUser.objects.get(email_token=user_token)
+        except CustomUser.DoesNotExist:
+            logger.error(f"process_now_view: User not found for token: {user_token}")
+            return Response({
+                'status': 'error',
+                'message': 'Invalid user token.',
+                'show_dashboard_link': False
+            }, status=404)
+        
+        # Find active session for this user
+        active_session = EmailAggregationSession.objects.filter(
+            user=user,
+            is_active=True
+        ).first()
+        
+        if not active_session:
+            logger.info(f"process_now_view: No active session found for user {user.id}")
+            return Response({
+                'status': 'info',
+                'message': 'No active email session found. Your message may have already been processed.',
+                'show_dashboard_link': True,
+                'user': {
+                    'id': user.id,
+                    'username': user.username,
+                    'email': user.email
+                }
+            }, status=200)
+        
+        # Process the session immediately using the existing Celery task
+        task_result = process_aggregated_emails.apply_async(
+            args=[str(active_session.session_identifier)],
+            kwargs={'use_enhanced_formatting': True},
+            countdown=0  # Process immediately
+        )
+        
+        logger.info(f"process_now_view: Immediate processing triggered for user {user.id}, session {active_session.session_identifier}")
+        
+        # Return success response
+        return Response({
+            'status': 'success',
+            'message': 'Great! Your message is being processed now with enhanced AI analysis. You should receive a response in your email shortly.',
+            'show_dashboard_link': True,
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email
+            },
+            'task_id': task_result.id
+        }, status=200)
+        
+    except Exception as e:
+        logger.error(f"process_now_view: Error processing request: {str(e)}")
+        return Response({
+            'status': 'error',
+            'message': 'An error occurred while processing your request. Please try again or contact support.',
+            'show_dashboard_link': False
+        }, status=500)
 
 # Minimal RegisterView to satisfy the test case which expects a 'custom_auth:register' URL
 class RegisterView(View):

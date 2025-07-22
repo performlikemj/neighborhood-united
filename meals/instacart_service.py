@@ -269,6 +269,26 @@ def _transform_to_instacart_payload(
     
     return payload
 
+def _append_instacart_utm_params(url: str) -> str:
+    """
+    Append required UTM parameters to Instacart URLs for affiliate tracking.
+    
+    Args:
+        url: The original Instacart URL
+        
+    Returns:
+        URL with UTM parameters appended
+    """
+    utm_params = "utm_campaign=instacart-idp&utm_medium=affiliate&utm_source=instacart_idp&utm_term=partnertype-mediapartner&utm_content=campaignid-20313_partnerid-6356307"
+    
+    # Check if URL already has query parameters
+    if "?" in url:
+        # URL already has query parameters, append with &
+        return f"{url}&{utm_params}"
+    else:
+        # URL doesn't have query parameters, append with ?
+        return f"{url}?{utm_params}"
+
 def _call_instacart_api(payload: dict, api_key: str) -> str:
     """
     Calls the Instacart API to create a shopping list and returns the URL.
@@ -319,7 +339,7 @@ def _call_instacart_api(payload: dict, api_key: str) -> str:
     if not instacart_url:
         raise ValueError("Instacart API response did not contain a products_link_url")
     
-    return instacart_url
+    return _append_instacart_utm_params(instacart_url)
 
 def generate_instacart_link(user_id: int, meal_plan_id: int, postal_code: str = None) -> dict:
     """

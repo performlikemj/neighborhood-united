@@ -67,6 +67,7 @@ from django.conf import settings
 from asgiref.sync import async_to_sync
 from meals.guest_tool_registration import get_guest_tool_registry
 from meals.tool_registration import get_all_tools, handle_tool_call
+from meals.enhanced_email_processor import process_email_with_enhanced_formatting
 
 class GuestChatThrottle(UserRateThrottle):
     rate = '100/day'  
@@ -1632,17 +1633,6 @@ def onboarding_stream_message(request):
             logger.warning(f"onboarding_stream_message: Failed to clear existing history for guest_id={guest_id}: {str(clear_error)}")
             # Don't fail the request for this - just log and continue
         
-        # Clear any existing conversation history to prevent context confusion
-        # (In case this is the first onboarding message without calling new_conversation first)
-        try:
-            from meals.meal_assistant_implementation import GLOBAL_GUEST_STATE
-            if guest_id in GLOBAL_GUEST_STATE:
-                del GLOBAL_GUEST_STATE[guest_id]
-                logger.info(f"onboarding_stream_message: Cleared existing conversation history for guest_id={guest_id}")
-        except Exception as clear_error:
-            logger.warning(f"onboarding_stream_message: Failed to clear existing history for guest_id={guest_id}: {str(clear_error)}")
-            # Don't fail the request for this - just log and continue
-        
         # Create OnboardingAssistant
         try:
             from meals.meal_assistant_implementation import OnboardingAssistant
@@ -2074,3 +2064,7 @@ def api_stream_user_summary(request):
     response['X-Accel-Buffering'] = 'no'  # For Nginx
     
     return response
+
+
+
+

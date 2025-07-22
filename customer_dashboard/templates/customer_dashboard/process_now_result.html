@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% if status == 'success' %}Message Processing Started{% elif status == 'error' %}Processing Error{% else %}Processing Status{% endif %} - SautAI</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f8f9fa;
+            color: #333;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .logo {
+            margin-bottom: 30px;
+        }
+        .logo img {
+            max-width: 200px;
+            height: auto;
+        }
+        .status-icon {
+            font-size: 48px;
+            margin-bottom: 20px;
+            display: block;
+        }
+        .success { color: #28a745; }
+        .error { color: #dc3545; }
+        .info { color: #17a2b8; }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .message {
+            font-size: 18px;
+            line-height: 1.6;
+            margin-bottom: 30px;
+            color: #666;
+        }
+        .button {
+            display: inline-block;
+            background: #007bff;
+            color: white;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 5px;
+            font-weight: bold;
+            margin: 10px;
+        }
+        .button.primary {
+            background: #4CAF50;
+        }
+        .button:hover {
+            opacity: 0.9;
+        }
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+            font-size: 14px;
+            color: #888;
+        }
+        .task-id {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+            color: #666;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Logo -->
+        <div class="logo">
+            <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="SautAI" />
+        </div>
+
+        <!-- Status Icon -->
+        <span class="status-icon {{ status }}">
+            {% if status == 'success' %}
+                ✅
+            {% elif status == 'error' %}
+                ❌
+            {% else %}
+                ℹ️
+            {% endif %}
+        </span>
+
+        <!-- Title and Message -->
+        <h1>{{ title }}</h1>
+        <div class="message">
+            {{ message }}
+        </div>
+
+        <!-- Action Buttons -->
+        {% if show_dashboard_link and user %}
+            <a href="{% if 'STREAMLIT_URL'|get_env %}{{ 'STREAMLIT_URL'|get_env }}/{% else %}#{% endif %}" class="button primary">
+                🏠 Go to Dashboard
+            </a>
+        {% endif %}
+
+        {% if status == 'success' %}
+            <p style="margin-top: 20px; font-size: 14px; color: #666;">
+                Your email response will arrive shortly with enhanced AI analysis including:
+            </p>
+            <ul style="text-align: left; display: inline-block; color: #666; font-size: 14px;">
+                <li>🧠 Intent analysis for better understanding</li>
+                <li>🔧 Tool-specific formatting for clear presentation</li>
+                <li>📊 Rich content with tables, lists, and structured data</li>
+                <li>🎯 Personalized responses based on your preferences</li>
+            </ul>
+        {% endif %}
+
+        <!-- Task ID for debugging (only show in development) -->
+        {% if task_id and 'DEBUG'|get_env == 'True' %}
+            <div class="task-id">
+                Task ID: {{ task_id }}
+            </div>
+        {% endif %}
+
+        <!-- Footer -->
+        <div class="footer">
+            <p><strong>SautAI</strong> - Your Intelligent Meal Planning Assistant</p>
+            <p>Need help? Reply to any email from your assistant or visit your dashboard.</p>
+        </div>
+    </div>
+</body>
+</html> 

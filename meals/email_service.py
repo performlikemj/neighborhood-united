@@ -247,6 +247,9 @@ def generate_shopping_list(meal_plan_id):
     chef_meals_present = False
     meal_plan_meals = meal_plan.meal.all()
     
+    # Initialize substitution_str early so it's available throughout the function
+    substitution_str = ""
+    
     for meal in meal_plan_meals:
         # Check if this is a chef meal
         is_chef = is_chef_meal(meal)
@@ -350,7 +353,6 @@ def generate_shopping_list(meal_plan_id):
             shopping_category_list = [item.value for item in ShoppingCategory]
             
             # Format substitution information for prompt
-            substitution_str = ""
             if substitution_info:
                 substitution_str = "Ingredient substitution information:\n"
                 for sub in substitution_info:

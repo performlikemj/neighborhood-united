@@ -5,6 +5,10 @@ from django.conf import settings
 from utils.openai_helpers import token_length
 from utils.quotas import hit_quota
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 # Available models in order of capability/cost
 MODEL_GPTo4_MINI = "o4-mini-2025-04-16"
 MODEL_GPT41_MINI = "gpt-4.1-mini"
@@ -47,7 +51,6 @@ def choose_model(user_id, is_guest: bool, question: str, history_tokens: int = 0
     # Measure question complexity by token count
     tl = token_length(question)
     total = tl + history_tokens
-    print(f"MODEL_SELECTION: User {user_id} (guest={is_guest}) - Question length: {tl} tokens, Total with history: {total} tokens")
     
     # Check for keyword matches
     question_lower = question.lower()
@@ -57,9 +60,9 @@ def choose_model(user_id, is_guest: bool, question: str, history_tokens: int = 0
     upgrade = matching_keywords or total >= COMPLEXITY_THRESHOLD
     
     if matching_keywords:
-        print(f"MODEL_SELECTION: Upgrading due to keywords: {matching_keywords}")
+        logger.info(f"MODEL_SELECTION: Upgrading due to keywords: {matching_keywords}")
     elif total >= COMPLEXITY_THRESHOLD:
-        print(f"MODEL_SELECTION: Upgrading due to token complexity: {total} >= {COMPLEXITY_THRESHOLD}")
+        logger.info(f"MODEL_SELECTION: Upgrading due to token complexity: {total} >= {COMPLEXITY_THRESHOLD}")
     
     # 1) Decide "ideal" model based on upgrade criteria
     ideal = MODEL_GPTo4_MINI if upgrade else MODEL_GPT41_MINI
@@ -69,18 +72,18 @@ def choose_model(user_id, is_guest: bool, question: str, history_tokens: int = 0
         if ideal == MODEL_GPT41_MINI:
             quota_exhausted = hit_quota(user_id, "mini_daily", settings.GPT41_MINI_GUEST_LIMIT)
             if quota_exhausted:
-                print(f"MODEL_SELECTION: Guest {user_id} quota exhausted - Using {MODEL_GPT41_NANO}")
+                logger.info(f"MODEL_SELECTION: Guest {user_id} quota exhausted - Using {MODEL_GPT41_NANO}")
                 return MODEL_GPT41_NANO
         else:
             # Guests never get full GPT-4.1, downgrade to mini
-            print(f"MODEL_SELECTION: Guest {user_id} - Using {MODEL_GPT41_MINI} (downgraded from {MODEL_GPTo4_MINI})")
+            logger.info(f"MODEL_SELECTION: Guest {user_id} - Using {MODEL_GPT41_MINI} (downgraded from {MODEL_GPTo4_MINI})")
             return MODEL_GPT41_MINI
     else:
         if ideal == MODEL_GPTo4_MINI:
             quota_exhausted = hit_quota(user_id, "gpt41_daily", settings.GPT41_AUTH_LIMIT)
             if quota_exhausted:
-                print(f"MODEL_SELECTION: User {user_id} quota exhausted - Using {MODEL_GPT41_MINI}")
+                logger.info(f"MODEL_SELECTION: User {user_id} quota exhausted - Using {MODEL_GPT41_MINI}")
                 return MODEL_GPT41_MINI
     
-    print(f"MODEL_SELECTION: Selected {ideal} for user {user_id}")
+    logger.info(f"MODEL_SELECTION: Selected {ideal} for user {user_id}")
     return ideal 

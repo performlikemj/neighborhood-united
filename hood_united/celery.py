@@ -59,4 +59,8 @@ app.conf.beat_schedule = {
         'schedule': crontab(day_of_week='monday', hour=0, minute=5),  # Run every Monday at 00:05
         'args': (),
     },
+    'cleanup-expired-sessions': {
+        'task': 'customer_dashboard.tasks.cleanup_expired_sessions',
+        'schedule': crontab(hour=2, minute=0),  # Run daily at 2 AM
+    },
 }

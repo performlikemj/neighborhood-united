@@ -44,15 +44,31 @@ LEVEL_TIERS = [
     (1, "Dish Washer"),
 ]
 
-# Default points awarded for miscellaneous gamification events that are
-# triggered from the front‑end via the ``/api/event/`` endpoint.
-EVENT_POINTS = {
-    'meal_plan_approved': 15,
-    'meal_plan_reviewed': 5,
-    'meal_reviewed': 5,
-    'replaced_with_chef_meal': 10,
-    'meals_updated': 5,
+# Unified point system for all gamification events
+# Organized by engagement level for logical consistency
+UNIFIED_EVENT_POINTS = {
+    # Basic engagement (1-5 points) - Daily activities
+    'login': 2,
+    'streak_update': 1,
+    'meal_planned': 3,
     'cooking_instructions_generated': 2,
+    
+    # Active participation (5-15 points) - Meaningful interactions
+    'review': 8,
+    'meal_reviewed': 8,
+    'meal_plan_reviewed': 10,
+    'meals_updated': 5,
+    'chef_connect': 12,
+    'cooking': 15,
+    
+    # Major actions (15-25 points) - Significant platform activities
+    'meal_plan_approved': 20,
+    'replaced_with_chef_meal': 18,
+    'achievement': 15,
+    'level_up': 25,
+    
+    # Major milestones (50+ points) - Weekly/rare achievements
+    'goal_completed': 100,
 }
 
 

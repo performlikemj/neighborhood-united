@@ -191,12 +191,15 @@ class AnalyticsEvent(models.Model):
     EVENT_TYPES = [
         ('login', _('Login')),
         ('achievement', _('Achievement Earned')),
+        ('chef_connect', _('Chef Connect')),
+        ('review', _('Review')),
         ('level_up', _('Level Up')),
         ('meal_planned', _('Meal Planned')),
+        ('cooking', _('Cooking')),
         ('streak_update', _('Streak Updated')),
         ('goal_completed', _('Weekly Goal Completed')),
     ]
-    
+
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='analytics_events')
     event_type = models.CharField(max_length=50, choices=EVENT_TYPES)
     value = models.IntegerField(null=True, blank=True)

@@ -970,8 +970,9 @@ def stream_bulk_prep_instructions(
 
         # Generate streaming instructions
         instructions_stream = generate_streaming_instructions(
-            meal_plan=meal_plan,
-            mode="bulk_prep"
+            user_id=user_id,
+            meal_plan_id=meal_plan_id,
+            mode="bulk"
         )
 
         # Return the stream response

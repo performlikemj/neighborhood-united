@@ -26,6 +26,105 @@ p{font-size:16px;line-height:1.5;margin:0 0 10px;}
 .logo img{max-width:200px;height:auto;}
 /* graphs */
 .email-body img.graph{max-width:100%;height:auto;border:0;outline:none;text-decoration:none;}
+/* Intent-specific styling */
+.intent-meal_planning .meal-calendar {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 20px 0;
+}
+
+.intent-shopping .shopping-category {
+    margin: 16px 0;
+    padding: 12px;
+    background: #f8f9fa;
+    border-radius: 8px;
+}
+
+.intent-recipe_request .recipe-steps ol {
+    padding-left: 20px;
+}
+
+.intent-recipe_request .recipe-steps li {
+    margin: 12px 0;
+    padding: 8px;
+    background: #f8f9fa;
+    border-radius: 4px;
+}
+
+/* Tool-specific styling */
+.meal-plan-calendar th {
+    background: #007bff;
+    color: white;
+    padding: 12px;
+}
+
+.meal-plan-calendar td {
+    padding: 12px;
+    border: 1px solid #ddd;
+    vertical-align: top;
+}
+
+.chef-badge {
+    background: #28a745;
+    color: white;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 12px;
+}
+
+.shopping-categories .category h3 {
+    color: #007bff;
+    margin: 0 0 8px 0;
+}
+
+.compatibility-status.compatible {
+    background: #d4edda;
+    border: 1px solid #c3e6cb;
+    color: #155724;
+}
+
+.compatibility-status.incompatible {
+    background: #f8d7da;
+    border: 1px solid #f5c6cb;
+    color: #721c24;
+}
+
+/* Button styling */
+.button {
+    display: inline-block;
+    padding: 12px 24px;
+    background-color: #007bff;
+    color: white;
+    text-decoration: none;
+    border-radius: 4px;
+    margin: 8px 4px;
+}
+
+.button.secondary {
+    background-color: #6c757d;
+}
+
+.button:hover {
+    opacity: 0.9;
+}
+
+/* Mobile responsiveness */
+@media (max-width: 600px) {
+    .meal-plan-calendar {
+        font-size: 14px;
+    }
+    
+    .meal-plan-calendar th,
+    .meal-plan-calendar td {
+        padding: 8px 4px;
+    }
+    
+    .button {
+        display: block;
+        text-align: center;
+        margin: 8px 0;
+    }
+}
 </style>
 </head>
 
@@ -57,11 +156,22 @@ p{font-size:16px;line-height:1.5;margin:0 0 10px;}
     {% endif %}
 
     <!-- ===== MAIN CONTENT ===== -->
-    {% autoescape off %}
-      {{ email_body_main|safe }}
-      {{ email_body_data|safe }}
-      {{ email_body_final|safe }}
-    {% endautoescape %}
+    <div class="email-content {{ css_classes|join:' ' }}">
+      <!-- Main Section -->
+      <div class="email-body-main">
+          {{ email_body_main|safe }}
+      </div>
+      
+      <!-- Data Section -->
+      <div class="email-body-data">
+          {{ email_body_data|safe }}
+      </div>
+      
+      <!-- Final Section -->
+      <div class="email-body-final">
+          {{ email_body_final|safe }}
+      </div>
+    </div>
 
     <!-- Dashboard CTA (optional) -->
     {% if profile_url %}

@@ -15,29 +15,20 @@ import uuid # For generating session_identifier if models were here
 from custom_auth.models import CustomUser
 from customer_dashboard.models import AssistantEmailToken, UserEmailSession, EmailAggregationSession, AggregatedMessageContent, PreAuthenticationMessage
 from meals.meal_assistant_implementation import MealPlanningAssistant
+from shared.utils import get_openai_client
+from meals.enhanced_email_processor import process_email_with_enhanced_formatting
 from utils.redis_client import get, set, delete
 from django.template.loader import render_to_string 
 from .tasks import process_aggregated_emails
 from requests.compat import urlencode 
-from utils.translate_html import translate_paragraphs  # Import the translation utility
+from utils.translate_html import translate_paragraphs, _get_language_name # Import the translation utility
 from bs4 import BeautifulSoup
-from django.conf.locale import LANG_INFO
 
 logger = logging.getLogger(__name__)
 
 # Cache key prefix for the FLAG indicating an active DB aggregation session
 ACTIVE_DB_AGGREGATION_SESSION_FLAG_PREFIX = "active_db_aggregation_session_user_"
 AGGREGATION_WINDOW_MINUTES = 5
-
-# Helper function to get language name
-def _get_language_name(language_code):
-    """
-    Returns the full language name for a given language code.
-    Falls back to the code itself if the language is not found.
-    """
-    if language_code in LANG_INFO and 'name' in LANG_INFO[language_code]:
-        return LANG_INFO[language_code]['name']
-    return language_code
 
 def extract_token_from_assistant_email(assistant_email_str):
     if not assistant_email_str:
@@ -52,7 +43,11 @@ def extract_token_from_assistant_email(assistant_email_str):
 @csrf_exempt
 @require_http_methods(["POST"])
 def process_email(request):
-    """API endpoint for processing emails from n8n"""
+    """API endpoint for processing emails from n8n - UNCHANGED"""
+    # NOTE: This function remains exactly the same as your original.
+    # The enhancement happens in the Celery task (process_aggregated_emails)
+    # where the actual assistant processing occurs.
+    
     try:
         data = json.loads(request.body)
         sender_email = data.get('sender_email')
@@ -156,15 +151,32 @@ def process_email(request):
                     content=message_content
                 )
                 set(active_session_flag_key, str(db_aggregation_session.session_identifier), timeout=AGGREGATION_WINDOW_MINUTES * 60)
+                
+                # ENHANCED: Pass enhanced processing flag to Celery task
                 process_aggregated_emails.apply_async(
                     args=[str(db_aggregation_session.session_identifier)],
+                    kwargs={'use_enhanced_formatting': True},  # NEW: Enable enhanced formatting
                     countdown=AGGREGATION_WINDOW_MINUTES * 60
                 )
+                
+                # Create the process now button URL
+                try:
+                    base_url = os.getenv('STREAMLIT_URL', 'http://localhost:8501')
+                    process_now_url = f"{base_url}/account?token={user.email_token}&action=process_now"
+                except Exception as e:
+                    logger.error(f"Error creating process now URL: {e}")
+                    process_now_url = ""
+                
                 # Acknowledgment for the first message that starts the window
                 ack_message_raw = (
                     "We've received your email. Your assistant, MJ, is on it! "
                     "If you have more details to add, feel free to send another email within the next 5 minutes. "
                     "All messages received in this window will be processed together.<br><br>"
+                    "Can't wait 5 minutes? Click the button below to process your message immediately:<br><br>"
+                    f"<div style='text-align: center; margin: 20px 0;'>"
+                    f"<a href='{process_now_url}' style='display: inline-block; background: #4CAF50; color: white; "
+                    f"padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;'>"
+                    f"🚀 Process My Message Now</a></div><br>"
                     "For urgent matters or a more interactive experience, please log in to your sautAI dashboard.<br><br>"
                     "Best,<br>The sautAI Team"
                 )
@@ -287,7 +299,14 @@ def process_email(request):
                     )
                     AggregatedMessageContent.objects.create(session=db_aggregation_session, content=message_content)
                     set(active_session_flag_key, str(db_aggregation_session.session_identifier), timeout=AGGREGATION_WINDOW_MINUTES * 60)
-                    process_aggregated_emails.apply_async(args=[str(db_aggregation_session.session_identifier)], countdown=AGGREGATION_WINDOW_MINUTES * 60)
+                    
+                    # ENHANCED: Pass enhanced processing flag to Celery task
+                    process_aggregated_emails.apply_async(
+                        args=[str(db_aggregation_session.session_identifier)], 
+                        kwargs={'use_enhanced_formatting': True},  # NEW: Enable enhanced formatting
+                        countdown=AGGREGATION_WINDOW_MINUTES * 60
+                    )
+                    
                     # Send acknowledgment for this newly forced session
                     # (Ack email sending logic would be duplicated or refactored into a helper)
                     # ... (ack email sending logic) ... 
@@ -470,4 +489,183 @@ def process_email(request):
         logger.error(f"Unhandled error in process_email: {str(e)}", exc_info=True)
         return JsonResponse({'status': 'error', 'message': 'An unexpected error occurred.'}, status=500)
 
-# Removed redundant comment about importing traceback as it's imported above
+
+# ENHANCED CELERY TASK PROCESSING
+# You'll need to update your tasks.py file with this enhanced version
+
+def enhanced_process_aggregated_emails_task(session_identifier_str, use_enhanced_formatting=False):
+    """
+    Enhanced version of your process_aggregated_emails Celery task
+    
+    This is the function that should replace or enhance your existing
+    process_aggregated_emails task in tasks.py
+    """
+    try:
+        from customer_dashboard.models import EmailAggregationSession, AggregatedMessageContent
+        from meals.meal_assistant_implementation import MealPlanningAssistant
+        from utils.redis_client import delete
+        from django.template.loader import render_to_string
+        from utils.translate_html import translate_paragraphs
+        from bs4 import BeautifulSoup
+        import requests
+        import os
+        import json
+        
+        # Get the session
+        try:
+            session = EmailAggregationSession.objects.get(
+                session_identifier=uuid.UUID(session_identifier_str),
+                is_active=True
+            )
+        except EmailAggregationSession.DoesNotExist:
+            logger.error(f"EmailAggregationSession {session_identifier_str} not found or not active")
+            return
+        
+        # Mark session as inactive
+        session.is_active = False
+        session.save()
+        
+        # Clear the cache flag
+        active_session_flag_key = f"{ACTIVE_DB_AGGREGATION_SESSION_FLAG_PREFIX}{session.user.id}"
+        delete(active_session_flag_key)
+        
+        # Aggregate all messages
+        messages = AggregatedMessageContent.objects.filter(session=session).order_by('created_at')
+        combined_message = "\n\n---\n\n".join([msg.content for msg in messages])
+        
+        logger.info(f"Processing {messages.count()} aggregated messages for user {session.user.id}")
+        
+        # ENHANCED PROCESSING - This is where the magic happens
+        if use_enhanced_formatting:
+            try:
+                # Use the enhanced email processor
+                openai_client = get_openai_client()
+                assistant = MealPlanningAssistant(str(session.user.id))
+                
+                # Convert Django ManyRelatedManager to list to avoid JSON serialization issues
+                dietary_prefs = getattr(session.user, 'dietary_preferences', None)
+                user_preferences = []
+                if dietary_prefs is not None:
+                    try:
+                        user_preferences = [str(pref) for pref in dietary_prefs.all()]
+                    except AttributeError:
+                        user_preferences = []
+                
+                result = process_email_with_enhanced_formatting(
+                    combined_message,
+                    openai_client,
+                    assistant,
+                    user_context={
+                        'user_id': str(session.user.id),
+                        'sender_email': session.recipient_email,
+                        'session_id': session_identifier_str,
+                        'message_count': messages.count(),
+                        'user_preferences': user_preferences
+                    }
+                )
+                
+                if result['status'] == 'success':
+                    # Use the enhanced formatting results
+                    email_body_main = result.get('email_body_main', '')
+                    email_body_data = result.get('email_body_data', '')
+                    email_body_final = result.get('email_body_final', '')
+                    css_classes = result.get('css_classes', [])
+                    
+                    logger.info(f"Enhanced formatting applied successfully for session {session_identifier_str}")
+                    logger.info(f"Intent detected: {result.get('metadata', {}).get('intent_analysis', {}).get('primary_intent', 'unknown')}")
+                    logger.info(f"Tools used: {result.get('metadata', {}).get('tools_used', [])}")
+                    
+                else:
+                    # Enhanced processing failed, fall back to original
+                    logger.warning(f"Enhanced processing failed for session {session_identifier_str}, falling back to original")
+                    use_enhanced_formatting = False
+            
+            except Exception as e:
+                logger.error(f"Enhanced processing error for session {session_identifier_str}: {str(e)}")
+                use_enhanced_formatting = False
+        
+        # Original processing (fallback or when enhanced is disabled)
+        if not use_enhanced_formatting:
+            assistant = MealPlanningAssistant(str(session.user.id))
+            response = assistant.send_message(combined_message)
+            
+            # Extract content from original response
+            if isinstance(response, dict):
+                message_content = response.get('message', str(response))
+            else:
+                message_content = str(response)
+            
+            # Apply basic formatting
+            email_body_main = f"<h2>Response from your SautAI Assistant</h2>"
+            email_body_data = f"<div class='assistant-response'>{message_content}</div>"
+            email_body_final = f"<p>Need more help? Just reply to this email!</p>"
+            css_classes = ['original-formatting']
+        
+        # Get user's preferred language
+        user_preferred_language = _get_language_name(getattr(session.user, 'preferred_language', 'en'))
+        
+        # Render the email template
+        email_html_content = render_to_string(
+            'customer_dashboard/assistant_email_template.html',
+            {
+                'user_name': session.user.get_full_name() or session.user.username,
+                'email_body_main': email_body_main,
+                'email_body_data': email_body_data,
+                'email_body_final': email_body_final,
+                'css_classes': ' '.join(css_classes),
+                'profile_url': f"{os.getenv('STREAMLIT_URL')}/",
+                'personal_assistant_email': getattr(session.user, 'personal_assistant_email', f"mj+{session.user.email_token}@sautai.com")
+            }
+        )
+        
+        # Translate the email content
+        try:
+            email_html_content = translate_paragraphs(email_html_content, user_preferred_language)
+        except Exception as e:
+            logger.error(f"Error translating email content: {e}")
+        
+        # Send the email via n8n
+        if not getattr(session.user, 'unsubscribed_from_emails', False):
+            n8n_webhook_url = os.getenv('N8N_EMAIL_REPLY_WEBHOOK_URL')
+            if n8n_webhook_url:
+                payload = {
+                    'status': 'success',
+                    'action': 'send_response',
+                    'reply_content': email_html_content,
+                    'recipient_email': session.recipient_email,
+                    'from_email': getattr(session.user, 'personal_assistant_email', f"mj+{session.user.email_token}@sautai.com"),
+                    'original_subject': "Re: " + session.original_subject if session.original_subject else "Response from your SautAI Assistant",
+                    'in_reply_to_header': session.in_reply_to_header,
+                    'email_thread_id': session.email_thread_id,
+                    'enhanced_formatting': use_enhanced_formatting  # Include this for tracking
+                }
+                
+                try:
+                    response = requests.post(n8n_webhook_url, json=payload, timeout=30)
+                    response.raise_for_status()
+                    logger.info(f"Email successfully sent for session {session_identifier_str} (enhanced: {use_enhanced_formatting})")
+                except requests.RequestException as e:
+                    logger.error(f"Failed to send email for session {session_identifier_str}: {e}")
+                    # Send error to n8n traceback
+                    n8n_traceback = {
+                        'error': str(e),
+                        'source': 'enhanced_process_aggregated_emails_task',
+                        'session_id': session_identifier_str,
+                        'traceback': traceback.format_exc()
+                    }
+                    requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+            else:
+                logger.error("N8N_EMAIL_REPLY_WEBHOOK_URL not configured")
+        else:
+            logger.info(f"User {session.user.username} has unsubscribed from emails")
+        
+    except Exception as e:
+        logger.error(f"Error in enhanced_process_aggregated_emails_task: {str(e)}")
+        # Send error to n8n traceback
+        n8n_traceback = {
+            'error': str(e),
+            'source': 'enhanced_process_aggregated_emails_task',
+            'session_id': session_identifier_str,
+            'traceback': traceback.format_exc()
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)

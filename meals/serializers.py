@@ -117,13 +117,15 @@ class MealSerializer(serializers.ModelSerializer):
     is_chef_meal = serializers.SerializerMethodField()
     chef_meal_events = serializers.SerializerMethodField()
     is_compatible = serializers.SerializerMethodField()
+    composed_dishes = serializers.SerializerMethodField()
+    meal_dishes = serializers.SerializerMethodField()
     
     class Meta:
         model = Meal
         fields = [
             'id', 'name', 'chef', 'chef_name', 'image', 'description', 
             'price', 'average_rating', 'meal_type', 'dietary_preferences',
-            'is_chef_meal', 'chef_meal_events', 'is_compatible'
+            'is_chef_meal', 'chef_meal_events', 'is_compatible', 'composed_dishes', 'meal_dishes'
         ]
     
     def get_chef_name(self, obj):
@@ -137,6 +139,45 @@ class MealSerializer(serializers.ModelSerializer):
     def get_is_chef_meal(self, obj):
         """Indicate if this is a meal created by a chef."""
         return obj.chef is not None
+
+    def get_composed_dishes(self, obj):
+        # For user-generated meals, surface the composed dishes bundle; ensure is_chef_dish flags are false by default
+        if not obj.chef:
+            try:
+                dishes = obj.composed_dishes or []
+                # Force is_chef_dish to False for all composed dishes on user-generated meals
+                normalized = []
+                for d in dishes:
+                    if isinstance(d, dict):
+                        nd = dict(d)
+                        nd['is_chef_dish'] = False
+                        normalized.append(nd)
+                return normalized
+            except Exception:
+                return []
+        return []
+
+    def get_meal_dishes(self, obj):
+        # Prefer structured MealDish rows; return simple dicts for API consumption
+        try:
+            rows = getattr(obj, 'meal_dishes', None)
+            if not rows:
+                return []
+            return [
+                {
+                    'id': md.id,
+                    'name': md.name,
+                    'dietary_tags': list(md.dietary_tags or []),
+                    'target_groups': list(md.target_groups or []),
+                    'notes': md.notes,
+                    'ingredients': md.ingredients,
+                    # Only true if the meal itself is a chef meal
+                    'is_chef_dish': bool(obj.chef and md.is_chef_dish),
+                }
+                for md in rows.all()
+            ]
+        except Exception:
+            return []
     
     def get_is_compatible(self, obj):
         """
@@ -213,7 +254,8 @@ class MealSerializer(serializers.ModelSerializer):
                 'current_price': float(event.current_price),
                 'orders_count': event.orders_count,
                 'max_orders': event.max_orders,
-                'status': event.status
+                'status': event.status,
+                'meal_type': obj.meal_type
             })
             
         return event_data
@@ -653,10 +695,33 @@ class ChefMealEventSerializer(serializers.ModelSerializer):
         from decimal import Decimal
         
         # Get all confirmed/placed orders
-        active_orders = obj.orders.filter(status__in=['placed', 'confirmed'])
-        
-        # Calculate total revenue
-        total_revenue = sum(order.price_paid * order.quantity for order in active_orders)
+        active_orders = obj.orders.filter(status__in=['placed', 'confirmed']).select_related('meal_event')
+
+        # Calculate total revenue (handle None values safely)
+        total_revenue = Decimal('0.00')
+        for order in active_orders:
+            # price_paid is intended to be the total for the line
+            if order.price_paid is not None:
+                try:
+                    line_total = Decimal(order.price_paid)
+                except Exception:
+                    line_total = Decimal(str(order.price_paid))
+            else:
+                # Fallback to unit price × quantity
+                qty = order.quantity or 1
+                unit = None
+                if getattr(order, 'unit_price', None) is not None:
+                    unit = order.unit_price
+                elif order.meal_event and getattr(order.meal_event, 'current_price', None) is not None:
+                    unit = order.meal_event.current_price
+                else:
+                    unit = Decimal('0.00')
+                try:
+                    unit_dec = Decimal(unit)
+                except Exception:
+                    unit_dec = Decimal(str(unit))
+                line_total = unit_dec * qty
+            total_revenue += line_total
         
         # Get platform fee percentage
         platform_fee_pct = PlatformFeeConfig.get_active_fee()
@@ -899,39 +964,62 @@ class ChefMealEventCreateSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 class ChefMealOrderCreateSerializer(serializers.ModelSerializer):
+    # Allow extra client-provided fields without failing validation
+    idempotency_key = serializers.CharField(write_only=True, required=False)
+    user_id = serializers.IntegerField(write_only=True, required=False)
     class Meta:
         model = ChefMealOrder
-        fields = ['meal_event', 'quantity', 'special_requests']
+        fields = ['meal_event', 'quantity', 'special_requests', 'idempotency_key', 'user_id']
     
     def validate_meal_event(self, value):
         if not value.is_available_for_orders():
             raise serializers.ValidationError("This meal event is not available for orders")
+        return value
+
+    def validate_quantity(self, value):
+        if value is None:
+            return 1
+        if value < 1:
+            raise serializers.ValidationError("Quantity must be at least 1")
         return value
     
     def create(self, validated_data):
         # Use the service layer to create the order with idempotency support
         from meals.services.order_service import create_order
         
-        # Get idempotency key from request context
+        # Get idempotency key from request header or request body, fallback to random
         request = self.context.get('request')
+        idem_key = None
         if request and hasattr(request, 'headers'):
             idem_key = request.headers.get('Idempotency-Key')
-        else:
+        if not idem_key:
+            idem_key = validated_data.get('idempotency_key')
+        if not idem_key:
             import uuid
             idem_key = str(uuid.uuid4())
+        # Expose the idempotency key to the view for response headers
+        try:
+            self.context['idem_key'] = idem_key
+        except Exception:
+            pass
         
+        # The authenticated user is the customer
+        user = request.user if request and hasattr(request, 'user') else None
+        if user is None or not user.is_authenticated:
+            raise serializers.ValidationError("Authentication required")
+
+        # Pull core fields and ignore any extra client-provided ones
+        meal_event = validated_data['meal_event']
+        quantity = validated_data.get('quantity', 1)
+        special_requests = validated_data.get('special_requests')
+
         try:
             # Call the service function
-            order = create_order(
-                user=validated_data['customer'],
-                event=validated_data['meal_event'],
-                qty=validated_data.get('quantity', 1),
-                idem_key=idem_key
-            )
+            order = create_order(user=user, event=meal_event, qty=quantity, idem_key=idem_key)
             
             # Add special requests if provided
-            if 'special_requests' in validated_data and validated_data['special_requests']:
-                order.special_requests = validated_data['special_requests']
+            if special_requests:
+                order.special_requests = special_requests
                 order.save(update_fields=['special_requests'])
                 
             return order

@@ -21,6 +21,7 @@ from datetime import timedelta, date
 from celery import shared_task
 import traceback
 import os
+from utils.redis_client import redis_client
 logger = logging.getLogger(__name__)
 
 def trigger_assign_pantry_tags(sender, instance, created, **kwargs):
@@ -58,7 +59,8 @@ def send_meal_plan_email(sender, instance, **kwargs):
     ):
         generate_shopping_list.delay(instance.id)
         if instance.meal_prep_preference == 'one_day_prep':
-            generate_bulk_prep_instructions.delay(instance.id)
+            # Generate bulk prep and send by default
+            generate_bulk_prep_instructions.delay(instance.id, send_via_assistant=True)
 
 @receiver(post_save, sender=GoalTracking)
 @receiver(post_save, sender=UserHealthMetrics)
@@ -118,21 +120,12 @@ def push_order_event(sender, instance, created, **kwargs):
     """
     # Determine event type and message content
     if created:
-        kind = 'order.created'
-        subject = "Your chef meal order has been confirmed"
-        message = (
-            f"Great news! Your order for {instance.meal_event.meal.name} by Chef "
-            f"{instance.meal_event.chef.user.get_full_name()} has been confirmed.\n\n"
-            f"Order Details:\n"
-            f"• Meal: {instance.meal_event.meal.name}\n"
-            f"• Quantity: {instance.quantity} serving{'s' if instance.quantity > 1 else ''}\n"
-            f"• Event Date: {instance.meal_event.event_date.strftime('%A, %B %d')}\n"
-            f"• Event Time: {instance.meal_event.event_time.strftime('%I:%M %p')}\n"
-            f"• Total Price: ${float(instance.unit_price * instance.quantity):.2f}\n\n"
-            f"You can view and manage your orders in your dashboard. If you need to make "
-            f"any changes, please do so before the cutoff time: "
-            f"{instance.meal_event.order_cutoff_time.strftime('%A, %B %d at %I:%M %p')}."
-        )
+        # Group newly created ChefMealOrder rows by parent Order to avoid sending one email per event
+        try:
+            schedule_grouped_order_email(instance.order.id, instance.customer.id)
+        except Exception as e:
+            logger.error(f"Failed to schedule grouped order email for order {instance.order.id}: {e}")
+        return
     elif instance.status in ['cancelled', 'refunded']:
         kind = f'order.{instance.status}'
         subject = f"Your chef meal order has been {instance.status}"
@@ -167,8 +160,24 @@ def push_order_event(sender, instance, created, **kwargs):
             f"You can view your complete order details in your dashboard."
         )
     
-    # Send notification via assistant
+    # Send notification via assistant for non-created updates (quantity changes/cancel/refund)
     send_chef_order_notification.delay(instance.customer.id, message, subject)
+
+
+def schedule_grouped_order_email(order_id: int, user_id: int, debounce_seconds: int = 8) -> None:
+    """
+    Debounce multiple ChefMealOrder creations that belong to the same Order and
+    send a single aggregated confirmation email.
+    """
+    # Record the user for this order (used by the task)
+    redis_client.set(f"order_group_queue:{order_id}:user", user_id, timeout=3600)
+
+    # Use a scheduled flag to avoid enqueuing the task multiple times
+    scheduled_key = f"order_group_queue:{order_id}:scheduled"
+    if not redis_client.exists(scheduled_key):
+        # Mark as scheduled with a short TTL
+        redis_client.set(scheduled_key, "1", timeout=max(debounce_seconds * 4, 60))
+        send_grouped_order_confirmation.apply_async(args=[order_id], countdown=debounce_seconds)
 
 @shared_task
 def send_chef_order_notification(user_id, message, subject):
@@ -180,7 +189,8 @@ def send_chef_order_notification(user_id, message, subject):
         result = MealPlanningAssistant.send_notification_via_assistant(
             user_id=user_id,
             message_content=message,
-            subject=subject
+            subject=subject,
+            template_key='system_update'
         )
         
         if result.get("status") == "success":
@@ -190,6 +200,74 @@ def send_chef_order_notification(user_id, message, subject):
             
     except Exception as e:
         logger.error(f"Error sending chef order notification to user {user_id}: {str(e)}")
+
+
+@shared_task
+def send_grouped_order_confirmation(order_id: int):
+    """
+    Build and send a single confirmation email summarizing all ChefMealOrder items
+    for the given Order.
+    """
+    try:
+        from meals.models import ChefMealOrder, Order
+        from meals.meal_assistant_implementation import MealPlanningAssistant
+
+        order = Order.objects.select_related('customer').get(id=order_id)
+        user = order.customer
+
+        # Collect active (placed/confirmed) items for this order
+        items = (
+            ChefMealOrder.objects
+            .filter(order_id=order_id, status__in=['placed', 'confirmed'])
+            .select_related('meal_event', 'meal_event__meal', 'meal_event__chef', 'meal_event__chef__user')
+            .order_by('created_at')
+        )
+
+        if not items:
+            logger.info(f"No active items to include for grouped order email: order {order_id}")
+            return
+
+        # Build summary lines and compute totals
+        lines = []
+        total_amount = 0.0
+        for it in items:
+            meal_name = it.meal_event.meal.name
+            chef_name = it.meal_event.chef.user.get_full_name() or it.meal_event.chef.user.username
+            evt_date = it.meal_event.event_date.strftime('%A, %B %d, %Y')
+            evt_time = it.meal_event.event_time.strftime('%I:%M %p')
+            qty = it.quantity or 1
+            line_total = float((it.unit_price or 0) * qty)
+            total_amount += line_total
+            cutoff = it.meal_event.order_cutoff_time.strftime('%A, %B %d at %I:%M %p') if it.meal_event.order_cutoff_time else 'N/A'
+            lines.append(
+                f"• {meal_name} by Chef {chef_name} — {qty} serving{'s' if qty > 1 else ''} — {evt_time} on {evt_date} — ${line_total:.2f} (cutoff: {cutoff})"
+            )
+
+        message = (
+            f"Great news! Your order has been confirmed.\n\n"
+            f"Order Details:\n"
+            + "\n".join(lines)
+            + "\n\n"
+            f"Order Total: ${total_amount:.2f}\n\n"
+            f"You can view and manage your orders anytime in your dashboard."
+        )
+
+        subject = "Your chef meal order has been confirmed"
+
+        result = MealPlanningAssistant.send_notification_via_assistant(
+            user_id=user.id,
+            message_content=message,
+            subject=subject,
+            template_key='system_update'
+        )
+
+        if result.get("status") == "success":
+            logger.info(f"Sent grouped order confirmation to user {user.id} for order {order_id}")
+        else:
+            logger.warning(f"Grouped order confirmation result for user {user.id}, order {order_id}: {result}")
+
+    except Exception as e:
+        logger.error(f"Error sending grouped order confirmation for order {order_id}: {str(e)}")
 
 # New signal handlers for ChefMealEvent changes
 @receiver(pre_save, sender=ChefMealEvent)

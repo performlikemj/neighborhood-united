@@ -1,0 +1,42 @@
+{% load i18n %}
+<div class="section section-data shopping-categories">
+  {% if shopping_tables %}
+    {% for tbl in shopping_tables %}
+      <div class="category" style="margin-bottom:12px;">
+        <h3 style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+          <span style="display:inline-block;width:8px;height:8px;background:#0ea5e9;border-radius:999px;"></span>
+          {{ tbl.category }}
+        </h3>
+        <table class="table-slim" role="presentation" aria-label="{% trans 'Shopping list table' %}">
+          <colgroup>
+            <col style="width:35%">
+            <col style="width:15%">
+            <col style="width:15%">
+            <col style="width:35%">
+          </colgroup>
+          <thead>
+            <tr>
+              <th scope="col">{% trans 'Item' %}</th>
+              <th scope="col">{% trans 'Qty' %}</th>
+              <th scope="col">{% trans 'Unit' %}</th>
+              <th scope="col">{% trans 'Notes' %}</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for it in tbl.items %}
+            <tr>
+              <td>{{ it.ingredient }}</td>
+              <td style="text-align:left;">{% if it.quantity %}<span class="qty-pill">{{ it.quantity }}</span>{% else %}—{% endif %}</td>
+              <td style="text-align:left;">{% if it.unit %}{{ it.unit }}{% else %}—{% endif %}</td>
+              <td style="text-align:left;">{% if it.notes %}<span class="badge">{{ it.notes|truncatechars:64 }}</span>{% else %}—{% endif %}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endfor %}
+  {% endif %}
+  {{ content_html|safe }}
+</div>
+
+

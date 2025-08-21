@@ -30,8 +30,11 @@ urlpatterns = [
     path('reviews/', include('reviews.urls')),
     path('events/', include('events.urls')),
     path('local_chefs/', include('local_chefs.urls')),
-    path('gamification/', include('gamification.urls')),
 ]
+
+# Conditionally expose gamification routes
+if getattr(settings, 'GAMIFICATION_ENABLED', False):
+    urlpatterns.append(path('gamification/', include('gamification.urls')))
 
 # Serve media files in development only
 if settings.DEBUG:

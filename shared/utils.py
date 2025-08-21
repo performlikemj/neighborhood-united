@@ -1251,11 +1251,19 @@ def create_meal_plan(request):
 def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day, meal_type):
     logger.info("Initiating meal replacement process for user.")
     
-    try:
-        user = CustomUser.objects.get(id=request.data.get('user_id'))
-    except CustomUser.DoesNotExist:
-        logger.error(f"User with ID {request.data.get('user_id')} not found.")
-        return {'status': 'error', 'message': 'User not found.'}
+    # Resolve user safely
+    user = getattr(request, 'user', None)
+    if not user or not getattr(user, 'id', None):
+        # Attempt to read from payload as fallback
+        user_id = None
+        data = getattr(request, 'data', None)
+        if isinstance(data, dict):
+            user_id = data.get('user_id') or data.get('userId') or data.get('id')
+        if user_id:
+            user = CustomUser.objects.filter(id=user_id).first()
+        if not user:
+            logger.error("Authenticated user not found for replace_meal_in_plan.")
+            return {'status': 'error', 'message': 'Authenticated user not found. Please ensure you are logged in.'}
     
     # Validate meal plan
     try:
@@ -1331,7 +1339,20 @@ def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day, m
 
 def remove_meal_from_plan(request, meal_plan_id, meal_id, day, meal_type):
     print("From remove_meal_from_plan")
-    user = CustomUser.objects.get(id=request.data.get('user_id'))
+    # Resolve user safely
+    user = getattr(request, 'user', None)
+    if not user or not getattr(user, 'id', None):
+        user_id = None
+        try:
+            data = getattr(request, 'data', None)
+            if isinstance(data, dict):
+                user_id = data.get('user_id') or data.get('userId') or data.get('id')
+        except Exception:
+            user_id = None
+        if user_id:
+            user = CustomUser.objects.filter(id=user_id).first()
+        if not user:
+            return {'status': 'error', 'message': 'Authenticated user not found. Please ensure you are logged in.'}
 
     # Retrieve the specified MealPlan
     try:
@@ -1358,12 +1379,17 @@ def remove_meal_from_plan(request, meal_plan_id, meal_id, day, meal_type):
     if not meal_plan_meal:
         return {'status': 'error', 'message': 'Meal not scheduled on the specified day and meal type.'}
 
-    # Remove the meal from the meal plan
-    meal_plan_meal.delete()
-    meal_plan.has_changes = True
-    meal_plan.is_approved = False
-    meal_plan.reminder_sent = False
-    meal_plan.save()
+    # Remove the meal from the meal plan within a transaction to ensure atomicity
+    try:
+        with transaction.atomic():
+            meal_plan_meal.delete()
+            meal_plan.has_changes = True
+            meal_plan.is_approved = False
+            meal_plan.reminder_sent = False
+            meal_plan.save()
+    except Exception as e:
+        logger.error(f"Failed to remove meal from plan: {e}")
+        return {'status': 'error', 'message': 'Failed to remove meal from the plan.'}
     return {'status': 'success', 'message': 'Meal removed from the plan.'}
 
 def cosine_similarity(vec1, vec2):
@@ -1403,28 +1429,31 @@ def is_valid_embedding(embedding, expected_length=1536):
         return False
     return True
 
-def create_meal(request=None, user_id=None, name=None, dietary_preferences=None, description=None, meal_type=None, used_pantry_items=None, max_attempts=3):
+def create_meal(request=None, user_id=None, name=None, dietary_preferences=None, description=None, meal_type=None, used_pantry_items=None, max_attempts=3, composed_dishes=None):
     from meals.dietary_preferences import assign_dietary_preferences
     attempt = 0
 
     while attempt < max_attempts:
         try:
-            # Step 1: Retrieve the user
-            if request:
-                try:
-                    user = CustomUser.objects.get(id=request.data.get('user_id'))
-                except CustomUser.DoesNotExist:
-                    logger.error(f"User with id {request.data.get('user_id')} does not exist.")
-                    return {'status': 'error', 'message': 'User does not exist'}
-            elif user_id:
-                try:
-                    user = CustomUser.objects.get(id=user_id)
-                except CustomUser.DoesNotExist:
-                    logger.error(f"User with id {user_id} does not exist.")
-                    return {'status': 'error', 'message': 'User does not exist'}
-            else:
-                logger.error("Either request or user_id must be provided.")
-                return {'status': 'error', 'message': 'User identification is missing'}
+            # Step 1: Retrieve the user (prefer authenticated request.user)
+            user = None
+            if request is not None:
+                req_user = getattr(request, 'user', None)
+                if req_user and getattr(req_user, 'id', None):
+                    user = req_user
+                else:
+                    # Fallback to request.data
+                    data = getattr(request, 'data', None)
+                    payload_user_id = None
+                    if isinstance(data, dict):
+                        payload_user_id = data.get('user_id') or data.get('userId') or data.get('id')
+                    if payload_user_id:
+                        user = CustomUser.objects.filter(id=payload_user_id).first()
+            if user is None and user_id is not None:
+                user = CustomUser.objects.filter(id=user_id).first()
+            if user is None:
+                logger.error("User does not exist or could not be resolved for create_meal.")
+                return {'status': 'error', 'message': 'User does not exist'}
 
             # Generate the user context safely
             try:
@@ -1526,7 +1555,42 @@ def create_meal(request=None, user_id=None, name=None, dietary_preferences=None,
                 if dietary_list:
                     assign_dietary_preferences(meal.id, dietary_list)
 
+                # Persist composed_dishes if provided (sanitize flags/types)
+                if composed_dishes and isinstance(composed_dishes, list) and len(composed_dishes) > 0:
+                    sanitized_bundle = []
+                    for d in composed_dishes:
+                        if not isinstance(d, dict):
+                            continue
+                        sanitized = {
+                            'name': d.get('name', 'Dish'),
+                            'dietary_tags': d.get('dietary_tags') or [],
+                            'target_groups': d.get('target_groups') or [],
+                            'notes': d.get('notes'),
+                            'ingredients': d.get('ingredients') or [],
+                            # For user-generated meals, force False regardless of model output
+                            'is_chef_dish': False,
+                        }
+                        sanitized_bundle.append(sanitized)
+                    meal.composed_dishes = sanitized_bundle
                 meal.save()
+
+                # Create structured MealDish rows from composed_dishes (if provided)
+                try:
+                    if composed_dishes and isinstance(composed_dishes, list):
+                        from meals.models import MealDish
+                        for d in composed_dishes:
+                            MealDish.objects.create(
+                                meal=meal,
+                                name=d.get('name', 'Dish'),
+                                dietary_tags=d.get('dietary_tags') or [],
+                                target_groups=d.get('target_groups') or [],
+                                notes=d.get('notes'),
+                                ingredients=d.get('ingredients'),
+                                # Force user-generated composed dishes to non-chef
+                                is_chef_dish=False
+                            )
+                except Exception as e:
+                    logger.error(f"Failed to create MealDish rows for meal {meal.id}: {e}")
 
                 # Fetch and assign the custom dietary preferences
                 custom_prefs = user.custom_dietary_preferences.all()
@@ -1586,6 +1650,7 @@ def create_meal(request=None, user_id=None, name=None, dietary_preferences=None,
                     'description': meal.description,
                     'meal_type': meal.meal_type,
                     'created_date': meal.created_date.isoformat(),
+                    'composed_dishes': meal.composed_dishes,
                 }
                 return {
                     'meal': meal_dict,
@@ -1732,9 +1797,35 @@ def add_meal_to_plan(request, meal_plan_id, meal_id, day, meal_type, allow_dupli
 def suggest_alternative_meals(request, meal_ids, days_of_week, meal_types):
     """
     Suggest alternative meals based on a list of meal IDs, corresponding days of the week, and meal types.
+    Prioritization:
+    1) Chef-created meals that match dietary preferences and location for the target date
+    2) Auto-generated/user meals (no chef) that match dietary preferences
     """
-    user = CustomUser.objects.get(id=request.data.get('user_id'))
-    user_role = UserRole.objects.get(user=user)
+    # Resolve the user from the authenticated request first; fall back to request.data
+    user = getattr(request, 'user', None)
+    if not user or not getattr(user, 'id', None):
+        # Frontend may not send user_id; try to read it, otherwise error out gracefully
+        user_id = None
+        try:
+            data = getattr(request, 'data', None)
+            if isinstance(data, dict):
+                user_id = data.get('user_id') or data.get('userId') or data.get('id')
+        except Exception:
+            user_id = None
+
+        if user_id:
+            user = CustomUser.objects.filter(id=user_id).first()
+        else:
+            user = None
+
+        if not user:
+            return {'status': 'error', 'message': 'Authenticated user not found. Please ensure you are logged in.'}
+
+    # Safely retrieve or provision a UserRole
+    try:
+        user_role = UserRole.objects.get(user=user)
+    except UserRole.DoesNotExist:
+        user_role = UserRole.objects.create(user=user, current_role='customer', is_chef=False)
     
     if user_role.current_role == 'chef':
         return {'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'}
@@ -1761,22 +1852,37 @@ def suggest_alternative_meals(request, meal_ids, days_of_week, meal_types):
         days_until_target = (day_of_week_number - current_weekday + 7) % 7
         target_date = today + timedelta(days=days_until_target)
 
-        # Filter meals by dietary preferences, postal code, current week, and meal type
-        dietary_filtered_meals = Meal.dietary_objects.for_user(user).filter(start_date=target_date, mealplanmeal__meal_type=meal_type).exclude(id=meal_id)
-        postal_filtered_meals = Meal.postal_objects.for_user(user=user).filter(start_date=target_date, mealplanmeal__meal_type=meal_type).exclude(id=meal_id)
+        # 1) Chef-created meals that match dietary preferences AND location for the exact target date
+        chef_dietary = Meal.dietary_objects.for_user(user).filter(
+            start_date=target_date,
+            mealplanmeal__meal_type=meal_type,
+        ).exclude(id=meal_id)
 
-        # Combine both filters
-        available_meals = dietary_filtered_meals & postal_filtered_meals
+        chef_postal = Meal.postal_objects.for_user(user=user).filter(
+            start_date=target_date,
+            mealplanmeal__meal_type=meal_type,
+        ).exclude(id=meal_id)
 
-        # Compile meal details
-        for meal in available_meals:
+        chef_available_meals = (chef_dietary & chef_postal).order_by('name')
+
+        # 2) Auto-generated/user meals (no chef) matching dietary preferences and meal type.
+        # Do not apply location or date filter, since they are not chef events.
+        auto_generated_meals = Meal.dietary_objects.for_user(user).filter(
+            chef__isnull=True,
+            meal_type=meal_type,
+        ).exclude(id=meal_id).order_by('name')
+
+        # Compile meal details with prioritization: chef meals first, then auto-generated
+        for meal in list(chef_available_meals) + list(auto_generated_meals):
+            start_date_str = meal.start_date.strftime('%Y-%m-%d') if meal.start_date else None
             meal_details = {
                 "meal_id": meal.id,
                 "name": meal.name,
-                "start_date": meal.start_date.strftime('%Y-%m-%d'),
-                "is_available": meal.can_be_ordered(),
-                "chef": meal.chef.user.username,
-                "meal_type": meal_type  # Include meal type
+                "start_date": start_date_str,
+                "is_available": meal.can_be_ordered() if hasattr(meal, 'can_be_ordered') else False,
+                "chef": (meal.chef.user.username if getattr(meal, 'chef', None) and getattr(meal.chef, 'user', None) else 'User Created Meal'),
+                "meal_type": meal_type,
+                "is_chef_meal": bool(getattr(meal, 'chef', None)),
             }
             alternative_meals.append(meal_details)
 

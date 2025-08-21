@@ -1,0 +1,26 @@
+{% load i18n %}
+<div class="section section-data">
+  {% if supplies_by_category %}
+    {% for tbl in supplies_by_category %}
+      <div class="category" style="margin-bottom:12px;">
+        <h3>{{ tbl.category }}</h3>
+        <table class="table-slim" role="presentation">
+          <tbody>
+          {% for it in tbl.items %}
+            <tr>
+              <td>{{ it.ingredient }}</td>
+              <td class="qty">{{ it.quantity }}{% if it.unit %} {{ it.unit }}{% endif %}</td>
+            </tr>
+            {% if it.notes %}
+              <tr><td colspan="2" style="color:#666;font-size:13px;">{{ it.notes }}</td></tr>
+            {% endif %}
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endfor %}
+  {% endif %}
+  {{ content_html|safe }}
+</div>
+
+

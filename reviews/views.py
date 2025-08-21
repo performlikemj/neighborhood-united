@@ -119,7 +119,6 @@ def create_meal_review(request, meal_id):
     rating = request.data.get('rating')
     comment = request.data.get('comment', '')
     meal_plan_id = request.data.get('meal_plan_id')
-
     if not meal_plan_id:
         return Response({"error": "meal_plan_id is required to review a meal."}, status=400)
 

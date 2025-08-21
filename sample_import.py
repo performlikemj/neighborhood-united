@@ -70,7 +70,8 @@ for name, ingredients in puerto_rican_dishes:
 # Create Events
 event_categories = ['WS', 'SE', 'ME', 'CO', 'WE', 'FE', 'EX', 'FU', 'CO']
 for i in range(4):
-    event_date = datetime.now() + timedelta(days=randint(1, 30))
+    from django.utils import timezone
+    event_date = timezone.now() + timedelta(days=randint(1, 30))
     Event.objects.create(
         title=f'Event {i + 1}',
         description='Description for event {i + 1}',

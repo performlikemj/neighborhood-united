@@ -8,11 +8,13 @@ import re
 from django.shortcuts import get_object_or_404
 import requests
 import pytz
+from zoneinfo import ZoneInfo
 import textwrap
 from celery import shared_task
 from datetime import timedelta
 from django.utils import timezone
 from django.conf import settings
+from django.core.cache import cache
 from collections import defaultdict
 from pydantic import ValidationError
 from openai import OpenAI, OpenAIError
@@ -50,19 +52,24 @@ def send_daily_meal_instructions():
             continue
         # Convert current UTC time to the user's time zone
         try:
-            user_timezone = pytz.timezone(user.timezone)
-        except pytz.UnknownTimeZoneError:
+            user_timezone = ZoneInfo(user.timezone)
+        except Exception:
             logger.error(f"Unknown timezone for user {user.email}: {user.timezone}")
             continue
 
         user_time = current_utc_time.astimezone(user_timezone)
 
-        # # Check if it's 8 PM in the user's time zone
-        if user_time.hour == 20:
+        # Check if it's within 8–9 PM in the user's time zone
+        if 20 <= user_time.hour < 21:
 
             # Get the next day's date in the user's time zone
             next_day = user_time.date() + timedelta(days=1)
             next_day_name = next_day.strftime('%A')   # e.g. "Saturday"
+            # Idempotency key: one send per user per next_day
+            send_key = f"daily_instructions_sent:{user.id}:{next_day.isoformat()}"
+            # TTL: expire at end of the 8–9 PM window in user's local time
+            end_of_window_local = user_time.replace(hour=21, minute=0, second=0, microsecond=0)
+            ttl_seconds = max(60, int((end_of_window_local - user_time).total_seconds()))
 
             meal_plan_meals_for_next_day = MealPlanMeal.objects.filter(
                 meal_plan__user=user,
@@ -83,7 +90,12 @@ def send_daily_meal_instructions():
                 if meal_plan_meals_for_next_day.exists():
                     # Get the IDs of the MealPlanMeals for the next day
                     meal_plan_meal_ids = list(meal_plan_meals_for_next_day.values_list('id', flat=True))
-                    generate_instructions.delay(meal_plan_meal_ids)
+                    # Idempotency guard: only queue/send once per user per day
+                    if not cache.add(send_key, "1", timeout=ttl_seconds):
+                        logger.info(f"Skipping duplicate daily instructions for user {user.email} on {next_day} (already sent)")
+                    else:
+                        # Scheduled job: generate and send via assistant
+                        generate_instructions.delay(meal_plan_meal_ids, send_via_assistant=True)
             elif meal_plan.meal_prep_preference == 'one_day_prep':
                 # Check for follow-up instructions scheduled for next_day
                 follow_up_instruction = MealPlanInstruction.objects.filter(
@@ -115,32 +127,40 @@ def send_daily_meal_instructions():
             
                     # Send directly via in-app assistant instead of email
                     try:
+                        # Use the properly formatted instructions context
                         formatted_message = f"Follow-up instructions for {next_day_name}:\n\n"
                         
-                        # Format each task by meal type
-                        tasks_by_meal_type = defaultdict(list)
-                        for task in daily_task.tasks:
-                            # Handle cases where task might not have meal_type attribute
-                            meal_type = getattr(task, 'meal_type', 'Other')
-                            tasks_by_meal_type[meal_type].append(task)
-                        
-                        meal_types_order = ['Breakfast', 'Lunch', 'Dinner', 'Snack']
-                        
-                        for mt in meal_types_order:
-                            tasks = tasks_by_meal_type.get(mt, [])
+                        # Use the meal_types from the formatted_instructions context
+                        for meal_type_info in formatted_instructions['meal_types']:
+                            meal_type = meal_type_info['meal_type']
+                            tasks = meal_type_info['tasks']
+                            
                             if tasks:
-                                formatted_message += f"## {mt}\n"
+                                formatted_message += f"## {meal_type}\n"
                                 for task in tasks:
                                     formatted_message += f"- {task.description}\n"
                                     if task.notes:
                                         formatted_message += f"  Note: {task.notes}\n"
                                 formatted_message += "\n"
                         
+                        # Idempotency guard: only send once per user per day
+                        if not cache.add(send_key, "1", timeout=ttl_seconds):
+                            logger.info(f"Skipping duplicate follow-up instructions for user {user.email} on {next_day} (already sent)")
+                            continue
+
                         assistant = MealPlanningAssistant(user_id=user.id)
                         result = MealPlanningAssistant.send_notification_via_assistant(
                             user_id=user.id,
                             message_content=formatted_message,
-                            subject=f"Follow-up instructions for {next_day_name}"
+                            subject=f"Follow-up instructions for {next_day_name}",
+                            template_key='daily_prep_instructions',
+                            template_context={
+                                'sections_by_day': {
+                                    next_day_name: [
+                                        t.description for mt in formatted_instructions['meal_types'] for t in mt['tasks'] if getattr(t, 'description', None)
+                                    ]
+                                }
+                            }
                         )
                         if result:
                             logger.info(f"Follow-up instructions sent to MealPlanningAssistant for user {user.email}")
@@ -152,16 +172,95 @@ def send_daily_meal_instructions():
                             exc_info=True
                         )
                 else:
-                    logger.info(f"No follow-up instructions for user {user.email} on {next_day} for meal plan {meal_plan.id}")
+                    # Fallback: derive next-day tasks from bulk prep instructions if available
+                    try:
+                        bulk_instruction = MealPlanInstruction.objects.filter(
+                            meal_plan=meal_plan,
+                            is_bulk_prep=True
+                        ).first()
+
+                        if not bulk_instruction or not bulk_instruction.instruction_text:
+                            logger.info(f"No follow-up or bulk instructions for user {user.email} on {next_day} (plan {meal_plan.id})")
+                        else:
+                            try:
+                                bulk_data = json.loads(bulk_instruction.instruction_text)
+                                validated_bulk = BulkPrepInstructions.model_validate(bulk_data)
+                            except Exception as e:
+                                logger.error(f"Failed to parse bulk prep instructions for user {user.email}: {e}")
+                                validated_bulk = None
+
+                            if validated_bulk and getattr(validated_bulk, 'daily_tasks', None):
+                                next_day_tasks = [dt for dt in validated_bulk.daily_tasks if getattr(dt, 'day', None) == next_day_name]
+
+                                if next_day_tasks:
+                                    try:
+                                        # There may be multiple DailyTask entries for the same day; combine their tasks
+                                        combined = DailyTask(
+                                            step_number=1,
+                                            day=next_day_name,
+                                            tasks=[t for dt in next_day_tasks for t in getattr(dt, 'tasks', [])],
+                                            total_estimated_time=None
+                                        )
+
+                                        formatted = format_follow_up_instructions(combined, user.username)
+
+                                        # Build a concise plaintext for assistant context
+                                        formatted_message = f"Follow-up instructions for {next_day_name}:\n\n"
+                                        for meal_type_info in formatted['meal_types']:
+                                            meal_type = meal_type_info['meal_type']
+                                            tasks = meal_type_info['tasks']
+                                            if tasks:
+                                                formatted_message += f"## {meal_type}\n"
+                                                for task in tasks:
+                                                    formatted_message += f"- {task.description}\n"
+                                                    if getattr(task, 'notes', None):
+                                                        formatted_message += f"  Note: {task.notes}\n"
+                                                formatted_message += "\n"
+
+                                        # Idempotency guard: only send once per user per day
+                                        if not cache.add(send_key, "1", timeout=ttl_seconds):
+                                            logger.info(f"Skipping duplicate derived follow-up for user {user.email} on {next_day} (already sent)")
+                                            continue
+
+                                        result = MealPlanningAssistant.send_notification_via_assistant(
+                                            user_id=user.id,
+                                            message_content=formatted_message,
+                                            subject=f"Follow-up instructions for {next_day_name}",
+                                            template_key='daily_prep_instructions',
+                                            template_context={
+                                                'sections_by_day': {
+                                                    next_day_name: [
+                                                        t.description for mt in formatted['meal_types'] for t in mt['tasks'] if getattr(t, 'description', None)
+                                                    ]
+                                                }
+                                            }
+                                        )
+                                        if result:
+                                            logger.info(f"Derived follow-up (from bulk) sent to MealPlanningAssistant for user {user.email}")
+                                        else:
+                                            logger.error(f"Failed to send derived follow-up (from bulk) to MealPlanningAssistant for user {user.email}")
+                                    except Exception as e:
+                                        logger.error(
+                                            f"Failed to derive/send follow-up from bulk for user {user.email}: {e}",
+                                            exc_info=True
+                                        )
+                                else:
+                                    logger.info(f"No daily_tasks for {next_day_name} found in bulk prep for user {user.email} (plan {meal_plan.id})")
+                    except Exception as e:
+                        logger.error(
+                            f"Error while handling fallback to bulk instructions for user {user.email}: {e}",
+                            exc_info=True
+                        )
             else:
                 logger.info(f"No meals found for user {user.email} on {next_day_name}")
 
 @shared_task
 @handle_task_failure
-def generate_instructions(meal_plan_meal_ids):
+def generate_instructions(meal_plan_meal_ids, send_via_assistant: bool = False):
     """
-    Generate cooking instructions for a list of MealPlanMeal IDs and send a consolidated email to the user.
-    Includes fetching/generating macro info using existing functions.
+    Generate cooking instructions for a list of MealPlanMeal IDs.
+    Always persists results to `Instruction`.
+    If send_via_assistant=True, also sends an email via the meal planning assistant.
     """
     logger.info(f"=== MEAL INSTRUCTIONS DEBUG: generate_instructions called for meal_plan_meal_ids={meal_plan_meal_ids}")
     
@@ -183,6 +282,32 @@ def generate_instructions(meal_plan_meal_ids):
     meal_plan = first_meal.meal_plan # Get the meal plan object
     user_email = user.email
     user_name = user.username
+
+    # Filter out past meals relative to the user's local date (handles late approvals/manual requests)
+    try:
+        user_tz = ZoneInfo(user.timezone) if getattr(user, 'timezone', None) else ZoneInfo("UTC")
+    except Exception:
+        user_tz = ZoneInfo("UTC")
+    today_local = timezone.now().astimezone(user_tz).date()
+
+    # Build mapping of day name -> date within the plan week for meals missing explicit date
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    start_idx = meal_plan.week_start_date.weekday()
+    ordered_names = [day_names[(start_idx + i) % 7] for i in range(7)]
+    day_to_date = {ordered_names[i]: (meal_plan.week_start_date + timedelta(days=i)) for i in range(7)}
+
+    mpm_filtered = []
+    for mpm in meal_plan_meals:
+        m_date = getattr(mpm, 'meal_date', None)
+        if not m_date:
+            m_date = day_to_date.get(mpm.day)
+        if m_date is not None and m_date < today_local:
+            continue
+        mpm_filtered.append(mpm)
+
+    if not mpm_filtered:
+        logger.info(f"No future-or-today meals to generate instructions for (user={user.id}, plan={meal_plan.id}). Skipping.")
+        return
 
     # Import is_chef_meal function here to avoid circular imports
     from meals.meal_plan_service import is_chef_meal
@@ -212,7 +337,7 @@ def generate_instructions(meal_plan_meal_ids):
     instructions_list = []
     meals_to_update = [] # Keep track of meals with new metadata
 
-    for meal_plan_meal in meal_plan_meals:
+    for meal_plan_meal in mpm_filtered:
         meal = meal_plan_meal.meal
         meal_plan_meal_data = MealPlanMealSerializer(meal_plan_meal).data
         metadata_updated = False # Track if metadata was updated for *this* meal
@@ -222,7 +347,11 @@ def generate_instructions(meal_plan_meal_ids):
         if not meal.macro_info:
             logger.info(f"Macro info missing for meal {meal.id}. Attempting to fetch.")
             try:
-                macro_data = get_meal_macro_information(meal) # Expects Meal object
+                macro_data = get_meal_macro_information(
+                    meal_name=meal.name,
+                    meal_description=meal.description or "",
+                    ingredients=None
+                )
                 if macro_data:
                     # Assuming the function returns a dict/Pydantic model, convert to JSON string for storage
                     meal.macro_info = json.dumps(macro_data) if not isinstance(macro_data, str) else macro_data
@@ -324,6 +453,7 @@ def generate_instructions(meal_plan_meal_ids):
                                 f"- **User context**: household ages, dietary needs, kitchen skill.\n"
                                 f"- **Expiring pantry items**: {expiring_items_str} (use when sensible to cut waste).\n"
                                 f"- **Metadata**: {metadata_prompt_part.strip()}\n\n"
+                                f"- **Multi-dish meals**: If the meal has `meal_dishes` (structured rows) or fallback `composed_dishes`, write complete instructions that cover each dish in the bundle, grouped per dish, ensuring every household member has a complete path to eat safely.\n\n"
                                 f"## Output Rules\n"
                                 f"1.  Return exactly one JSON object—nothing else—conforming to the `Instructions` "
                                 f"   schema below (Pydantic `extra='forbid'`).\n"
@@ -455,7 +585,7 @@ def generate_instructions(meal_plan_meal_ids):
         subject = f"Your Cooking Instructions for {meal_day_of_week}'s Meals"
     else:
         # Meals are on different dates
-        current_user_time = timezone.now().astimezone(pytz.timezone(user.timezone))
+        current_user_time = timezone.now().astimezone(ZoneInfo(user.timezone))
         current_date_str = current_user_time.strftime('%A %B %d')
         subject = f"Your Requested Cooking Instructions for {current_date_str}"
 
@@ -466,72 +596,52 @@ def generate_instructions(meal_plan_meal_ids):
         meal_type = item['meal_type']
         grouped_instructions[meal_type].append(item)
 
-    # Define the order of meal types
-    meal_types_order = ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Other']  # Add any other meal types as needed
 
-    # Pre-resolve and store in a new variable
-    ordered_meals = []
-    for mt in meal_types_order:
-        meals = grouped_instructions.get(mt, [])
-        ordered_meals.append((mt, meals))
-
-    # Get current meal plan
-    meal_plan = first_meal.meal_plan
-    # Get approval token
-    approval_token = meal_plan.approval_token
-    # Build context for the template
     streamlit_url = os.getenv("STREAMLIT_URL") 
-    context = {
-        'subject': subject,
-        'user_name': user_name,
-        'ordered_meals': ordered_meals,
-        'profile_url': f"{streamlit_url}/profile",
-        'streamlit_url': streamlit_url,
-        'user_id': user.id,
-        'approval_token': approval_token,
-    }
 
-    # --- Send via in-app assistant instead of email ---
-    instructions_message_parts = [subject, ""]  # top-line heading
 
-    for meal_type, meals in ordered_meals:
-        if not meals:
-            continue
-        instructions_message_parts.append(f"## {meal_type}")
-        for item in meals:
-            # Strip HTML so GPT chat shows plain text
-            text_only = re.sub(r"<[^>]+>", "", item["formatted_instructions"])
-            instructions_message_parts.append(text_only)
-        instructions_message_parts.append("")      # blank line between sections
+    if send_via_assistant and instructions_list:
+        try:
+            # Build a simple HTML block combining each meal's formatted instructions
+            main_blocks = []
+            for item in instructions_list:
+                main_blocks.append(item['formatted_instructions'])
+            main_text_html = "".join(main_blocks)
 
-    message_content = "\n".join(instructions_message_parts)
-
-    try:
-        assistant = MealPlanningAssistant(user_id=user.id)
-        result = MealPlanningAssistant.send_notification_via_assistant(
-            user_id=user.id,
-            message_content=message_content,
-            subject=subject
-        )
-        if result:
-            logger.info(f"Daily meal instructions sent to MealPlanningAssistant for user {user_email}")
-        else:
-            logger.error(f"Failed to send daily meal instructions to MealPlanningAssistant for user {user_email}")
-    except Exception as e:
-        logger.error(
-            f"Failed to send instructions to MealPlanningAssistant for user {user_email}: {e}",
-            exc_info=True,
+            from meals.meal_assistant_implementation import MealPlanningAssistant
+            result = MealPlanningAssistant.send_notification_via_assistant(
+                user_id=user.id,
+                message_content=(
+                    f"Daily cooking instructions for {user_name}. Render the provided tables cleanly; keep tone concise."
+                ),
+                subject=subject,
+                template_key='daily_prep_instructions',
+                template_context={
+                    'main_text': main_text_html,
+                    # pass minimal plan context to maintain template personalization
+                    'user_name': user_name,
+                    'profile_url': f"{streamlit_url}/profile" if streamlit_url else None,
+                }
+            )
+            if result.get('status') == 'success':
+                logger.info(f"Daily cooking instructions sent via assistant for user {user_email}")
+            else:
+                logger.error(f"Failed to send daily cooking instructions for user {user_email}: {result}")
+        except Exception as e:
+            logger.error(f"Error sending daily cooking instructions for user {user_email}: {e}")
+    else:
+        # Intentionally no outbound send; stored only
+        logger.info(
+            f"Instructions generated and stored for user {user_email}; outbound send skipped (send_via_assistant={send_via_assistant})."
         )
 
 @shared_task
 @handle_task_failure
-def generate_bulk_prep_instructions(meal_plan_id):
+def generate_bulk_prep_instructions(meal_plan_id, send_via_assistant: bool = True):
     """
     Generate bulk meal prep instructions for a given meal plan.
     """
     logger.info(f"=== MEAL INSTRUCTIONS DEBUG: generate_bulk_prep_instructions called for meal_plan_id={meal_plan_id}")
-    print(f"=== MEAL INSTRUCTIONS DEBUG: generate_bulk_prep_instructions called for meal_plan_id={meal_plan_id}")
-    print(f"=== MEAL INSTRUCTIONS DEBUG: THIS IS NOT THE EMERGENCY PANTRY PLAN FUNCTION!")
     logger.info(f"MEAL INSTRUCTIONS DEBUG: THIS IS NOT THE EMERGENCY PANTRY PLAN FUNCTION!")
 
     from meals.models import Meal, MealPlan, MealPlanMeal, MealPlanInstruction, PantryItem
@@ -574,6 +684,33 @@ def generate_bulk_prep_instructions(meal_plan_id):
         logger.warning(f"No meals found for MealPlan ID {meal_plan_id}. Cannot generate bulk prep.")
         return
 
+    # If the plan is being approved late, filter out meals scheduled before 'today' in the user's timezone
+    try:
+        user_tz = ZoneInfo(user.timezone) if getattr(user, 'timezone', None) else ZoneInfo("UTC")
+    except Exception:
+        user_tz = ZoneInfo("UTC")
+    today_local = timezone.now().astimezone(user_tz).date()
+
+    # Build day name -> date map for the plan week
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    start_idx = meal_plan.week_start_date.weekday()
+    ordered_names = [day_names[(start_idx + i) % 7] for i in range(7)]
+    day_to_date = {ordered_names[i]: (meal_plan.week_start_date + timedelta(days=i)) for i in range(7)}
+
+    # Produce a filtered list of MealPlanMeal records that are today or future
+    mpm_filtered = []
+    for mpm in meal_plan_meals:
+        m_date = getattr(mpm, 'meal_date', None)
+        if not m_date:
+            m_date = day_to_date.get(mpm.day)
+        if m_date is not None and m_date < today_local:
+            continue
+        mpm_filtered.append(mpm)
+
+    if not mpm_filtered:
+        logger.info(f"Bulk prep generation skipped for MealPlan {meal_plan_id}: all meals are in the past for user local date {today_local}.")
+        return
+
     # Get full serialized data of the MealPlan (might be needed for overall context)
     # serializer = MealPlanSerializer(meal_plan)
     # meal_plan_data = serializer.data
@@ -588,7 +725,7 @@ def generate_bulk_prep_instructions(meal_plan_id):
     chef_meals_present = False
     meals_to_update = [] # Track meals needing metadata save
 
-    for meal_plan_meal in meal_plan_meals:
+    for meal_plan_meal in mpm_filtered:
         meal = meal_plan_meal.meal
         is_chef = is_chef_meal(meal)
         if is_chef:
@@ -600,7 +737,11 @@ def generate_bulk_prep_instructions(meal_plan_id):
         if not meal.macro_info:
             logger.info(f"Macro info missing for bulk prep meal {meal.id}. Attempting fetch.")
             try:
-                macro_data = get_meal_macro_information(meal)
+                macro_data = get_meal_macro_information(
+                    meal_name=meal.name,
+                    meal_description=meal.description or "",
+                    ingredients=None
+                )
                 if macro_data:
                     meal.macro_info = json.dumps(macro_data) if not isinstance(macro_data, str) else macro_data
                     metadata_updated = True
@@ -707,7 +848,7 @@ def generate_bulk_prep_instructions(meal_plan_id):
         user_lang   = user_preferred_language or "English"
         meals_json  = json.dumps(all_meals_data_for_prompt, ensure_ascii=False)
         subs_text   = build_substitution_bullets(substitution_info)   # helper returns '' if none
-        meta_part   = build_metadata_prompt_part(meal_plan_meals)
+        meta_part   = build_metadata_prompt_part(mpm_filtered)
         chef_text   = ("\nIMPORTANT: Some meals are chef‑created and MUST NOT be altered."
                     if chef_meals_present else "")
         # ----------------------------------------
@@ -737,7 +878,8 @@ def generate_bulk_prep_instructions(meal_plan_id):
                     f"6. Use provided durations or `'N/A'`.\n"
                     f"7. Never repeat nutrition/video metadata.\n"
                     f"8. If you cannot comply, output `null`.\n"
-                    f"9. Keep total tokens ≈400; be terse.\n\n"
+                    f"9. Keep total tokens ≈400; be terse.\n"
+                    f"10. For every `meal_type` field, use exactly one of: Breakfast, Lunch, Dinner, Snack, Other.\n\n"
 
                     f"## Extras\n{subs_text}{chef_text}"
                 )
@@ -776,103 +918,10 @@ def generate_bulk_prep_instructions(meal_plan_id):
             )
             logger.info(f"Generated bulk prep instructions for meal plan {meal_plan_id}")
             
-            # Notify the user in-app that bulk-prep instructions are ready
-            try:
-                assistant = MealPlanningAssistant(user_id=user.id)
-                
-                # Parse the instructions for context
-                try:
-                    instruction_data = json.loads(generated_instructions_text)
-                    validated_prep = BulkPrepInstructions.model_validate(instruction_data)
-                    
-                    # Format bulk prep steps
-                    bulk_prep_steps = validated_prep.bulk_prep_steps
-                    daily_tasks = validated_prep.daily_tasks
-                    
-                    # Format the steps by meal type
-                    steps_formatted = ""
-                    steps_by_meal_type = defaultdict(list)
-                    
-                    for step in bulk_prep_steps:
-                        steps_by_meal_type[step.meal_type].append(step)
-                    
-                    meal_types_order = ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Other']
-                    
-                    for meal_type in meal_types_order:
-                        steps = steps_by_meal_type.get(meal_type, [])
-                        if steps:
-                            # Filter out steps with empty descriptions before numbering
-                            non_empty_steps = [step for step in steps if step and step.description and step.description.strip()]
-                            if non_empty_steps:
-                                steps_formatted += f"\n{meal_type} Prep:\n"
-                                for i, step in enumerate(non_empty_steps, 1):
-                                    steps_formatted += f"{i}. {step.description}\n"
-                                    if step.notes:
-                                        steps_formatted += f"   Note: {step.notes}\n"
-                    
-                    # Format the daily tasks by day
-                    daily_tasks_formatted = ""
-                    tasks_by_day = defaultdict(list)
-                    
-                    for task in daily_tasks:
-                        tasks_by_day[task.day].append(task)
-                    
-                    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-                    start_day_index = meal_plan.week_start_date.weekday()
-                    ordered_days = [(start_day_index + i) % 7 for i in range(7)]
-                    ordered_day_names = [day_names[i] for i in ordered_days]
-                    
-                    for day_name in ordered_day_names:
-                        daily_tasks_for_day = tasks_by_day.get(day_name, [])
-                        if daily_tasks_for_day:
-                            daily_tasks_formatted += f"\n{day_name}:\n"
-                            for daily_task in daily_tasks_for_day:
-                                # Each daily_task has a list of task steps
-                                for task_step in daily_task.tasks:
-                                    if task_step.description and task_step.description.strip():
-                                        daily_tasks_formatted += f"- {task_step.meal_type}: {task_step.description}\n"
-                                        if task_step.notes:
-                                            daily_tasks_formatted += f"  Note: {task_step.notes}\n"
-                    
-                    # Create detailed message with full context
-                    message_content = (
-                        f"Your bulk meal-prep instructions for the week of "
-                        f"{meal_plan.week_start_date.strftime('%B %d')} - {meal_plan.week_end_date.strftime('%B %d')} are ready!\n\n"
-                        f"Here are the bulk preparation steps you should complete:\n{steps_formatted}\n\n"
-                        f"And here are the follow-up tasks for each day of the week:\n{daily_tasks_formatted}\n\n"
-                        f"This will help you save time during the week by preparing multiple meals at once."
-                    )
-                    
-                except Exception as e:
-                    # Fallback to simple notification if parsing fails
-                    # n8n traceback
-                    n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-                    requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_instructions", "traceback": traceback.format_exc()})
-                    message_content = (
-                        "Your bulk meal-prep instructions for the upcoming week are ready! "
-                        "Open the chat to review them."
-                    )
-                
-                result = MealPlanningAssistant.send_notification_via_assistant(
-                    user_id=user.id,
-                    message_content=message_content,
-                    subject=f"Bulk Meal Prep Instructions for {meal_plan.week_start_date.strftime('%B %d')} - {meal_plan.week_end_date.strftime('%B %d')}"
-                )
-                if result:
-                    logger.info(
-                        f"Bulk-prep notification sent to MealPlanningAssistant for user {user.email}"
-                    )
-                else:
-                    logger.error(
-                        f"Failed to send bulk-prep notification to MealPlanningAssistant for user {user.email}"
-                    )
-            except Exception as e:
-                # n8n traceback
-                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-                requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_instructions", "traceback": traceback.format_exc()})
-            
-            # Send an email with the bulk prep instructions
-            send_bulk_prep_instructions.delay(meal_plan_id)
+            # Queue the actual email send (single source of truth)
+            if send_via_assistant:
+                logger.info(f"Generated bulk prep instructions for meal_plan_id={meal_plan_id}; queuing email send task.")
+                send_bulk_prep_instructions.delay(meal_plan_id)
         else:
             logger.error(f"Failed to generate bulk prep instructions for meal plan {meal_plan_id}")
     
@@ -889,6 +938,27 @@ def build_substitution_bullets(subs):
             bullets += f"- {s['notes']}\n"
             seen.add(s["notes"])
     return bullets
+
+def _normalize_meal_type(meal_type: str) -> str:
+    """Map free-form meal_type strings to a canonical set.
+
+    Canonical values: 'Breakfast', 'Lunch', 'Dinner', 'Snack', 'Other'
+    """
+    try:
+        t = (meal_type or "").strip().lower()
+    except Exception:
+        t = ""
+    if not t:
+        return "Other"
+    if "breakfast" in t:
+        return "Breakfast"
+    if "lunch" in t:
+        return "Lunch"
+    if "dinner" in t:
+        return "Dinner"
+    if "snack" in t:
+        return "Snack"
+    return "Other"
 
 @shared_task
 @handle_task_failure
@@ -929,32 +999,64 @@ def send_bulk_prep_instructions(meal_plan_id):
         bulk_prep_steps = validated_prep.bulk_prep_steps
         daily_tasks = validated_prep.daily_tasks
         
-        # Format the steps by meal type
+        # Format the steps by meal type (text block) and also build structured sections for templating
         steps_formatted = ""
         steps_by_meal_type = defaultdict(list)
-        
+
         for step in bulk_prep_steps:
-            steps_by_meal_type[step.meal_type].append(step)
-        
-        meal_types_order = ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Other']
-        
-        for meal_type in meal_types_order:
+            key = _normalize_meal_type(getattr(step, 'meal_type', ''))
+            steps_by_meal_type[key].append(step)
+
+        base_order = ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Other']
+        extra_keys = [k for k in steps_by_meal_type.keys() if k not in base_order]
+
+        # Build a dict suitable for the email template's structured rendering
+        batch_sections_context = {}
+
+        for meal_type in list(dict.fromkeys(base_order + sorted(extra_keys))):
             steps = steps_by_meal_type.get(meal_type, [])
             if steps:
                 # Filter out steps with empty descriptions before numbering
-                non_empty_steps = [step for step in steps if step and step.description and step.description.strip()]
+                non_empty_steps = [s for s in steps if s and getattr(s, 'description', None) and s.description.strip()]
                 if non_empty_steps:
+                    # Append to the plaintext version (for assistant context)
                     steps_formatted += f"\n{meal_type} Prep:\n"
-                    for i, step in enumerate(non_empty_steps, 1):
-                        steps_formatted += f"{i}. {step.description}\n"
-                        if step.notes:
-                            steps_formatted += f"   Note: {step.notes}\n"
+                    # Also create a clean list for the template section (no numbers; template uses <ol>)
+                    rendered_steps_for_section = []
+                    for i, s in enumerate(non_empty_steps, 1):
+                        steps_formatted += f"{i}. {s.description}\n"
+                        # Include note in both plaintext and structured line for clarity
+                        if getattr(s, 'notes', None):
+                            steps_formatted += f"   Note: {s.notes}\n"
+                            rendered_steps_for_section.append(f"{s.description} — <em>Note:</em> {s.notes}")
+                        else:
+                            rendered_steps_for_section.append(f"{s.description}")
+
+                    # Use a friendlier batch title
+                    batch_title = f"{meal_type} Prep"
+                    batch_sections_context[batch_title] = rendered_steps_for_section
         
         # Format the daily tasks by day
         daily_tasks_formatted = ""
         tasks_by_day = defaultdict(list)
         
+        # Filter out tasks for days before today in user's timezone
+        try:
+            user_tz = ZoneInfo(user.timezone) if getattr(user, 'timezone', None) else ZoneInfo("UTC")
+        except Exception:
+            user_tz = ZoneInfo("UTC")
+        today_local = timezone.now().astimezone(user_tz).date()
+
+        # Build mapping of day name -> date within the plan week
+        day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        start_idx = meal_plan.week_start_date.weekday()
+        ordered_names = [day_names[(start_idx + i) % 7] for i in range(7)]
+        day_to_date = {ordered_names[i]: (meal_plan.week_start_date + timedelta(days=i)) for i in range(7)}
+
         for task in daily_tasks:
+            task_date = day_to_date.get(getattr(task, 'day', None))
+            if task_date is not None and task_date < today_local:
+                continue
             tasks_by_day[task.day].append(task)
         
         day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -973,16 +1075,75 @@ def send_bulk_prep_instructions(meal_plan_id):
                             daily_tasks_formatted += f"- {task_step.meal_type}: {task_step.description}\n"
                             if task_step.notes:
                                 daily_tasks_formatted += f"  Note: {task_step.notes}\n"
+
+        # Build a tabular Daily Serve-Up plan per day, no bullets
+        from django.utils.html import escape
+        daily_tables = []
+        for day_name in ordered_day_names:
+            daily_tasks_for_day = tasks_by_day.get(day_name, [])
+            if not daily_tasks_for_day:
+                continue
+            rows = []
+            for daily_task in daily_tasks_for_day:
+                for task_step in daily_task.tasks:
+                    description = escape(getattr(task_step, 'description', '') or '')
+                    notes = escape(getattr(task_step, 'notes', '') or '')
+                    meal_type = escape(getattr(task_step, 'meal_type', '') or '')
+                    if not description:
+                        continue
+                    rows.append(
+                        f"<tr>"
+                        f"<td style='padding:10px 10px;vertical-align:top;'><span class='badge'>{meal_type}</span></td>"
+                        f"<td style='padding:10px 10px;vertical-align:top;'>{description}</td>"
+                        f"<td style='padding:10px 10px;vertical-align:top;'>{notes or '—'}</td>"
+                        f"</tr>"
+                    )
+            if rows:
+                table_html = (
+                    f"<div class='card' style='margin:10px 0;'>"
+                    f"<h4 style='margin:6px 0 8px;'>{escape(day_name)}</h4>"
+                    f"<table class='table-slim' role='presentation' aria-label='Daily serve-up {escape(day_name)}'>"
+                    f"  <thead>"
+                    f"    <tr>"
+                    f"      <th scope='col' style='width:15%;'>{escape('Meal')}</th>"
+                    f"      <th scope='col' style='width:60%;'>{escape('What to serve')}</th>"
+                    f"      <th scope='col' style='width:25%;'>{escape('Notes')}</th>"
+                    f"    </tr>"
+                    f"  </thead>"
+                    f"  <tbody>"
+                    f"    {''.join(rows)}"
+                    f"  </tbody>"
+                    f"</table>"
+                    f"</div>"
+                )
+                daily_tables.append(table_html)
+
+        daily_tasks_html = "".join(daily_tables)
         
-        # Format the message for the assistant
+        # Format the message for the assistant (kept concise; templates will render structured sections)
         message_to_assistant = (
-            f"I need to send bulk meal prep instructions to the user for the week of "
-            f"{meal_plan.week_start_date.strftime('%B %d')} - {meal_plan.week_end_date.strftime('%B %d')}.\n\n"
-            f"Here are the bulk preparation steps they should complete:\n{steps_formatted}\n\n"
-            f"And here are the follow-up tasks for each day of the week:\n{daily_tasks_formatted}\n\n"
-            f"Please format this information into a friendly email with clear and well-organized instructions. "
-            f"Start with an introduction about how doing this bulk prep will save them time during the week. "
-            f"Then organize the bulk prep steps clearly by meal type, followed by the daily tasks organized by day."
+            f"Bulk meal prep instructions for the week of "
+            f"{meal_plan.week_start_date.strftime('%B %d')} - {meal_plan.week_end_date.strftime('%B %d')}. "
+            f"Render as a friendly email with a short intro."
+        )
+
+        # Build explicit template context to ensure clear, numbered rendering regardless of LLM phrasing
+        week_start_str = meal_plan.week_start_date.strftime('%b %d')
+        week_end_str = meal_plan.week_end_date.strftime('%b %d')
+
+        main_text_html = (
+            "<h3 style='margin:8px 0 4px;'>Prep Day — Batch in this order</h3>"
+            "<p style='margin:4px 0 8px;'>Follow the checklist below, then see safety notes.</p>"
+            "<h4 style='margin:8px 0 4px;'>Storage &amp; Safety</h4>"
+            "<ul style='margin:6px 0 12px 18px;'>"
+            "<li>Cool hot foods to ≤ 40 °F (≤ 4 °C) within 2 hours before covering.</li>"
+            "<li>Fridge: cooked fish 3–4 days; cooked grains/veg 4 days; salads 3 days.</li>"
+            "<li>Reheat to 165 °F (74 °C) unless serving cold as intended.</li>"
+            "</ul>"
+        )
+
+        final_text_html = (
+            "<h3 style='margin:8px 0 4px;'>Daily Serve‑Up Plan</h3>" + (daily_tasks_html or "")
         )
         
         # Send via the assistant
@@ -990,7 +1151,15 @@ def send_bulk_prep_instructions(meal_plan_id):
         result = MealPlanningAssistant.send_notification_via_assistant(
             user_id=user.id,
             message_content=message_to_assistant,
-            subject=subject
+            subject=subject,
+            template_key='bulk_prep_instructions',
+            template_context={
+                'main_text': main_text_html,
+                'batch_sections': batch_sections_context,
+                'final_text': final_text_html,
+                'week_start': week_start_str,
+                'week_end': week_end_str,
+            }
         )
         
         if result.get('status') == 'success':
@@ -1080,7 +1249,8 @@ def send_follow_up_email(user, daily_task_context):
     result = MealPlanningAssistant.send_notification_via_assistant(
         user_id=user.id,
         message_content=message_to_assistant,
-        subject=subject
+        subject=subject,
+        template_key='daily_prep_instructions'
     )
     
     if result.get('status') == 'success':

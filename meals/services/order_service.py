@@ -49,7 +49,7 @@ def create_order(user, event: ChefMealEvent, qty: int, idem_key: str):
         )
         
         # Create the order
-        from meals.models import Order
+        from meals.models import Order, OrderMeal
         # Check if the user already has an active order
         order, created = Order.objects.get_or_create(
             customer=user,
@@ -69,6 +69,33 @@ def create_order(user, event: ChefMealEvent, qty: int, idem_key: str):
             unit_price=event.current_price,
             stripe_payment_intent_id=intent.id
         )
+
+        # Ensure a corresponding OrderMeal row exists and is linked to this event
+        try:
+            # We need a MealPlanMeal to link when available; if not, create a minimal OrderMeal
+            # Prefer to find an existing OrderMeal for this meal/event, else create new
+            order_meal = (
+                OrderMeal.objects
+                .select_for_update()
+                .filter(order=order, chef_meal_event=event)
+                .first()
+            )
+            if not order_meal:
+                order_meal = OrderMeal.objects.create(
+                    order=order,
+                    meal=event.meal,
+                    meal_plan_meal=chef_meal_order.meal_plan_meal or event.meal.mealplanmeal_set.filter(meal=event.meal).first(),
+                    chef_meal_event=event,
+                    quantity=qty,
+                )
+            else:
+                # Update quantity by adding this line's quantity (basic merge)
+                order_meal.quantity = max(1, (order_meal.quantity or 0) + qty)
+                order_meal.chef_meal_event = event
+                order_meal.save(update_fields=['quantity', 'chef_meal_event'])
+        except Exception:
+            # Do not fail the transaction if OrderMeal creation fails; payment-init will fallback to ChefMealOrders
+            pass
         
         # Schedule capture at cutoff time
         from meals.tasks import schedule_capture

@@ -1,6 +1,6 @@
 # chefs/forms.py
 from django import forms
-from .models import Chef
+from .models import Chef, ChefPhoto
 from meals.models import Meal, Dish
 
 class MealForm(forms.ModelForm):
@@ -24,4 +24,14 @@ class ChefProfileForm(forms.ModelForm):
             'serving_postalcodes': forms.CheckboxSelectMultiple(),
         }
 
+
+class ChefPhotoForm(forms.ModelForm):
+    class Meta:
+        model = ChefPhoto
+        fields = ['image', 'title', 'caption', 'is_featured']
+        widgets = {
+            'image': forms.FileInput(attrs={'class': 'form-control'}),
+            'title': forms.TextInput(attrs={'class': 'form-control'}),
+            'caption': forms.Textarea(attrs={'class': 'form-control'}),
+        }
 

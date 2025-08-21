@@ -3,6 +3,7 @@ import os
 import traceback
 from django.shortcuts import get_object_or_404, render, redirect
 from datetime import datetime, timedelta
+import pytz
 from .models import (
     Meal, Dish, Ingredient, ChefMealEvent, ChefMealOrder, 
     ChefPostalCode, StripeConnectAccount, PaymentLog, 
@@ -27,6 +28,7 @@ from django.utils import timezone
 from django.db.models import Q, Sum, Count, Avg, F, Value, DecimalField
 from django.db.models.functions import Coalesce
 from django.utils import timezone
+from datetime import timezone as py_tz
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 import stripe
@@ -45,6 +47,7 @@ from django.contrib import messages
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 import pytz
+from zoneinfo import ZoneInfo
 
 
 logger = logging.getLogger(__name__)
@@ -178,12 +181,64 @@ def api_chef_meal_orders(request):
     # Handle POST requests
     elif request.method == 'POST':
         serializer = ChefMealOrderCreateSerializer(data=request.data, context={'request': request})
-        if serializer.is_valid():
-            order = serializer.save(customer=request.user)
-            # Return the created order with full details
-            response_serializer = ChefMealOrderSerializer(order)
-            return Response(response_serializer.data, status=201)
-        return Response(serializer.errors, status=400)
+        try:
+            if serializer.is_valid():
+                # Allow multiple chef-created meal orders across different chefs and events
+                # Uniqueness per event is enforced at the model level (active orders per event)
+                order = serializer.save()
+                # Return the created order with full details
+                response_serializer = ChefMealOrderSerializer(order)
+                # If the serializer exposed the idempotency key, echo it back in the header
+                idem_key = serializer.context.get('idem_key')
+                resp = Response(response_serializer.data, status=201)
+                if idem_key:
+                    resp["Idempotency-Key"] = idem_key
+                return resp
+        except Exception as e:
+            # Special handling for DRF validation errors with specific error detail
+            from rest_framework.exceptions import ValidationError
+            # Use module-level Response import to avoid overshadowing
+            from rest_framework import status
+            import traceback
+            import os
+            import requests
+
+            # Check for DRF ValidationError or error detail in the exception
+            error_detail = getattr(e, 'detail', None)
+            if error_detail:
+                # If the error is about an active order already existing, return a specific message
+                if isinstance(error_detail, dict):
+                    # Check for a field or non_field_errors containing the message
+                    for field, messages in error_detail.items():
+                        if isinstance(messages, list):
+                            for msg in messages:
+                                if (
+                                    hasattr(msg, 'code') and msg.code == 'invalid'
+                                    and str(msg) == 'Active order already exists'
+                                ):
+                                    return Response(
+                                        {"error": "Active order already exists for this event. Please update the existing order instead."},
+                                        status=status.HTTP_400_BAD_REQUEST
+                                    )
+                elif isinstance(error_detail, list):
+                    for msg in error_detail:
+                        if (
+                            hasattr(msg, 'code') and msg.code == 'invalid'
+                            and str(msg) == 'Active order already exists'
+                        ):
+                            return Response(
+                                {"error": "Active order already exists for this event. Please update the existing order instead."},
+                                status=status.HTTP_400_BAD_REQUEST
+                            )
+            logger.error(f"Error creating ChefMealOrder: {str(e)}")
+            # n8n traceback
+            n8n_traceback = {
+                'error': str(e),
+                'source': 'api_chef_meal_orders',
+                'traceback': traceback.format_exc()
+            }
+            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+            return Response({"error": str(e)}, status=400)
 
 @api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
 @permission_classes([IsAuthenticated])
@@ -696,63 +751,80 @@ def stripe_webhook(request):
         logger.error(f"Invalid payload in Stripe webhook: {str(e)}")
         return Response({"error": "Invalid payload"}, status=400)
     except stripe.error.SignatureVerificationError as e:
-        logger.error(f"Invalid signature in Stripe webhook: {str(e)}")
-        return Response({"error": "Invalid signature"}, status=400)
+        # In development, allow fallback parsing if signature header is missing and DEBUG is True
+        if getattr(settings, 'DEBUG', False) and not sig_header:
+            import json as _json
+            try:
+                event = stripe.Event.construct_from(_json.loads(payload), stripe.api_key)
+            except Exception as _e:
+                logger.error(f"Unable to parse webhook payload in DEBUG fallback: {_e}")
+                return Response({"error": "Invalid signature"}, status=400)
+        else:
+            logger.error(f"Invalid signature in Stripe webhook: {str(e)}")
+            return Response({"error": "Invalid signature"}, status=400)
     
     try:
         if event.type == 'checkout.session.completed':
             session = event.data.object
             
-            # Handle chef meal payments
+            # Handle chef meal payments via parent Order
             if session.metadata.get('order_type') == 'chef_meal':
-                order_id = session.metadata.get('order_id')
-                logger.info(f"Processing payment confirmation for chef meal order {order_id}")
+                from meals.models import Order
+                parent_order_id = session.metadata.get('order_id')
+                logger.info(f"Processing payment confirmation for Order {parent_order_id}")
                 try:
-                    order = ChefMealOrder.objects.get(id=order_id)
-                    
-                    # Use mark_as_paid to properly update order counts and pricing
-                    order.mark_as_paid()
-                    
-                    # Update Stripe payment details
-                    order.payment_intent_id = session.payment_intent
-                    order.save(update_fields=['payment_intent_id'])
-                    
-                    # Update corresponding Order if it exists
-                    if order.order:
-                        order.order.is_paid = True
-                        order.order.status = 'Confirmed'
-                        order.order.save()
-                    
-                    # Get amount from either session or order
-                    amount = float(session.amount_total) / 100  # Convert from cents to dollars
-                    if not amount and order.price_paid:
-                        amount = float(order.price_paid) * order.quantity
-                    
-                    # Create payment log
-                    PaymentLog.objects.create(
-                        chef_meal_order=order,
-                        user=order.customer,
-                        chef=order.meal_event.chef,
-                        action='charge',
-                        amount=amount,
-                        stripe_id=session.payment_intent,
-                        status='succeeded',
-                        details={
-                            'session_id': session.id,
-                            'payment_intent_id': session.payment_intent,
-                            'checkout_completed_at': timezone.now().isoformat()
-                        }
-                    )
-                    
-                    # Send email notification
-                    send_payment_confirmation_email.delay(order_id)
-                    
-                    logger.info(f"Successfully processed payment for chef meal order {order_id}")
-                except ChefMealOrder.DoesNotExist:
-                    logger.error(f"Could not find chef meal order {order_id} for completed Stripe session")
-                    # n8n traceback
+                    # Use transaction to make the order/payment update atomic
+                    with transaction.atomic():
+                        order = Order.objects.select_for_update().select_related('customer').get(id=parent_order_id)
+
+                        # Idempotency: acknowledge if already paid
+                        if getattr(order, 'is_paid', False):
+                            return Response({"received": True})
+
+                        # Mark order paid and move to an active status
+                        order.is_paid = True
+                        order.status = 'In Progress'
+                        order.save(update_fields=['is_paid', 'status'])
+
+                        # Confirm associated chef items (locked for update)
+                        chef_items = (
+                            ChefMealOrder.objects.select_for_update()
+                            .filter(order=order, status__in=['placed'])
+                            .select_related('meal_event')
+                        )
+                        for item in chef_items:
+                            item.payment_intent_id = session.payment_intent
+                            try:
+                                item.mark_as_paid()
+                            except Exception:
+                                item.status = 'confirmed'
+                                item.save(update_fields=['status', 'stripe_payment_intent_id'])
+
+                        # Order-level payment log (best-effort inside tx)
+                        try:
+                            total_amount = float(getattr(session, 'amount_total', 0) or 0) / 100.0
+                            PaymentLog.objects.create(
+                                order=order,
+                                user=order.customer,
+                                action='charge',
+                                amount=total_amount,
+                                stripe_id=session.payment_intent,
+                                status='succeeded',
+                                details={
+                                    'session_id': session.id,
+                                    'payment_intent_id': session.payment_intent,
+                                    'checkout_completed_at': timezone.now().isoformat()
+                                }
+                            )
+                        except Exception as _log_e:
+                            logger.warning(f"Failed to log payment for Order {order.id}: {_log_e}")
+
+                    logger.info(f"Successfully processed payment for Order {parent_order_id}")
+                    return Response({"received": True})
+                except Order.DoesNotExist:
+                    logger.error(f"Could not find Order {parent_order_id} for completed Stripe session")
                     n8n_traceback = {
-                        'error': f"Could not find chef meal order {order_id} for completed Stripe session",
+                        'error': f"Could not find Order {parent_order_id} for completed Stripe session",
                         'source': 'stripe_webhook',
                         'traceback': traceback.format_exc()
                     }
@@ -760,7 +832,6 @@ def stripe_webhook(request):
                     return Response({"error": "Order not found"}, status=404)
                 except Exception as e:
                     logger.error(f"Error processing chef meal payment: {str(e)}", exc_info=True)
-                    # n8n traceback
                     n8n_traceback = {
                         'error': str(e),
                         'source': 'stripe_webhook',
@@ -877,7 +948,7 @@ def stripe_webhook(request):
         return Response({"error": str(e)}, status=400)
 
 @api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def api_chef_meal_events(request):
     """
     GET: Get a list of chef meal events with optional filtering.
@@ -907,22 +978,39 @@ def api_chef_meal_events(request):
     """
     if request.method == 'GET':
         try:
-            user = request.user
             queryset = ChefMealEvent.objects.all()
-            
-            # Filter by chef if we're looking at chef's own events
-            chef = Chef.objects.get(user=user)
-            queryset = queryset.filter(chef=chef)
+            user = request.user
+            my_events = request.query_params.get('my_events') == 'true'
+            upcoming = request.query_params.get('upcoming') == 'true'
+            chef_id = request.query_params.get('chef_id')
+            chef_username = request.query_params.get('chef_username')
+
+            # Ownership filter (requires auth)
+            if my_events and user.is_authenticated:
+                try:
+                    chef = Chef.objects.get(user=user)
+                    queryset = queryset.filter(chef=chef)
+                except Chef.DoesNotExist:
+                    queryset = ChefMealEvent.objects.none()
+            # Public filters by chef
+            elif chef_id:
+                queryset = queryset.filter(chef_id=chef_id)
+            elif chef_username:
+                queryset = queryset.filter(chef__user__username__iexact=chef_username)
 
 
             # Filter by postal code if provided
             postal_code = request.query_params.get('postal_code')
             if postal_code:
-                # Find all chefs that serve this postal code
-                chef_ids = ChefPostalCode.objects.filter(
-                    postal_code=postal_code
-                ).values_list('chef_id', flat=True)
-                queryset = queryset.filter(chef_id__in=chef_ids)
+                # Optional: filter events by chefs serving this postal code
+                from local_chefs.models import PostalCode
+                normalized = PostalCode.normalize_code(postal_code)
+                queryset = queryset.filter(chef__serving_postalcodes__code=normalized)
+
+            if upcoming:
+                # Consider events with future cutoff or future event datetime
+                now = timezone.now()
+                queryset = queryset.filter(order_cutoff_time__gte=now)
             
             # Order by date and time
             queryset = queryset.order_by('event_date', 'event_time')
@@ -1049,16 +1137,16 @@ def api_chef_meal_events(request):
             # Get the chef's timezone
             chef_timezone = chef.user.timezone if hasattr(chef.user, 'timezone') else 'UTC'
             try:
-                chef_tz = pytz.timezone(chef_timezone)
-            except pytz.exceptions.UnknownTimeZoneError:
-                chef_tz = pytz.UTC
-                
+                chef_zinfo = ZoneInfo(chef_timezone)
+            except Exception:
+                chef_zinfo = ZoneInfo("UTC")
+            
             # Get current time in chef's timezone
-            now = timezone.now().astimezone(chef_tz)
+            now = timezone.now().astimezone(chef_zinfo)
             
             # Create event datetime in chef's timezone
-            event_datetime = datetime.combine(event_date, event_time)
-            event_datetime = chef_tz.localize(event_datetime)
+            event_datetime_naive = datetime.combine(event_date, event_time)
+            event_datetime = timezone.make_aware(event_datetime_naive, chef_zinfo)
             
             # Compare with current time in chef's timezone
             if event_datetime <= now:
@@ -1073,7 +1161,7 @@ def api_chef_meal_events(request):
             
             # If cutoff time is naive, assume it's in chef's timezone
             if not timezone.is_aware(order_cutoff_time):
-                order_cutoff_time = chef_tz.localize(order_cutoff_time)
+                order_cutoff_time = timezone.make_aware(order_cutoff_time, chef_zinfo)
             
             # Compare with event time in chef's timezone
             if order_cutoff_time >= event_datetime:
@@ -1092,7 +1180,7 @@ def api_chef_meal_events(request):
                 )
                 
             # Convert order_cutoff_time to UTC for storage
-            order_cutoff_time = order_cutoff_time.astimezone(timezone.utc)
+            order_cutoff_time = order_cutoff_time.astimezone(py_tz.utc)
             
         except ValueError:
             # n8n traceback
@@ -2098,6 +2186,7 @@ def api_create_chef_ingredient(request):
     # Check for existing ingredient with same name for this chef
     ingredient_name = data.get('name').strip()
     if Ingredient.objects.filter(chef=chef, name__iexact=ingredient_name).exists():
+
         return standardize_response(
             status="error",
             message=f"You already have an ingredient named '{ingredient_name}'.",
@@ -2117,6 +2206,7 @@ def api_create_chef_ingredient(request):
         
         # Save the ingredient
         ingredient.save()
+        print(f"Created ingredient: {ingredient.id} - {ingredient.name}")
         logger.info(f"Created ingredient: {ingredient.id} - {ingredient.name}")
         
         serializer = IngredientSerializer(ingredient)
@@ -2825,19 +2915,19 @@ def api_update_chef_meal_event(request, event_id):
                     # Get the chef's timezone
                     chef_timezone = event.chef.user.timezone if hasattr(event.chef.user, 'timezone') else 'UTC'
                     try:
-                        chef_tz = pytz.timezone(chef_timezone)
-                    except pytz.exceptions.UnknownTimeZoneError:
-                        chef_tz = pytz.UTC
+                        chef_zinfo = ZoneInfo(chef_timezone)
+                    except Exception:
+                        chef_zinfo = ZoneInfo("UTC")
                     
                     # Parse the cutoff time
                     order_cutoff_time = dateutil.parser.parse(data['order_cutoff_time'])
                     
                     # If cutoff time is naive, assume it's in chef's timezone
                     if not timezone.is_aware(order_cutoff_time):
-                        order_cutoff_time = chef_tz.localize(order_cutoff_time)
+                        order_cutoff_time = timezone.make_aware(order_cutoff_time, chef_zinfo)
                     
                     # Get current time in chef's timezone    
-                    now = timezone.now().astimezone(chef_tz)
+                    now = timezone.now().astimezone(chef_zinfo)
                     
                     # Ensure the new cutoff time is still in the future
                     if order_cutoff_time <= now:
@@ -2848,7 +2938,7 @@ def api_update_chef_meal_event(request, event_id):
                         )
                     
                     # Convert to UTC for storage
-                    event.order_cutoff_time = order_cutoff_time.astimezone(timezone.utc)
+                    event.order_cutoff_time = order_cutoff_time.astimezone(py_tz.utc)
                 except ValueError:
                     return standardize_response(
                         status="error",
@@ -2864,16 +2954,16 @@ def api_update_chef_meal_event(request, event_id):
             # Get chef's timezone for validation
             chef_timezone = event.chef.user.timezone if hasattr(event.chef.user, 'timezone') else 'UTC'
             try:
-                chef_tz = pytz.timezone(chef_timezone)
-            except pytz.exceptions.UnknownTimeZoneError:
-                chef_tz = pytz.UTC
+                chef_zinfo = ZoneInfo(chef_timezone)
+            except Exception:
+                chef_zinfo = ZoneInfo("UTC")
             
             # Create event datetime in chef's timezone
-            event_datetime = datetime.combine(current_event_date, current_event_time)
-            event_datetime = chef_tz.localize(event_datetime)
+            event_datetime_naive = datetime.combine(current_event_date, current_event_time)
+            event_datetime = timezone.make_aware(event_datetime_naive, chef_zinfo)
             
             # Compare with cutoff time in chef's timezone
-            cutoff_time = event.order_cutoff_time.astimezone(chef_tz)
+            cutoff_time = event.order_cutoff_time.astimezone(chef_zinfo)
             
             if cutoff_time >= event_datetime:
                 return standardize_response(
@@ -3110,7 +3200,7 @@ def api_get_chef_meals_by_postal_code(request):
         
         # Get all eligible chef meals
         from .models import Meal
-        meals = Meal.objects.filter(query).distinct()
+        meals = Meal.objects.filter(query).distinct().order_by('id')
         
         # Setup pagination
         page_number = request.query_params.get('page', 1)
@@ -3158,7 +3248,8 @@ def api_get_chef_meals_by_postal_code(request):
                     'event_time': str(event.event_time),
                     'orders_count': event.orders_count,
                     'max_orders': event.max_orders,
-                    'price': float(event.current_price)
+                    'price': float(event.current_price),
+                    'meal_type': meal_data.get('meal_type')
                 }
                 for event in meal_events
             }
@@ -3191,14 +3282,19 @@ def api_get_chef_meals_by_postal_code(request):
         })
         
     except Exception as e:
-        import traceback
-        logger.error(f"Error retrieving chef meals: {str(e)}", exc_info=True)
+        # N8N webhook
+        if settings.DEBUG:
+            logger.error(f"Error retrieving chef meals: {str(e)}", exc_info=True)
+        else:
+            logger.error(f"Error retrieving chef meals: {str(e)}", exc_info=True)
+            n8n_webhook_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_webhook_url, json={"error": str(e), "source":"api_get_chef_meals_by_postal_code", "traceback": traceback.format_exc()})
         return Response({
             'status': 'error',
             'message': f"Error retrieving chef meals: {str(e)}",
-            'code': 'server_error',
-            'details': traceback.format_exc() if settings.DEBUG else None
+            'code': 'server_error'
         }, status=500)
+
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -3328,7 +3424,6 @@ def api_chef_dashboard_stats(request):
         avg=Avg('rating')
     )['avg'] or 0
     
-    print(f'All Chef Dashboard Stats/Events: {upcoming_events_count}, {active_orders_count}, {past_events_count}, {revenue_this_month}, {refunds_this_month}, {net_revenue}, {total_savings}, {pending_adjustments_count}, {review_count}, {avg_rating}')
     return Response({
         'upcoming_events_count': upcoming_events_count,
         'active_orders_count': active_orders_count,
@@ -3368,7 +3463,6 @@ def sync_recent_payments(chef):
                     stripe_account=stripe_account.stripe_account_id
                 )
                 
-                print(f"Found {len(payment_list.data)} payments to sync in current batch")
                 
                 # Process each payment
                 for payment in payment_list.data:
@@ -3379,7 +3473,6 @@ def sync_recent_payments(chef):
                             try:
                                 # For direct chef meal orders
                                 order = ChefMealOrder.objects.get(payment_intent_id=payment.id)
-                                print(f"Found order {order.id} for payment {payment.id}")
                                 # Log the payment
                                 PaymentLog.objects.create(
                                     chef_meal_order=order,
@@ -3422,13 +3515,22 @@ def sync_recent_payments(chef):
                 logger.error(f"Stripe API error: {str(e)}", exc_info=True)
                 break
                 
-        print(f"Successfully synced {total_synced} payments total")
+        logger.info(f"Successfully synced {total_synced} payments total")
                     
     except StripeConnectAccount.DoesNotExist:
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": f"No Stripe account found for chef {chef.id}", "source":"sync_recent_payments", "traceback": traceback.format_exc()})
         logger.warning(f"No Stripe account found for chef {chef.id}")
     except stripe.error.StripeError as e:
         logger.error(f"Stripe error: {str(e)}", exc_info=True)
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": f"Stripe error: {str(e)}", "source":"sync_recent_payments", "traceback": traceback.format_exc()})
     except Exception as e:
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": f"Error syncing payments: {str(e)}", "source":"sync_recent_payments", "traceback": traceback.format_exc()})
         logger.error(f"Error syncing payments: {str(e)}", exc_info=True)
 
 @api_view(['GET'])
@@ -3514,7 +3616,9 @@ def payment_success(request):
                     else:
                         logger.info(f"Chef meal order {chef_order.id} was already confirmed, skipping processing")
             except ChefMealOrder.DoesNotExist:
-                logger.error(f"Chef meal order {order_id} not found or doesn't belong to user {request.user.id}")
+                # n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                requests.post(n8n_traceback_url, json={"error": f"Order {order_id} not found or doesn't belong to user {request.user.id}", "source":"payment_success", "traceback": traceback.format_exc()})
                 return Response(
                     {"success": False, "message": "Order not found"}, 
                     status=404
@@ -3608,12 +3712,18 @@ def payment_success(request):
         
     except stripe.error.StripeError as e:
         logger.error(f"Stripe error in payment success redirect: {str(e)}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": f"Stripe error in payment success redirect: {str(e)}", "source":"payment_success", "traceback": traceback.format_exc()})
         return Response(
             {"success": False, "message": f"Payment processing error: {str(e)}"}, 
             status=400
         )
     except Exception as e:
         logger.error(f"Unexpected error in payment success redirect: {str(e)}", exc_info=True)
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": f"Unexpected error in payment success redirect: {str(e)}", "source":"payment_success", "traceback": traceback.format_exc()})
         return Response(
             {"success": False, "message": "An unexpected error occurred"}, 
             status=500
@@ -3738,8 +3848,9 @@ def api_debug_order_info(request, order_id):
             return Response({"order_exists": False, "order_id": order_id})
     except Exception as e:
         logger.error(f"Error in debug endpoint: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": f"Error in debug endpoint: {str(e)}", "source":"api_debug_order_info", "traceback": traceback.format_exc()})
         return Response({"error": str(e)}, status=500)
 
 @api_view(['POST'])
@@ -3812,14 +3923,18 @@ def api_create_chef_meal_order(request, event_id):
             )
         except Exception as e:
             # Log the error and return a generic message
-            logger.error(f"Error creating chef meal order: {str(e)}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": f"Error creating chef meal order: {str(e)}", "source":"api_create_chef_meal_order", "traceback": traceback.format_exc()})
             return Response(
                 {"error": "Failed to create order"},
                 status=500
             )
     
     except Exception as e:
-        logger.error(f"Unexpected error in api_create_chef_meal_order: {str(e)}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": f"Unexpected error in api_create_chef_meal_order: {str(e)}", "source":"api_create_chef_meal_order", "traceback": traceback.format_exc()})
         return Response(
             {"error": "An unexpected error occurred"},
             status=500
@@ -3897,15 +4012,18 @@ def api_adjust_chef_meal_quantity(request, order_id):
                 status=400
             )
         except Exception as e:
-            # Log the error and return a generic message
-            logger.error(f"Error adjusting chef meal order quantity: {str(e)}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": f"Error adjusting chef meal order quantity: {str(e)}", "source":"api_adjust_chef_meal_quantity", "traceback": traceback.format_exc()})
             return Response(
                 {"error": "Failed to adjust order quantity"},
                 status=500
             )
     
     except Exception as e:
-        logger.error(f"Unexpected error in api_adjust_chef_meal_quantity: {str(e)}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": f"Unexpected error in api_adjust_chef_meal_quantity: {str(e)}", "source":"api_adjust_chef_meal_quantity", "traceback": traceback.format_exc()})
         return Response(
             {"error": "An unexpected error occurred"},
             status=500
@@ -3964,15 +4082,18 @@ def api_cancel_chef_meal_order(request, order_id):
             )
             
         except Exception as e:
-            # Log the error and return a generic message
-            logger.error(f"Error cancelling chef meal order: {str(e)}")
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": f"Error cancelling chef meal order: {str(e)}", "source":"api_cancel_chef_meal_order", "traceback": traceback.format_exc()})
             return Response(
                 {"error": "Failed to cancel order"},
                 status=500
             )
     
     except Exception as e:
-        logger.error(f"Unexpected error in api_cancel_chef_meal_order: {str(e)}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": f"Unexpected error in api_cancel_chef_meal_order: {str(e)}", "source":"api_cancel_chef_meal_order", "traceback": traceback.format_exc()})
         return Response(
             {"error": "An unexpected error occurred"},
             status=500

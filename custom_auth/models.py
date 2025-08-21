@@ -1,6 +1,8 @@
 # custom_auth/models.py
 
 from django.db import models
+from django.utils import timezone
+from datetime import timezone as py_tz
 from django.apps import apps
 from django.contrib.auth.models import AbstractUser
 from django.contrib.auth import get_user_model
@@ -130,6 +132,25 @@ class CustomUser(AbstractUser):
 
     def save(self, *args, **kwargs):
         self.username = self.username.lower()
+        # Ensure timezone-aware datetimes for fields when USE_TZ is enabled
+        try:
+            if getattr(self, 'date_joined', None) and timezone.is_naive(self.date_joined):
+                try:
+                    self.date_joined = timezone.make_aware(self.date_joined, timezone.get_current_timezone())
+                except Exception:
+                    self.date_joined = self.date_joined.replace(tzinfo=py_tz.utc)
+            if getattr(self, 'last_login', None) and timezone.is_naive(self.last_login):
+                try:
+                    self.last_login = timezone.make_aware(self.last_login, timezone.get_current_timezone())
+                except Exception:
+                    self.last_login = self.last_login.replace(tzinfo=py_tz.utc)
+            if getattr(self, 'token_created_at', None) and timezone.is_naive(self.token_created_at):
+                try:
+                    self.token_created_at = timezone.make_aware(self.token_created_at, timezone.get_current_timezone())
+                except Exception:
+                    self.token_created_at = self.token_created_at.replace(tzinfo=py_tz.utc)
+        except Exception:
+            pass
         if not self.pk and not self.email_token:  # If creating a new user and token isn't set
             self.email_token = uuid.uuid4()
         super().save(*args, **kwargs)
@@ -232,7 +253,8 @@ class Address(models.Model):
 
     def save(self, *args, **kwargs):
         # Check if this is an update and if postal code has changed
-        if self.pk:  # Check if the instance already exists
+        should_run_full_clean = True
+        if self.pk:  # Existing instance
             try:
                 original = Address.objects.get(pk=self.pk)
                 # Normalize the current input postal code for accurate comparison
@@ -240,10 +262,23 @@ class Address(models.Model):
                 if original.input_postalcode != current_normalized_postalcode:
                     self.latitude = None
                     self.longitude = None
+
+                # Only run full_clean if either country or input_postalcode changed
+                original_country = original.country
+                original_postal = original.input_postalcode
+                new_country = self.country
+                new_postal = current_normalized_postalcode
+                should_run_full_clean = (original_country != new_country) or (original_postal != new_postal)
             except Address.DoesNotExist:
-                pass # Instance is new, skip comparison
-            
-        self.full_clean()  # This ensures that the model is validated before saving
+                # If somehow not found, treat as new and validate
+                should_run_full_clean = True
+        else:
+            # New instance – validate
+            should_run_full_clean = True
+
+        if should_run_full_clean:
+            self.full_clean()  # Validate only when relevant fields changed or on create
+
         super().save(*args, **kwargs)
 
 

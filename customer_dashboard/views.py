@@ -17,11 +17,13 @@ from .forms import GoalForm
 import openai
 from openai import NotFoundError, OpenAI, OpenAIError
 import pytz
+from zoneinfo import ZoneInfo
 import json
 import os
 import re
 import time
-
+import requests
+import traceback
 from shared.utils import (get_user_info, post_review, update_review, delete_review, replace_meal_in_plan, 
                           remove_meal_from_plan, list_upcoming_meals, get_date, create_meal_plan, 
                           add_meal_to_plan, auth_get_meal_plan, auth_search_chefs, auth_search_dishes, 
@@ -287,7 +289,7 @@ def api_user_summary_status(request):
     
     # Get the current date in the user's timezone
     user = request.user
-    user_timezone = pytz.timezone(user.timezone if user.timezone else 'UTC')
+    user_timezone = ZoneInfo(user.timezone if getattr(user, 'timezone', None) else 'UTC')
     today = timezone.now().astimezone(user_timezone).date()
     
     # If no summary exists or the most recent one is from before today, create a new one for today
@@ -333,7 +335,7 @@ def api_user_summary(request):
     
     # Get the current date in the user's timezone
     user = request.user
-    user_timezone = pytz.timezone(user.timezone if user.timezone else 'UTC')
+    user_timezone = ZoneInfo(user.timezone if getattr(user, 'timezone', None) else 'UTC')
     today = timezone.now().astimezone(user_timezone).date()
     
     # If no summary exists or the most recent one is from before today, create a new one for today
@@ -400,7 +402,6 @@ def api_update_calorie_intake(request):
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_get_calories(request):
     try:
-        print("Getting calories")
         user = CustomUser.objects.get(id=request.user.id)
         date_recorded = request.data.get('date')
         # Using request.user.id to get the authenticated user's ID
@@ -426,8 +427,9 @@ def api_add_calorie_intake(request):
             return Response(serializer.data, status=201)
         return Response(serializer.errors, status=400)
     except Exception as e:
-        print(f"Exception in api_add_calorie_intake: {e}")
-        print(traceback.format_exc())
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": f"Exception in api_add_calorie_intake: {str(e)}", "source":"api_add_calorie_intake", "traceback": traceback.format_exc()})
         return Response({"error": str(e)}, status=400)
 
 @api_view(['DELETE'])
@@ -440,8 +442,9 @@ def api_delete_calorie_intake(request, record_id):
     except CalorieIntake.DoesNotExist:
         return Response({"error": "Record not found."}, status=404)
     except Exception as e:
-        print(f"Exception in api_delete_calorie_intake: {e}")
-        print(traceback.format_exc())
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": f"Exception in api_delete_calorie_intake: {str(e)}", "source":"api_delete_calorie_intake", "traceback": traceback.format_exc()})
         return Response({"error": str(e)}, status=400)
 
 
@@ -553,7 +556,7 @@ def api_thread_detail_view(request, openai_thread_id):
     we simply look up that row and return the saved history.
     """
     try:
-        print(f"DEBUG THREAD LOOKUP - Looking up thread with ID: {openai_thread_id}")
+        logger.info(f"DEBUG THREAD LOOKUP - Looking up thread with ID: {openai_thread_id}")
         
         # Try looking up by latest_response_id first (most reliable)
         thread = ChatThread.objects.filter(
@@ -562,7 +565,7 @@ def api_thread_detail_view(request, openai_thread_id):
         ).first()
         
         if thread:
-            print(f"DEBUG THREAD LOOKUP - Found by latest_response_id: {thread.id}")
+            logger.info(f"DEBUG THREAD LOOKUP - Found by latest_response_id: {thread.id}")
         else:
             # Try direct match on openai_thread_id field (exact string match)
             thread = ChatThread.objects.filter(
@@ -571,27 +574,25 @@ def api_thread_detail_view(request, openai_thread_id):
             ).first()
             
             if thread:
-                print(f"DEBUG THREAD LOOKUP - Found by direct match on openai_thread_id: {thread.id}")
+                logger.info(f"DEBUG THREAD LOOKUP - Found by direct match on openai_thread_id: {thread.id}")
         
         # If still not found, do the more expensive list search operation
         if not thread:
-            print(f"DEBUG THREAD LOOKUP - Direct matches failed, trying list search")
             # Get all user threads and search manually
             user_threads = ChatThread.objects.filter(user=request.user)
-            print(f"DEBUG THREAD LOOKUP - User has {user_threads.count()} threads total")
             
             for t in user_threads:
-                print(f"DEBUG THREAD LOOKUP - Checking thread {t.id} with openai_thread_id: {t.openai_thread_id} (type: {type(t.openai_thread_id)})")
+                logger.info(f"DEBUG THREAD LOOKUP - Checking thread {t.id} with openai_thread_id: {t.openai_thread_id} (type: {type(t.openai_thread_id)})")
                 
                 if isinstance(t.openai_thread_id, list) and openai_thread_id in t.openai_thread_id:
                     thread = t
-                    print(f"DEBUG THREAD LOOKUP - Found match in list for thread {t.id}")
+                    logger.info(f"DEBUG THREAD LOOKUP - Found match in list for thread {t.id}")
                     break
         
         # If this is the *first* turn of a brand‑new conversation, there may be
         # no DB row yet – go ahead and create one on the fly.
         if thread is None and openai_thread_id.startswith("resp_"):
-            print(f"DEBUG THREAD LOOKUP - Creating new thread for response ID: {openai_thread_id}")
+            logger.info(f"DEBUG THREAD LOOKUP - Creating new thread for response ID: {openai_thread_id}")
             # Deactivate other threads
             ChatThread.objects.filter(
                 user=request.user,
@@ -605,16 +606,14 @@ def api_thread_detail_view(request, openai_thread_id):
             logger.info(f"Created ChatThread for new response_id {openai_thread_id}")
 
         if thread is None:
-            print(f"DEBUG THREAD LOOKUP - No thread found for ID: {openai_thread_id}")
+            logger.info(f"DEBUG THREAD LOOKUP - No thread found for ID: {openai_thread_id}")
             return Response({'error': 'Thread not found.'}, status=404)
             
-        print(f"DEBUG THREAD LOOKUP - Final thread found: ID: {thread.id} with openai_thread_id: {thread.openai_thread_id}")
         
         chat_history = []
         if openai_thread_id.startswith('resp_'):
             # ── Primary path: use the saved JSON if it exists
             raw_history = thread.openai_input_history or []
-            print(f"Raw history length: {len(raw_history)}")
             
             if raw_history:
                 base_ts = int(thread.created_at.timestamp())
@@ -640,11 +639,12 @@ def api_thread_detail_view(request, openai_thread_id):
 
         thread.is_active = True
         thread.save()
-        print(f"Returning chat history with {len(chat_history)} messages")
         return Response({'chat_history': chat_history})
     except Exception as e:
         logger.error(f"Error retrieving thread detail: {str(e)}")
-        traceback.print_exc()
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": f"Error retrieving thread detail: {str(e)}", "source":"api_thread_detail_view", "traceback": traceback.format_exc()})
         return Response({'error': "Error retrieving message details"})
 
 def api_format_chat_history_from_response(response):
@@ -733,7 +733,7 @@ def is_customer(user):
 def history(request):
     chat_threads = ChatThread.objects.filter(user=request.user).order_by('-created_at')[:5]  # Limit to 5 recent chats
     data = serializers.serialize('json', chat_threads)
-    print(data)
+    logger.info(f"History page data: {data}")
     return JsonResponse({'chat_threads': data})
 
 @login_required
@@ -989,17 +989,68 @@ def stream_message(request):
     message = request.data.get('message')
     thread_id = request.data.get('thread_id')  # Check if we're getting thread_id
     response_id = request.data.get('response_id')  # Check if we're getting response_id
-    
-    print(f"DEBUG STREAM - stream_message: user_id={user_id}")
-    print(f"DEBUG STREAM - Request data: {request.data}")
-    print(f"DEBUG STREAM - Thread ID in request: {thread_id}")
-    print(f"DEBUG STREAM - Response ID in request: {response_id}")
-    
+    # Optional meal context from frontend
+    chef_username = request.data.get('chef_username')
+    topic = request.data.get('topic')
+    meal_id = request.data.get('meal_id')
+        
     # Use the correct ID - prefer thread_id if provided, fallback to response_id
     effective_thread_id = thread_id or response_id
     
-    print(f"DEBUG STREAM - Effective thread ID being used: {effective_thread_id}")
-    print(f"DEBUG STREAM - message={message[:100]!r}, thread_id={effective_thread_id}")
+    # Build an augmented message that includes optional meal context
+    augmented_message = message or ""
+    meal_context_lines = []
+    meal_obj = None
+    if meal_id:
+        try:
+            # Try integer IDs first
+            meal_obj = Meal.objects.select_related('chef__user').filter(id=int(meal_id)).first()
+        except (ValueError, TypeError):
+            # Fall back gracefully if meal_id isn't an int
+            meal_obj = Meal.objects.select_related('chef__user').filter(id=meal_id).first()
+
+    try:
+        if meal_obj:
+            derived_chef_username = None
+            try:
+                derived_chef_username = getattr(getattr(meal_obj.chef, 'user', None), 'username', None)
+            except Exception:
+                derived_chef_username = None
+
+            # Prefer explicit chef_username if provided; otherwise derive from meal
+            final_chef_username = chef_username or derived_chef_username
+
+            meal_context_lines.append("You are answering a question about a specific meal from our catalog.")
+            if final_chef_username:
+                meal_context_lines.append(f"Chef username: {final_chef_username}")
+            meal_context_lines.append(f"Meal name: {meal_obj.name}")
+            if meal_obj.price is not None:
+                meal_context_lines.append(f"Price: ${meal_obj.price}")
+            if topic:
+                meal_context_lines.append(f"Topic: {topic}")
+            if meal_obj.description:
+                # Limit very long descriptions in the context
+                desc = str(meal_obj.description)
+                if len(desc) > 600:
+                    desc = desc[:600] + "…"
+                meal_context_lines.append(f"Description: {desc}")
+        else:
+            # If no meal object but we have some context, include a light preface
+            light_ctx = []
+            if chef_username:
+                light_ctx.append(f"Chef username: {chef_username}")
+            if topic:
+                light_ctx.append(f"Topic: {topic}")
+            if light_ctx:
+                meal_context_lines.append("You are answering a question about a specific meal.")
+                meal_context_lines.extend(light_ctx)
+    except Exception as e:
+        logger.warning(f"DEBUG STREAM - Error building meal context: {e}")
+
+    if meal_context_lines:
+        preface = "\n".join(meal_context_lines)
+        augmented_message = f"[MEAL_CONTEXT]\n{preface}\n[/MEAL_CONTEXT]\n\nQuestion: {message or ''}"
+
     
     # Check if this thread exists before we start
     try:
@@ -1007,21 +1058,26 @@ def stream_message(request):
         for t in threads:
             if (isinstance(t.openai_thread_id, list) and effective_thread_id in t.openai_thread_id) or \
                (t.latest_response_id == effective_thread_id):
-                print(f"DEBUG STREAM - Found existing thread {t.id} matching ID {effective_thread_id}")
+                logger.info(f"DEBUG STREAM - Found existing thread {t.id} matching ID {effective_thread_id}")
     except Exception as e:
-        print(f"DEBUG STREAM - Error checking threads: {str(e)}")
+        # n8n traceback
+        n8n_traceback = {
+            'error': str(e),
+            'source': 'stream_message',
+            'traceback': traceback.format_exc()
+        }
+        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        logger.error(f"DEBUG STREAM - Error checking threads: {str(e)}")
     
     assistant = MealPlanningAssistant(user_id)
     def event_stream():
         emitted_id = False
         chunk_count = 0
         try:
-            for chunk in assistant.stream_message(message, effective_thread_id):
+            for chunk in assistant.stream_message(augmented_message, effective_thread_id):
                 chunk_count += 1
                 chunk_type = chunk.get("type", "unknown")
                 
-                if chunk_count == 1:
-                    print(f"DEBUG STREAM - First chunk type: {chunk_type}")
                 
                 # Skip if chunk is not a dictionary
                 if not isinstance(chunk, dict):
@@ -1030,7 +1086,7 @@ def stream_message(request):
                 # initial response.created event
                 if not emitted_id and chunk.get("type") == "response_id":
                     response_id = chunk.get("id")
-                    print(f"DEBUG STREAM - Got new response_id: {response_id}")
+                    logger.info(f"DEBUG STREAM - Got new response_id: {response_id}")
                     event_payload = {"type": "response.created", "id": response_id}
                     yield f"data: {json.dumps(event_payload)}\n\n"
                     emitted_id = True
@@ -1062,7 +1118,7 @@ def stream_message(request):
 
                 # 5) conversation completed
                 if chunk.get("type") == "response.completed":
-                    print(f"DEBUG STREAM - Stream completed")
+                    logger.info(f"DEBUG STREAM - Stream completed")
                     payload = {"type": "response.completed"}
                     yield f"data: {json.dumps(payload)}\n\n"
                     continue
@@ -1106,20 +1162,20 @@ def guest_stream_message(request):
             # Save to session for consistency across requests
             request.session['guest_id'] = guest_id
             request.session.save()
-            print(f"GUEST_STREAM: Using guest_id {guest_id} from request data")
+            logger.info(f"GUEST_STREAM: Using guest_id {guest_id} from request data")
     
     # If not in request data, try session
     if not guest_id:
         guest_id = request.session.get('guest_id')
         if guest_id:
-            print(f"GUEST_STREAM: Using guest_id {guest_id} from session")
+            logger.info(f"GUEST_STREAM: Using guest_id {guest_id} from session")
     
     # Generate only as last resort
     if not guest_id:
         guest_id = generate_guest_id()
         request.session['guest_id'] = guest_id
         request.session.save()
-        print(f"GUEST_STREAM: Generated new guest_id {guest_id}")
+        logger.info(f"GUEST_STREAM: Generated new guest_id {guest_id}")
     
     message = request.data.get('message')
     thread_id = request.data.get('response_id')
@@ -1227,7 +1283,7 @@ def chat_with_gpt(request):
 @api_view(['POST'])
 def guest_chat_with_gpt(request):
     """API endpoint for guest users to chat with the assistant"""
-    print(f"Request: {request}")
+    logger.info(f"Request: {request}")
     try:
         data = request.data
         message = data.get('message')
@@ -1253,15 +1309,15 @@ def guest_chat_with_gpt(request):
             # Store in session for future consistency
             request.session['guest_id'] = guest_id
             request.session.save()
-            print(f"GUEST_CHAT: Using guest_id {guest_id} from request")
+            logger.info(f"GUEST_CHAT: Using guest_id {guest_id} from request")
         elif session_guest_id:
             guest_id = session_guest_id
-            print(f"GUEST_CHAT: Using guest_id {guest_id} from session")
+            logger.info(f"GUEST_CHAT: Using guest_id {guest_id} from session")
         else:
             guest_id = generate_guest_id()
             request.session['guest_id'] = guest_id
             request.session.save()
-            print(f"GUEST_CHAT: Generated new guest_id {guest_id}")
+            logger.info(f"GUEST_CHAT: Generated new guest_id {guest_id}")
         
         # Send message to assistant with thread_id parameter
         assistant = MealPlanningAssistant(guest_id)

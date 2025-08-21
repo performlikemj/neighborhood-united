@@ -114,10 +114,7 @@ class MealType(str, Enum):
 class PantryUsageItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
     pantry_item_name: str = Field(..., description="Exact name of the pantry item used.")
-    quantity_used: Optional[str] = Field(
-        ..., 
-        description="Amount of this pantry item used, e.g. '2', '1.5', '0.5', 'To taste', etc."
-    )
+    quantity_used: float = Field(..., description="Amount used as a number only (e.g., 2, 1.5, 0.5). No text.")
     unit: Optional[str] = Field(
         ...,
         description="Unit of measure for the used quantity, e.g. 'cup', 'teaspoon', 'each', etc."
@@ -151,7 +148,7 @@ class ShoppingListItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
     meal_name: str
     ingredient: str
-    quantity: str
+    quantity: float
     unit: str
     notes: Optional[str] = Field(..., description="Any special notes about the item.")
     category: str = Field(..., description="Category of the item.")
@@ -585,7 +582,7 @@ class PantryTagsSchema(BaseModel):
 class UsageItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
     item_name: str = Field(..., description="Exact name of the pantry item to use.")
-    quantity_used: float = Field(..., description="How many units the recipe calls for.")
+    quantity_used: float = Field(..., description="How many units the recipe calls for. Should only be a number, no text.")
     unit: str = Field(..., description="Unit of measure, e.g. 'cups', 'pieces', 'grams'")
 
 class UsageList(BaseModel):
@@ -619,7 +616,7 @@ class UsageList(BaseModel):
 class Ingredient(BaseModel):
     model_config = ConfigDict(extra="forbid")
     item_name: str = Field(..., description="Exact name of the pantry item to use.")
-    quantity_used: float = Field(..., description="How many units the recipe calls for.")
+    quantity_used: float = Field(..., description="How many units the recipe calls for. Should only be a number, no text.")
     unit: str = Field(..., description="Unit of measure, e.g. 'cups', 'pieces', 'grams'")
     notes: Optional[str] = Field(..., description="Any special notes about the ingredient.")
 

@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 @receiver(user_logged_in)
 def handle_user_login(sender, user, request, **kwargs):
     """Update streak and award points when a user logs in."""
+    from django.conf import settings
+    if not getattr(settings, 'GAMIFICATION_ENABLED', False):
+        return
     try:
         update_streak(user)
     except Exception as e:
@@ -31,6 +34,9 @@ def handle_user_login(sender, user, request, **kwargs):
 @receiver(post_save, sender=MealPlanMeal)
 def handle_meal_added(sender, instance, created, **kwargs):
     """Award points when a user adds a meal to their meal plan."""
+    from django.conf import settings
+    if not getattr(settings, 'GAMIFICATION_ENABLED', False):
+        return
     if created:  # Only trigger on new meal plans, not updates
         try:
             # Get the user from the meal plan
@@ -49,6 +55,9 @@ def handle_meal_added(sender, instance, created, **kwargs):
 @receiver(post_save, sender=MealPlan)
 def handle_meal_plan_created(sender, instance, created, **kwargs):
     """Setup weekly goal when a meal plan is created."""
+    from django.conf import settings
+    if not getattr(settings, 'GAMIFICATION_ENABLED', False):
+        return
     if created:
         try:
             user = instance.user

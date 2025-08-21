@@ -321,74 +321,64 @@ def view_chef_meal_events(
     """
     View upcoming meal events offered by a specific chef.
     """
-    print(f"\n\n==== DEBUGGING VIEW_CHEF_MEAL_EVENTS ====")
-    print(f"Input parameters: chef_id={chef_id}, meal_type={meal_type}, dietary_preference={dietary_preference}")
     
     try:
         # Get the chef
         chef = get_object_or_404(Chef, id=chef_id)
-        print(f"Found chef: {chef.id} - {chef.user.username}")
         
         # First, get ALL events for this chef without any filtering
         all_chef_events = ChefMealEvent.objects.filter(chef=chef)
-        print(f"Total events for this chef (no filtering): {all_chef_events.count()}")
         
         if all_chef_events.count() == 0:
-            print(f"⚠️ No events found for this chef at all. Check if chef has created any events.")
+            logger.error(f"⚠️ No events found for this chef at all. Check if chef has created any events.")
         else:
             # Print details of all events
-            print("ALL EVENTS FOR THIS CHEF:")
+            logger.info("ALL EVENTS FOR THIS CHEF:")
             for i, event in enumerate(all_chef_events):
-                print(f"  Event {i+1}: id={event.id}, meal={event.meal.name}, status={event.status}")
-                print(f"    date={event.event_date}, time={event.event_time}")
-                print(f"    cutoff={event.order_cutoff_time}, orders={event.orders_count}/{event.max_orders}")
+                logger.info(f"  Event {i+1}: id={event.id}, meal={event.meal.name}, status={event.status}")
+                logger.info(f"    date={event.event_date}, time={event.event_time}")
+                logger.info(f"    cutoff={event.order_cutoff_time}, orders={event.orders_count}/{event.max_orders}")
         
         # Build the base query for events
         now = timezone.now()
-        print(f"Current datetime: {now}")
         
         # Check event dates individually
         future_events = all_chef_events.filter(event_date__gte=now.date())
-        print(f"Events with future dates (event_date__gte={now.date()}): {future_events.count()}")
         
         # Check statuses individually 
         from meals.models import STATUS_SCHEDULED, STATUS_OPEN
-        print(f"Looking for events with status in: ['{STATUS_SCHEDULED}', '{STATUS_OPEN}']")
         status_events = all_chef_events.filter(Q(status=STATUS_SCHEDULED) | Q(status=STATUS_OPEN))
-        print(f"Events with correct status: {status_events.count()}")
         if status_events.count() == 0 and all_chef_events.count() > 0:
-            print("⚠️ Status filter is eliminating all events. Statuses found:")
+            logger.error("⚠️ Status filter is eliminating all events. Statuses found:")
             statuses = all_chef_events.values_list('status', flat=True).distinct()
-            print(f"  Available statuses: {list(statuses)}")
+            logger.error(f"  Available statuses: {list(statuses)}")
         
         # Check cutoff times
         cutoff_events = all_chef_events.filter(order_cutoff_time__gt=now)
-        print(f"Events with valid cutoff time (order_cutoff_time__gt={now}): {cutoff_events.count()}")
         if cutoff_events.count() == 0 and all_chef_events.count() > 0:
             first_event = all_chef_events.first()
             if first_event:
-                print(f"⚠️ Cutoff time issue. Sample event cutoff: {first_event.order_cutoff_time}")
+                logger.error(f"⚠️ Cutoff time issue. Sample event cutoff: {first_event.order_cutoff_time}")
         
         # Check orders count
         orders_events = all_chef_events.filter(orders_count__lt=F('max_orders'))
-        print(f"Events with available capacity (orders_count__lt=max_orders): {orders_events.count()}")
         
         # Start building the combined query
-        print(f"\nBuilding combined query...")
+        logger.info(f"\nBuilding combined query...")
         query = Q(chef=chef) & Q(event_date__gte=now.date()) & Q(
             Q(status=STATUS_SCHEDULED) | Q(status=STATUS_OPEN)
         ) & Q(order_cutoff_time__gt=now) & Q(orders_count__lt=F('max_orders'))
         
         # Show effect of additional filters
         if meal_type:
-            print(f"Adding meal_type filter: {meal_type}")
+            logger.info(f"Adding meal_type filter: {meal_type}")
             meal_type_events = all_chef_events.filter(meal__meal_type=meal_type)
-            print(f"Events matching meal type '{meal_type}': {meal_type_events.count()}")
+            logger.info(f"Events matching meal type '{meal_type}': {meal_type_events.count()}")
             query &= Q(meal__meal_type=meal_type)
             
                 
         # Execute the final query
-        print(f"\nExecuting final query...")
+        logger.info(f"\nExecuting final query...")
         events = (
             ChefMealEvent.objects
             .filter(query)
@@ -398,16 +388,15 @@ def view_chef_meal_events(
         )
         
         event_count = events.count()
-        print(f"FINAL RESULT: Found {event_count} events matching all criteria")
         
         if event_count == 0:
-            print("⚠️ No events matched the combined criteria.")
+            logger.error("⚠️ No events matched the combined criteria.")
         else:
-            print("Events that matched all criteria:")
+            logger.info("Events that matched all criteria:")
             for i, event in enumerate(events):
-                print(f"  Event {i+1}: id={event.id}, meal={event.meal.name}, status={event.status}")
-                print(f"    date={event.event_date}, time={event.event_time}")
-                print(f"    cutoff={event.order_cutoff_time}, orders={event.orders_count}/{event.max_orders}")
+                logger.info(f"  Event {i+1}: id={event.id}, meal={event.meal.name}, status={event.status}")
+                logger.info(f"    date={event.event_date}, time={event.event_time}")
+                logger.info(f"    cutoff={event.order_cutoff_time}, orders={event.orders_count}/{event.max_orders}")
         
         # Create serialized response as before
         serialized_events = []
@@ -434,8 +423,7 @@ def view_chef_meal_events(
                 "special_instructions": event.special_instructions
             })
         
-        print(f"Returning {len(serialized_events)} serialized events")
-        print("==== END DEBUGGING ====\n")
+        logger.info(f"Returning {len(serialized_events)} serialized events")
         
         return {
             "status": "success",
@@ -445,7 +433,9 @@ def view_chef_meal_events(
         }
         
     except Chef.DoesNotExist:
-        print(f"Chef with id={chef_id} does not exist")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": f"Chef with id={chef_id} does not exist", "source":"view_chef_meal_events", "traceback": traceback.format_exc()})
         return {
             "status": "error",
             "message": f"Chef with ID {chef_id} not found"

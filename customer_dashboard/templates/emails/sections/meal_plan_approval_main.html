@@ -1,0 +1,42 @@
+{% load i18n %}
+<div class="section section-main">
+  <div class="card">
+    <h2 style="margin:0 0 8px;">{% trans "Your Weekly Meal Plan" %}
+      {% if week_start and week_end %}
+        <span class="badge" style="margin-left:8px;">{{ week_start }} – {{ week_end }}</span>
+      {% endif %}
+    </h2>
+    <p style="margin:0 0 12px;">{% trans "Review your plan and choose your preferred prep style below." %}</p>
+    {% if key_highlights %}
+      <div class="card" style="margin-top:8px;background:#f9fdf9;border-color:#e8f3ea;">
+        <h3 style="margin:0 0 6px;color:#0f172a;">{% trans "Key Highlights" %}</h3>
+        <table class="table-slim" role="presentation" aria-label="{% trans 'Key highlights' %}">
+          <tbody>
+            {% for item in key_highlights %}
+              {% if item %}
+              <tr>
+                <td>{{ item }}</td>
+              </tr>
+              {% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+    <div style="margin:12px 0;">
+      {% if approval_link_daily %}
+        <a href="{{ approval_link_daily }}" class="button">{% trans "Approve (Daily Prep)" %}</a>
+      {% endif %}
+      {% if approval_link_one_day %}
+        <a href="{{ approval_link_one_day }}" class="button secondary">{% trans "Approve (One‑Day Bulk Prep)" %}</a>
+      {% endif %}
+    </div>
+    {% if main_text %}
+      <div style="margin-top:8px;color:#6b7280;">{{ main_text|safe }}</div>
+    {% elif content_html %}
+      <div style="margin-top:8px;color:#6b7280;">{{ content_html|safe }}</div>
+    {% endif %}
+  </div>
+</div>
+
+

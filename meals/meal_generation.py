@@ -16,13 +16,71 @@ import os
 import requests
 from custom_auth.models import CustomUser
 from meals.models import Meal, MealPlan, MealPlanMeal, PantryItem, MealPlanMealPantryUsage, MealCompatibility
-from meals.pydantic_models import MealOutputSchema, SanitySchema, UsageList
+from meals.pydantic_models import SanitySchema, UsageList
 from shared.utils import (generate_user_context, create_meal,
                           get_embedding, cosine_similarity, get_openai_client)
 from meals.pantry_management import get_expiring_pantry_items, compute_effective_available_items
 from openai import OpenAIError, BadRequestError
 
 logger = logging.getLogger(__name__)
+
+def _household_coverage_ok(user: CustomUser, composed_dishes) -> bool:
+    """
+    Minimal coverage check ensuring each household member can eat at least one dish.
+    Rules:
+    - Babies (<2 yrs): require a dish with target_groups containing 'baby' or dietary_tags including 'Baby-Safe'.
+    - Members with dietary preferences: require a dish whose dietary_tags includes at least one of their preferences.
+    - Others (no preferences): any dish with target_groups including 'general' OR any non-baby dish.
+    If no household members are defined, return True.
+    """
+    try:
+        members_qs = getattr(user, 'household_members', None)
+        if members_qs is None or not members_qs.exists():
+            return True
+
+        dishes = composed_dishes or []
+        if not isinstance(dishes, list) or len(dishes) == 0:
+            return False
+
+        def has_baby_safe(d):
+            tags = [t.lower() for t in (d.get('dietary_tags') or [])]
+            groups = [g.lower() for g in (d.get('target_groups') or [])]
+            return ('baby-safe' in tags) or any(g in ['baby', 'infant'] for g in groups)
+
+        def covers_pref(d, pref_name: str) -> bool:
+            tags = [t.lower() for t in (d.get('dietary_tags') or [])]
+            return pref_name.lower() in tags
+
+        def is_general(d) -> bool:
+            groups = [g.lower() for g in (d.get('target_groups') or [])]
+            return 'general' in groups or len(groups) == 0
+
+        for member in members_qs.all():
+            # Baby coverage
+            if getattr(member, 'age', None) is not None and member.age < 2:
+                if not any(has_baby_safe(d) for d in dishes):
+                    return False
+                continue
+
+            # Dietary preference coverage
+            member_prefs = list(getattr(member, 'dietary_preferences', []).all()) if hasattr(member, 'dietary_preferences') else []
+            if member_prefs:
+                # at least one preference must be covered by at least one dish
+                names = [getattr(p, 'name', '').lower() for p in member_prefs]
+                if not any(any(covers_pref(d, n) for n in names) for d in dishes):
+                    return False
+                continue
+
+            # General eater coverage
+            if not any(is_general(d) for d in dishes):
+                # fallback: if no explicit general dish, allow any non-baby dish
+                if not any(not has_baby_safe(d) for d in dishes):
+                    return False
+
+        return True
+    except Exception:
+        # Fail-open to avoid blocking generation in edge cases
+        return True
 
 def use_pantry_item(pantry_item: PantryItem, units_to_use: int) -> None:
     """
@@ -88,11 +146,14 @@ def generate_and_create_meal(
     # Generate a request ID if not provided
     if request_id is None:
         request_id = str(uuid.uuid4())
+    # High-signal breadcrumb visible at WARNING level
+    # Generation start breadcrumb (kept at INFO for normal verbosity)
+    logger.info(f"[{request_id}] Start generate_and_create_meal user={getattr(user, 'id', user_id)} plan={getattr(meal_plan, 'id', 'unknown')} day={day_name} meal_type={meal_type}")
         
     attempt = 0
     while attempt < max_attempts:
         attempt += 1
-        logger.info(f"[{request_id}] Attempt {attempt} to generate and create meal for {meal_type} on {day_name}.")
+        logger.info(f"[{request_id}] Attempt={attempt} day={day_name} meal_type={meal_type} existing_count={len(existing_meal_names)} composed_embeddings={len(existing_meal_embeddings)}")
 
         # Step A: Generate meal details
         meal_details = generate_meal_details(
@@ -108,9 +169,17 @@ def generate_and_create_meal(
         if not meal_details:
             logger.error(f"[{request_id}] Attempt {attempt}: Failed to generate meal details for {meal_type} on {day_name}.")
             continue  # Retry
+        else:
+            logger.info(f"[{request_id}] meal_name='{meal_details.get('name')}' pantry_used={len(meal_details.get('used_pantry_items', []))} composed_dishes={len(meal_details.get('composed_dishes') or [])}")
 
         used_pantry_items = meal_details.get('used_pantry_items', [])
         logger.info(f"[{request_id}] Used pantry items: {used_pantry_items}")
+
+        # NEW: coverage check for composed dishes across the household
+        composed_dishes = meal_details.get('composed_dishes')
+        if composed_dishes and not _household_coverage_ok(user, composed_dishes):
+            logger.warning(f"[{request_id}] Attempt {attempt}: composed_dishes failed household coverage. Retrying.")
+            continue
 
         # Step B: Create the meal record
         meal_data = create_meal(
@@ -120,6 +189,7 @@ def generate_and_create_meal(
             description=meal_details.get('description'),
             meal_type=meal_type,
             used_pantry_items=used_pantry_items,
+            composed_dishes=meal_details.get('composed_dishes'),
         )
 
         # Handle the "info" status if a similar meal was found
@@ -127,6 +197,25 @@ def generate_and_create_meal(
             similar_meal_id = meal_data['similar_meal_id']
             try:
                 meal = Meal.objects.get(id=similar_meal_id)
+                # Skip if similar meal was used in any of the previous 3 weeks
+                try:
+                    ranges = [
+                        (
+                            meal_plan.week_start_date - timedelta(days=7*i),
+                            meal_plan.week_end_date - timedelta(days=7*i)
+                        ) for i in range(1, 4)
+                    ]
+                    from django.db.models import Q
+                    reuse_q = Q(meal_plan__user=user) & Q(meal_id=meal.id)
+                    week_q = Q()
+                    for ws, we in ranges:
+                        week_q |= Q(meal_plan__week_start_date=ws, meal_plan__week_end_date=we)
+                    used_recently = MealPlanMeal.objects.filter(reuse_q & week_q).exists()
+                    if used_recently:
+                        logger.info(f"[{request_id}] Similar meal '{meal.name}' was used in the last 3 weeks; skipping reuse.")
+                        continue  # Retry generation to find a different meal
+                except Exception:
+                    pass
                 offset = day_to_offset(day_name)
                 meal_date = meal_plan.week_start_date + timedelta(days=offset)
                 logger.info(f"[{request_id}] Similar meal '{meal.name}' already exists. Adding to meal plan.")
@@ -159,10 +248,20 @@ def generate_and_create_meal(
         if meal_data['status'] != 'success':
             logger.error(f"[{request_id}] Attempt {attempt}: Failed to create meal: {meal_data.get('message')}")
             continue  # Retry
+        else:
+            # Created candidate meal – log at WARNING for Celery warning-level visibility
+            try:
+                candidate_name = meal_data.get('meal', {}).get('name')
+            except Exception:
+                candidate_name = None
+            logger.info(f"[{request_id}] Created candidate meal '{candidate_name or '?'}' for {day_name} {meal_type}")
 
         # Step C: Verify the newly-created meal
         try:
-            meal_id = meal_data['meal']['id']
+            meal_id = meal_data['meal'].get('id') if meal_data.get('meal') else None
+            if not meal_id:
+                logger.warning(f"[{request_id}] Skipping macro/video fetch: missing meal_id in response.")
+                continue  # Retry generation cleanly
             meal = Meal.objects.get(id=meal_id)
             
             # Get ingredients if available
@@ -176,20 +275,20 @@ def generate_and_create_meal(
                 
             # DIRECT ENHANCEMENT: Add macro information
             try:
-                logger.info(f"[{request_id}] Getting macro information for meal '{meal.name}'")
-                macro_info = get_meal_macro_information(
-                    meal_name=meal.name,
-                    meal_description=meal.description,
-                    ingredients=ingredients
-                )
-                
-                if macro_info:
-                    logger.info(f"[{request_id}] Saving macro information for meal '{meal.name}': {macro_info}")
-                    meal.macro_info = json.dumps(macro_info)
-                    meal.save()
-                    logger.info(f"[{request_id}] Successfully added macro information to meal '{meal.name}'")
-                else:
-                    logger.warning(f"[{request_id}] No macro information returned for meal '{meal.name}'")
+                if meal and meal.id:
+                    logger.info(f"[{request_id}] Getting macro information for meal '{meal.name}'")
+                    macro_info = get_meal_macro_information(
+                        meal_name=meal.name,
+                        meal_description=meal.description,
+                        ingredients=ingredients
+                    )
+                    if macro_info:
+                        logger.info(f"[{request_id}] Saving macro information for meal '{meal.name}': {macro_info}")
+                        meal.macro_info = json.dumps(macro_info)
+                        meal.save(update_fields=['macro_info'])
+                        logger.info(f"[{request_id}] Successfully added macro information to meal '{meal.name}'")
+                    else:
+                        logger.warning(f"[{request_id}] No macro information returned for meal '{meal.name}'")
             except Exception as e:
                 logger.error(f"[{request_id}] Error adding macro information to meal '{meal.name}': {e}")
                 logger.error(f"[{request_id}] {traceback.format_exc()}")
@@ -207,6 +306,7 @@ def generate_and_create_meal(
 
         # Step D: Perform a comprehensive sanity check
         sanity_ok = perform_comprehensive_sanity_check(meal, user, request_id)
+        logger.info(f"[{request_id}] sanity_ok={sanity_ok} meal_id={meal.id} name='{meal.name}'")
         if not sanity_ok:
             logger.warning(f"[{request_id}] Attempt {attempt}: Generated meal '{meal.name}' failed comprehensive sanity check.")
             continue  # Retry
@@ -266,6 +366,7 @@ def generate_and_create_meal(
         existing_meal_names.add(meal.name)
         existing_meal_embeddings.append(meal.meal_embedding)
         logger.info(f"[{request_id}] Added new meal '{meal.name}' for {day_name} {meal_type}.")
+        logger.info(f"[{request_id}] Attached meal '{meal.name}' to plan on {meal_date}")
 
         # Step H: Return success, letting caller know if pantry was used
         return {
@@ -518,13 +619,35 @@ def generate_meal_details(
             new_item["quantity"] = leftover_qty
             updated_expiring_items.append(new_item)
 
-        # 3) Identify previous week's meals (to avoid duplicates)
-        previous_week_start = timezone.now().date() - timedelta(days=timezone.now().weekday() + 7)
-        previous_week_end = previous_week_start + timedelta(days=6)
+        # 3) Identify previous 3 weeks' meals relative to the target plan (to avoid duplicates)
+        try:
+            target_week_start = getattr(meal_plan, 'week_start_date', None)
+            target_week_end = getattr(meal_plan, 'week_end_date', None)
+            if target_week_start and target_week_end:
+                week_ranges = [
+                    (target_week_start - timedelta(days=7*i), target_week_end - timedelta(days=7*i))
+                    for i in range(1, 4)
+                ]
+            else:
+                # Fallback to calendar-based weeks if plan dates are unavailable
+                base_start = timezone.now().date() - timedelta(days=timezone.now().weekday())
+                week_ranges = [
+                    (base_start - timedelta(days=7*i), (base_start - timedelta(days=7*i)) + timedelta(days=6))
+                    for i in range(1, 4)
+                ]
+        except Exception:
+            base_start = timezone.now().date() - timedelta(days=timezone.now().weekday())
+            week_ranges = [
+                (base_start - timedelta(days=7*i), (base_start - timedelta(days=7*i)) + timedelta(days=6))
+                for i in range(1, 4)
+            ]
+
+        from django.db.models import Q
+        week_q = Q()
+        for ws, we in week_ranges:
+            week_q |= Q(meal_plan__week_start_date=ws, meal_plan__week_end_date=we)
         previous_meals = MealPlanMeal.objects.filter(
-            meal_plan__user=user,
-            meal_plan__week_start_date=previous_week_start,
-            meal_plan__week_end_date=previous_week_end
+            Q(meal_plan__user=user) & week_q
         ).select_related('meal')
 
         previous_meal_names = set(previous_meals.values_list('meal__name', flat=True))
@@ -553,10 +676,20 @@ def generate_meal_details(
         base_prompt = build_user_context(user, expiring_items_str, user_goals, combined_meal_names, allergens_str, meal_type)
 
         static_rules = f"""
-        You are a meal‑planning assistant …
-        (put ALL hard rules here, inc. 0–2 items rule, schema mandate, chef_name=null rule)
-        For "dietary_preferences" output 1–3 tags chosen from:
-        {allowed_enum}
+        You are a meal‑planning assistant focused on generating specific, appetizing, and diverse meals for a given week.
+        
+        Naming rules for the meal "name":
+        - Use a concise, enticing title that references the primary composed dish (and optionally one secondary).
+        - Prefer dish-driven names like “Lemon Herb Chicken with Roasted Vegetables” rather than generic labels.
+        - Avoid marketing/goal terms and generics: balanced, healthy, low-calorie, fat loss, weight loss, plan, meal, dinner, lunch, breakfast.
+        - Do not include body-goal or diet buzzwords in the name; save those for the description if needed.
+        - Keep under 60 characters where possible; use Title Case.
+        
+        When creating "composed_dishes":
+        - Ensure each dish has a clear name and tags; reuse one dish to cover multiple groups when appropriate.
+        - chef_name must be null for user-generated dishes; set is_chef_dish=false.
+        
+        For "dietary_preferences" output 1–3 tags chosen from: {allowed_enum}
         """
         # 6) Attempt up to max_attempts
 
@@ -564,10 +697,62 @@ def generate_meal_details(
             try:
                 # Pass the list of possible dietary preferences to the model
                 # Add dietary preferences to the base prompt
+                meal_json_schema = {
+                    "type": "object",
+                    "properties": {
+                        "meal": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "description": {"type": "string"},
+                                "dietary_preferences": {
+                                    "type": "array",
+                                    "items": {"type": "string"}
+                                },
+                                "used_pantry_items": {
+                                    "type": "array",
+                                    "items": {"type": "string"}
+                                },
+                                "composed_dishes": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "name": {"type": "string"},
+                                            "dietary_tags": {
+                                                "type": "array",
+                                                "items": {"type": "string"}
+                                            },
+                                            "target_groups": {
+                                                "type": "array",
+                                                "items": {"type": "string"}
+                                            },
+                                            "notes": {"type": "string"},
+                                            "ingredients": {"type": "array", "items": {"type": "string"}},
+                                            "is_chef_dish": {"type": "boolean"}
+                                        },
+                                        "required": ["name", "dietary_tags", "target_groups", "notes", "ingredients", "is_chef_dish"],
+                                        "additionalProperties": False
+                                    }
+                                }
+                            },
+                            "required": [
+                                "name",
+                                "description",
+                                "dietary_preferences",
+                                "used_pantry_items",
+                                "composed_dishes"
+                            ],
+                            "additionalProperties": False
+                        }
+                    },
+                    "required": ["meal"],
+                    "additionalProperties": False,
+                }
                 response = get_openai_client().responses.create(
                     model="gpt-4.1-mini",
                     input=[
-                        {"role": "developer", "content": static_rules},
+                        {"role": "developer", "content": static_rules + "\n\nOutput must include a 'composed_dishes' array that covers all household members: at minimum provide dishes for babies (<2 years) as baby-safe, vegans if present, and a general dish for unrestricted members. Reuse one dish to cover multiple groups when possible (e.g., a vegan-general dish). Each dish object must match the ComposedDish schema in MealData: name, dietary_tags, target_groups, optional notes and ingredients, and include is_chef_dish. The meal 'name' MUST reference at least the primary composed dish (e.g., include that dish’s name)."},
                         {"role": "user", "content": base_prompt}
                     ],
                     #store=True,
@@ -576,19 +761,21 @@ def generate_meal_details(
                         "format": {
                             'type': 'json_schema',
                             'name': 'meal_details',
-                            'schema': MealOutputSchema.model_json_schema()
+                            'schema': meal_json_schema
                         }
                     }
                 )
 
                 gpt_output = response.output_text
+                logger.info(f"[{request_id}] [DEBUG] GPT output: {gpt_output}")
                 meal_data = json.loads(gpt_output)
-
+                logger.info(f"[{request_id}] [DEBUG] Meal data: {meal_data}")
                 meal_dict = meal_data.get('meal', {})
                 meal_name = meal_dict.get('name')
                 description = meal_dict.get('description')
                 dietary_preferences = meal_dict.get('dietary_preferences', [])
                 used_pantry_items = meal_dict.get('used_pantry_items', [])
+                composed_dishes = meal_dict.get('composed_dishes')
 
                 # Basic checks
                 if not meal_name or not description or not dietary_preferences:
@@ -619,14 +806,19 @@ def generate_meal_details(
                     'description': description,
                     'dietary_preferences': dietary_preferences,
                     'meal_embedding': new_meal_embedding,
-                    'used_pantry_items': used_pantry_items
+                    'used_pantry_items': used_pantry_items,
+                    'composed_dishes': composed_dishes
                 }
 
             except Exception as e:
                 # n8n traceback
-                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-                requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_meal_details", "traceback": traceback.format_exc()})
-                continue
+                if settings.DEBUG:
+                    logger.error(f"Error during meal generation: {e}")
+                    logger.error(traceback.format_exc())
+                else:
+                    n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                    requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_meal_details", "traceback": traceback.format_exc()})
+                    continue
 
         logger.error(f"[{request_id}] Failed to generate a unique meal after {max_attempts} attempts.")
         return None
@@ -691,7 +883,7 @@ def determine_usage_for_meal(
 
         - `UsageItem`: Represents an individual pantry item and includes:
         - `item_name`: The exact name of the pantry item.
-        - `quantity_used`: A float indicating the number of units required.
+        - `quantity_used`: A float indicating the number only (no text) of units required.
         - `unit`: The unit of measurement, such as 'cups', 'pieces', or 'grams'.
 
         - `UsageList`: A top-level object that contains an array of `UsageItem`.
@@ -742,7 +934,7 @@ def determine_usage_for_meal(
 
         # Notes
 
-        - Ensure all numeric quantities are represented as floats.
+        - Ensure all numeric quantities are represented as floats. Do not include unit names inside `quantity_used`.
         - Follow the JSON schema strictly, especially with field names and types.
         - Consider units carefully, especially when multiple units are possible for an item (e.g., grams vs. ounces).
         """

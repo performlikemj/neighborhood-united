@@ -1,0 +1,13 @@
+{% load i18n %}
+<div class="section section-main">
+  <div class="card">
+    <h2 style="margin:0 0 6px;">{% trans "Bulk Meal-Prep Guide" %}{% if week_start and week_end %} {% trans "for the Week of" %} {{ week_start }}–{{ week_end }}{% endif %}</h2>
+    {% if main_text %}
+      {{ main_text|safe }}
+    {% else %}
+      {{ content_html|safe }}
+    {% endif %}
+  </div>
+</div>
+
+

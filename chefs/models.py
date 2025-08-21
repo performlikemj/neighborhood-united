@@ -13,6 +13,7 @@ class Chef(models.Model):
         related_name='serving_chefs'
     )
     profile_pic = models.ImageField(upload_to='chefs/profile_pics/', blank=True)
+    banner_image = models.ImageField(upload_to='chefs/banners/', blank=True, null=True)
     chef_request = models.BooleanField(default=False)
     chef_request_experience = models.TextField(blank=True, null=True)
     chef_request_bio = models.TextField(blank=True, null=True)
@@ -57,3 +58,33 @@ class ChefRequest(models.Model):
     
     def __str__(self):
         return f"Chef Request for {self.user.username}"
+
+
+class ChefPhoto(models.Model):
+    """Gallery photo uploaded by an approved chef to showcase their food."""
+    chef = models.ForeignKey('Chef', on_delete=models.CASCADE, related_name='photos')
+    image = models.ImageField(upload_to='chefs/photos/')
+    title = models.CharField(max_length=200, blank=True)
+    caption = models.TextField(blank=True)
+    is_featured = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-is_featured', '-created_at']
+
+    def __str__(self):
+        base = self.title or 'Chef Photo'
+        return f"{base} (chef_id={self.chef_id})"
+
+
+class ChefDefaultBanner(models.Model):
+    """Site-wide default banner that applies when a Chef has no custom banner_image."""
+    image = models.ImageField(upload_to='chefs/banners/defaults/')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at', '-id']
+
+    def __str__(self):
+        return f"ChefDefaultBanner(id={self.id})"

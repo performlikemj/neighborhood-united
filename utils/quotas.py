@@ -2,8 +2,10 @@
 Quota management utilities for limiting API usage.
 """
 import datetime
+from django.utils import timezone
 import redis
 import pytz
+from zoneinfo import ZoneInfo
 from django.conf import settings
 from custom_auth.models import CustomUser
 import os
@@ -76,8 +78,9 @@ def _key(user_id: str, model: str) -> str:
     # Use user's local date if it's an authenticated user
     try:
         user = CustomUser.objects.get(id=int(user_id))
-        user_timezone = pytz.timezone(user.timezone if user.timezone else 'UTC')
-        today = datetime.datetime.now(user_timezone).date().isoformat()
+        user_timezone = ZoneInfo(user.timezone if user.timezone else 'UTC')
+        from django.utils import timezone
+        today = timezone.now().astimezone(user_timezone).date().isoformat()
     except (ValueError, CustomUser.DoesNotExist):
         # Fallback to server time if user not found
         today = datetime.date.today().isoformat()
@@ -108,10 +111,10 @@ def hit_quota(user_id: str, model: str, limit: int) -> bool:
                 if not is_guest_user:
                     # Get user's timezone
                     user = CustomUser.objects.get(id=int(user_id))
-                    user_timezone = pytz.timezone(user.timezone if user.timezone else 'UTC')
+                    user_timezone = ZoneInfo(user.timezone if user.timezone else 'UTC')
                     
                     # Calculate seconds until midnight in user's timezone
-                    now = datetime.datetime.now(user_timezone)
+                    now = timezone.now().astimezone(user_timezone)
                     midnight = datetime.datetime.combine(
                         now.date() + datetime.timedelta(days=1),
                         datetime.time.min
@@ -124,7 +127,7 @@ def hit_quota(user_id: str, model: str, limit: int) -> bool:
                         (datetime.datetime.combine(
                             datetime.date.today() + datetime.timedelta(days=1),
                             datetime.time.min
-                        ) - datetime.datetime.now()).seconds
+                        ) - timezone.now()).seconds
                     )
             except (ValueError, CustomUser.DoesNotExist):
                 # Fallback to server time
@@ -132,7 +135,7 @@ def hit_quota(user_id: str, model: str, limit: int) -> bool:
                     (datetime.datetime.combine(
                         datetime.date.today() + datetime.timedelta(days=1),
                         datetime.time.min
-                    ) - datetime.datetime.now()).seconds
+                    ) - timezone.now()).seconds
                 )
             
             r.expire(k, seconds_till_midnight)

@@ -1,0 +1,11 @@
+{% load i18n %}
+<div class="section section-main">
+  <div class="card">
+    <h2 style="margin:0 0 8px;">{% trans "Refund Processed" %}</h2>
+    {% if content_html %}
+      {{ content_html|safe }}
+    {% endif %}
+  </div>
+</div>
+
+

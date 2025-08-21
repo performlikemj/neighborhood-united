@@ -2,7 +2,7 @@ from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.db import transaction
-from utils.redis_client import get, set, delete
+from utils.redis_client import get as redis_get, set as redis_set, delete as redis_delete
 from django.utils.translation import gettext_lazy as _
 from custom_auth.models import CustomUser
 from meals.models import MealPlan, MealPlanMeal
@@ -39,7 +39,7 @@ class UserProfile(models.Model):
         self.save()
         
         # Clear cached leaderboard data
-        delete('leaderboard_top_10')
+        redis_delete('leaderboard_top_10')
         
         # Return whether level changed for notification purposes
         return level_changed

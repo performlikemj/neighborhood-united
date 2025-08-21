@@ -1,0 +1,54 @@
+{% load i18n %}
+{% if meals_by_day %}
+<div class="section section-data">
+  <div class="card">
+    <h3 style="margin:0 0 10px;">{% trans "Plan Overview" %}</h3>
+    <table class="table-slim" role="presentation" aria-label="{% trans 'Meals by day and type' %}">
+      <colgroup>
+        <col style="width:120px">
+        <col style="width:30%">
+        <col style="width:30%">
+        <col style="width:30%">
+      </colgroup>
+      <thead>
+        <tr>
+          <th scope="col" style="width:120px;">{% trans "Day" %}</th>
+          <th scope="col" style="width:30%;">{% trans "Breakfast" %}</th>
+          <th scope="col" style="width:30%;">{% trans "Lunch" %}</th>
+          <th scope="col" style="width:30%;">{% trans "Dinner" %}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if plan_rows %}
+          {% for r in plan_rows %}
+          <tr {% if forloop.counter0|divisibleby:2 %}style="background:#f3faf5;"{% endif %}>
+            <td style="vertical-align:top;"><strong>{{ r.day }}</strong></td>
+            <td style="vertical-align:top;overflow-wrap:break-word;word-break:normal;hyphens:auto;">{{ r.breakfast|default:'—' }}</td>
+            <td style="vertical-align:top;overflow-wrap:break-word;word-break:normal;hyphens:auto;">{{ r.lunch|default:'—' }}</td>
+            <td style="vertical-align:top;overflow-wrap:break-word;word-break:normal;hyphens:auto;">{{ r.dinner|default:'—' }}</td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          {% for day, meals in meals_by_day.items %}
+            {% with b="" l="" d="" %}
+              {% for m in meals %}
+                {% if m.meal_type == 'Breakfast' %}{% firstof m.meal_name '' as b %}{% endif %}
+                {% if m.meal_type == 'Lunch' %}{% firstof m.meal_name '' as l %}{% endif %}
+                {% if m.meal_type == 'Dinner' %}{% firstof m.meal_name '' as d %}{% endif %}
+              {% endfor %}
+            <tr {% if forloop.counter0|divisibleby:2 %}style="background:#f3faf5;"{% endif %}>
+              <td style="vertical-align:top;"><strong>{{ day }}</strong></td>
+              <td style="vertical-align:top;overflow-wrap:break-word;word-break:normal;hyphens:auto;">{{ b }}</td>
+              <td style="vertical-align:top;overflow-wrap:break-word;word-break:normal;hyphens:auto;">{{ l }}</td>
+              <td style="vertical-align:top;overflow-wrap:break-word;word-break:normal;hyphens:auto;">{{ d }}</td>
+            </tr>
+            {% endwith %}
+          {% endfor %}
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+

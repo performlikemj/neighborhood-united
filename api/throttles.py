@@ -37,7 +37,6 @@ class GPT4DailyThrottle(SimpleRateThrottle):
         # Check if the current path matches any model endpoint
         for endpoint in model_endpoints:
             if endpoint in request.path:
-                print(f"THROTTLE: Applying throttle to {request.path}")
                 return True
                 
         # Don't throttle other endpoints
@@ -85,7 +84,6 @@ class GuestGPT4MiniThrottle(SimpleRateThrottle):
         # Check if the current path matches any model endpoint
         for endpoint in model_endpoints:
             if endpoint in request.path:
-                print(f"THROTTLE: Applying throttle to {request.path}")
                 return True
                 
         # Don't throttle other endpoints

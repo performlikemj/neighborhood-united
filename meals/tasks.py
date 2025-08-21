@@ -5,6 +5,7 @@ EXPECTED_EMBEDDING_SIZE = 1536  # Example size, adjust based on your embedding m
 
 from celery import shared_task
 from .models import SystemUpdate
+from .models import MealPlan, MealPlanMeal, Meal
 from .models import Chef
 from .chef_meals_views import sync_recent_payments
 import logging
@@ -12,10 +13,12 @@ from datetime import timedelta
 from django.utils import timezone
 from django.conf import settings
 from django.db.models import F
+from django.db import transaction
 from decimal import Decimal
 import stripe
 from .models import ChefMealEvent, ChefMealOrder, PaymentLog, STATUS_COMPLETED
 import pytz
+from zoneinfo import ZoneInfo
 from customer_dashboard.models import CustomUser
 from openai import OpenAI
 import time
@@ -207,7 +210,7 @@ def generate_daily_user_summaries():
     for user in active_users:
         try:
             # Get the user's timezone
-            user_timezone = pytz.timezone(user.timezone if user.timezone else 'UTC')
+            user_timezone = ZoneInfo(user.timezone if user.timezone else 'UTC')
             
             # Get current time in user's timezone
             user_local_time = timezone.now().astimezone(user_timezone)
@@ -677,6 +680,98 @@ def generate_chat_session_summaries():
 
 
 
+
+
+@shared_task
+def cleanup_old_meal_plans_and_meals(dry_run: bool = False):
+    """
+    Delete meal plans whose week_end_date is older than 3 weeks and delete any
+    meals tied exclusively to those old plans, provided those meals:
+      - have not been used in any meal plans within the last 3 weeks,
+      - have never been ordered (to preserve order history), and
+      - are NOT chef-created meals (i.e., only delete user-created meals).
+
+    Args:
+        dry_run: If True, perform no deletions and return counts only.
+
+    Returns:
+        Dict with counts of items identified and deleted.
+    """
+    logger = logging.getLogger(__name__)
+
+    today = timezone.localdate()
+    cutoff_date = today - timedelta(weeks=3)
+
+    # Meals that appear in meal plans in the last 3 weeks (protected)
+    recent_meal_ids_qs = (
+        MealPlanMeal.objects
+        .filter(meal_plan__week_end_date__gte=cutoff_date)
+        .values_list('meal_id', flat=True)
+        .distinct()
+    )
+    recent_meal_ids = set(recent_meal_ids_qs)
+
+    # Old meal plans to delete
+    old_meal_plans_qs = MealPlan.objects.filter(week_end_date__lt=cutoff_date)
+
+    # Meals tied to those old plans which are NOT used in recent plans
+    candidate_old_meal_ids_qs = (
+        MealPlanMeal.objects
+        .filter(meal_plan__in=old_meal_plans_qs)
+        .exclude(meal_id__in=recent_meal_ids)
+        .values_list('meal_id', flat=True)
+        .distinct()
+    )
+    # Restrict to user-created meals only (chef__isnull=True)
+    deletable_user_meal_ids_qs = (
+        Meal.objects
+        .filter(id__in=candidate_old_meal_ids_qs, chef__isnull=True)
+        .values_list('id', flat=True)
+    )
+    deletable_user_meal_ids = list(deletable_user_meal_ids_qs)
+
+    identified_old_plans = old_meal_plans_qs.count()
+    identified_old_only_meals = len(deletable_user_meal_ids)
+
+    if dry_run:
+        logger.info(
+            f"[DRY RUN] Identified {identified_old_plans} old meal plans and "
+            f"{identified_old_only_meals} meals eligible for deletion."
+        )
+        return {
+            "old_meal_plans_found": identified_old_plans,
+            "meals_eligible_for_deletion": identified_old_only_meals,
+            "deleted_meal_plans": 0,
+            "deleted_meals": 0,
+        }
+
+    deleted_plans = 0
+    deleted_meals = 0
+
+    with transaction.atomic():
+        # Delete the old meal plans (cascades remove MealPlanMeal, instructions, etc.)
+        deleted_plans = old_meal_plans_qs.count()
+        if deleted_plans:
+            logger.info(f"Deleting {deleted_plans} meal plans older than {cutoff_date}")
+            old_meal_plans_qs.delete()
+
+        # Now delete the meals that were only tied to those old plans and not used recently
+        if deletable_user_meal_ids:
+            meals_qs = Meal.objects.filter(id__in=deletable_user_meal_ids, chef__isnull=True)
+            deleted_meals = meals_qs.count()
+            if deleted_meals:
+                logger.info(f"Deleting {deleted_meals} meals no longer referenced by recent meal plans")
+                meals_qs.delete()
+
+    logger.info(
+        f"Cleanup complete. Deleted {deleted_plans} meal plans and {deleted_meals} meals."
+    )
+    return {
+        "old_meal_plans_found": identified_old_plans,
+        "meals_eligible_for_deletion": identified_old_only_meals,
+        "deleted_meal_plans": deleted_plans,
+        "deleted_meals": deleted_meals,
+    }
 
 
 

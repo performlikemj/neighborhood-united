@@ -446,18 +446,7 @@ https://customers.dev.instacart.tools/store/shopping_lists/5827424
     
     manager = ToolSpecificFormatterManager()
     result = manager.format_content(test_content, ['shopping_list_tool'])
-    
-    print("=== MAIN CONTENT ===")
-    print(result.main_content)
-    print("\n=== DATA CONTENT ===")
-    print(result.data_content)
-    print("\n=== FINAL CONTENT ===")
-    print(result.final_content)
-    
-    # Test recipe context
-    print("\n" + "="*50)
-    print("=== RECIPE CONTEXT TEST ===")
-    
+        
     recipe_content = """
 Here's your recipe for Jamaican Jerk Chicken with ingredients.
 
@@ -470,6 +459,5 @@ Ingredients:
 """
     
     recipe_result = manager.format_content(recipe_content, ['recipe_tool'])
-    print("Recipe Main Content:")
-    print(recipe_result.main_content)
+
 

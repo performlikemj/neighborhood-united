@@ -7,6 +7,7 @@ from datetime import timedelta
 import json
 import hashlib
 import pytz
+from zoneinfo import ZoneInfo
 from utils.redis_client import get, set, delete
 import requests
 import traceback
@@ -117,7 +118,7 @@ def summarize_user_chat_sessions():
                     continue
                 
                 # Convert UTC time to user's local time
-                user_tz = pytz.timezone(user.timezone)
+                user_tz = ZoneInfo(user.timezone)
                 user_local_time = now_utc.astimezone(user_tz)
                 
                 # Check if it's between 3:30 AM and 4:29 AM for this user

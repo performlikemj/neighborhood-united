@@ -4,6 +4,7 @@ from django.utils import timezone
 from custom_auth.models import CustomUser
 import datetime
 import pytz
+from zoneinfo import ZoneInfo
 
 class DishForm(forms.ModelForm):
     class Meta:
@@ -60,9 +61,9 @@ class ChefMealEventForm(forms.ModelForm):
             if instance and instance.order_cutoff_time:
                 # Get the chef's timezone
                 try:
-                    tz = pytz.timezone(self.chef.user.timezone)
-                except pytz.exceptions.UnknownTimeZoneError:
-                    tz = pytz.UTC
+                    tz = ZoneInfo(self.chef.user.timezone)
+                except Exception:
+                    tz = ZoneInfo("UTC")
                 
                 # Convert UTC time to chef's local time
                 if timezone.is_aware(instance.order_cutoff_time):
@@ -85,9 +86,9 @@ class ChefMealEventForm(forms.ModelForm):
             chef_timezone = self.chef.user.timezone
         
         try:
-            chef_tz = pytz.timezone(chef_timezone)
-        except pytz.exceptions.UnknownTimeZoneError:
-            chef_tz = pytz.UTC
+            chef_tz = ZoneInfo(chef_timezone)
+        except Exception:
+            chef_tz = ZoneInfo("UTC")
         
         # Convert current time to chef's timezone for comparison
         now = timezone.now().astimezone(chef_tz)
@@ -101,14 +102,14 @@ class ChefMealEventForm(forms.ModelForm):
         if event_date and event_time and order_cutoff_time:
             # Make cutoff time timezone-aware in chef's timezone if it's not already
             if not timezone.is_aware(order_cutoff_time):
-                order_cutoff_time = chef_tz.localize(order_cutoff_time)
+                order_cutoff_time = timezone.make_aware(order_cutoff_time, chef_tz)
             
             # Create event datetime in chef's timezone
             event_datetime = datetime.datetime.combine(
                 event_date, 
                 event_time
             )
-            event_datetime = chef_tz.localize(event_datetime)
+            event_datetime = timezone.make_aware(event_datetime, chef_tz)
             
             if order_cutoff_time >= event_datetime:
                 self.add_error('order_cutoff_time', 'Order cutoff time must be before the event time.')

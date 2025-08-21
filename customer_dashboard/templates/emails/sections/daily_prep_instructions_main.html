@@ -1,0 +1,13 @@
+{% load i18n %}
+<div class="section section-main">
+  <div class="card">
+    <h2 style="margin:0 0 8px;">{% trans "Daily Prep Instructions" %}</h2>
+    {% if main_text %}
+      {{ main_text|safe }}
+    {% else %}
+      {{ content_html|safe }}
+    {% endif %}
+  </div>
+</div>
+
+

@@ -88,7 +88,12 @@ INSTALLED_APPS = [
     'django_celery_beat',
 ]
 
+# Feature flags
+# Toggle gamification system on/off without removing the app
+GAMIFICATION_ENABLED = str_to_bool(os.getenv('GAMIFICATION_ENABLED', 'False'))
+
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',  # CORS must be as high as possible
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -96,7 +101,6 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'corsheaders.middleware.CorsMiddleware', # CORS middleware
 ]
 
 # CORS Configuration - Handle comma-separated origins from Key Vault
@@ -111,6 +115,32 @@ else:
         'https://www.hoodunited.org',
         'https://neighborhoodunited.org',
         'https://www.neighborhoodunited.org',
+    ]
+
+# Allow cookies/credentials to be sent by the browser
+CORS_ALLOW_CREDENTIALS = True
+
+# Allowed headers
+CORS_ALLOW_HEADERS = [
+    'Idempotency-Key',
+    'idempotency-key',
+    'Authorization',
+    'Content-Type',
+    'X-Requested-With',
+]
+# In development, ensure localhost origins for React/Vite are allowed
+if DEBUG:
+    CORS_ALLOWED_ORIGINS = list(set(CORS_ALLOWED_ORIGINS + [
+        'http://localhost:5173', 'http://127.0.0.1:5173',
+        'http://localhost:5174', 'http://127.0.0.1:5174',
+        'http://localhost:3000', 'http://127.0.0.1:3000',
+        'http://localhost:8501', 'http://127.0.0.1:8501',
+    ]))
+    CSRF_TRUSTED_ORIGINS = [
+        'http://localhost:5173', 'http://127.0.0.1:5173',
+        'http://localhost:5174', 'http://127.0.0.1:5174',
+        'http://localhost:3000', 'http://127.0.0.1:3000',
+        'http://localhost:8501', 'http://127.0.0.1:8501',
     ]
 
 ROOT_URLCONF = 'hood_united.urls'
@@ -386,6 +416,12 @@ CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL')
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CELERY_REDIS_MAX_CONNECTIONS = 10
 
+broker_pool_limit = 1                               # <— add
+broker_transport_options = {                        # <— add
+    "visibility_timeout": 3600,
+    "health_check_interval": 30,
+}
+
 # Ensure Celery doesn't fallback to localhost if broker URL is not available
 if not CELERY_BROKER_URL:
     import logging
@@ -461,6 +497,11 @@ LOGGING = {
         },
     }
 }
+# Email assistant session durations
+# - Duration for authenticated email assistant sessions (hours)
+# - Default expiry for generic email sessions in models fallback
+EMAIL_ASSISTANT_SESSION_DURATION_HOURS = 72
+EMAIL_SESSION_EXPIRY_HOURS = 72
 # Environment-aware security settings
 IS_PRODUCTION = not DEBUG and not TEST_MODE
 

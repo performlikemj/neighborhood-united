@@ -16,11 +16,13 @@ def get_redis_connection():
     """Get a properly configured Redis connection with SSL support for Azure Redis."""
     redis_url = os.getenv('REDIS_URL', '') or os.getenv('CELERY_BROKER_URL', '')
     
+    
     if not redis_url:
         logger.error("No Redis URL found in environment variables (REDIS_URL or CELERY_BROKER_URL)")
         return None
     
     logger.info(f"Attempting Redis connection to: {redis_url.split('@')[0]}@[REDACTED]")
+    
     
     try:
         # Try direct connection - URL now contains lowercase ssl_cert_reqs=none

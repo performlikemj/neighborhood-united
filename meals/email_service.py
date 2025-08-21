@@ -10,6 +10,7 @@ from datetime import timedelta, datetime, time
 from urllib.parse import urlencode
 from collections import defaultdict
 import pytz
+from zoneinfo import ZoneInfo
 import requests
 from celery import shared_task
 from django.conf import settings
@@ -179,13 +180,94 @@ def send_meal_plan_approval_email(meal_plan_id):
         except Exception as e:
             logger.error(f"Error retrieving user goals: {e}")
 
+        # Build a clean HTML intro for the main section so we don't rely on LLM formatting
+        week_range_full = f"{meal_plan.week_start_date.strftime('%B %d, %Y')} – {meal_plan.week_end_date.strftime('%B %d, %Y')}"
+        main_text_html = (
+            f"<p>Your meal plan for the week of <strong>{week_range_full}</strong> is ready for review and approval.</p>"
+            f"<p>This plan supports your goals while respecting household allergies and toddler‑safe textures.</p>"
+        )
+
+        # Prepare a tabular grid for the Plan Overview: day x meal type
+        day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        plan_grid = {day: {'Breakfast': '', 'Lunch': '', 'Dinner': ''} for day in day_order}
+        for day, items in meals_by_day.items():
+            row = plan_grid.get(day)
+            if row is None:
+                continue
+            for m in items:
+                mt = m.get('meal_type')
+                name = m.get('meal_name')
+                if mt in row and name:
+                    row[mt] = name
+
+        # Provide a template-friendly list to avoid custom filters in email partials
+        plan_rows = []
+        for day in day_order:
+            data = plan_grid.get(day, {'Breakfast': '', 'Lunch': '', 'Dinner': ''})
+            plan_rows.append({
+                'day': day,
+                'breakfast': data.get('Breakfast', ''),
+                'lunch': data.get('Lunch', ''),
+                'dinner': data.get('Dinner', ''),
+            })
+
         # Send the notification via the assistant
         subject = f'Approve Your Meal Plan for {meal_plan.week_start_date.strftime("%b %d")} - {meal_plan.week_end_date.strftime("%b %d")}'
         
+        # Derive brief key highlights (3–5 bullets) for the approval email
+        key_highlights = []
+        try:
+            # Goals-based highlight
+            try:
+                from customer_dashboard.models import GoalTracking as _GT
+                _goals = _GT.objects.filter(user=user).first()
+                if _goals and _goals.goal_description:
+                    key_highlights.append(str(_goals.goal_description)[:160])
+            except Exception:
+                pass
+
+            # Count-based highlights
+            total_meals = len(meals_list)
+            breakfast_count = sum(1 for m in meals_list if m.get('meal_type') == 'Breakfast')
+            lunch_count = sum(1 for m in meals_list if m.get('meal_type') == 'Lunch')
+            dinner_count = sum(1 for m in meals_list if m.get('meal_type') == 'Dinner')
+            key_highlights.append(f"Balanced plan: {breakfast_count} breakfasts, {lunch_count} lunches, {dinner_count} dinners")
+
+            # Chef meal indicator (if any present)
+            try:
+                chef_meal_flag = any(is_chef_meal(mpm.meal) for mpm in meal_plan_meals)
+                if chef_meal_flag:
+                    key_highlights.append("Includes chef-prepared dishes — no substitutions needed")
+            except Exception:
+                pass
+
+            # Safety / family notes if present in user context string
+            if isinstance(user_context, str):
+                if 'allerg' in user_context.lower():
+                    key_highlights.append("Allergy-aware selections")
+                if 'toddler' in user_context.lower() or 'child' in user_context.lower():
+                    key_highlights.append("Toddler-safe portions and textures")
+
+            # Trim to 5 bullets
+            key_highlights = [k for k in key_highlights if k][:5]
+        except Exception:
+            key_highlights = []
+
         result = MealPlanningAssistant.send_notification_via_assistant(
             user_id=user.id,
             message_content=message_content,
-            subject=subject
+            subject=subject,
+            template_key='meal_plan_approval',
+            template_context={
+                'approval_link_daily': approval_link_daily,
+                'approval_link_one_day': approval_link_one_day,
+                'meals_by_day': meals_by_day,
+                'plan_rows': plan_rows,
+                'week_start': meal_plan.week_start_date.strftime('%B %d, %Y'),
+                'week_end': meal_plan.week_end_date.strftime('%B %d, %Y'),
+                'key_highlights': key_highlights,
+                'main_text': main_text_html,
+            }
         )
         
         # Mark as sent if successful
@@ -235,6 +317,38 @@ def generate_shopping_list(meal_plan_id):
 
     user = CustomUser.objects.get(id=user_id)
 
+    # Determine today's date in the user's timezone
+    try:
+        user_tz = ZoneInfo(user.timezone) if getattr(user, 'timezone', None) else ZoneInfo("UTC")
+    except Exception:
+        user_tz = ZoneInfo("UTC")
+    today_local = timezone.now().astimezone(user_tz).date()
+
+    # Compute which MealPlanMeals are in the future (or today) relative to user's local date
+    # Build a mapping of day name to date based on the plan's week_start_date
+    from datetime import timedelta as _td
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    week_start_date = meal_plan.week_start_date
+    day_to_date_map = {day_names[i]: (week_start_date + _td(days=i)) for i in range(7)}
+
+    # Filter serializer meals list to only include today or future dates
+    original_meals = meal_plan_data.get('meals', []) or []
+    filtered_meals = [
+        m for m in original_meals
+        if day_to_date_map.get(m.get('day')) is None or day_to_date_map[m.get('day')] >= today_local
+    ]
+
+    # If the entire plan is in the past, skip generation to avoid wasting resources
+    if not filtered_meals:
+        logger.info(f"Shopping list skipped for MealPlan ID {meal_plan_id}: all meals are in the past (today={today_local}, plan={meal_plan.week_start_date}..{meal_plan.week_end_date}).")
+        return
+
+    # Overwrite meals in the serialized structure with the filtered subset
+    meal_plan_data['meals'] = filtered_meals
+
+    # Also derive the included Meal IDs to scope substitution logic below
+    included_meal_ids = {m.get('meal', {}).get('id') for m in filtered_meals if isinstance(m.get('meal'), dict)}
+
     # Retrieve the user's preferred serving size
     try:
         household_member_count = user.household_member_count
@@ -242,10 +356,27 @@ def generate_shopping_list(meal_plan_id):
         logger.error(f"Error retrieving household member count for user {user.id}: {e}")
         household_member_count = 1
 
-    # Collect all ingredient substitution information from the meal plan
+    # Collect ingredient substitution information only for included meals in the plan
     substitution_info = []
     chef_meals_present = False
-    meal_plan_meals = meal_plan.meal.all()
+    # Use related through model to retain day/date filtering
+    try:
+        from meals.models import MealPlanMeal as _MPM
+        mpm_qs = _MPM.objects.filter(meal_plan=meal_plan).select_related('meal')
+        # Apply the same date filter
+        mpm_in_scope = []
+        for mpm in mpm_qs:
+            # Prefer explicit meal_date if present; else compute from day
+            m_date = getattr(mpm, 'meal_date', None)
+            if not m_date:
+                m_date = day_to_date_map.get(mpm.day)
+            if m_date is not None and m_date < today_local:
+                continue
+            mpm_in_scope.append(mpm)
+        meal_plan_meals = [mpm.meal for mpm in mpm_in_scope]
+    except Exception:
+        # Fallback: filter by included_meal_ids from serializer
+        meal_plan_meals = [m for m in meal_plan.meal.all() if (not included_meal_ids) or (m.id in included_meal_ids)]
     
     # Initialize substitution_str early so it's available throughout the function
     substitution_str = ""
@@ -368,7 +499,13 @@ def generate_shopping_list(meal_plan_id):
                 input=[
                     {
                         "role": "developer",
-                        "content": "You are a helpful assistant that generates shopping lists in JSON format."
+                        "content": (
+                            "You are a helpful assistant that generates shopping lists in JSON format.\n"
+                            "If a meal contains a composed_dishes bundle (user-generated multi-dish meal), ensure the shopping list fully covers ingredients for all dishes in the bundle.\n"
+                            "For such bundles, include the dish name in the 'notes' field for each relevant item (e.g., 'For baby puree' or 'Vegan dish').\n"
+                            "Respect substitutions for non-chef meals.\n"
+                            "When available, prefer structured meal_dishes (MealDish rows) over composed_dishes JSON.\n"
+                        )
                     },
                     {
                         "role": "user",
@@ -436,48 +573,124 @@ def generate_shopping_list(meal_plan_id):
     # Group items by category and aggregate quantities
     categorized_items = defaultdict(lambda: defaultdict(lambda: {'quantity': 0, 'unit': '', 'notes': []}))
 
+    # --- helpers for normalization/deduplication ---
+    def _normalize_unit(u: str) -> str:
+        if not u:
+            return ''
+        unit = str(u).strip().lower()
+        # remove redundant words
+        unit = unit.replace(' units', '').replace(' unit', '')
+        # collapse duplicates like "slices slices"
+        parts = unit.split()
+        if len(parts) == 2 and parts[0] == parts[1]:
+            unit = parts[0]
+        # standardize common units
+        mapping = {
+            'tablespoon': 'tbsp', 'tablespoons': 'tbsp', 'tbs': 'tbsp', 'tbsp': 'tbsp',
+            'teaspoon': 'tsp', 'teaspoons': 'tsp', 'tsp': 'tsp',
+            'grams': 'g', 'gram': 'g', 'g': 'g',
+            'kilogram': 'kg', 'kilograms': 'kg', 'kg': 'kg',
+            'milliliter': 'ml', 'milliliters': 'ml', 'ml': 'ml',
+            'liter': 'l', 'liters': 'l', 'l': 'l',
+            'pieces': '', 'piece': '', 'pcs': '',
+            'ounce': 'oz', 'ounces': 'oz', 'oz': 'oz',
+            'pound': 'lb', 'pounds': 'lb', 'lb': 'lb', 'lbs': 'lb',
+            'dozen': 'dozen',
+        }
+        unit = mapping.get(unit, unit)
+        return unit
+
+    def _convert_quantity_to_canonical(qty: float, unit_norm: str):
+        """
+        Convert quantity/unit to canonical small units where possible.
+        Weight → grams (g); Volume → milliliters (ml); dozen → pieces.
+        Returns (quantity, unit).
+        """
+        if qty is None:
+            return qty, unit_norm
+        try:
+            if unit_norm == 'kg':
+                return qty * 1000.0, 'g'
+            if unit_norm == 'l':
+                return qty * 1000.0, 'ml'
+            if unit_norm == 'lb':
+                return qty * 453.592, 'g'
+            if unit_norm == 'oz':
+                return qty * 28.3495, 'g'
+            if unit_norm == 'dozen':
+                return qty * 12.0, 'pieces'
+        except Exception:
+            return qty, unit_norm
+        return qty, unit_norm
+
+    def _clean_note(note: str) -> str:
+        if not note:
+            return ''
+        import re
+        s = re.sub(r'\([^)]*\)', '', str(note)).strip()
+        # shorten overly long notes
+        if len(s) > 140:
+            s = s[:137].rstrip() + '...'
+        return s
+
     for item in shopping_list_dict.get("items", []):
         logger.info(f"Shopping list item: {item}")
         category = item.get("category", "Miscellaneous")
         ingredient = item.get("ingredient")
-        quantity_str = item.get("quantity", "")
+        quantity_value = item.get("quantity", "")
         unit = item.get("unit", "")
         meal_name = item.get("meal_name", "")
         notes = item.get("notes", "")
 
-        # Handle fractional quantities
+        # Handle numeric quantities (schema enforces float), but remain defensive
+        quantity = None
         try:
-            if '/' in quantity_str:
-                numerator, denominator = quantity_str.split('/')
-                quantity = float(numerator) / float(denominator)
-            else:
-                quantity = float(quantity_str)
-        except ValueError:
+            if isinstance(quantity_value, (int, float)):
+                quantity = float(quantity_value)
+            elif isinstance(quantity_value, str):
+                qs = quantity_value.strip()
+                if '/' in qs and re.match(r'^\s*\d+\s*/\s*\d+\s*$', qs):
+                    numerator, denominator = qs.split('/')
+                    quantity = float(numerator) / float(denominator)
+                else:
+                    quantity = float(re.sub(r'[^0-9\./]', '', qs)) if re.search(r'[0-9]', qs) else None
+        except Exception:
             quantity = None
-            logger.info(f"Non-numeric quantity '{quantity_str}' for ingredient '{ingredient}'")
+        if quantity is None:
+            logger.info(f"Non-numeric quantity '{quantity_value}' for ingredient '{ingredient}'")
+
+        unit_norm = _normalize_unit(unit)
+        # Convert to canonical units if applicable
+        if quantity is not None:
+            quantity, unit_norm = _convert_quantity_to_canonical(quantity, unit_norm)
 
         if quantity is not None:
-            if categorized_items[category][ingredient]['unit'] == unit or not categorized_items[category][ingredient]['unit']:
-                categorized_items[category][ingredient]['quantity'] += quantity
-                categorized_items[category][ingredient]['unit'] = unit
+            existing = categorized_items[category].get(ingredient)
+            # If another unit was already stored and differs, split into a variant key
+            if existing and existing['unit'] and existing['unit'] != unit_norm:
+                ingredient_variant = f"{ingredient} ({unit_norm})"
+                categorized_items[category][ingredient_variant]['quantity'] += quantity
+                categorized_items[category][ingredient_variant]['unit'] = unit_norm
             else:
-                # If units differ, treat them as separate entries
-                if categorized_items[category][ingredient]['unit']:
-                    logger.warning(
-                        f"Conflicting units for {ingredient} in {category}: "
-                        f"{categorized_items[category][ingredient]['unit']} vs {unit}"
-                    )
                 categorized_items[category][ingredient]['quantity'] += quantity
-                categorized_items[category][ingredient]['unit'] += f" and {quantity} {unit}"
+                categorized_items[category][ingredient]['unit'] = unit_norm
         else:
             # For e.g. "To taste"
             if not categorized_items[category][ingredient]['unit']:
-                categorized_items[category][ingredient]['quantity'] = quantity_str
-                categorized_items[category][ingredient]['unit'] = unit
+                categorized_items[category][ingredient]['quantity'] = str(quantity_value)
+                categorized_items[category][ingredient]['unit'] = unit_norm
 
         # Append any relevant notes
         if notes and 'none' not in notes.lower():
-            categorized_items[category][ingredient]['notes'].append(f"{meal_name}: {notes} ({quantity_str} {unit})")
+            cleaned = _clean_note(notes)
+            if cleaned:
+                note_list = categorized_items[category][ingredient]['notes']
+                # Avoid dupes (case-insensitive)
+                if cleaned.lower() not in [n.lower() for n in note_list]:
+                    note_list.append(cleaned)
+                # Cap at 2 concise notes
+                if len(note_list) > 2:
+                    categorized_items[category][ingredient]['notes'] = note_list[:2]
 
     # Build the final message for the assistant (regular shopping list only)
     try:
@@ -515,62 +728,50 @@ def generate_shopping_list(meal_plan_id):
         else:
             message_content = "CURRENT SAFE PANTRY ITEMS: None available\n\n"
 
-        # Build the final message for the assistant (regular shopping list only)
-        # Inserted block as per instructions
-        # ---------------------------------------------------------------
-        # Build the final message for the assistant (regular shopping list only)
+        # Keep the assistant text minimal; the template renders tables from structured context
         message_content = (
-            f"I need to send a shopping list to {user_name} for their meal plan from "
-            f"{meal_plan.week_start_date.strftime('%B %d')} to {meal_plan.week_end_date.strftime('%B %d')}. "
-            "Here's the context you'll need:\n\n"
-            f"USER CONTEXT:\n{user_context}\n\n"
-            f"MEAL PLAN DETAILS:\n"
-            f"- Time period: {meal_plan.week_start_date.strftime('%B %d, %Y')} to "
-            f"{meal_plan.week_end_date.strftime('%B %d, %Y')}\n"
-            f"- Serving size: {household_member_count} "
-            f"{'people' if household_member_count > 1 else 'person'}\n"
-            f"- Dietary restrictions: {user.dietary_restrictions if hasattr(user, 'dietary_restrictions') else 'None specified'}\n\n"
-            f"PANTRY INFORMATION:\n"
-            f"- Expiring items: {expiring_items_str}\n"
-            f"- Inventory: {', '.join(user_pantry_items) if user_pantry_items else 'No items in pantry'}\n"
-            f"- Leftover usage: {bridging_leftover_str}\n\n"
-            f"MEAL SUBSTITUTIONS:\n"
-            f"{substitution_str if substitution_info else 'No substitutions needed for this meal plan.'}\n\n"
-            "SHOPPING LIST ITEMS BY CATEGORY:\n"
+            f"Please send a professional weekly shopping list for {user_name} "
+            f"({meal_plan.week_start_date.strftime('%B %d')} – {meal_plan.week_end_date.strftime('%B %d')}). "
+            f"Use the structured tables provided; avoid meal-by-meal commentary."
         )
 
-        # Append the categorized items
+        # Build structured tables for template rendering, if we have categorized_items
+        shopping_tables = []
         if categorized_items:
             for category, items_in_category in categorized_items.items():
-                if items_in_category:
-                    message_content += f"\n{category.upper()}:\\n"
-                    for ingredient, details in items_in_category.items():
-                        qty = details['quantity']
-                        unit = details['unit']
-                        notes_list = details.get('notes', [])
-
-                        # Format quantity nicely
-                        if isinstance(qty, (int, float)):
-                            qty_str = (f"{qty:.1f}".rstrip('0').rstrip('.') 
-                                       if qty % 1 != 0 else f"{int(qty)}")
-                        else:
-                            qty_str = str(qty)
-
-                        message_content += f"- {ingredient}: {qty_str} {unit}"
-                        if notes_list:
-                            message_content += f" (Notes: {'; '.join(notes_list)})"
-                        message_content += "\\n"
-            message_content += "\\n"
-        else:
-            message_content += "No items in shopping list.\\n\\n"
-        # ---------------------------------------------------------------
+                table_items = []
+                for ingredient, details in items_in_category.items():
+                    qty = details.get('quantity')
+                    unit = details.get('unit')
+                    notes_list = details.get('notes', []) or []
+                    # Normalize quantity to a friendly string
+                    if isinstance(qty, (int, float)):
+                        qty_str = (f"{qty:.1f}".rstrip('0').rstrip('.') if isinstance(qty, float) and qty % 1 != 0 else f"{int(qty)}")
+                    else:
+                        qty_str = str(qty)
+                    # Build a concise, normalized row
+                    table_items.append({
+                        'ingredient': ingredient,
+                        'quantity': qty_str,
+                        'unit': _normalize_unit(unit),
+                        'notes': '; '.join([n for n in (notes_list[:2] if isinstance(notes_list, list) else [notes_list]) if n]) or '',
+                    })
+                shopping_tables.append({'category': category, 'items': table_items})
 
         subject = f"Your Shopping List for {meal_plan.week_start_date.strftime('%b %d')} - {meal_plan.week_end_date.strftime('%b %d')}"
 
         result = MealPlanningAssistant.send_notification_via_assistant(
             user_id=user.id,
             message_content=message_content,
-            subject=subject
+            subject=subject,
+            template_key='shopping_list',
+            template_context={
+                'has_categories': bool(categorized_items),
+                'household_member_count': household_member_count,
+                'week_start': meal_plan.week_start_date.strftime('%B %d, %Y'),
+                'week_end': meal_plan.week_end_date.strftime('%B %d, %Y'),
+                'shopping_tables': shopping_tables,
+            }
         )
 
         if result.get('status') == 'success':
@@ -612,7 +813,7 @@ def generate_user_summary(user_id: int, summary_date=None) -> None:
     # Get or create summary_date (default to today in user's local timezone)
     if summary_date is None:
         # Use the user's timezone if available, otherwise use UTC
-        user_timezone = pytz.timezone(user.timezone if user.timezone else 'UTC')
+        user_timezone = ZoneInfo(user.timezone if getattr(user, 'timezone', None) else 'UTC')
         summary_date = timezone.now().astimezone(user_timezone).date()
     elif isinstance(summary_date, str):
         # If it's a string, parse it as a date
@@ -1124,7 +1325,8 @@ def generate_emergency_supply_list(user_id):
             result = MealPlanningAssistant.send_notification_via_assistant(
                 user_id=user.id,
                 message_content=message_content,
-                subject=subject
+                subject=subject,
+                template_key='emergency_supply'
             )
             
             if result.get('status') == 'success':
@@ -1220,7 +1422,8 @@ def send_system_update_email(subject, message, user_ids=None):
                 result = MealPlanningAssistant.send_notification_via_assistant(
                     user_id=user.id,
                     message_content=enhanced_message,
-                    subject=subject
+                    subject=subject,
+                    template_key='system_update'
                 )
                 
                 if result.get('status') == 'success':
@@ -1503,7 +1706,8 @@ def send_payment_confirmation_email(payment_data):
         result = MealPlanningAssistant.send_notification_via_assistant(
             user_id=chef_user.id,
             message_content=message_content,
-            subject=subject
+            subject=subject,
+            template_key='payment_confirmation'
         )
         
         if result.get('status') == 'success':
@@ -1572,7 +1776,8 @@ def send_refund_notification_email(order_id):
         result = MealPlanningAssistant.send_notification_via_assistant(
             user_id=user.id,
             message_content=message_content,
-            subject=subject
+            subject=subject,
+            template_key='refund_notification'
         )
         
         if result.get('status') == 'success':
@@ -1689,7 +1894,8 @@ def send_order_cancellation_email(order_id):
         result = MealPlanningAssistant.send_notification_via_assistant(
             user_id=user.id,
             message_content=message_content,
-            subject=subject
+            subject=subject,
+            template_key='order_cancellation'
         )
         
         if result.get('status') == 'success':

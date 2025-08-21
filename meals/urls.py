@@ -41,10 +41,15 @@ urlpatterns = [
     path('api/email_approved_meal_plan/', views.api_email_approved_meal_plan, name='api_email_approved_meal_plan'),
     path('api/remove_meal_from_plan/', views.api_remove_meal_from_plan, name='api_remove_meal_from_plan'),
     path('api/replace_meal_plan_meal/', views.api_replace_meal_plan_meal, name='api_replace_meal_plan_meal'),
+    path('api/add_meal_slot/', views.api_add_meal_slot, name='api_add_meal_slot'),
+    path('api/suggest_alternatives_for_slot/', views.api_suggest_alternatives_for_slot, name='api_suggest_alternatives_for_slot'),
+    path('api/fill_meal_slot/', views.api_fill_meal_slot, name='api_fill_meal_slot'),
     path('api/update_meals_with_prompt/', views.api_update_meals_with_prompt, name='api_update_meals_with_prompt'),
+    path('api/suggest_meal_alternatives/', views.api_suggest_meal_alternatives, name='api_suggest_meal_alternatives'),
     path('api/generate_meal_plan/', views.api_generate_meal_plan, name='api_generate_meal_plan'),
     path('api/meal_plan_status/<str:task_id>/', views.api_meal_plan_status, name='api_meal_plan_status'),
     path('api/modify_meal_plan/<int:meal_plan_id>/', views.api_modify_meal_plan, name='api_modify_meal_plan'),
+    path('api/meal_plans/stream', views.api_stream_meal_plan_generation, name='api_stream_meal_plan_generation'),
     
     # Function-based API views for chef meal orders
     path('api/chef-meal-orders/', chef_meals_views.api_chef_meal_orders, name='api_chef_meal_orders'),
@@ -66,6 +71,7 @@ urlpatterns = [
     path('api/regenerate-stripe-link/', views.api_regenerate_stripe_account_link, name='api_regenerate_stripe_account_link'),
     path('api/fix-restricted-account/', views.api_fix_restricted_stripe_account, name='api_fix_restricted_stripe_account'),
     path('api/process-chef-meal-payment/<int:order_id>/', views.api_process_chef_meal_payment, name='api_process_chef_meal_payment'),
+    path('api/order-payment-status/<int:order_id>/', views.api_order_payment_status, name='api_order_payment_status'),
     path('api/process-meal-payment/<int:order_id>/', views.api_process_meal_payment, name='api_process_meal_payment'),
     path('api/resend-payment-link/<int:order_id>/', views.api_resend_payment_link, name='api_resend_payment_link'),
     path('api/chef-received-orders/', views.api_chef_received_orders, name='api_chef_received_orders'),

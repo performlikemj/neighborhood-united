@@ -10,10 +10,11 @@ import logging
 import os
 import requests
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as py_tz
 from typing import Dict, List, Optional, Any, Union
 from shared.utils import generate_user_context
 from django.utils import timezone
+import pytz
 from django.shortcuts import get_object_or_404
 from custom_auth.models import CustomUser
 from meals.models import PantryItem, MealPlan
@@ -382,6 +383,33 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
 
     # --- 1. Gather prompt context -------------------------------------------
     meal_plan_data = MealPlanSerializer(meal_plan).data
+
+    # Filter out past meals relative to the user's local date
+    try:
+        from zoneinfo import ZoneInfo
+        user_tz = ZoneInfo(getattr(user, 'timezone', 'UTC'))
+    except Exception:
+        try:
+            import pytz as _p
+            user_tz = _p.timezone(getattr(user, 'timezone', 'UTC'))
+        except Exception:
+            user_tz = py_tz.utc
+    today_local = timezone.now().astimezone(user_tz).date()
+
+    from datetime import timedelta as _td
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    start_idx = meal_plan.week_start_date.weekday()
+    ordered_names = [day_names[(start_idx + i) % 7] for i in range(7)]
+    day_to_date = {ordered_names[i]: (meal_plan.week_start_date + _td(days=i)) for i in range(7)}
+
+    original_meals = meal_plan_data.get('meals', []) or []
+    filtered_meals = [m for m in original_meals if (day_to_date.get(m.get('day')) is None or day_to_date[m.get('day')] >= today_local)]
+
+    if not filtered_meals:
+        # nothing to generate
+        return {"items": []}
+
+    meal_plan_data['meals'] = filtered_meals
     user_context = generate_user_context(user) or "No additional user context."
 
     # Chef & substitution info
@@ -468,8 +496,8 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
                         - **ShoppingListItem**: Each item in the list should have the following attributes:
                         - **meal_name**: The name of the meal the ingredient is for.
                         - **ingredient**: The specific ingredient needed.
-                        - **quantity**: The amount of the ingredient required, adjusted for the user's preferred serving size.
-                        - **unit**: The unit of measurement for the quantity.
+                        - **quantity**: Numeric-only amount required, adjusted for serving size. Use numbers only (e.g., 200, 1.5, 12). Do not include text or units here.
+                        - **unit**: The unit of measurement for the quantity. Place all unit text here (e.g., "grams", "ml", "pieces").
                         - **notes**: Any special notes regarding the item (optional).
                         - **category**: The category to which the item belongs (such as 'vegetables', 'dairy', etc.).
 
@@ -482,7 +510,7 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
                         **Input:**
                         Generate a shopping list for two meals with preferred serving sizes.
 
-                        **Output:**
+                        **Output (numeric-only quantities):**
 
                         ```json
                         {
@@ -490,7 +518,7 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
                             {
                             "meal_name": "Spaghetti Bolognese",
                             "ingredient": "Spaghetti",
-                            "quantity": "300",
+                            "quantity": 300,
                             "unit": "grams",
                             "notes": null,
                             "category": "pasta"
@@ -498,7 +526,7 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
                             {
                             "meal_name": "Spaghetti Bolognese",
                             "ingredient": "Ground Beef",
-                            "quantity": "750",
+                            "quantity": 750,
                             "unit": "grams",
                             "notes": "Leaner cuts preferred",
                             "category": "meat"
@@ -506,7 +534,7 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
                             {
                             "meal_name": "Caesar Salad",
                             "ingredient": "Romaine Lettuce",
-                            "quantity": "2",
+                            "quantity": 2,
                             "unit": "heads",
                             "notes": "Fresh and crisp",
                             "category": "vegetables"
@@ -514,7 +542,7 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
                             {
                             "meal_name": "Caesar Salad",
                             "ingredient": "Parmesan Cheese",
-                            "quantity": "75",
+                            "quantity": 75,
                             "unit": "grams",
                             "notes": "Grated",
                             "category": "dairy"

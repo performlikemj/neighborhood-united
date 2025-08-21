@@ -63,4 +63,9 @@ app.conf.beat_schedule = {
         'task': 'customer_dashboard.tasks.cleanup_expired_sessions',
         'schedule': crontab(hour=2, minute=0),  # Run daily at 2 AM
     },
+    'cleanup-old-meal-plans-and-meals': {
+        'task': 'meals.tasks.cleanup_old_meal_plans_and_meals',
+        'schedule': crontab(hour=3, minute=0),  # Run daily at 3 AM
+        'args': (),
+    },
 }

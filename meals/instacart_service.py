@@ -304,7 +304,7 @@ def _call_instacart_api(payload: dict, api_key: str) -> str:
         Exception: If the API call fails
     """
     # Determine API endpoint
-    api_base_url = getattr(settings, 'INSTACART_API_BASE_URL', 'https://connect.instacart.com')
+    api_base_url = os.getenv('INSTACART_API_BASE_URL', 'https://connect.instacart.com')
     api_endpoint = f"{api_base_url}/idp/v1/products/products_link"
     
     # Log API request (without the key)
@@ -375,6 +375,9 @@ def generate_instacart_link(user_id: int, meal_plan_id: int, postal_code: str = 
         # Get the meal plan
         meal_plan = get_object_or_404(MealPlan, id=meal_plan_id, user=user)
         
+        # Precompute whether the meal plan contains chef-created meals
+        has_chef_meals = meal_plan.meal.filter(chef__isnull=False).exists()
+
         # Check if meal plan already has an Instacart URL saved
         if meal_plan.instacart_url:
             logger.info(f"Using existing Instacart URL for meal plan {meal_plan_id}")
@@ -382,7 +385,8 @@ def generate_instacart_link(user_id: int, meal_plan_id: int, postal_code: str = 
                 "status": "success",
                 "instacart_url": meal_plan.instacart_url,
                 "message": "Retrieved existing Instacart shopping list URL",
-                "from_cache": True
+                "from_cache": True,
+                "has_chef_meals": has_chef_meals
             }
         
         # Use the provided postal code or try to get it from the user's address if not provided
@@ -411,13 +415,43 @@ def generate_instacart_link(user_id: int, meal_plan_id: int, postal_code: str = 
             # Parse the existing shopping list
             shopping_list_data = json.loads(shopping_list.items)
         
+        # Filter out items belonging to chef-created meals
+        try:
+            if has_chef_meals:
+                # Pull chef meal names via DB for efficiency
+                chef_meal_names = set(
+                    meal_plan.meal.filter(chef__isnull=False).values_list('name', flat=True)
+                )
+                items = shopping_list_data.get('items') or []
+                original_count = len(items)
+                if chef_meal_names and original_count:
+                    filtered_items = [
+                        it for it in items
+                        if (it or {}).get('meal_name') not in chef_meal_names
+                    ]
+                    removed_count = original_count - len(filtered_items)
+                    if removed_count > 0:
+                        logger.info(
+                            f"Excluded {removed_count} shopping list item(s) tied to chef-created meals from Instacart payload"
+                        )
+                    shopping_list_data['items'] = filtered_items
+        except Exception as _filter_err:
+            logger.warning(f"Failed to filter chef-created meal items for Instacart: {_filter_err}")
+
+        # If everything was filtered out, avoid calling Instacart API with empty items
+        if not (shopping_list_data.get('items') or []):
+            return {
+                "status": "error",
+                "message": "No eligible grocery items to send to Instacart after excluding chef-created meals."
+            }
+        
         # Get the API key from settings
         api_key = os.getenv('INSTACART_API_KEY')
         if not api_key:
             logger.error("Instacart API key not found in environment variables")
             return {
                 "status": "error",
-                "message": "Instacart API key not found in environment variables"
+                "message": "Having issues connecting to Instacart"
             }
         # Create the Instacart shopping list
         result = create_instacart_shopping_list(
@@ -434,6 +468,12 @@ def generate_instacart_link(user_id: int, meal_plan_id: int, postal_code: str = 
             meal_plan.save(update_fields=['instacart_url'])
             result['from_cache'] = False
             logger.info(f"Saved Instacart URL to meal plan {meal_plan_id}")
+        
+        # Always include presence flag for chef meals
+        try:
+            result['has_chef_meals'] = has_chef_meals
+        except Exception:
+            pass
         
         return result
     except Exception as e:

@@ -5,7 +5,8 @@ from local_chefs.models import PostalCode, ChefPostalCode
 import requests
 import json
 from django.conf import settings
-from datetime import date, timedelta
+from datetime import date, timedelta, timezone as py_tz
+from zoneinfo import ZoneInfo
 from django.utils import timezone
 from custom_auth.models import CustomUser, Address
 from django.contrib.contenttypes.fields import GenericRelation
@@ -251,6 +252,13 @@ class Meal(models.Model):
     meal_embedding = VectorField(dimensions=1536, null=True)
     macro_info = models.JSONField(blank=True, null=True)
     youtube_videos = models.JSONField(blank=True, null=True)
+    # For user-generated meals, store a bundle of dishes (lightweight structure) to
+    # cover heterogeneous households without creating persistent Dish rows.
+    # Expected structure: [
+    #   { "name": str, "dietary_tags": [str], "target_groups": [str],
+    #     "notes": str | null, "ingredients": [str] | null, "is_chef_dish": false }
+    # ]
+    composed_dishes = models.JSONField(blank=True, null=True)
 
     class Meta:
         constraints = [
@@ -469,6 +477,29 @@ class Meal(models.Model):
         """
         current_date = timezone.now().date()
         return self.start_date > current_date
+
+
+class MealDish(models.Model):
+    """
+    Structured per-meal dish for user-generated meals.
+    Keeps chef-created Dish model untouched.
+    """
+    meal = models.ForeignKey('Meal', on_delete=models.CASCADE, related_name='meal_dishes')
+    name = models.CharField(max_length=200)
+    dietary_tags = ArrayField(models.CharField(max_length=50), blank=True, default=list)
+    target_groups = ArrayField(models.CharField(max_length=50), blank=True, default=list)
+    notes = models.TextField(blank=True, null=True)
+    # Free-form ingredient list for now; can be upgraded to structured name/qty/unit later
+    ingredients = models.JSONField(blank=True, null=True)
+    is_chef_dish = models.BooleanField(default=False)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['meal', 'name']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} (meal_id={self.meal_id})"
 
 class MealPlan(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
@@ -877,14 +908,13 @@ class ChefMealEvent(models.Model):
     
     def get_chef_timezone_object(self):
         """
-        Get the chef's timezone as a pytz timezone object.
+        Get the chef's timezone as a ZoneInfo timezone object.
         """
-        import pytz
         timezone_str = self.get_chef_timezone()
         try:
-            return pytz.timezone(timezone_str)
-        except pytz.exceptions.UnknownTimeZoneError:
-            return pytz.UTC
+            return ZoneInfo(timezone_str)
+        except Exception:
+            return ZoneInfo("UTC")
     
     def to_chef_timezone(self, dt):
         """
@@ -908,10 +938,10 @@ class ChefMealEvent(models.Model):
         # If the datetime is naive, assume it's in the chef's timezone and make it aware
         if not timezone.is_aware(dt):
             chef_tz = self.get_chef_timezone_object()
-            dt = chef_tz.localize(dt)
+            dt = timezone.make_aware(dt, chef_tz)
             
         # Convert to UTC
-        return dt.astimezone(timezone.utc)
+        return dt.astimezone(py_tz.utc)
     
     def get_event_datetime(self):
         """
@@ -926,7 +956,7 @@ class ChefMealEvent(models.Model):
         
         # Make it timezone-aware in the chef's timezone
         chef_tz = self.get_chef_timezone_object()
-        return chef_tz.localize(naive_dt)
+        return timezone.make_aware(naive_dt, chef_tz)
     
     def get_cutoff_time_in_chef_timezone(self):
         """

@@ -7,6 +7,7 @@ import os
 import random
 import requests
 import pytz
+from zoneinfo import ZoneInfo
 import traceback
 import uuid
 from collections import defaultdict
@@ -54,10 +55,10 @@ def is_saturday_in_timezone(user_timezone_str):
     """
     try:
         # Get the timezone object
-        user_tz = pytz.timezone(user_timezone_str)
+        user_tz = ZoneInfo(user_timezone_str)
         
         # Get current time in user's timezone
-        user_local_time = datetime.now(user_tz)
+        user_local_time = timezone.now().astimezone(user_tz)
         
         # Check if it's Saturday (weekday 5)
         return user_local_time.weekday() == 5
@@ -371,8 +372,8 @@ def create_meal_plan_for_all_users():
             logger.info(f"It's Saturday in {user.timezone} for user {user.username}. Creating meal plan.")
             
             # Calculate start and end dates for the upcoming week
-            user_tz = pytz.timezone(user.timezone)
-            user_local_time = datetime.now(user_tz)
+            user_tz = ZoneInfo(user.timezone)
+            user_local_time = timezone.now().astimezone(user_tz)
             user_local_date = user_local_time.date()
             
             # Calculate days until next Monday (weekday 0)
@@ -478,45 +479,39 @@ def create_meal_plan_for_user(
     # Use a transaction to prevent race conditions
     with transaction.atomic():
         logger.info(f"[{request_id}] Starting transaction for meal plan creation")
-        # Check for existing meal plan with select_for_update to lock the rows
-        existing_meal_plan = MealPlan.objects.select_for_update().filter(
-            user=user,
-            week_start_date=start_of_week if monday_date is None else monday_date,
-            week_end_date=end_of_week
-        ).first()
         
-        if existing_meal_plan:
-            # Check if the plan has meals
-            existing_meals = MealPlanMeal.objects.filter(meal_plan=existing_meal_plan)
-            
-            if existing_meals.exists():
-                logger.info(f"[{request_id}] User {user.username} already has meals for the week. Returning existing plan.")
-                return existing_meal_plan
-            else:
-                # Empty meal plan - delete it and create a new one
-                logger.warning(f"[{request_id}] Found empty meal plan (ID: {existing_meal_plan.id}) for user {user.username}. Deleting it.")
-                existing_meal_plan.delete()
-                logger.info(f"[{request_id}] Deleted empty meal plan (ID: {existing_meal_plan.id})")
-
-        # Create a new meal plan
+        # Use get_or_create to atomically handle the meal plan creation/retrieval
+        # This prevents race conditions where two processes try to create the same meal plan
+        # IMPORTANT: Do not change this back to separate existence check + create()
+        # as it will reintroduce race conditions in concurrent environments (Celery tasks, etc.)
         try:
-            if monday_date is None:
-                meal_plan = MealPlan.objects.create(
-                    user=user,
-                    week_start_date=start_of_week,
-                    week_end_date=end_of_week,
-                )
+            meal_plan, created = MealPlan.objects.get_or_create(
+                user=user,
+                week_start_date=start_of_week if monday_date is None else monday_date,
+                week_end_date=end_of_week,
+                defaults={}  # No additional defaults needed since we're only setting the required fields
+            )
+            
+            if created:
+                logger.info(f"[{request_id}] Created new meal plan (ID: {meal_plan.id}) for user {user.username}")
             else:
-                meal_plan = MealPlan.objects.create(
-                    user=user,
-                    week_start_date=monday_date,
-                    week_end_date=end_of_week,
-                )
-            logger.info(f"[{request_id}] Created new meal plan (ID: {meal_plan.id}) for user {user.username}")
+                logger.info(f"[{request_id}] Found existing meal plan (ID: {meal_plan.id}) for user {user.username}")
+                
+                # Check if the existing plan has meals
+                existing_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan)
+                
+                if existing_meals.exists():
+                    logger.info(f"[{request_id}] User {user.username} already has meals for the week. Returning existing plan.")
+                    return meal_plan
+                else:
+                    # Empty meal plan - we can proceed to add meals to it
+                    logger.info(f"[{request_id}] Found empty meal plan (ID: {meal_plan.id}) for user {user.username}. Will populate with meals.")
+                    
         except Exception as e:
             # n8n traceback
             n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
             requests.post(n8n_traceback_url, json={"error": str(e), "source":"create_meal_plan_for_user", "traceback": traceback.format_exc()})
+            logger.error(f"[{request_id}] Exception during meal plan creation/retrieval: {e}")
             return None
 
         user_id = user.id
@@ -606,6 +601,39 @@ def create_meal_plan_for_user(
             ) if day in planning_days
         }
         
+        # Initialize progress tracking in Redis for SSE
+        try:
+            from utils.redis_client import set as redis_set
+            total_slots = len(planning_days) * len(meal_types)
+            progress_key = f"meal_plan_job:{user_id}:{start_of_week.strftime('%Y_%m_%d')}"
+            redis_set(progress_key, {"total": total_slots, "added": 0}, 3600)
+        except Exception:
+            progress_key = None
+        added_count = 0
+
+        # Preload previous 3 weeks' meals to avoid reusing them
+        try:
+            ranges = [
+                (
+                    start_of_week - timedelta(days=7*i),
+                    end_of_week - timedelta(days=7*i)
+                ) for i in range(1, 4)
+            ]
+            from django.db.models import Q
+            week_q = Q()
+            for ws, we in ranges:
+                week_q |= Q(meal_plan__week_start_date=ws, meal_plan__week_end_date=we)
+            prev_meal_ids = set(
+                MealPlanMeal.objects.filter(
+                    Q(meal_plan__user=user) & week_q
+                ).values_list('meal_id', flat=True)
+            )
+            if prev_meal_ids:
+                skipped_meal_ids.update(prev_meal_ids)
+                logger.info(f"[{request_id}] Preloaded {len(prev_meal_ids)} prior-3-week meal IDs to skip.")
+        except Exception:
+            pass
+
         for day_name in planning_days:
             day_offset = day_offset_map[day_name]
             meal_date = start_of_week + timedelta(days=day_offset)
@@ -723,6 +751,33 @@ def create_meal_plan_for_user(
                                 meal_added = True
                                 
                             logger.info(f"[{request_id}] Successfully added meal '{meal.name}' for {day_name} {meal_type}")
+                            # Publish SSE event for new meal
+                            try:
+                                from utils.redis_client import get_redis_connection, get as redis_get, set as redis_set
+                                from meals.serializers import MealPlanMealSerializer
+                                conn = get_redis_connection()
+                                if conn is not None:
+                                    channel = f"meal_plan_stream:{user.id}:{start_of_week.strftime('%Y_%m_%d')}"
+                                    # Retrieve the created plan meal
+                                    offset = day_to_offset(day_name)
+                                    meal_date = meal_plan.week_start_date + timedelta(days=offset)
+                                    mpm = MealPlanMeal.objects.filter(meal_plan=meal_plan, day=day_name, meal_type=meal_type, meal=meal, meal_date=meal_date).first()
+                                    if mpm:
+                                        payload = {
+                                            "event": "meal_added",
+                                            "data": {"meal_plan_meal": MealPlanMealSerializer(mpm).data}
+                                        }
+                                        conn.publish(channel, json.dumps(payload))
+                                        # Update and publish progress
+                                        added_count += 1
+                                        if progress_key:
+                                            job_info = redis_get(progress_key) or {"total": total_slots, "added": 0}
+                                            job_info["added"] = added_count
+                                            redis_set(progress_key, job_info, 3600)
+                                            pct = int((added_count / max(total_slots, 1)) * 100)
+                                            conn.publish(channel, json.dumps({"event": "progress", "data": {"pct": pct}}))
+                            except Exception:
+                                pass
                             
                             # If that meal used pantry items, keep track of it
                             if result.get('used_pantry_item'):
@@ -807,6 +862,29 @@ def create_meal_plan_for_user(
                                 existing_meal_names.add(meal_found.name)
                                 existing_meal_embeddings.append(meal_found.meal_embedding)
                                 meal_added = True
+                                # Publish SSE event for new meal
+                                try:
+                                    from utils.redis_client import get_redis_connection, get as redis_get, set as redis_set
+                                    from meals.serializers import MealPlanMealSerializer
+                                    conn = get_redis_connection()
+                                    if conn is not None:
+                                        channel = f"meal_plan_stream:{user.id}:{start_of_week.strftime('%Y_%m_%d')}"
+                                        mpm = meal_plan_meal
+                                        payload = {
+                                            "event": "meal_added",
+                                            "data": {"meal_plan_meal": MealPlanMealSerializer(mpm).data}
+                                        }
+                                        conn.publish(channel, json.dumps(payload))
+                                        # Update and publish progress
+                                        added_count += 1
+                                        if progress_key:
+                                            job_info = redis_get(progress_key) or {"total": total_slots, "added": 0}
+                                            job_info["added"] = added_count
+                                            redis_set(progress_key, job_info, 3600)
+                                            pct = int((added_count / max(total_slots, 1)) * 100)
+                                            conn.publish(channel, json.dumps({"event": "progress", "data": {"pct": pct}}))
+                                except Exception:
+                                    pass
                             except Exception as e:
                                 # n8n traceback
                                 n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
@@ -835,12 +913,9 @@ def create_meal_plan_for_user(
         logger.info(f"[{request_id}] Meal plan created successfully for {user.username} with {meal_count} meals across {len(planning_days)} day(s)")
 
     # These operations can be outside the transaction since we now have a validated meal plan with meals
-    # If any meal used pantry items, skip replacements
-    if used_pantry_item:
-        logger.info(f"[{request_id}] At least one meal used soon-to-expire pantry items; skipping replacements.")
-    else:
-        logger.info(f"[{request_id}] Analyzing and replacing meals if needed.")
-        analyze_and_replace_meals(user, meal_plan, meal_types, request_id)
+    # Always analyze and replace for variety to prevent repeated plans week-to-week
+    logger.info(f"[{request_id}] Running variety analysis and replacements (if needed).")
+    analyze_and_replace_meals(user, meal_plan, meal_types, request_id)
 
     # Apply the meal plan approval token and expiry
     meal_plan.approval_token = str(uuid.uuid4())
@@ -870,6 +945,17 @@ def create_meal_plan_for_user(
             logger.debug(f"[{request_id}] Redis lock {lock_key} was not found or already expired")
     except Exception as e:
         logger.warning(f"[{request_id}] Error cleaning up Redis lock: {str(e)}")
+
+    # Publish done event
+    try:
+        from utils.redis_client import get_redis_connection
+        conn = get_redis_connection()
+        if conn is not None:
+            channel = f"meal_plan_stream:{user.id}:{start_of_week.strftime('%Y_%m_%d')}"
+            conn.publish(channel, json.dumps({"event": "progress", "data": {"pct": 100}}))
+            conn.publish(channel, json.dumps({"event": "done", "data": {}}))
+    except Exception:
+        pass
 
     return meal_plan
 
@@ -1068,18 +1154,21 @@ def analyze_and_replace_meals(user, meal_plan, meal_types, request_id=None):
     if request_id is None:
         request_id = str(uuid.uuid4())
 
-    # Fetch previous meal plans
+    # Fetch previous meal plans (last 3 weeks)
     last_week_meal_plan = MealPlan.objects.filter(user=user, week_start_date=meal_plan.week_start_date - timedelta(days=7)).first()
     two_weeks_ago_meal_plan = MealPlan.objects.filter(user=user, week_start_date=meal_plan.week_start_date - timedelta(days=14)).first()
+    three_weeks_ago_meal_plan = MealPlan.objects.filter(user=user, week_start_date=meal_plan.week_start_date - timedelta(days=21)).first()
 
     # Query the user's meal plan meals
     current_meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan)
     previous_meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=last_week_meal_plan)
     two_weeks_ago_meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=two_weeks_ago_meal_plan)
+    three_weeks_ago_meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=three_weeks_ago_meal_plan)
 
     current_meal_plan_str = format_meal_plan(current_meal_plan_meals)
     previous_week_plan_str = format_meal_plan(previous_meal_plan_meals)
     two_weeks_ago_plan_str = format_meal_plan(two_weeks_ago_meal_plan_meals)
+    three_weeks_ago_plan_str = format_meal_plan(three_weeks_ago_meal_plan_meals)
 
     try:
         input = [
@@ -1157,6 +1246,7 @@ def analyze_and_replace_meals(user, meal_plan, meal_types, request_id=None):
                     f"Current Meal Plan:\n{current_meal_plan_str}\n\n"
                     f"Previous Week's Meal Plan:\n{previous_week_plan_str}\n\n"
                     f"Two Weeks Ago Meal Plan:\n{two_weeks_ago_plan_str}\n\n"
+                    f"Three Weeks Ago Meal Plan:\n{three_weeks_ago_plan_str}\n\n"
                     "Please identify meals in the current meal plan that should be replaced to ensure variety. "
                 )
             }
@@ -1414,6 +1504,8 @@ def find_existing_meal(
         user_country = user.address.country if hasattr(user.address, 'country') else None
     current_date = timezone.now().date()
         
+    chef_meals = Meal.objects.none()
+    chef_meal_ids = []
     if user_postal_code:
         # Find chefs serving user's postal code - FIXED to query by code field
         chef_ids = ChefPostalCode.objects.filter(
@@ -1431,7 +1523,7 @@ def find_existing_meal(
             orders_count__lt=F('max_orders')
         )
 
-        chef_meal_ids = upcoming_chef_events.values_list('meal_id', flat=True).distinct()
+        chef_meal_ids = list(upcoming_chef_events.values_list('meal_id', flat=True).distinct())
 
         # Get chef meals with exclusions
         if chef_meal_ids:
@@ -1481,18 +1573,22 @@ def find_existing_meal(
                 id__in=skipped_meal_ids
             )
             
-            # Combine with potential meals
-            potential_meals = potential_meals.union(chef_meals)
-            
-            logger.info(f"Including {chef_meals.count()} chef-created meals in recommendations for user {user.username}")
+            # Keep chef meals separate so we can prioritize them in ordering later
+            chef_meal_ids = list(chef_meals.values_list('id', flat=True))
+            logger.info(f"Including {len(chef_meal_ids)} chef-created meals in recommendations for user {user.username}")
 
-    # If no potential meals, return None
-    if not potential_meals.exists():
-        logger.info(f"No potential meals found for user {user.username} and meal type {meal_type} after basic filtering.")
+    # If no potential meals of any kind, return None
+    if not potential_meals.exists() and len(chef_meal_ids) == 0:
+        logger.info(f"No potential meals (including chef meals) found for user {user.username} and meal type {meal_type} after basic filtering.")
         return None
 
-    # Get a list of meals for analysis
-    meals_for_analysis = list(potential_meals)
+    # Get a list of meals for analysis, prioritizing chef meals first
+    prioritized_meals = []
+    if chef_meal_ids:
+        prioritized_meals.extend(list(Meal.objects.filter(id__in=chef_meal_ids)))
+    non_chef_qs = potential_meals.exclude(id__in=chef_meal_ids) if chef_meal_ids else potential_meals
+    prioritized_meals.extend(list(non_chef_qs))
+    meals_for_analysis = prioritized_meals
     
     # For embedding similarity check
     filtered_meals = []

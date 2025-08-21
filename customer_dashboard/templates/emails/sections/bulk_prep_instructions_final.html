@@ -1,0 +1,12 @@
+{% load i18n %}
+<div class="section section-final">
+  {% if final_text %}
+    {{ final_text|safe }}
+  {% else %}
+    {{ content_html|safe }}
+  {% endif %}
+  <p style="margin-top:8px;">{% trans "You’re set for the week. Reply if you want me to tweak portions or timing." %}</p>
+  
+</div>
+
+

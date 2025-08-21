@@ -1,0 +1,18 @@
+{% load i18n %}
+<div class="section section-final" style="margin-top:16px;">
+  <div class="card" style="text-align:center;">
+    {% if approval_link_daily or approval_link_one_day %}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin:8px 0 12px;">
+        {% if approval_link_daily %}
+          <a href="{{ approval_link_daily }}" class="button" style="min-width:240px;">{% trans "Approve (Daily Prep)" %}</a>
+        {% endif %}
+        {% if approval_link_one_day %}
+          <a href="{{ approval_link_one_day }}" class="button secondary" style="min-width:240px;">{% trans "Approve (One‑Day Bulk Prep)" %}</a>
+        {% endif %}
+      </div>
+    {% endif %}
+    <p style="margin:8px 0 0;">{% trans "You can adjust preferences anytime—just reply to this email or open your dashboard." %}</p>
+  </div>
+</div>
+
+

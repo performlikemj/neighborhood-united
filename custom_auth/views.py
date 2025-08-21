@@ -10,7 +10,7 @@ from django.core.mail import EmailMessage
 from .tokens import account_activation_token
 from .models import CustomUser, Address, UserRole, HouseholdMember, OnboardingSession
 from customer_dashboard.models import GoalTracking, AssistantEmailToken, UserEmailSession, EmailAggregationSession, AggregatedMessageContent, PreAuthenticationMessage
-from chefs.models import ChefRequest
+from chefs.models import ChefRequest, Chef
 from .forms import RegistrationForm, UserProfileForm, EmailChangeForm, AddressForm
 from django.urls import reverse
 from django.contrib.auth.decorators import login_required, user_passes_test
@@ -56,7 +56,7 @@ from meals.models import CustomDietaryPreference
 from django.core.mail import send_mail
 from django.conf import settings
 from uuid import UUID
-from utils.redis_client import get, set
+from utils.redis_client import get, set as redis_set
 from customer_dashboard.tasks import process_aggregated_emails
 from utils.translate_html import translate_paragraphs  # Import the translation utility
 from bs4 import BeautifulSoup
@@ -136,7 +136,7 @@ def email_authentication_view(request, auth_token):
             )
 
             active_session_flag_key = f"{ACTIVE_DB_AGGREGATION_SESSION_FLAG_PREFIX}{user.id}"
-            set(active_session_flag_key, str(db_aggregation_session.session_identifier), timeout=AGGREGATION_WINDOW_MINUTES * 60)
+            redis_set(active_session_flag_key, str(db_aggregation_session.session_identifier), timeout=AGGREGATION_WINDOW_MINUTES * 60)
 
             process_aggregated_emails.apply_async(
                 args=[str(db_aggregation_session.session_identifier)],
@@ -417,23 +417,63 @@ class RegisterView(View):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def switch_role_api(request):
-    # Get the user's role, or create a new one with 'customer' as the default
-    user_role, _ = UserRole.objects.get_or_create(user=request.user, defaults={'current_role': 'customer'})
-    new_role = 'chef' if user_role.current_role == 'customer' and user_role.is_chef else 'customer'
+    """
+    Atomically switch the current role and return the authoritative user payload.
+    - Accepts optional { role: 'chef' | 'customer' } to explicitly set the role; otherwise toggles.
+    - Ensures Chef profile exists when switching to 'chef' (if user is approved as chef).
+    - Updates server-side session state to reflect the new role before responding.
+    - Returns the same payload shape as GET /auth/api/user_details/.
+    """
+    try:
+        with transaction.atomic():
+            user = request.user
+            user_role, _ = UserRole.objects.select_for_update().get_or_create(
+                user=user, defaults={'current_role': 'customer'}
+            )
 
+            requested_role = (request.data.get('role') or '').strip().lower()
+            if requested_role not in ('chef', 'customer', ''):
+                return Response({'detail': "Invalid role. Must be 'chef' or 'customer'."}, status=400)
 
-    # Check if the user can switch to chef
-    if new_role == 'chef' and not user_role.is_chef:
-        return Response({'error': 'You are not a chef.'}, status=400)
+            if requested_role:
+                target_role = requested_role
+            else:
+                # Toggle behavior if not explicitly provided
+                if user_role.current_role == 'customer' and user_role.is_chef:
+                    target_role = 'chef'
+                else:
+                    target_role = 'customer'
 
-    # Update the user role
-    user_role.current_role = new_role
-    user_role.save()
+            # Authorization to switch to chef
+            if target_role == 'chef' and not user_role.is_chef:
+                return Response({'detail': 'You are not a chef.'}, status=403)
 
+            # Apply the role change
+            user_role.current_role = target_role
+            user_role.save(update_fields=['current_role'])
 
-    # Serialize and return the new user role
-    serializer = UserRoleSerializer(user_role)
-    return Response(serializer.data)
+            # If switching to chef, ensure a Chef profile exists
+            if target_role == 'chef':
+                try:
+                    Chef.objects.get(user=user)
+                except Chef.DoesNotExist:
+                    Chef.objects.create(user=user)
+
+            # Update any session-backed hints for immediate consistency
+            try:
+                request.session['current_role'] = user_role.current_role
+                request.session['is_chef'] = user_role.is_chef
+                request.session.modified = True
+            except Exception:
+                pass
+
+        # After transaction commit, build and return the authoritative user payload
+        payload = CustomUserSerializer(user).data
+        return Response({'user': payload}, status=200)
+
+    except Exception as e:
+        logger.error(f"switch_role_api error for user {getattr(request.user, 'id', 'anon')}: {e}")
+        return Response({'detail': 'Failed to switch role.'}, status=500)
 
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
@@ -630,11 +670,10 @@ def get_countries(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def update_profile_api(request):
-
     try:
         user = request.user
         user_serializer = CustomUserSerializer(user, data=request.data, partial=True)
-
+        # Avoid accessing serializer.data before validation; use initial_data for debugging if needed
         if user_serializer.is_valid():
             if 'email' in user_serializer.validated_data and user_serializer.validated_data['email'] != user.email:
                 new_email = user_serializer.validated_data['email']
@@ -737,33 +776,71 @@ def update_profile_api(request):
             user.save()
 
         else:
+            print(f"User Serializer Errors: {user_serializer.errors}")
             return Response({'status': 'failure', 'message': user_serializer.errors}, status=400)
 
         # Update or create address data
         address_data = request.data.get('address')
         if address_data:
-            
-            # Convert full country name to country code
-            country_name = address_data.get('country')
-            if country_name:
-                country_code = get_country_code(country_name)  # Use the new function to get the country code
-                if not country_code:
-                    return Response({'status': 'failure', 'message': f'Invalid country name: {country_name}'}, status=400)
-                address_data['country'] = country_code
+            # Normalize country input: accept either ISO code (e.g., "JP") or full name (e.g., "Japan")
+            country_input = address_data.get('country')
+            if country_input:
+                candidate = str(country_input).strip()
+                resolved_code = None
+                # If it's a 2-letter code and valid, use it directly
+                if len(candidate) == 2:
+                    for code, _name in countries:
+                        if code.upper() == candidate.upper():
+                            resolved_code = code.upper()
+                            break
+                # Otherwise, try to resolve by full country name
+                if not resolved_code:
+                    for code, name in countries:
+                        if name.lower() == candidate.lower():
+                            resolved_code = code
+                            break
+                if not resolved_code:
+                    return Response({'status': 'failure', 'message': f'Invalid country: {country_input}'}, status=400)
+                address_data['country'] = resolved_code
 
             try:
                 address = Address.objects.get(user=user)
             except Address.DoesNotExist:
                 address = None
 
-            # Correct field name mapping - frontend sends 'postalcode' but model expects 'input_postalcode'
-            address_data['input_postalcode'] = address_data.pop('postalcode', '')
+            # Correct field name mapping - frontend may send 'postalcode' but model expects 'input_postalcode'
+            # Only set 'input_postalcode' if 'postalcode' is actually provided to avoid clearing existing data
+            if 'postalcode' in address_data:
+                address_data['input_postalcode'] = address_data.pop('postalcode')
             
             # Add debugging for address data
             country_code_received = address_data.get('country', 'NOT_PROVIDED')
             postal_code_received = address_data.get('input_postalcode', 'NOT_PROVIDED')
             logger.info(f"Registration address data - Country: '{country_code_received}', Postal Code: '{postal_code_received}'")
-            
+
+            # Normalize empty strings to None and drop empty values for country/postal to avoid unintended clears
+            if 'input_postalcode' in address_data and (address_data['input_postalcode'] is None or str(address_data['input_postalcode']).strip() == ''):
+                address_data.pop('input_postalcode')
+            if 'country' in address_data and (address_data['country'] is None or str(address_data['country']).strip() == ''):
+                address_data.pop('country')
+
+            # If only one of country or postal code is provided, avoid updating either to prevent validation error
+            has_country = 'country' in address_data
+            has_postal = 'input_postalcode' in address_data
+            if has_country ^ has_postal:
+                # If no other address fields are being updated, skip address update entirely
+                other_fields_present = any(
+                    bool(address_data.get(f)) for f in ['street', 'city', 'state']
+                )
+                if not other_fields_present:
+                    logger.info("Skipping address update: only one of country/postal code provided and no other address fields.")
+                    return Response({'status': 'success', 'message': 'Profile updated successfully (address unchanged).'})
+                # Otherwise, drop the lone field so other fields can update without tripping validation
+                if has_country:
+                    address_data.pop('country', None)
+                else:
+                    address_data.pop('input_postalcode', None)
+
             address_data['user'] = user.id
             address_serializer = AddressSerializer(instance=address, data=address_data, partial=True)
             if address_serializer.is_valid():
@@ -778,20 +855,36 @@ def update_profile_api(request):
                         }
                     )
                 except ValidationError as ve:
-                    # Build a user‑friendly error payload
+                    # Handle the specific pair requirement gracefully by retrying without the lone field
+                    ve_messages = getattr(ve, "messages", []) or [str(ve)]
+                    pair_error = any("Both country and postal code must be provided together" in m for m in ve_messages)
+                    if pair_error:
+                        # Strip country/postal and retry if there are other fields to update
+                        sanitized_address_data = {k: v for k, v in address_data.items() if k not in ("country", "input_postalcode")}
+                        other_fields_present = any(
+                            bool(sanitized_address_data.get(f)) for f in ['street', 'city', 'state']
+                        )
+                        if other_fields_present:
+                            retry_serializer = AddressSerializer(instance=address, data={**sanitized_address_data, 'user': user.id}, partial=True)
+                            if retry_serializer.is_valid():
+                                retry_addr = retry_serializer.save(user=user)
+                                return Response({'status': 'success', 'message': 'Profile updated successfully (address updated without country/postal).', 'is_served': retry_addr.is_postalcode_served()})
+                            # Fall through to normal error formatting if retry somehow invalid
+
+                        # No other fields to update – treat as success without changing address
+                        return Response({'status': 'success', 'message': 'Profile updated successfully (address unchanged).'})
+
+                    # Build a user‑friendly error payload for all other errors
                     logger.warning(f"Address validation error during profile update: {ve}")
                     if getattr(ve, "message_dict", None):
-                        # If only non‑field errors (usually under "__all__"), flatten to a plain string
                         non_field_keys = {"__all__", ""}
                         if set(ve.message_dict.keys()).issubset(non_field_keys):
                             flat_msg = " ".join(sum(ve.message_dict.values(), []))
                             friendly_msg = flat_msg
                         else:
-                            # Field‑specific errors – return the dict so the UI can highlight fields
                             friendly_msg = ve.message_dict
                     else:
-                        # .messages is already a list of strings
-                        friendly_msg = " ".join(getattr(ve, "messages", [str(ve)]))
+                        friendly_msg = " ".join(ve_messages)
 
                     return Response(
                         {
@@ -975,13 +1068,80 @@ def logout_api_view(request):
     except (TokenError, InvalidToken):
         return JsonResponse({'status': 'error', 'message': 'Invalid token'}, status=400)
 
+def _normalize_registration_payload(data):
+    """
+    Accept both legacy flat shape and new nested shape.
+    Returns (normalized_payload, errors_dict|None).
+    Normalized shape: { user: {...}, address?: {...}, goal?: {...} }
+    - Strips any user_id
+    - Remaps postalcode -> input_postalcode
+    - Validates country/postal presence pairing
+    """
+    try:
+        # Shallow copy to avoid mutating DRF request.data
+        incoming = dict(data)
+    except Exception:
+        incoming = data
+
+    # Remove user_id anywhere present
+    incoming.pop('user_id', None)
+
+    # If already nested, use as-is with minor fixes
+    if 'user' in incoming:
+        normalized = {
+            'user': dict(incoming.get('user') or {}),
+            'address': dict(incoming.get('address') or {}) if incoming.get('address') else None,
+            'goal': dict(incoming.get('goal') or {}) if incoming.get('goal') else None,
+        }
+    else:
+        # Legacy flat payload -> split into user/address/goal
+        user_keys = {
+            'username','email','password','phone_number','preferred_language',
+            'allergies','custom_allergies','emergency_supply_goal','household_member_count',
+            'dietary_preferences','custom_dietary_preferences','week_shift','timezone'
+        }
+        address_keys = {'street','city','state','postalcode','country','input_postalcode'}
+        goal_keys = {'goal_name','goal_description'}
+
+        user_obj = {k: incoming[k] for k in user_keys if k in incoming}
+        address_obj = {k: incoming[k] for k in address_keys if k in incoming}
+        goal_obj = {k: incoming[k] for k in goal_keys if k in incoming}
+        normalized = {
+            'user': user_obj,
+            'address': address_obj or None,
+            'goal': goal_obj or None,
+        }
+
+    # Address remaps and validation
+    errors = None
+    addr = normalized.get('address') or None
+    if addr is not None:
+        # Strip any user_id remnants
+        addr.pop('user_id', None)
+        # Remap postalcode -> input_postalcode
+        if 'postalcode' in addr and not addr.get('input_postalcode'):
+            addr['input_postalcode'] = addr.pop('postalcode')
+        # Early validation: require both country and postal together when either provided
+        country = addr.get('country')
+        postal = addr.get('input_postalcode')
+        if (country and not postal) or (postal and not country):
+            errors = {'__all__': ['Both country and postal code must be provided together']}
+
+    return normalized, errors
+
+
 @api_view(['POST'])
 def register_api_view(request):
-    user_data = request.data.get('user')
+    normalized, norm_errors = _normalize_registration_payload(request.data)
+    if norm_errors:
+        return Response({'errors': norm_errors}, status=400)
+    user_data = normalized.get('user')
     if not user_data:
         return Response({'errors': 'User data is required'}, status=400)
 
     try:
+        # Normalize dietary preferences and allergies from any language to English
+        user_data = normalize_user_inputs_to_english(user_data)
         custom_diet_prefs_input = user_data.pop('custom_dietary_preferences', None)  # Extract custom dietary preferences
         new_custom_prefs = []  # Initialize the list here
 
@@ -1011,20 +1171,16 @@ def register_api_view(request):
                 user.emergency_supply_goal = user_serializer.validated_data['emergency_supply_goal']
                 user.save()
 
-            # Handle the household_member_count during user creation
-            if 'household_member_count' in user_serializer.validated_data:
-                user.household_member_count = user_serializer.validated_data['household_member_count']
-                user.save() 
-            
-            if 'household_members' in user_serializer.validated_data:
-                user.household_members.set(user_serializer.validated_data['household_members'])
-                user.save()
+            # Ensure household size defaults to 1 unless user adds household members
+            user.household_member_count = max(1, user.household_members.count())
+            user.save()
 
-            address_data = request.data.get('address')
+            address_data = normalized.get('address')
             # Check if any significant address data is provided
-            if address_data and any(value.strip() for value in address_data.values()):
+            if address_data and any((str(value).strip() if value is not None else '') for value in address_data.values()):
                 # Correct field name mapping - frontend sends 'postalcode' but model expects 'input_postalcode'
-                address_data['input_postalcode'] = address_data.pop('postalcode', '')
+                if 'postalcode' in address_data and not address_data.get('input_postalcode'):
+                    address_data['input_postalcode'] = address_data.pop('postalcode')
                 
                 # Add debugging for address data
                 country_code_received = address_data.get('country', 'NOT_PROVIDED')
@@ -1039,7 +1195,7 @@ def register_api_view(request):
                 address_serializer.save()
 
             # Handle goal data
-            goal_data = request.data.get('goal')
+            goal_data = normalized.get('goal')
             if goal_data:
                 GoalTracking.objects.create(
                     user=user,
@@ -1087,8 +1243,10 @@ def register_api_view(request):
             }
             try:
                 requests.post(os.getenv('N8N_REGISTER_URL'), json=email_data)
-                print(f"Email data: {email_data}")
             except Exception as e:
+                # n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                requests.post(n8n_traceback_url, json={"error": f"Error sending activation email data to n8n for: {to_email}, error: {str(e)}", "source":"register_api_view", "traceback": traceback.format_exc()})
                 logger.error(f"Error sending activation email data to n8n for: {to_email}, error: {str(e)}")
                 raise 
         # After successful registration
@@ -1277,224 +1435,224 @@ def is_correct_user(user, customuser_username):
     return user.username == customuser_username
 
 
-@login_required
-def profile(request: HttpRequest):
-    """Very small tweak – always guarantee an Address exists for the template."""
-    if not request.user.initial_email_confirmed:
-        messages.info(request, "Please confirm your email.")
-        return redirect("custom_auth:register")
+# @login_required
+# def profile(request: HttpRequest):
+#     """Very small tweak – always guarantee an Address exists for the template."""
+#     if not request.user.initial_email_confirmed:
+#         messages.info(request, "Please confirm your email.")
+#         return redirect("custom_auth:register")
 
-    # ensure address row
-    address, _ = Address.objects.get_or_create(
-        user=request.user,
-        defaults={
-            "street": "-",
-            "city": "-",
-            "state": "-",
-            "input_postalcode": "-",
-            "country": "US",
-        },
-    )
+#     # ensure address row
+#     address, _ = Address.objects.get_or_create(
+#         user=request.user,
+#         defaults={
+#             "street": "-",
+#             "city": "-",
+#             "state": "-",
+#             "input_postalcode": "-",
+#             "country": "US",
+#         },
+#     )
 
-    breadcrumbs = [{"url": reverse("custom_auth:profile"), "name": "Profile"}]
-    return render(
-        request,
-        "custom_auth/profile.html",
-        {
-            "customuser": request.user,
-            "address": address,
-            "breadcrumbs": breadcrumbs,
-        },
-    )
-
-
-@login_required
-@user_passes_test(lambda u: is_correct_user(u, u.username), login_url='chefs:chef_list', redirect_field_name=None)
-def update_profile(request):
-    # Fetch or create the user role
-    user_role, created = UserRole.objects.get_or_create(user=request.user, defaults={'current_role': 'customer'})
-    if created:
-        messages.info(request, "Your user role has been set to 'customer' by default.")
-
-    # Define forms
-    form = UserProfileForm(request.POST or None, instance=request.user, request=request)
-    address_form_instance = None  # Initialize as None
-
-    # Determine the correct address form based on the user's role
-    address_form_class = AddressForm
-    try:
-        address_instance = Address.objects.get(user=request.user)
-        address_form_instance = address_form_class(request.POST or None, instance=address_instance)
-    except (Address.DoesNotExist):
-        address_form_instance = address_form_class(request.POST or None)  # No instance if address doesn't exist
-
-    # Handle form submission
-    if request.method == 'POST':
-        if form.is_valid():
-            form.save()
-            messages.success(request, 'Profile updated successfully.')
-            if address_form_instance and address_form_instance.is_valid():
-                address_form_instance.save()
-                messages.success(request, 'Address updated successfully.')
-            elif not address_instance:
-                messages.info(request, 'Please add an address to your profile.')
-            return redirect('custom_auth:profile')
-
-    # Prepare context
-    breadcrumbs = [
-        {'url': reverse('custom_auth:profile'), 'name': 'Profile'},
-        {'url': reverse('custom_auth:update_profile'), 'name': 'Update Profile'},
-    ]
-    context = {
-        'form': form,
-        'address_form': address_form_instance,
-        'breadcrumbs': breadcrumbs
-    }
-
-    return render(request, 'custom_auth/update_profile.html', context)
+#     breadcrumbs = [{"url": reverse("custom_auth:profile"), "name": "Profile"}]
+#     return render(
+#         request,
+#         "custom_auth/profile.html",
+#         {
+#             "customuser": request.user,
+#             "address": address,
+#             "breadcrumbs": breadcrumbs,
+#         },
+#     )
 
 
-@login_required
-@user_passes_test(lambda u: is_correct_user(u, u.username), login_url='chefs:chef_list', redirect_field_name=None)
-def switch_roles(request):
-    # Get the user's role, or create a new one with 'customer' as the default
-    user_role, created = UserRole.objects.get_or_create(user=request.user, defaults={'current_role': 'customer'})
+# @login_required
+# @user_passes_test(lambda u: is_correct_user(u, u.username), login_url='chefs:chef_list', redirect_field_name=None)
+# def update_profile(request):
+#     # Fetch or create the user role
+#     user_role, created = UserRole.objects.get_or_create(user=request.user, defaults={'current_role': 'customer'})
+#     if created:
+#         messages.info(request, "Your user role has been set to 'customer' by default.")
 
-    if request.method == 'POST':  # Only switch roles for POST requests
-        if user_role.current_role == 'chef':
-            user_role.current_role = 'customer'
-            user_role.save()
-            messages.success(request, 'You have switched to the Customer role.')
-        elif user_role.current_role == 'customer':
-            # Check if there's a chef request and it is approved
-            chef_request = ChefRequest.objects.filter(user=request.user, is_approved=True).first()
-            if chef_request:
-                user_role.current_role = 'chef'
-                user_role.save()
-                messages.success(request, 'You have switched to the Chef role.')
-            else:
-                messages.error(request, 'You are not approved to become a chef.')
-        else:
-            messages.error(request, 'Invalid role.')
+#     # Define forms
+#     form = UserProfileForm(request.POST or None, instance=request.user, request=request)
+#     address_form_instance = None  # Initialize as None
 
-    return redirect('custom_auth:profile')  # Always redirect to the profile page after the operation
+#     # Determine the correct address form based on the user's role
+#     address_form_class = AddressForm
+#     try:
+#         address_instance = Address.objects.get(user=request.user)
+#         address_form_instance = address_form_class(request.POST or None, instance=address_instance)
+#     except (Address.DoesNotExist):
+#         address_form_instance = address_form_class(request.POST or None)  # No instance if address doesn't exist
 
-# activate view for clicking the link in the email
-def activate_view(request, uidb64, token):
-    try:
-        uid = force_str(urlsafe_base64_decode(uidb64))
-        user = CustomUser.objects.get(pk=uid)
-        if account_activation_token.check_token(user, token):
-            user.email_confirmed = True  # Change is_active to email_confirmed
-            user.initial_email_confirmed = True   
-            user.save()
-            login(request, user)
-            return render(request, 'custom_auth/activate_success.html')
-        else:
-            return render(request, 'custom_auth/activate_failure.html')
-    except(TypeError, ValueError, OverflowError, CustomUser.DoesNotExist):
-        user = None
-        return render(request, 'custom_auth/activate_failure.html')
+#     # Handle form submission
+#     if request.method == 'POST':
+#         if form.is_valid():
+#             form.save()
+#             messages.success(request, 'Profile updated successfully.')
+#             if address_form_instance and address_form_instance.is_valid():
+#                 address_form_instance.save()
+#                 messages.success(request, 'Address updated successfully.')
+#             elif not address_instance:
+#                 messages.info(request, 'Please add an address to your profile.')
+#             return redirect('custom_auth:profile')
 
-# login view
-def login_view(request):
-    if request.method == 'POST':
-        username = request.POST['username']
-        password = request.POST['password']
-        user = authenticate(request, username=username, password=password)
-        if user is not None:
-            login(request, user)
-            return redirect('custom_auth:profile')
-        else:
-            messages.error(request, 'Invalid username or password')
-    breadcrumbs = [
-        {'url': reverse('custom_auth:login'), 'name': 'Login'},
-    ]
-    return render(request, 'custom_auth/login.html', {'breadcrumbs' : breadcrumbs})
+#     # Prepare context
+#     breadcrumbs = [
+#         {'url': reverse('custom_auth:profile'), 'name': 'Profile'},
+#         {'url': reverse('custom_auth:update_profile'), 'name': 'Update Profile'},
+#     ]
+#     context = {
+#         'form': form,
+#         'address_form': address_form_instance,
+#         'breadcrumbs': breadcrumbs
+#     }
 
-# logout view
-@login_required
-def logout_view(request):
-    logout(request)
-    return redirect('custom_auth:login')
-
-# email verification view
-def verify_email_view(request):
-    show_login_message = False
-    show_email_verification_message = False
-    if not request.user.is_authenticated:
-        show_login_message = True
-    elif not request.user.is_active:
-        show_email_verification_message = True
-
-    breadcrumbs = [
-        {'url': reverse('custom_auth:verify_email'), 'name': 'Verify Email'},
-    ]
-    return render(request, 'custom_auth/verify_email.html', {
-        'show_login_message': show_login_message,
-        'show_email_verification_message': show_email_verification_message,
-        'breadcrumbs' : breadcrumbs
-    })
+#     return render(request, 'custom_auth/update_profile.html', context)
 
 
-def confirm_email(request, uidb64, token):
-    try:
-        uid = force_str(urlsafe_base64_decode(uidb64))
-        user = CustomUser.objects.get(pk=uid)
-        if account_activation_token.check_token(user, token):
-            # check if the token is not expired
-            token_lifetime = timedelta(hours=48)  # 48 hours
-            if timezone.now() > user.token_created_at + token_lifetime:
-                messages.error(request, 'The confirmation token has expired.')
-            else:
-                user.email = user.new_email
-                user.new_email = None
-                user.token_created_at = None
-                user.email_confirmed = True
-                user.save()
-                return render(request, 'custom_auth/confirm_email_success.html')
-        else:
-            return render(request, 'custom_auth/confirm_email_failure.html')
-    except(TypeError, ValueError, OverflowError, CustomUser.DoesNotExist):
-        user = None
-        return render(request, 'custom_auth/confirm_email_failure.html')
+# @login_required
+# @user_passes_test(lambda u: is_correct_user(u, u.username), login_url='chefs:chef_list', redirect_field_name=None)
+# def switch_roles(request):
+#     # Get the user's role, or create a new one with 'customer' as the default
+#     user_role, created = UserRole.objects.get_or_create(user=request.user, defaults={'current_role': 'customer'})
+
+#     if request.method == 'POST':  # Only switch roles for POST requests
+#         if user_role.current_role == 'chef':
+#             user_role.current_role = 'customer'
+#             user_role.save()
+#             messages.success(request, 'You have switched to the Customer role.')
+#         elif user_role.current_role == 'customer':
+#             # Check if there's a chef request and it is approved
+#             chef_request = ChefRequest.objects.filter(user=request.user, is_approved=True).first()
+#             if chef_request:
+#                 user_role.current_role = 'chef'
+#                 user_role.save()
+#                 messages.success(request, 'You have switched to the Chef role.')
+#             else:
+#                 messages.error(request, 'You are not approved to become a chef.')
+#         else:
+#             messages.error(request, 'Invalid role.')
+
+#     return redirect('custom_auth:profile')  # Always redirect to the profile page after the operation
+
+# # activate view for clicking the link in the email
+# def activate_view(request, uidb64, token):
+#     try:
+#         uid = force_str(urlsafe_base64_decode(uidb64))
+#         user = CustomUser.objects.get(pk=uid)
+#         if account_activation_token.check_token(user, token):
+#             user.email_confirmed = True  # Change is_active to email_confirmed
+#             user.initial_email_confirmed = True   
+#             user.save()
+#             login(request, user)
+#             return render(request, 'custom_auth/activate_success.html')
+#         else:
+#             return render(request, 'custom_auth/activate_failure.html')
+#     except(TypeError, ValueError, OverflowError, CustomUser.DoesNotExist):
+#         user = None
+#         return render(request, 'custom_auth/activate_failure.html')
+
+# # login view
+# def login_view(request):
+#     if request.method == 'POST':
+#         username = request.POST['username']
+#         password = request.POST['password']
+#         user = authenticate(request, username=username, password=password)
+#         if user is not None:
+#             login(request, user)
+#             return redirect('custom_auth:profile')
+#         else:
+#             messages.error(request, 'Invalid username or password')
+#     breadcrumbs = [
+#         {'url': reverse('custom_auth:login'), 'name': 'Login'},
+#     ]
+#     return render(request, 'custom_auth/login.html', {'breadcrumbs' : breadcrumbs})
+
+# # logout view
+# @login_required
+# def logout_view(request):
+#     logout(request)
+#     return redirect('custom_auth:login')
+
+# # email verification view
+# def verify_email_view(request):
+#     show_login_message = False
+#     show_email_verification_message = False
+#     if not request.user.is_authenticated:
+#         show_login_message = True
+#     elif not request.user.is_active:
+#         show_email_verification_message = True
+
+#     breadcrumbs = [
+#         {'url': reverse('custom_auth:verify_email'), 'name': 'Verify Email'},
+#     ]
+#     return render(request, 'custom_auth/verify_email.html', {
+#         'show_login_message': show_login_message,
+#         'show_email_verification_message': show_email_verification_message,
+#         'breadcrumbs' : breadcrumbs
+#     })
 
 
-@login_required
-def re_request_email_change(request):
-    if request.method == 'POST':
-        form = EmailChangeForm(request.user, request.POST)
-        if form.is_valid():
-            new_email = form.cleaned_data.get('new_email')
-            if CustomUser.objects.filter(email=new_email).exclude(username=request.user.username).exists():
-                messages.error(request, "This email is already in use.")
-            else:
-                send_email_change_confirmation(request, request.user, new_email)
-                return redirect('custom_auth:profile')
-    else:
-        form = EmailChangeForm(request.user)
+# def confirm_email(request, uidb64, token):
+#     try:
+#         uid = force_str(urlsafe_base64_decode(uidb64))
+#         user = CustomUser.objects.get(pk=uid)
+#         if account_activation_token.check_token(user, token):
+#             # check if the token is not expired
+#             token_lifetime = timedelta(hours=48)  # 48 hours
+#             if timezone.now() > user.token_created_at + token_lifetime:
+#                 messages.error(request, 'The confirmation token has expired.')
+#             else:
+#                 user.email = user.new_email
+#                 user.new_email = None
+#                 user.token_created_at = None
+#                 user.email_confirmed = True
+#                 user.save()
+#                 return render(request, 'custom_auth/confirm_email_success.html')
+#         else:
+#             return render(request, 'custom_auth/confirm_email_failure.html')
+#     except(TypeError, ValueError, OverflowError, CustomUser.DoesNotExist):
+#         user = None
+#         return render(request, 'custom_auth/confirm_email_failure.html')
 
-    breadcrumbs = [
-        {'url': reverse('custom_auth:profile'), 'name': 'Profile'},
-        {'url': reverse('custom_auth:re_request_email_change'), 'name': 'Re-request Email Change'},
-    ]
 
-    return render(request, 'custom_auth/re_request_email_change.html', {'form': form, 'breadcrumbs': breadcrumbs})
+# @login_required
+# def re_request_email_change(request):
+#     if request.method == 'POST':
+#         form = EmailChangeForm(request.user, request.POST)
+#         if form.is_valid():
+#             new_email = form.cleaned_data.get('new_email')
+#             if CustomUser.objects.filter(email=new_email).exclude(username=request.user.username).exists():
+#                 messages.error(request, "This email is already in use.")
+#             else:
+#                 send_email_change_confirmation(request, request.user, new_email)
+#                 return redirect('custom_auth:profile')
+#     else:
+#         form = EmailChangeForm(request.user)
+
+#     breadcrumbs = [
+#         {'url': reverse('custom_auth:profile'), 'name': 'Profile'},
+#         {'url': reverse('custom_auth:re_request_email_change'), 'name': 'Re-request Email Change'},
+#     ]
+
+#     return render(request, 'custom_auth/re_request_email_change.html', {'form': form, 'breadcrumbs': breadcrumbs})
 
 
-class EmailChangeView(LoginRequiredMixin, View):
-    def post(self, request, *args, **kwargs):
-        form = EmailChangeForm(request.POST)
-        if form.is_valid():
-            new_email = form.cleaned_data.get('email')
-            if CustomUser.objects.filter(email=new_email).exclude(username=request.user.username).exists():
-                messages.error(request, "This email is already in use.")
-            else:
-                send_email_change_confirmation(request, request.user, new_email)
-                return redirect('custom_auth:profile')
-        else:
-            messages.error(request, "Please correct the error below.")
-        return render(request, 'custom_auth/change_email.html', {'form': form})
+# class EmailChangeView(LoginRequiredMixin, View):
+#     def post(self, request, *args, **kwargs):
+#         form = EmailChangeForm(request.POST)
+#         if form.is_valid():
+#             new_email = form.cleaned_data.get('email')
+#             if CustomUser.objects.filter(email=new_email).exclude(username=request.user.username).exists():
+#                 messages.error(request, "This email is already in use.")
+#             else:
+#                 send_email_change_confirmation(request, request.user, new_email)
+#                 return redirect('custom_auth:profile')
+#         else:
+#             messages.error(request, "Please correct the error below.")
+#         return render(request, 'custom_auth/change_email.html', {'form': form})
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -1529,6 +1687,138 @@ def _get_language_name(language_code):
         return LANG_INFO[language_code]['name']
     return language_code
 
+def normalize_user_inputs_to_english(stored_data):
+    """
+    Use GPT to translate user dietary preferences and allergies from any language to English using structured output.
+    Uses the same approach as meal compatibility checking with Pydantic v2 schemas.
+    """
+    from shared.utils import get_openai_client
+    from utils.redis_client import get as redis_get, set as redis_set
+    from pydantic import BaseModel, Field
+    import json
+    import hashlib
+    
+    # Define the Pydantic schema for normalized output
+    class NormalizedUserInputs(BaseModel):
+        dietary_preferences: list[str] = Field(default=[], description="Standard dietary preferences in English")
+        custom_dietary_preferences: list[str] = Field(default=[], description="Custom dietary preferences that don't match standard options")
+        allergies: list[str] = Field(default=[], description="Standard allergies in English") 
+        custom_allergies: list[str] = Field(default=[], description="Custom allergies that don't match standard options")
+    
+    # Create a copy to avoid modifying original
+    normalized_data = stored_data.copy()
+    
+    # Extract items that need translation
+    dietary_items = stored_data.get('dietary_preferences', []) + stored_data.get('custom_dietary_preferences', [])
+    allergy_items = stored_data.get('allergies', []) + stored_data.get('custom_allergies', [])
+    
+    # Skip if no items to translate
+    if not dietary_items and not allergy_items:
+        return normalized_data
+    
+    try:
+        # Create cache key based on the items to translate
+        cache_input = {
+            'dietary_items': dietary_items,
+            'allergy_items': allergy_items
+        }
+        cache_key = f"onboarding_translation:{hashlib.md5(json.dumps(cache_input, sort_keys=True).encode()).hexdigest()}"
+        
+        # Check cache first
+        try:
+            cached_result = redis_get(cache_key)
+            if cached_result:
+                cached_data = json.loads(cached_result)
+                logger.info("Retrieved translation from Redis cache")
+                
+                # Apply cached translations to normalized_data
+                normalized_data['dietary_preferences'] = cached_data.get('dietary_preferences', [])
+                normalized_data['custom_dietary_preferences'] = cached_data.get('custom_dietary_preferences', [])
+                normalized_data['allergies'] = cached_data.get('allergies', [])
+                normalized_data['custom_allergies'] = cached_data.get('custom_allergies', [])
+                
+                return normalized_data
+        except Exception as e:
+            logger.warning(f"Cache retrieval failed: {e}")
+        
+        # Prepare the system message
+        system_message = """You are a dietary preference and allergy translator. Your job is to:
+
+1. Translate dietary preferences and allergies from any language to standard English
+2. Categorize items as either "standard" (common dietary preferences/allergies) or "custom" (unusual/specific items)
+3. Handle variations and synonyms (e.g., "gluten free" → "Gluten-Free", "vegan" → "Vegan")
+4. For allergies, translate "none", "no allergies", etc. to "None"
+
+Standard dietary preferences include: Vegan, Vegetarian, Pescatarian, Gluten-Free, Keto, Paleo, Halal, Kosher, Low-Calorie, Low-Sodium, High-Protein, Dairy-Free, Nut-Free, Raw Food, Whole 30, Low-FODMAP, Diabetic-Friendly, Everything
+
+Common allergies include: Peanuts, Tree nuts, Milk, Egg, Wheat, Soy, Fish, Shellfish, Sesame, Mustard, Celery, Lupin, Sulfites, Molluscs, Corn, Gluten, Kiwi, Latex, Pine Nuts, Sunflower Seeds, Poppy Seeds, Fennel, Peach, Banana, Avocado, Chocolate, Coffee, Cinnamon, Garlic, Chickpeas, Lentils, None
+
+Return the translated and categorized items in the specified JSON structure."""
+
+        # Prepare user payload
+        user_payload = {
+            "dietary_items": dietary_items,
+            "allergy_items": allergy_items
+        }
+        
+        # Call Responses API with JSON-mode + schema
+        response = get_openai_client().responses.create(
+            model="gpt-4.1-nano",
+            input=[{"role": "developer", "content": system_message},
+                   {"role": "user", "content": json.dumps(user_payload)}],
+            text={
+                "format": {
+                    'type': 'json_schema',
+                    'name': 'normalized_user_inputs',
+                    'schema': NormalizedUserInputs.model_json_schema()
+                }
+            }
+        )
+        
+        # Parse JSON then load into the Pydantic model
+        result_data = json.loads(response.output_text)
+        
+        try:
+            result = NormalizedUserInputs(**result_data)
+        except Exception:
+            # If the model validation fails, fall back to a simple wrapper
+            result = NormalizedUserInputs(
+                dietary_preferences=result_data.get("dietary_preferences", []),
+                custom_dietary_preferences=result_data.get("custom_dietary_preferences", []),
+                allergies=result_data.get("allergies", []),
+                custom_allergies=result_data.get("custom_allergies", [])
+            )
+        
+        # Apply translations to normalized_data
+        normalized_data['dietary_preferences'] = result.dietary_preferences
+        normalized_data['custom_dietary_preferences'] = result.custom_dietary_preferences
+        normalized_data['allergies'] = result.allergies
+        normalized_data['custom_allergies'] = result.custom_allergies
+        
+        # Cache the result for 1 hour
+        try:
+            cache_data = {
+                'dietary_preferences': result.dietary_preferences,
+                'custom_dietary_preferences': result.custom_dietary_preferences,
+                'allergies': result.allergies,
+                'custom_allergies': result.custom_allergies
+            }
+            redis_set(cache_key, json.dumps(cache_data), timeout=3600)
+            logger.info("Cached translation result in Redis")
+        except Exception as e:
+            logger.warning(f"Failed to cache translation: {e}")
+        
+        # Log the translation for debugging
+        logger.info(f"Translated dietary preferences: {dietary_items} -> standard: {result.dietary_preferences}, custom: {result.custom_dietary_preferences}")
+        logger.info(f"Translated allergies: {allergy_items} -> standard: {result.allergies}, custom: {result.custom_allergies}")
+        
+        return normalized_data
+        
+    except Exception as e:
+        logger.error(f"Translation failed, using original data: {e}")
+        # On error, return original data - better to proceed than fail
+        return stored_data
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def onboarding_complete_registration(request):
@@ -1553,6 +1843,10 @@ def onboarding_complete_registration(request):
         try:
             onboarding_session = OnboardingSession.objects.get(guest_id=guest_id)
             stored_data = onboarding_session.data or {}
+            
+            # Normalize user inputs from any language to English database values using GPT
+            stored_data = normalize_user_inputs_to_english(stored_data)
+            
         except OnboardingSession.DoesNotExist:
             return Response({'errors': 'No onboarding data found for this guest ID'}, status=400)
         

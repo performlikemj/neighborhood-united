@@ -45,6 +45,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
     allergies = serializers.ListField(
         child=serializers.CharField(max_length=20),
         allow_empty=True,  # Allow for no allergies
+        required=False,
     )
 
     custom_allergies = serializers.ListField(
@@ -71,6 +72,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
     
     # Add is_chef field from UserRole relationship
     is_chef = serializers.SerializerMethodField()
+    current_role = serializers.SerializerMethodField()
 
     household_members = HouseholdMemberSerializer(many=True, required=False)
     
@@ -81,7 +83,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'phone_number', 'dietary_preferences', 'custom_dietary_preferences',
             'allergies', 'custom_allergies', 'week_shift', 'email_confirmed',
             'preferred_language', 'timezone', 'emergency_supply_goal',
-            'personal_assistant_email', 'is_chef',
+            'personal_assistant_email', 'is_chef', 'current_role',
             'household_member_count', 'household_members'
         ]
         extra_kwargs = {
@@ -89,6 +91,8 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'username': {},
             'email': {},
             'phone_number': {'required': False},  # Make phone_number not required
+            'dietary_preferences': {'required': False},
+            'allergies': {'required': False},
             'custom_dietary_preferences': {'required': False},  # Optional field
             'personal_assistant_email': {'read_only': True}  # Mark as read-only
         }
@@ -103,6 +107,17 @@ class CustomUserSerializer(serializers.ModelSerializer):
             return user_role.is_chef
         except UserRole.DoesNotExist:
             return False
+
+    def get_current_role(self, obj):
+        """
+        Get the current_role from the related UserRole model.
+        Returns 'customer' if UserRole doesn't exist for the user.
+        """
+        try:
+            user_role = UserRole.objects.get(user=obj)
+            return user_role.current_role
+        except UserRole.DoesNotExist:
+            return 'customer'
 
     def __init__(self, *args, **kwargs):
         super(CustomUserSerializer, self).__init__(*args, **kwargs)
@@ -123,6 +138,13 @@ class CustomUserSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         custom_dietary_prefs = validated_data.pop('custom_dietary_preferences', [])
+        household_members_data = validated_data.pop('household_members', [])
+        # Ensure household size defaults to 1 unless user adds members
+        requested_household_count = validated_data.get('household_member_count', 1)
+        if not requested_household_count or requested_household_count < 1:
+            requested_household_count = 1
+        if household_members_data:
+            requested_household_count = len(household_members_data)
         user = get_user_model()(
             username=validated_data.get('username'),
             email=validated_data.get('email'),
@@ -130,14 +152,24 @@ class CustomUserSerializer(serializers.ModelSerializer):
             preferred_language=validated_data.get('preferred_language', 'en'),
             timezone=validated_data.get('timezone', 'UTC'),
             allergies=validated_data.get('allergies', []),
-            custom_allergies=validated_data.get('custom_allergies', ''),
+            custom_allergies=validated_data.get('custom_allergies', []),
             emergency_supply_goal=validated_data.get('emergency_supply_goal', 0), 
-            household_member_count=validated_data.get('household_member_count', 1),
+            household_member_count=requested_household_count,
         )
         user.set_password(validated_data['password'])
         user.save()
         user.dietary_preferences.set(validated_data.get('dietary_preferences', []))
         user.custom_dietary_preferences.set(custom_dietary_prefs)
+        # Create household members if provided
+        if household_members_data:
+            for member_data in household_members_data:
+                member_serializer = HouseholdMemberSerializer(data=member_data)
+                if member_serializer.is_valid():
+                    member_serializer.save(user=user)
+                else:
+                    raise ValidationError({
+                        'household_members': member_serializer.errors
+                    })
         return user
 
 
@@ -180,6 +212,18 @@ class CustomUserSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
+    def validate_allergies(self, value):
+        """Coerce empty or null inputs to an empty list for ArrayField compatibility."""
+        if value is None or value == '' or value == []:
+            return []
+        return value
+
+    def validate_custom_allergies(self, value):
+        """Coerce empty or null inputs to an empty list for ArrayField compatibility."""
+        if value is None or value == '' or value == []:
+            return []
+        return value
+
 class AddressSerializer(serializers.ModelSerializer):
     user = serializers.PrimaryKeyRelatedField(queryset=CustomUser.objects.all(), write_only=True)
     street = serializers.CharField(required=False, allow_blank=True, allow_null=True)
@@ -221,8 +265,6 @@ class AddressSerializer(serializers.ModelSerializer):
         
         instance.save()
         return instance
-
-    
 
 class PostalCodeSerializer(serializers.ModelSerializer):
     class Meta:

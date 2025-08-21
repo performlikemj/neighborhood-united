@@ -1,4 +1,5 @@
 from django.apps import AppConfig
+from django.conf import settings
 
 
 class GamificationConfig(AppConfig):
@@ -6,5 +7,6 @@ class GamificationConfig(AppConfig):
     name = 'gamification'
     
     def ready(self):
-        # Import signal handlers
-        import gamification.signals
+        # Conditionally enable gamification signal handlers
+        if getattr(settings, 'GAMIFICATION_ENABLED', False):
+            import gamification.signals

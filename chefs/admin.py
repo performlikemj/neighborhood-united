@@ -1,6 +1,6 @@
 from django.contrib import admin
 from meals.models import Meal  
-from .models import Chef, ChefRequest, ChefPostalCode, PostalCode
+from .models import Chef, ChefRequest, ChefPostalCode, PostalCode, ChefPhoto, ChefDefaultBanner
 from custom_auth.models import UserRole
 from django.contrib import messages
 from django.db import transaction
@@ -21,7 +21,7 @@ class ChefAdmin(admin.ModelAdmin):
     list_display = ('user', 'experience', 'bio',)
     search_fields = ('user__username', 'experience', 'bio')
     list_filter = ('user__is_active',)
-    fields = ('user', 'experience', 'bio', 'profile_pic', 'chef_embedding')
+    fields = ('user', 'experience', 'bio', 'profile_pic', 'banner_image', 'chef_embedding')
     inlines = [MealInline, ChefPostalCodeInline]
     
     def save_model(self, request, obj, form, change):
@@ -155,3 +155,16 @@ class ChefRequestAdmin(admin.ModelAdmin):
 
 
 admin.site.register(ChefRequest, ChefRequestAdmin)
+
+
+@admin.register(ChefPhoto)
+class ChefPhotoAdmin(admin.ModelAdmin):
+    list_display = ('chef', 'title', 'is_featured', 'created_at')
+    list_filter = ('is_featured', 'chef')
+    search_fields = ('title', 'caption', 'chef__user__username')
+
+
+@admin.register(ChefDefaultBanner)
+class ChefDefaultBannerAdmin(admin.ModelAdmin):
+    list_display = ('id', 'created_at', 'updated_at')
+    readonly_fields = ('created_at', 'updated_at')

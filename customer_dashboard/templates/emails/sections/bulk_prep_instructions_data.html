@@ -1,0 +1,40 @@
+{% load i18n %}
+{% if batch_sections %}
+<div class="section section-data">
+  {% for batch, steps in batch_sections.items %}
+    <div class="card" style="margin:12px 0;">
+      <h3 style="margin:0 0 8px; color:#15803d;">{{ batch }}</h3>
+      <table class="table-slim" role="presentation" aria-label="{% trans 'Bulk prep steps' %}" style="border-spacing:0 6px;">
+        <colgroup>
+          <col style="width:10%">
+          <col style="width:60%">
+          <col style="width:30%">
+        </colgroup>
+        <thead>
+          <tr>
+            <th scope="col">{% trans 'Step' %}</th>
+            <th scope="col">{% trans 'What to do' %}</th>
+            <th scope="col">{% trans 'Notes' %}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in steps %}
+            {% with parts=s|safe %}
+            <tr>
+              <td class="qty" style="vertical-align:top;padding:12px 10px;"><span class="qty-pill">{{ forloop.counter }}</span></td>
+              <td style="vertical-align:top;padding:12px 10px;">{{ s|safe }}</td>
+              <td style="vertical-align:top;padding:12px 10px;"></td>
+            </tr>
+            {% endwith %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endfor %}
+  {% if content_html %}
+    <div class="card">{{ content_html|safe }}</div>
+  {% endif %}
+</div>
+{% endif %}
+
+

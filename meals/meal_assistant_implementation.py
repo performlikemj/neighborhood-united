@@ -36,6 +36,7 @@ from custom_auth.models import CustomUser
 from shared.utils import generate_user_context, _get_language_name
 from utils.model_selection import choose_model
 import pytz
+from zoneinfo import ZoneInfo
 from local_chefs.models import ChefPostalCode
 from django.db.models import F
 from meals.models import ChefMealEvent
@@ -44,6 +45,8 @@ import os
 import requests # Added for n8n webhook call
 import traceback
 from django.template.loader import render_to_string # Added for rendering email templates
+from django.db import close_old_connections
+from django.db.utils import OperationalError, InterfaceError
 
 # Add the translation utility
 from utils.translate_html import translate_paragraphs
@@ -987,6 +990,38 @@ class MealPlanningAssistant:
         # Log initialization details
         is_guest = self._is_guest(self.user_id)
 
+    # ───────────────────────────────────────── schema utils (adapter)
+    def _clean_schema_for_openai(self, schema: dict) -> dict:
+        """Adapter so callers on this class can clean Pydantic JSON Schema for
+        OpenAI Responses 'json_schema' formatting. Delegates to the formatter's
+        implementation and falls back to a local cleaner if needed.
+        """
+        try:
+            # Reuse the formatter's implementation
+            return self._django_email_formatter._clean_schema_for_openai(schema)
+        except Exception:
+            # Minimal fallback copy (kept simple to avoid import cycles)
+            def clean_recursively(obj):
+                if isinstance(obj, dict):
+                    cleaned = {}
+                    for key, value in obj.items():
+                        if key in ['allOf', 'anyOf', 'oneOf', 'default', 'format', 'examples', 'const']:
+                            continue
+                        elif key == 'enum' and isinstance(value, list):
+                            cleaned[key] = value
+                        elif key == 'type' and value == 'null':
+                            continue
+                        else:
+                            cleaned[key] = clean_recursively(value)
+                    if cleaned.get('type') == 'object' and 'additionalProperties' not in cleaned:
+                        cleaned['additionalProperties'] = False
+                    return cleaned
+                elif isinstance(obj, list):
+                    return [clean_recursively(item) for item in obj]
+                else:
+                    return obj
+            return clean_recursively(schema)
+
     # ───────────────────────────────────────── helper: persist guest state
     def _store_guest_state(self, response_id: str, history: list) -> None:
         """
@@ -1078,9 +1113,7 @@ class MealPlanningAssistant:
                     previous_response_id=prev_resp_id, 
                 )
                 
-                final_response_id = resp.id
-                print(f"Response from send_message: {resp}")
-                
+                final_response_id = resp.id                
                 # Check for tool calls in response
                 tool_calls_in_response = [item for item in getattr(resp, "output", []) if getattr(item, 'type', None) == "function_call"]
                 
@@ -2007,7 +2040,7 @@ class MealPlanningAssistant:
             
             # Set summary_date to today in user's timezone if not provided
             if summary_date is None:
-                user_timezone = pytz.timezone(user.timezone if user.timezone else 'UTC')
+                user_timezone = ZoneInfo(user.timezone if user.timezone else 'UTC')
                 summary_date = timezone.now().astimezone(user_timezone).date()
             elif isinstance(summary_date, str):
                 # If it's a string, parse it as a date
@@ -2437,7 +2470,9 @@ class MealPlanningAssistant:
         original_subject: str, 
         in_reply_to_header: Optional[str], 
         email_thread_id: Optional[str],
-        openai_thread_context_id_initial: Optional[str] = None
+        openai_thread_context_id_initial: Optional[str] = None,
+        template_key: Optional[str] = None,
+        template_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Processes an aggregated email message, gets a response from the assistant,
@@ -2445,6 +2480,11 @@ class MealPlanningAssistant:
         This is a non-streaming method.
         Assumes self.user_id is already set correctly for an authenticated user.
         """
+        # Ensure DB connection is fresh for long-running worker processes
+        try:
+            close_old_connections()
+        except Exception:
+            pass
         if self._is_guest(self.user_id):
             logger.error(f"process_and_reply_to_email called for a guest user ID: {self.user_id}. This should not happen.")
             return {"status": "error", "message": "Email processing is only for authenticated users."}
@@ -2470,12 +2510,78 @@ class MealPlanningAssistant:
             new_openai_response_id = assistant_response_data.get('response_id', None)
             logger.info(f"MealPlanningAssistant: Received response for user {self.user_id}. OpenAI response ID: {new_openai_response_id}")
 
-        # 2. Get structured Django template sections instead of single formatted content
-        django_email_body = self._get_django_template_sections(raw_reply_content)
+        # 2. Get structured sections. If a template_key is provided, attempt JSON-schema output.
+        structured_sections = None
+        if template_key:
+            try:
+                # Ask model to return structured JSON for the template_key
+                # Build a minimal, explicit instruction for structured output
+                from customer_dashboard.template_router import get_schema_for_key
+                schema_model = get_schema_for_key(template_key)
+                raw_schema = schema_model.model_json_schema()
+                schema_dict = self._clean_schema_for_openai(raw_schema)
+
+                # Make a second, lightweight call to shape the final output
+                shaping_prompt = [
+                    {"role": "system", "content": "You will transform the assistant's prior reply into structured JSON."},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Return ONLY JSON matching this schema. Do not include explanations.\n"
+                            f"Schema: {schema_dict}\n"
+                            "Use these inputs to populate fields: \n"
+                            f"RAW_REPLY: {raw_reply_content}"
+                        ),
+                    },
+                ]
+
+                resp = self.client.responses.create(
+                    model=MODEL_AUTH_FALLBACK,
+                    input=shaping_prompt,
+                    text={
+                        "format": {
+                            "type": "json_schema",
+                            "name": "email_structured",
+                            "schema": schema_dict,
+                            "strict": True,
+                        }
+                    },
+                )
+                import json as _json
+                structured_payload = _json.loads(resp.output_text)
+                structured_sections = structured_payload
+            except Exception as _shape_err:
+                logger.error(f"Email structured shaping failed for key '{template_key}': {_shape_err}")
+
+        # Fallback: derive sections via formatter
+        if not structured_sections:
+            django_email_body = self._get_django_template_sections(raw_reply_content)
+            base_sections = {
+                'main': django_email_body.email_body_main,
+                'data': django_email_body.email_body_data,
+                'final': django_email_body.email_body_final,
+            }
+        else:
+            # Map structured payload into base HTML sections; let partials handle rich rendering
+            # We support both generic and intent-specific payloads
+            main_html = structured_sections.get('main_html') or structured_sections.get('main_text') or ''
+            data_html = ''  # data may be rendered from structured fields in partials
+            final_html = structured_sections.get('final_html') or structured_sections.get('final_text') or ''
+            base_sections = {
+                'main': main_html,
+                'data': data_html,
+                'final': final_html,
+            }
 
         # 3. Render the full email using the Django template with structured sections
         try:
-            user = CustomUser.objects.get(id=self.user_id) # Fetch user for their name
+            # Fetch user for their name, retry once if the DB connection is stale
+            try:
+                user = CustomUser.objects.get(id=self.user_id)
+            except (OperationalError, InterfaceError):
+                logger.warning("DB connection issue when fetching user; refreshing connections and retrying once")
+                close_old_connections()
+                user = CustomUser.objects.get(id=self.user_id)
             user_name = user.get_full_name() or user.username
             
             # Check if the user has unsubscribed from emails
@@ -2493,15 +2599,63 @@ class MealPlanningAssistant:
         site_domain = os.getenv('STREAMLIT_URL')
         profile_url = f"{site_domain}/" # Adjust if your profile URL is different
 
+        # 3.5. Route sections through a template router if a template_key was provided
+        css_classes_extra: List[str] = []
+        try:
+            if template_key:
+                from customer_dashboard.template_router import render_email_sections
+                # Merge caller-provided context with structured fields (if any)
+                merged_context = {}
+                if template_context and isinstance(template_context, dict):
+                    merged_context.update(template_context)
+                try:
+                    if structured_sections and isinstance(structured_sections, dict):
+                        # Do NOT override explicit template_context keys with model-shaped fields
+                        for _k, _v in structured_sections.items():
+                            if _k not in merged_context:
+                                merged_context[_k] = _v
+                        # Normalize known fields for safety (handle common LLM shape drift)
+                        try:
+                            import re as _re
+                            if 'key_highlights' in merged_context:
+                                kh = merged_context['key_highlights']
+                                if isinstance(kh, str):
+                                    parts = [_p.strip(" -•\t\r") for _p in _re.split(r"[\n\r•]+", kh) if _p and _p.strip(" -•")]
+                                    merged_context['key_highlights'] = parts[:5]
+                                elif isinstance(kh, list):
+                                    merged_context['key_highlights'] = [str(x).strip() for x in kh if str(x).strip()][:5]
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                rendered_sections, css_classes_extra = render_email_sections(
+                    template_key=template_key,
+                    section_html=base_sections,
+                    extra_context=merged_context,
+                )
+                email_body_main = rendered_sections['main']
+                email_body_data = rendered_sections['data']
+                email_body_final = rendered_sections['final']
+            else:
+                email_body_main = base_sections['main']
+                email_body_data = base_sections['data']
+                email_body_final = base_sections['final']
+        except Exception as _route_err:
+            logger.error(f"Template routing failed; using raw sections. Error: {_route_err}")
+            email_body_main = base_sections['main']
+            email_body_data = base_sections['data']
+            email_body_final = base_sections['final']
+
         email_html_content = render_to_string(
             'customer_dashboard/assistant_email_template.html',
             {
                 'user_name': user_name,
-                'email_body_main': django_email_body.email_body_main,
-                'email_body_data': django_email_body.email_body_data,
-                'email_body_final': django_email_body.email_body_final,
+                'email_body_main': email_body_main,
+                'email_body_data': email_body_data,
+                'email_body_final': email_body_final,
                 'profile_url': profile_url,
-                'personal_assistant_email': user.personal_assistant_email if hasattr(user, 'personal_assistant_email') else None
+                'personal_assistant_email': user.personal_assistant_email if hasattr(user, 'personal_assistant_email') else None,
+                'css_classes': css_classes_extra,
             }
         )
         
@@ -2554,6 +2708,11 @@ class MealPlanningAssistant:
         }
 
         try:
+            # if settings.DEBUG:
+            #     logger.info(f"MealPlanningAssistant: Skipping n8n webhook for user {self.user_id} in DEBUG mode.")
+            #     logger.info(f"MealPlanningAssistant: Payload: {json.dumps(payload)}")
+            #     return {"status": "success", "message": "Email reply successfully sent to n8n.", "n8n_response_status": "skipped"}
+            # else:
             logger.info(f"MealPlanningAssistant: Posting to n8n webhook for user {self.user_id}. URL: {n8n_webhook_url}")
             response = requests.post(n8n_webhook_url, json=payload, timeout=15)
             response.raise_for_status() 
@@ -2572,7 +2731,14 @@ class MealPlanningAssistant:
             return {"status": "error", "message": f"Unexpected error during email sending preparation: {str(e_general)}"}
 
     @classmethod
-    def send_notification_via_assistant(cls, user_id: int, message_content: str, subject: str = None) -> Dict[str, Any]:
+    def send_notification_via_assistant(
+        cls, 
+        user_id: int, 
+        message_content: str, 
+        subject: str = None,
+        template_key: Optional[str] = None,
+        template_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         Static utility method that wraps process_and_reply_to_email to allow tasks to
         send emails through the assistant.
@@ -2589,8 +2755,19 @@ class MealPlanningAssistant:
             Dict with status and result information
         """
         try:
-            # Get user
-            user = CustomUser.objects.get(id=user_id)
+            # Ensure DB connection is fresh for long-running worker processes
+            try:
+                close_old_connections()
+            except Exception:
+                pass
+
+            # Get user (retry once on stale connection)
+            try:
+                user = CustomUser.objects.get(id=user_id)
+            except (OperationalError, InterfaceError):
+                logger.warning("DB connection issue when fetching user in send_notification_via_assistant; refreshing and retrying once")
+                close_old_connections()
+                user = CustomUser.objects.get(id=user_id)
             
             # Skip if email not confirmed
             if not user.email_confirmed:
@@ -2619,7 +2796,9 @@ class MealPlanningAssistant:
                 user_email_token=str(user.email_token) if hasattr(user, 'email_token') else None,
                 original_subject=subject,
                 in_reply_to_header=None,
-                email_thread_id=None
+                email_thread_id=None,
+                template_key=template_key,
+                template_context=template_context,
             )
             
             return result

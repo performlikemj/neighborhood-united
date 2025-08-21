@@ -10,6 +10,7 @@ import logging
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 from datetime import datetime
+from django.utils import timezone
 import time
 from django.http import JsonResponse
 # Import our new components
@@ -203,7 +204,7 @@ class EnhancedEmailProcessor:
                         'formatting_type': 'tool_specific',
                         'intent_category': intent.primary_intent,
                         'detected_tools': detected_tools,
-                        'formatting_timestamp': datetime.now().isoformat()
+                        'formatting_timestamp': timezone.now().isoformat()
                     }
                 )
             else:
@@ -322,7 +323,7 @@ class EnhancedEmailProcessor:
                         'tool_name': tool_name,
                         'output': tool_output,
                         'call_id': tool_call.get('id', ''),
-                        'timestamp': tool_call.get('timestamp', datetime.now().isoformat())
+                        'timestamp': tool_call.get('timestamp', timezone.now().isoformat())
                     })
         
         # Handle direct tool results in response
@@ -332,7 +333,7 @@ class EnhancedEmailProcessor:
                     'tool_name': tool_name,
                     'output': tool_result,
                     'call_id': f"{tool_name}_{int(time.time())}",
-                    'timestamp': datetime.now().isoformat()
+                    'timestamp': timezone.now().isoformat()
                 })
         
         return tool_outputs
@@ -378,7 +379,7 @@ class EnhancedEmailProcessor:
             'data_sections': len(data_sections),
             'final_sections': len(final_sections),
             'intent_category': intent.primary_intent,
-            'formatting_timestamp': datetime.now().isoformat()
+            'formatting_timestamp': timezone.now().isoformat()
         }
         
         return DjangoEmailBody(
@@ -463,7 +464,7 @@ class EnhancedEmailProcessor:
             'formatting_type': 'general',
             'intent_category': intent.primary_intent,
             'has_content': bool(formatted_content),
-            'formatting_timestamp': datetime.now().isoformat()
+            'formatting_timestamp': timezone.now().isoformat()
         }
         
         return DjangoEmailBody(
@@ -556,7 +557,7 @@ class EnhancedEmailProcessor:
                     'metadata': {
                         'formatting_type': 'fallback',
                         'enhanced_processing': False,
-                        'timestamp': datetime.now().isoformat()
+                        'timestamp': timezone.now().isoformat()
                     }
                 }
             
@@ -574,7 +575,7 @@ class EnhancedEmailProcessor:
                 'metadata': {
                     'formatting_type': 'error',
                     'error': str(e),
-                    'timestamp': datetime.now().isoformat()
+                    'timestamp': timezone.now().isoformat()
                 }
             }
 

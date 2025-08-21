@@ -129,6 +129,13 @@ def process_email(request):
         ).first()
 
         if active_user_email_session:
+            # Refresh session expiry (sliding window)
+            try:
+                session_duration_hours = getattr(settings, 'EMAIL_ASSISTANT_SESSION_DURATION_HOURS', 24)
+                active_user_email_session.expires_at = timezone.now() + timedelta(hours=session_duration_hours)
+                active_user_email_session.save(update_fields=['expires_at'])
+            except Exception as e:
+                logger.error(f"Failed to refresh UserEmailSession expiry for user {user.id}: {e}")
             
             # This cache key now stores the DB EmailAggregationSession.session_identifier (UUID string) if a window is active
             active_session_flag_key = f"{ACTIVE_DB_AGGREGATION_SESSION_FLAG_PREFIX}{user.id}"
@@ -350,7 +357,6 @@ def process_email(request):
 
             try:
                 site_domain_raw = os.getenv('STREAMLIT_URL')
-                print(f"STREAMLIT_URL: {site_domain_raw}")
                 site_domain = site_domain_raw.strip('"\'') if site_domain_raw else ''
                 # Corrected query parameter construction for auth_link
                 if site_domain:

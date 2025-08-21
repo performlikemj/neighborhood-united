@@ -3,7 +3,7 @@ import os
 import traceback
 from django.shortcuts import get_object_or_404, render, redirect
 from django.contrib.auth.decorators import login_required, user_passes_test
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone as py_tz
 from .forms import DishForm, IngredientForm, MealForm
 from .models import (
     Meal, Cart, Dish, Ingredient, Order, OrderMeal, MealPlan, MealPlanMeal, Instruction, PantryItem, 
@@ -62,6 +62,9 @@ import html
 from django.contrib.postgres.fields import ArrayField
 from meals.meal_plan_service import apply_modifications
 import pytz
+from django.views.decorators.csrf import csrf_exempt
+from zoneinfo import ZoneInfo
+
 
 
 logger = logging.getLogger(__name__)
@@ -104,7 +107,7 @@ def _cleanup_meal_plan_locks_for_task(task_id, user_id):
         
         # Since Redis doesn't have a scan pattern in our utils, we'll check common date ranges
         # Check last 30 days to find potential locks
-        today = datetime.now().date()
+        today = timezone.now().date()
         for i in range(30):
             check_date = today - timedelta(days=i)
             lock_key = f"meal_plan_generation_lock_{user_id}_{check_date.strftime('%Y_%m_%d')}"
@@ -129,7 +132,7 @@ def _check_and_cleanup_stale_locks(task_id, user_id):
     
     try:
         # Check last 7 days for potential locks
-        today = datetime.now().date()
+        today = timezone.now().date()
         for i in range(7):
             check_date = today - timedelta(days=i)
             lock_key = f"meal_plan_generation_lock_{user_id}_{check_date.strftime('%Y_%m_%d')}"
@@ -185,9 +188,9 @@ def cleanup_expired_meal_plan_locks(user_id=None, max_age_hours=6):
     
     try:
         # Determine date range to check
-        end_date = datetime.now().date()
+        end_date = timezone.now().date()
         start_date = end_date - timedelta(days=7)  # Check last 7 days
-        cutoff_time = datetime.now() - timedelta(hours=max_age_hours)
+        cutoff_time = timezone.now() - timedelta(hours=max_age_hours)
         
         # If user_id provided, check only that user's locks
         if user_id:
@@ -626,7 +629,13 @@ def api_get_meal_plans(request):
             meal_plans = MealPlan.objects.filter(user=user)
 
         serializer = MealPlanSerializer(meal_plans, many=True)
-        
+
+        # Flatten all meals across the selected meal plans for easier polling
+        from .models import MealPlanMeal
+        from .serializers import MealPlanMealSerializer
+        all_plan_meals_qs = MealPlanMeal.objects.filter(meal_plan__in=meal_plans).select_related('meal', 'meal_plan', 'meal__chef')
+        flattened_meals = MealPlanMealSerializer(all_plan_meals_qs, many=True, context={'request': request}).data
+
         # Count how many chef meals are in these meal plans
         chef_meal_count = 0
         for meal_plan in meal_plans:
@@ -638,6 +647,10 @@ def api_get_meal_plans(request):
         
         response_data = {
             "meal_plans": serializer.data,
+            # Top-level meals array for easy polling UI merge; includes meal_plan_meal_id
+            "meals": flattened_meals,
+            # Alias maintained for backwards-compat with older UI code
+            "meal_plan_meals": flattened_meals,
             "has_chef_meals": chef_meal_count > 0,
             "chef_meal_count": chef_meal_count
         }
@@ -691,6 +704,7 @@ def api_generate_cooking_instructions(request):
             return Response({"error": "No valid meal plan meals found or you do not have permission to access them."}, status=404)
 
         # Call the Celery task to generate cooking instructions for each valid meal plan meal
+        # Frontend-triggered generation should never send emails
         generate_instructions.delay(valid_meal_plan_meal_ids)
 
         return Response({"message": "Cooking instructions generation initiated successfully for the selected meal plan meals."}, status=200)
@@ -1095,7 +1109,9 @@ def api_update_meals_with_prompt(request):
         meal_dates = request.data.get('meal_dates', [])
         prompt = request.data.get('prompt', '').strip()
         logger.info(f"Received meal_plan_meal_ids: {meal_plan_meal_ids}, dates: {meal_dates}, prompt: {prompt}")
-
+        print(f"Meal Plan Meal IDs: {meal_plan_meal_ids}")
+        print(f"Meal Dates: {meal_dates}")
+        print(f"Prompt: {prompt}")
         if not meal_plan_meal_ids or not meal_dates:
             logger.warning("Missing required data: meal_plan_meal_ids or meal_dates")
             return Response({
@@ -1108,20 +1124,24 @@ def api_update_meals_with_prompt(request):
                 "error": "Number of meal IDs must match number of dates."
             }, status=400)
 
-        # Get current date for comparisons
-        today = timezone.now().date()
-        logger.info(f"Current date: {today}")
+        # Get current date in the user's timezone for comparisons
+        user_tz = ZoneInfo(getattr(request.user, 'timezone', 'UTC') or 'UTC')
+        today = timezone.now().astimezone(user_tz).date()
+        logger.info(f"Current date (user tz {user_tz}): {today}")
 
         # Convert string dates to date objects and create ID-to-date mapping
         try:
             id_date_pairs = []
+            past_date_pairs = []
             for meal_id, date_str in zip(meal_plan_meal_ids, meal_dates):
                 meal_date = datetime.strptime(date_str, '%Y-%m-%d').date()
                 # Check if date is in the past
                 if meal_date < today:
                     logger.info(f"Skipping past date: {date_str} for meal_id: {meal_id}")
+                    past_date_pairs.append((meal_id, meal_date))
                     continue  # Skip past dates
                 id_date_pairs.append((meal_id, meal_date))
+                print(f"Added valid date pair: meal_id={meal_id}, date={date_str}")
                 logger.info(f"Added valid date pair: meal_id={meal_id}, date={date_str}")
         except ValueError as e:
             logger.error(f"Date parsing error: {e}")
@@ -1130,6 +1150,14 @@ def api_update_meals_with_prompt(request):
             }, status=400)
 
         if not id_date_pairs:
+            # If all provided dates are in the past, return a specific message
+            if 'past_date_pairs' in locals() and past_date_pairs:
+                past_dates_str = [d.strftime('%Y-%m-%d') for _, d in past_date_pairs]
+                logger.warning(f"All selected meals are in the past; cannot update. Past dates: {past_dates_str}")
+                return Response({
+                    "error": "Cannot update past meals. Selected dates are in the past and cannot be edited.",
+                    "past_dates": past_dates_str
+                }, status=400)
             logger.warning("No valid future dates found in request")
             return Response({
                 "error": "No valid future dates provided for meal updates."
@@ -1207,62 +1235,62 @@ def api_update_meals_with_prompt(request):
         # If no prompt is provided, try suggest_alternative_meals first
         if not prompt:
             logger.info("No prompt provided, attempting to find alternative meals")
-            # Get the days and meal types for each meal to be replaced
-            days_of_week = []
-            meal_types = []
-            old_meal_ids = []
-            
-            # First, remove all the old meal plan meals
-            for meal_plan_meal_id, _ in id_date_pairs:
-                try:
-                    meal_plan_meal = MealPlanMeal.objects.get(id=meal_plan_meal_id, meal_plan__user=request.user)
-                    logger.info(f"Removing meal plan meal: {meal_plan_meal.meal.name} from {meal_plan_meal.day} {meal_plan_meal.meal_type}")
-                    days_of_week.append(meal_plan_meal.day)
-                    meal_types.append(meal_plan_meal.meal_type)
-                    old_meal_ids.append(meal_plan_meal.meal.id)
-                    meal_plan_meal.delete()
-                    logger.info(f"Preparing to update: Day={meal_plan_meal.day}, Type={meal_plan_meal.meal_type}, Old Meal ID={meal_plan_meal.meal.id}")
-                except MealPlanMeal.DoesNotExist:
-                    logger.warning(f"Meal plan meal with ID {meal_plan_meal_id} not found or unauthorized")
-                    continue
+            # Perform the whole no-prompt flow atomically to avoid partial deletions
+            with transaction.atomic():
+                # Collect days, meal types, and old meal IDs without deleting yet
+                days_of_week = []
+                meal_types = []
+                old_meal_ids = []
+                for meal_plan_meal_id, _ in id_date_pairs:
+                    try:
+                        meal_plan_meal = MealPlanMeal.objects.get(id=meal_plan_meal_id, meal_plan__user=request.user)
+                        days_of_week.append(meal_plan_meal.day)
+                        meal_types.append(meal_plan_meal.meal_type)
+                        old_meal_ids.append(meal_plan_meal.meal.id)
+                        logger.info(f"Queued for update: Day={meal_plan_meal.day}, Type={meal_plan_meal.meal_type}, Old Meal ID={meal_plan_meal.meal.id}")
+                    except MealPlanMeal.DoesNotExist:
+                        logger.warning(f"Meal plan meal with ID {meal_plan_meal_id} not found or unauthorized")
+                        continue
 
-            # Use the existing suggest_alternative_meals function to get alternatives
-            from shared.utils import suggest_alternative_meals
-            alternatives_response = suggest_alternative_meals(
-                request=request,
-                meal_ids=old_meal_ids,
-                days_of_week=days_of_week,
-                meal_types=meal_types
-            )
-            logger.info(f"Alternatives response: {alternatives_response}")
+                # Use the existing suggest_alternative_meals function to get alternatives
+                from shared.utils import suggest_alternative_meals
+                alternatives_response = suggest_alternative_meals(
+                    request=request,
+                    meal_ids=old_meal_ids,
+                    days_of_week=days_of_week,
+                    meal_types=meal_types
+                )
+                logger.info(f"Alternatives response: {alternatives_response}")
 
-            # Get the alternative meals
-            alternative_meals = alternatives_response.get('alternative_meals', [])
+                # If the helper returned an error, abort and rollback
+                if isinstance(alternatives_response, dict) and alternatives_response.get('status') == 'error':
+                    raise Exception(alternatives_response.get('message', 'Failed to suggest alternative meals'))
 
-            if alternative_meals:
-                logger.info(f"Found {len(alternative_meals)} alternative meals")
-                # Use the alternative meals to update the meal plan
-                for idx, alternative in enumerate(alternative_meals):
-                    day = days_of_week[idx]
-                    meal_type = meal_types[idx]
-                    new_meal_id = alternative['meal_id']
-                    logger.info(f"Processing alternative meal: Day={day}, Type={meal_type}, New ID={new_meal_id}")
-                    
-                    # Use replace_meal_in_plan instead of direct update
+                # Get the alternative meals
+                alternative_meals = alternatives_response.get('alternative_meals', [])
+
+                if alternative_meals:
+                    logger.info(f"Found {len(alternative_meals)} alternative meals")
+                    # Use the alternative meals to update the meal plan without prior deletion
                     from shared.utils import replace_meal_in_plan
-                    result = replace_meal_in_plan(
-                        request=request,
-                        meal_plan_id=meal_plan.id,
-                        old_meal_id=old_meal_ids[idx],
-                        new_meal_id=new_meal_id,
-                        day=day,
-                        meal_type=meal_type
-                    )
+                    for old_meal_id, day, meal_type, alternative in zip(old_meal_ids, days_of_week, meal_types, alternative_meals):
+                        new_meal_id = alternative['meal_id']
+                        logger.info(f"Processing alternative meal: Day={day}, Type={meal_type}, New ID={new_meal_id}")
+                        result = replace_meal_in_plan(
+                            request=request,
+                            meal_plan_id=meal_plan.id,
+                            old_meal_id=old_meal_id,
+                            new_meal_id=new_meal_id,
+                            day=day,
+                            meal_type=meal_type
+                        )
 
-                    if result['status'] == 'success':
+                        if result['status'] != 'success':
+                            raise Exception(result.get('message', 'Failed to replace meal'))
+
                         updates.append({
                             "old_meal": {
-                                "id": old_meal_ids[idx],
+                                "id": old_meal_id,
                                 "name": result['replaced_meal']['old_meal']
                             },
                             "new_meal": {
@@ -1273,49 +1301,55 @@ def api_update_meals_with_prompt(request):
                         })
                         processed_meals += 1
                         logger.info(f"Successfully replaced meal {processed_meals}/{total_meals}")
-                    else:
-                        logger.error(f"Failed to replace meal: {result['message']}")
 
-            else:
-                logger.info("No alternatives found, proceeding to generate new meals")
-                # If no alternatives found, fall back to generating new meals
-                
-                for idx, (day, meal_type) in enumerate(zip(days_of_week, meal_types)):
-                    # Get existing meal names and embeddings for remaining meals
-                    existing_meal_names = set(meal_plan.mealplanmeal_set.values_list('meal__name', flat=True))
-                    existing_meal_embeddings = list(meal_plan.mealplanmeal_set.values_list('meal__meal_embedding', flat=True))
+                else:
+                    logger.info("No alternatives found, proceeding to generate new meals without deleting existing entries first")
+                    # Generate new meals and then replace existing entries atomically
+                    from shared.utils import create_meal, replace_meal_in_plan
+                    for old_meal_id, day, meal_type in zip(old_meal_ids, days_of_week, meal_types):
+                        # Generate the new meal
+                        gen_response = create_meal(request=request, meal_type=meal_type)
+                        if not isinstance(gen_response, dict) or gen_response.get('status') not in ('success', 'info'):
+                            raise Exception(gen_response.get('message', 'Failed to generate meal'))
 
-                    # Generate and create a new meal
-                    result = generate_and_create_meal(
-                        user=request.user,
-                        meal_plan=meal_plan,
-                        meal_type=meal_type,
-                        existing_meal_names=existing_meal_names,
-                        existing_meal_embeddings=existing_meal_embeddings,
-                        user_id=request.user.id,
-                        day_name=day,
-                        user_prompt=None
-                    )
+                        # Extract meal object/id
+                        if gen_response.get('meal') and isinstance(gen_response['meal'], dict):
+                            new_meal_id = gen_response['meal']['id']
+                            new_meal_name = gen_response['meal']['name']
+                        else:
+                            # In some paths create_meal may return a model instance
+                            new_meal = gen_response.get('meal') or gen_response.get('generated_meal')
+                            new_meal_id = getattr(new_meal, 'id', None)
+                            new_meal_name = getattr(new_meal, 'name', 'Unknown')
+                        if not new_meal_id:
+                            raise Exception('Generated meal did not return a valid ID')
 
-                    if result['status'] == 'success':
-                        new_meal = result['meal']
-                        logger.info(f"Creating new MealPlanMeal association for meal '{new_meal.name}' in meal plan {meal_plan.id}")
-                        # No need to create MealPlanMeal here - it's already created by generate_and_create_meal
-                        logger.info(f"Successfully created MealPlanMeal for {new_meal.name} on {day}")
+                        # Replace existing plan entry with the newly generated meal
+                        rep_result = replace_meal_in_plan(
+                            request=request,
+                            meal_plan_id=meal_plan.id,
+                            old_meal_id=old_meal_id,
+                            new_meal_id=new_meal_id,
+                            day=day,
+                            meal_type=meal_type
+                        )
+                        if rep_result['status'] != 'success':
+                            raise Exception(rep_result.get('message', 'Failed to replace meal with generated meal'))
+
                         updates.append({
                             "old_meal": {
-                                "id": old_meal_ids[idx],
-                                "name": result['replaced_meal']['old_meal'] if 'replaced_meal' in result else "Unknown"
+                                "id": old_meal_id,
+                                "name": rep_result['replaced_meal']['old_meal']
                             },
                             "new_meal": {
-                                "id": new_meal.id,
-                                "name": new_meal.name,
+                                "id": new_meal_id,
+                                "name": new_meal_name,
                                 "was_generated": True,
-                                "used_pantry_items": result.get('used_pantry_items', [])
+                                "used_pantry_items": gen_response.get('used_pantry_items', [])
                             }
                         })
                         processed_meals += 1
-                        logger.info(f"Successfully generated new meal {processed_meals}/{total_meals}")
+                        logger.info(f"Successfully generated and replaced meal {processed_meals}/{total_meals}")
 
         elif prompt:
             logger.info(f"Prompt provided: '{prompt}', proceeding to update {total_meals} meals")
@@ -1364,7 +1398,7 @@ def api_update_meals_with_prompt(request):
                     continue
 
             # Get existing meal names and embeddings once before the loop
-            existing_meal_names = set(meal_plan.mealplanmeal_set.values_list('meal__name', flat=True))
+            existing_meal_names = {name for name in meal_plan.mealplanmeal_set.values_list('meal__name', flat=True)}
             existing_meal_embeddings = list(meal_plan.mealplanmeal_set.values_list('meal__meal_embedding', flat=True))
             
             # Now create new meals for each removed meal
@@ -1417,10 +1451,182 @@ def api_update_meals_with_prompt(request):
 
     except Exception as e:
         logger.error(f"Error in api_update_meals_with_prompt: {str(e)}")
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": f"Error in api_update_meals_with_prompt: {str(e)}", "source":"api_update_meals_with_prompt", "traceback": traceback.format_exc()})
         logger.error(f"Full traceback: {traceback.format_exc()}")
         return Response({
             "error": f"An error occurred: {str(e)}"
         }, status=500)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_suggest_meal_alternatives(request):
+    """
+    API endpoint to suggest alternative meals for given meal plan entries.
+    Accepts the same parameters as api_update_meals_with_prompt except for `prompt`.
+
+    Request body:
+    - meal_plan_meal_ids: List[int]
+    - meal_dates: List[str] in YYYY-MM-DD format corresponding to each meal_plan_meal_id
+
+    Response:
+    {
+      "alternatives": [
+        {
+          "meal_plan_meal_id": int,
+          "day": str,
+          "meal_type": str,
+          "original_meal": { "id": int, "name": str },
+          "alternatives": [
+            { "meal_id": int, "name": str, "start_date": str, "is_available": bool, "chef": str, "meal_type": str },
+            ...
+          ]
+        },
+        ...
+      ]
+    }
+    """
+    logger.info("Starting api_suggest_meal_alternatives")
+    try:
+        meal_plan_meal_ids = request.data.get('meal_plan_meal_ids', [])
+        meal_dates = request.data.get('meal_dates', [])
+        logger.info(f"Received meal_plan_meal_ids: {meal_plan_meal_ids}, dates: {meal_dates}")
+
+        if not meal_plan_meal_ids or not meal_dates:
+            logger.warning("Missing required data: meal_plan_meal_ids or meal_dates")
+            return Response({
+                "error": "Both meal_plan_meal_ids and meal_dates are required."
+            }, status=400)
+
+        if len(meal_plan_meal_ids) != len(meal_dates):
+            logger.warning("Mismatched lengths: meal_plan_meal_ids and meal_dates")
+            return Response({
+                "error": "Number of meal IDs must match number of dates."
+            }, status=400)
+
+        # Get current date in the user's timezone for comparisons
+        user_tz = ZoneInfo(getattr(request.user, 'timezone', 'UTC') or 'UTC')
+        today = timezone.now().astimezone(user_tz).date()
+        logger.info(f"Current date (user tz {user_tz}): {today}")
+
+        # Convert string dates to date objects and create ID-to-date mapping
+        try:
+            id_date_pairs = []
+            past_date_pairs = []
+            for meal_id, date_str in zip(meal_plan_meal_ids, meal_dates):
+                meal_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                if meal_date < today:
+                    logger.info(f"Skipping past date: {date_str} for meal_id: {meal_id}")
+                    past_date_pairs.append((meal_id, meal_date))
+                    continue
+                id_date_pairs.append((meal_id, meal_date))
+                logger.info(f"Added valid date pair: meal_id={meal_id}, date={date_str}")
+        except ValueError as e:
+            logger.error(f"Date parsing error: {e}")
+            return Response({
+                "error": "Invalid date format. Use YYYY-MM-DD."
+            }, status=400)
+
+        if not id_date_pairs:
+            if 'past_date_pairs' in locals() and past_date_pairs:
+                past_dates_str = [d.strftime('%Y-%m-%d') for _, d in past_date_pairs]
+                logger.warning(f"All selected meals are in the past; cannot suggest alternatives. Past dates: {past_dates_str}")
+                return Response({
+                    "error": "Cannot suggest alternatives for past meals. Selected dates are in the past.",
+                    "past_dates": past_dates_str
+                }, status=400)
+            logger.warning("No valid future dates found in request")
+            return Response({
+                "error": "No valid future dates provided."
+            }, status=400)
+
+        results = []
+
+        # For each requested meal, validate ownership and day alignment, then fetch alternatives
+        for meal_plan_meal_id, meal_date in id_date_pairs:
+            try:
+                meal_plan_meal = MealPlanMeal.objects.select_related('meal_plan', 'meal').get(
+                    id=meal_plan_meal_id,
+                    meal_plan__user=request.user
+                )
+            except MealPlanMeal.DoesNotExist:
+                error_message = f"Meal plan meal with ID {meal_plan_meal_id} not found or unauthorized"
+                logger.warning(error_message)
+                return Response({
+                    "error": error_message,
+                    "details": {
+                        "meal_plan_meal_id": meal_plan_meal_id,
+                        "provided_date": meal_date.strftime("%Y-%m-%d")
+                    }
+                }, status=404)
+
+            # Verify provided date corresponds to the stored day
+            expected_day = meal_date.strftime("%A")
+            if meal_plan_meal.day != expected_day:
+                error_message = (
+                    f"Day mismatch for MealPlanMeal ID {meal_plan_meal.id}: "
+                    f"expected day '{expected_day}' (from provided date {meal_date}), "
+                    f"but found day '{meal_plan_meal.day}' with meal type '{meal_plan_meal.meal_type}'."
+                )
+                logger.error(error_message)
+                return Response({
+                    "error": error_message,
+                    "meal_plan_meal": {
+                        "id": meal_plan_meal.id,
+                        "name": meal_plan_meal.meal.name,
+                        "day": meal_plan_meal.day,
+                        "meal_type": meal_plan_meal.meal_type,
+                        "provided_date": meal_date.strftime("%Y-%m-%d")
+                    }
+                }, status=400)
+
+            # Fetch alternatives for this specific meal/day/type
+            from shared.utils import suggest_alternative_meals
+            alt_response = suggest_alternative_meals(
+                request=request,
+                meal_ids=[meal_plan_meal.meal.id],
+                days_of_week=[meal_plan_meal.day],
+                meal_types=[meal_plan_meal.meal_type]
+            )
+
+            if isinstance(alt_response, dict) and alt_response.get('status') == 'error':
+                logger.error(f"Error from suggest_alternative_meals: {alt_response}")
+                return Response({
+                    "error": alt_response.get('message', 'Failed to suggest alternative meals')
+                }, status=500)
+
+            alternatives = alt_response.get('alternative_meals', [])
+
+            results.append({
+                "meal_plan_meal_id": meal_plan_meal.id,
+                "day": meal_plan_meal.day,
+                "meal_type": meal_plan_meal.meal_type,
+                "original_meal": {
+                    "id": meal_plan_meal.meal.id,
+                    "name": meal_plan_meal.meal.name
+                },
+                "alternatives": alternatives
+            })
+
+        logger.info("Successfully generated alternative suggestions")
+        return Response({
+            "alternatives": results
+        }, status=200)
+
+    except Exception as e:
+        logger.error(f"Error in api_suggest_meal_alternatives: {str(e)}")
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        try:
+            requests.post(n8n_traceback_url, json={"error": f"Error in api_suggest_meal_alternatives: {str(e)}", "source":"api_suggest_meal_alternatives", "traceback": traceback.format_exc()})
+        except Exception:
+            pass
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        return Response({
+            "error": f"An error occurred: {str(e)}"
+        }, status=500)
+
 
 def get_user_dietary_preferences(user_id):
     """
@@ -1468,9 +1674,13 @@ def get_available_meals_count(user_id):
             count = Meal.objects.filter(creator_id=user_id).count()
             # Cache for 15 minutes (900 seconds) as this might change more frequently
             set(cache_key, count, 900)
-            logger.debug(f"Cached available meals count for user {user_id}")
         except Exception as e:
-            logger.error(f"Error counting available meals for user {user_id}: {str(e)}")
+            # N8N traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            try:
+                requests.post(n8n_traceback_url, json={"error": f"Error in get_available_meals_count: {str(e)}", "source":"get_available_meals_count", "traceback": traceback.format_exc()})
+            except Exception:
+                pass
             count = 0
     
     return count
@@ -1508,7 +1718,6 @@ def api_generate_meal_plan(request):
     Start asynchronous meal plan generation for a specific week.
     Returns a task ID that can be used to check the status.
     """
-    print(f"🎯 DEBUG: api_generate_meal_plan called by user {request.user.username} ({request.user.id})")
     try:
         # Get week_start_date from request parameters
         week_start_date_str = request.data.get('week_start_date') or request.query_params.get('week_start_date')
@@ -1593,12 +1802,9 @@ def api_generate_meal_plan(request):
         
         # Set the lock with the task ID and expiration
         set(lock_key, task_id, lock_duration)
-        print(f"🔒 DEBUG: Set Redis lock {lock_key} with task_id {task_id} for {lock_duration} seconds")
         
         # Start the async task using existing meal plan service with custom task ID
         from .meal_plan_service import create_meal_plan_for_user
-        print(f"🚀 DEBUG: About to dispatch Celery task with task_id={task_id}")
-        print(f"🚀 DEBUG: User ID: {request.user.id}, Week: {week_start_date} to {week_end_date}")
         
         try:
             task = create_meal_plan_for_user.apply_async(
@@ -1612,16 +1818,16 @@ def api_generate_meal_plan(request):
                 },
                 task_id=task_id  # Use deterministic task ID
             )
-            print(f"✅ DEBUG: Task dispatched successfully! Task object: {task}")
-            print(f"✅ DEBUG: Task ID: {task.id}, Task state: {task.state}")
         except Exception as e:
-            print(f"❌ DEBUG: Error dispatching task: {str(e)}")
             # Clean up the lock if task dispatch fails
             delete(lock_key)
-            print(f"🔓 DEBUG: Cleaned up Redis lock {lock_key} due to task dispatch failure")
-            import traceback
-            print(f"❌ DEBUG: Traceback: {traceback.format_exc()}")
-            raise
+            # N8N traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            try:
+                requests.post(n8n_traceback_url, json={"error": f"Error in api_generate_meal_plan: {str(e)}", "source":"api_generate_meal_plan", "traceback": traceback.format_exc()})
+            except Exception:
+                pass
+            
 
         logger.info(f"Started meal plan generation task {task.id} for user {request.user.username}")
 
@@ -1650,6 +1856,202 @@ def api_generate_meal_plan(request):
             "message": "Failed to start meal plan generation",
             "details": str(e)
                  }, status=500)
+
+from rest_framework.decorators import renderer_classes
+from rest_framework.renderers import BaseRenderer
+
+class EventStreamRenderer(BaseRenderer):
+    media_type = 'text/event-stream'
+    format = 'event-stream'
+    charset = None
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        if data is None:
+            return b""
+        if isinstance(data, (bytes, bytearray)):
+            return bytes(data)
+        if isinstance(data, str):
+            return data.encode('utf-8')
+        try:
+            import json as _json
+            return (_json.dumps(data) + "\n").encode('utf-8')
+        except Exception:
+            return str(data).encode('utf-8')
+
+@csrf_exempt
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@renderer_classes([EventStreamRenderer])
+def api_stream_meal_plan_generation(request):
+    """
+    SSE endpoint to stream meal plan generation events for a given week.
+    Emits:
+      - event: meal_added, data: { meal_plan_meal }
+      - event: progress, data: { pct }
+      - event: done
+    If no job is running, starts an idempotent generation job and streams results.
+    """
+    import json
+    import uuid
+    from datetime import datetime, timedelta
+    from django.utils import timezone
+    from django.http import StreamingHttpResponse
+    from utils.redis_client import get as redis_get, set as redis_set, delete as redis_delete, get_redis_connection
+    from .models import MealPlan, MealPlanMeal
+    
+    try:
+        # Troubleshooting headers
+        try:
+            accept = request.META.get('HTTP_ACCEPT')
+            
+        except Exception:
+            pass
+
+        # Support both DRF Request and plain Django HttpRequest
+        week_start_date_str = None
+        if hasattr(request, 'query_params') and request.query_params is not None:
+            week_start_date_str = request.query_params.get('week_start_date')
+        if not week_start_date_str and hasattr(request, 'GET'):
+            week_start_date_str = request.GET.get('week_start_date')
+        if not week_start_date_str:
+            def err_stream():
+                yield f"event: error\n"
+                yield f"data: {json.dumps({'message': 'week_start_date is required (YYYY-MM-DD)'})}\n\n"
+                yield 'event: close\n\n'
+            return StreamingHttpResponse(err_stream(), content_type='text/event-stream')
+        try:
+            week_start_date = datetime.strptime(week_start_date_str, '%Y-%m-%d').date()
+            week_end_date = week_start_date + timedelta(days=6)
+        except ValueError:
+            def err_stream2():
+                yield f"event: error\n"
+                yield f"data: {json.dumps({'message': 'Invalid date format. Use YYYY-MM-DD'})}\n\n"
+                yield 'event: close\n\n'
+            return StreamingHttpResponse(err_stream2(), content_type='text/event-stream')
+
+        # Channel and keys
+        user_id = request.user.id
+        channel = f"meal_plan_stream:{user_id}:{week_start_date.strftime('%Y_%m_%d')}"
+        lock_key = f"meal_plan_generation_lock_{user_id}_{week_start_date.strftime('%Y_%m_%d')}"
+        job_key = f"meal_plan_job:{user_id}:{week_start_date.strftime('%Y_%m_%d')}"
+
+        # If plan already exists with meals, short-circuit and emit done
+        existing_plan = MealPlan.objects.filter(
+            user=request.user,
+            week_start_date=week_start_date,
+            week_end_date=week_end_date
+        ).first()
+        if existing_plan and MealPlanMeal.objects.filter(meal_plan=existing_plan).exists():
+            def done_stream():
+                yield "event: progress\n"
+                yield f"data: {json.dumps({'pct': 100})}\n\n"
+                yield "event: done\n\n"
+            response = StreamingHttpResponse(done_stream(), content_type='text/event-stream')
+            response['Cache-Control'] = 'no-cache'
+            response['X-Accel-Buffering'] = 'no'
+            return response
+
+        # Prepare Redis pubsub
+        conn = get_redis_connection()
+        if conn is None:
+            def err_stream3():
+                yield f"event: error\n"
+                yield f"data: {json.dumps({'message': 'Redis unavailable for SSE'})}\n\n"
+                yield 'event: close\n\n'
+            return StreamingHttpResponse(err_stream3(), content_type='text/event-stream')
+        pubsub = conn.pubsub()
+        pubsub.subscribe(channel)
+
+        # Start job idempotently if not already running
+        if not redis_get(lock_key):
+            try:
+                # set short lock to avoid races before Celery picks it up
+                redis_set(lock_key, f"meal_plan_generation_{user_id}_{week_start_date.strftime('%Y_%m_%d')}", 7200)
+                from .meal_plan_service import create_meal_plan_for_user
+                task_id = f"meal_plan_generation_{user_id}_{week_start_date.strftime('%Y_%m_%d') }"
+                create_meal_plan_for_user.apply_async(
+                    args=[],
+                    kwargs={
+                        'user_id': user_id,
+                        'start_of_week': week_start_date,
+                        'end_of_week': week_start_date + timedelta(days=6),
+                        'request_id': str(uuid.uuid4()),
+                        'user_prompt': request.query_params.get('user_prompt')
+                    },
+                    task_id=task_id
+                )
+            except Exception:
+                # Best effort cleanup of premature lock
+                try:
+                    redis_delete(lock_key)
+                except Exception:
+                    pass
+                raise
+
+        def event_stream():
+            try:
+                # Immediate heartbeat to open the stream promptly
+                yield ":keepalive\n\n"
+                # Optional initial progress snapshot if available
+                job_info = redis_get(job_key)
+                if isinstance(job_info, dict) and 'total' in job_info and 'added' in job_info:
+                    total = max(job_info.get('total', 0), 1)
+                    pct = int((job_info.get('added', 0) / total) * 100)
+                    yield "event: progress\n"
+                    yield f"data: {json.dumps({'pct': pct})}\n\n"
+
+                # Switch to non-blocking poll with periodic keepalive
+                last_heartbeat = time.time()
+                while True:
+                    message = pubsub.get_message(timeout=1.0)
+                    now_ts = time.time()
+                    if message and message.get('type') == 'message':
+                        try:
+                            payload = json.loads(message.get('data'))
+                        except Exception:
+                            payload = None
+                        if not isinstance(payload, dict):
+                            continue
+                        event = payload.get('event') or payload.get('type')  # support alternate naming
+                        data = payload.get('data') if 'data' in payload else payload
+                        if not event:
+                            continue
+                        yield f"event: {event}\n"
+                        if data is None:
+                            yield "data: {}\n\n"
+                        else:
+                            yield f"data: {json.dumps(data)}\n\n"
+                        if event == 'done':
+                            break
+                        last_heartbeat = now_ts
+                    else:
+                        if now_ts - last_heartbeat >= 20:
+                            yield ":keepalive\n\n"
+                            last_heartbeat = now_ts
+            except GeneratorExit:
+                pass
+            finally:
+                try:
+                    pubsub.unsubscribe(channel)
+                except Exception:
+                    pass
+            yield 'event: close\n\n'
+
+        response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+        response['Cache-Control'] = 'no-cache'
+        response['X-Accel-Buffering'] = 'no'
+        return response
+
+    except Exception as e:
+        logger.error(f"Error in api_stream_meal_plan_generation: {str(e)}")
+        def err_stream4():
+            yield f"event: error\n"
+            yield f"data: {json.dumps({'message': str(e)})}\n\n"
+            yield 'event: done\n\n'
+            yield 'event: close\n\n'
+        response = StreamingHttpResponse(err_stream4(), content_type='text/event-stream')
+        response['Cache-Control'] = 'no-cache'
+        response['X-Accel-Buffering'] = 'no'
+        return response
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -1864,12 +2266,11 @@ def create_chef_meal_event(request):
     logger.debug(f"Found {chef_meals.count()} meals for chef {chef.id}")
     
     # Get chef's timezone for context/validation
-    import pytz
     chef_timezone = chef.user.timezone if hasattr(chef.user, 'timezone') else 'UTC'
     try:
-        chef_tz = pytz.timezone(chef_timezone)
-    except pytz.exceptions.UnknownTimeZoneError:
-        chef_tz = pytz.UTC
+        chef_tz = ZoneInfo(chef_timezone)
+    except Exception:
+        chef_tz = ZoneInfo("UTC")
     
     if request.method == 'POST':
         # Get form data
@@ -1895,16 +2296,16 @@ def create_chef_meal_event(request):
                 "%Y-%m-%d %H:%M"
             )
             
-            # Assume cutoff time is in chef's timezone, localize it and convert to UTC for storage
-            cutoff_datetime = chef_tz.localize(cutoff_datetime)
-            cutoff_datetime_utc = cutoff_datetime.astimezone(timezone.utc)
+            # Assume cutoff time is in chef's timezone, make aware and convert to UTC for storage
+            cutoff_datetime = timezone.make_aware(cutoff_datetime, chef_tz)
+            cutoff_datetime_utc = cutoff_datetime.astimezone(py_tz.utc)
             
             # Check if the event_date/time is in the future in chef's timezone
             event_datetime = datetime.strptime(
                 f"{event_date} {event_time}", 
                 "%Y-%m-%d %H:%M"
             )
-            event_datetime = chef_tz.localize(event_datetime)
+            event_datetime = timezone.make_aware(event_datetime, chef_tz)
             
             # Get current time in chef's timezone
             now = timezone.now().astimezone(chef_tz)
@@ -1970,12 +2371,11 @@ def edit_chef_meal_event(request, event_id):
     event = get_object_or_404(ChefMealEvent, id=event_id, chef=chef)
     
     # Get chef's timezone for context/validation
-    import pytz
     chef_timezone = chef.user.timezone if hasattr(chef.user, 'timezone') else 'UTC'
     try:
-        chef_tz = pytz.timezone(chef_timezone)
-    except pytz.exceptions.UnknownTimeZoneError:
-        chef_tz = pytz.UTC
+        chef_tz = ZoneInfo(chef_timezone)
+    except Exception:
+        chef_tz = ZoneInfo("UTC")
     
     # Check if event can be edited (not too close to event date or has orders)
     now = timezone.now().astimezone(chef_tz)
@@ -2022,16 +2422,16 @@ def edit_chef_meal_event(request, event_id):
                 "%Y-%m-%d %H:%M"
             )
             
-            # Localize to chef's timezone and convert to UTC for storage
-            cutoff_datetime = chef_tz.localize(cutoff_datetime)
-            cutoff_datetime_utc = cutoff_datetime.astimezone(timezone.utc)
+            # Make aware in chef's timezone and convert to UTC for storage
+            cutoff_datetime = timezone.make_aware(cutoff_datetime, chef_tz)
+            cutoff_datetime_utc = cutoff_datetime.astimezone(py_tz.utc)
             
             # Create event datetime in chef's timezone
             event_datetime = datetime.strptime(
                 f"{event_date} {event_time}", 
                 "%Y-%m-%d %H:%M"
             )
-            event_datetime = chef_tz.localize(event_datetime)
+            event_datetime = timezone.make_aware(event_datetime, chef_tz)
             
             # Validate cutoff is before event time
             if cutoff_datetime >= event_datetime:
@@ -2855,15 +3255,42 @@ def api_process_chef_meal_payment(request, order_id):
 
     
     try:
-        # Get the regular Order object
-        order = Order.objects.get(id=order_id, customer=request.user)
-        
-        if order.is_paid:
-            return standardize_stripe_response(
-                success=False,
-                message="This order has already been paid for.",
-                status_code=400
-            )
+        # Wrap the flow in a transaction and lock the order row to avoid races
+        with transaction.atomic():
+            # Get the regular Order object (locked for update)
+            order = Order.objects.select_for_update().get(id=order_id, customer=request.user)
+            print(f"Order: {order}")
+            # Short-circuit if already paid
+            if order.is_paid:
+                return standardize_stripe_response(
+                    success=True,
+                    message="Order already paid.",
+                    data={"order_id": order.id, "status": order.status}
+                )
+
+            # Reuse an open Checkout session if it exists
+            if order.stripe_session_id:
+                try:
+                    session_existing = stripe.checkout.Session.retrieve(order.stripe_session_id)
+                    if session_existing and getattr(session_existing, 'status', None) == 'open':
+                        return standardize_stripe_response(
+                            success=True,
+                            message="Reusing existing checkout session",
+                            data={"session_id": session_existing.id, "session_url": getattr(session_existing, 'url', None)}
+                        )
+                    # If the session has completed, mark paid if not already
+                    if session_existing and getattr(session_existing, 'status', None) == 'complete' and not order.is_paid:
+                        order.is_paid = True
+                        order.status = order.status or 'Confirmed'
+                        order.save(update_fields=['is_paid', 'status'])
+                        return standardize_stripe_response(
+                            success=True,
+                            message="Order payment already completed.",
+                            data={"order_id": order.id, "status": order.status}
+                        )
+                except Exception:
+                    # Fall through to create a fresh session
+                    pass
         
         # Get chef meal events from OrderMeal objects
         order_meals = order.ordermeal_set.filter(
@@ -2946,9 +3373,14 @@ def api_process_chef_meal_payment(request, order_id):
             }
         )
         
-        # Save the session ID to the order
-        order.stripe_session_id = session.id
-        order.save()
+        # Save the session ID to the order (outside tx is acceptable; if this fails, status endpoint can still finalize)
+        try:
+            with transaction.atomic():
+                order = Order.objects.select_for_update().get(id=order_id, customer=request.user)
+                order.stripe_session_id = session.id
+                order.save(update_fields=['stripe_session_id'])
+        except Exception:
+            logger.warning(f"Could not persist stripe_session_id for order {order_id}; will rely on status endpoint/webhook.")
         
 
         
@@ -2990,6 +3422,176 @@ def api_process_meal_payment(request, order_id):
             message="This order has already been paid for.",
             status_code=400
         )
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def api_order_payment_status(request, order_id):
+    """
+    Lightweight status check for an order's payment state and reusable Checkout session.
+    """
+    try:
+        logger.info(f"PAYMENT_STATUS: user={request.user.id} order_id={order_id}")
+        order = Order.objects.get(id=order_id, customer=request.user)
+        payload = {
+            "order_id": order.id,
+            "is_paid": bool(order.is_paid),
+            "status": order.status,
+            "has_session": bool(order.stripe_session_id),
+            "session_status": None,
+            "session_url": None,
+        }
+        # Prefer a provided session_id/payment_intent_id (e.g., from Stripe success redirect) when present
+        provided_session_id = request.query_params.get('session_id') or request.GET.get('session_id')
+        provided_pi_id = request.query_params.get('payment_intent_id') or request.GET.get('payment_intent_id')
+        session_id_to_check = provided_session_id or order.stripe_session_id
+        if session_id_to_check:
+            try:
+                session = stripe.checkout.Session.retrieve(session_id_to_check)
+                logger.info(f"PAYMENT_STATUS: session_id={session.id} status={getattr(session,'status',None)} payment_status={getattr(session,'payment_status',None)} (provided={bool(provided_session_id)})")
+                payload["session_status"] = getattr(session, "status", None)
+                payload["session_url"] = getattr(session, "url", None)
+
+                # Opportunistic finalize: if session completed and paid but order not yet marked paid,
+                # update the order and confirm related chef items. This avoids relying solely on webhooks.
+                is_complete = getattr(session, "status", None) == "complete"
+                is_paid = getattr(session, "payment_status", None) == "paid"
+                # Verify the session belongs to this order via metadata when present
+                meta_order_id = None
+                try:
+                    meta_order_id = int(getattr(session, 'metadata', {}).get('order_id')) if getattr(session, 'metadata', None) else None
+                except Exception:
+                    meta_order_id = None
+                session_matches_order = (meta_order_id == order.id) or (meta_order_id is None)
+
+                if (is_complete or is_paid) and session_matches_order and not order.is_paid:
+                    logger.info(f"PAYMENT_STATUS: finalizing order={order.id} from session={session.id}")
+                    # Mark order paid and move to active status
+                    order.is_paid = True
+                    # Keep existing status if already advanced; else use a valid active status
+                    order.status = order.status or 'In Progress'
+                    order.save(update_fields=['is_paid', 'status'])
+
+                    # If a provided session_id was used and differs from stored, update it
+                    if provided_session_id and order.stripe_session_id != provided_session_id:
+                        order.stripe_session_id = provided_session_id
+                        order.save(update_fields=['stripe_session_id'])
+
+                    # Confirm associated chef items
+                    chef_items = ChefMealOrder.objects.filter(order=order, status__in=['placed']).select_related('meal_event')
+                    for item in chef_items:
+                        try:
+                            # Save payment intent from session
+                            item.payment_intent_id = getattr(session, 'payment_intent', None)
+                            item.mark_as_paid()
+                        except Exception:
+                            item.status = 'confirmed'
+                            item.save(update_fields=['status', 'stripe_payment_intent_id'])
+
+                    # Best-effort order-level payment log
+                    try:
+                        total_amount = float(getattr(session, 'amount_total', 0) or 0) / 100.0
+                        PaymentLog.objects.create(
+                            order=order,
+                            user=order.customer,
+                            action='charge',
+                            amount=total_amount,
+                            stripe_id=getattr(session, 'payment_intent', None),
+                            status='succeeded',
+                            details={
+                                'session_id': session.id,
+                                'payment_intent_id': getattr(session, 'payment_intent', None),
+                                'finalized_via': 'status_endpoint'
+                            }
+                        )
+                    except Exception as log_err:
+                        logger.warning(f"PAYMENT_STATUS: failed to log payment for order={order.id}: {log_err}")
+
+                    # Reflect new state in return payload
+                    payload["is_paid"] = True
+                    payload["status"] = order.status
+            except Exception as sess_err:
+                logger.warning(f"PAYMENT_STATUS: failed to retrieve session for order={order.id}: {sess_err}")
+
+        # PaymentIntent fallback if provided explicitly and not yet paid
+        if not payload["is_paid"] and provided_pi_id:
+            try:
+                pi = stripe.PaymentIntent.retrieve(provided_pi_id)
+                pi_status = getattr(pi, 'status', None)
+                pi_meta = getattr(pi, 'metadata', {}) or {}
+                logger.info(f"PAYMENT_STATUS: PI fallback id={pi.id} status={pi_status} meta={pi_meta}")
+
+                # Validate that PI belongs to this order/user when metadata available
+                meta_order_ok = False
+                try:
+                    meta_order_id = int(pi_meta.get('order_id')) if pi_meta.get('order_id') else None
+                    if meta_order_id == order.id:
+                        meta_order_ok = True
+                except Exception:
+                    meta_order_ok = False
+
+                meta_user_ok = False
+                try:
+                    meta_customer = int(pi_meta.get('customer')) if pi_meta.get('customer') else None
+                    if meta_customer == request.user.id:
+                        meta_user_ok = True
+                except Exception:
+                    meta_user_ok = False
+
+                if meta_order_ok or meta_user_ok:
+                    # If requires_capture, attempt capture (idempotent)
+                    if pi_status == 'requires_capture':
+                        try:
+                            stripe.PaymentIntent.capture(
+                                pi.id,
+                                idempotency_key=f"status_endpoint_capture_{pi.id}"
+                            )
+                            # Re-fetch PI for updated status
+                            pi = stripe.PaymentIntent.retrieve(pi.id)
+                            pi_status = getattr(pi, 'status', None)
+                            logger.info(f"PAYMENT_STATUS: PI captured id={pi.id} new_status={pi_status}")
+                        except Exception as cap_err:
+                            logger.warning(f"PAYMENT_STATUS: PI capture failed id={pi.id}: {cap_err}")
+
+                    if pi_status == 'succeeded' and not order.is_paid:
+                        logger.info(f"PAYMENT_STATUS: finalizing order={order.id} from payment_intent={pi.id}")
+                        order.is_paid = True
+                        order.status = order.status or 'In Progress'
+                        order.save(update_fields=['is_paid', 'status'])
+
+                        # Confirm associated chef items
+                        chef_items = ChefMealOrder.objects.filter(order=order, status__in=['placed']).select_related('meal_event')
+                        for item in chef_items:
+                            try:
+                                item.payment_intent_id = pi.id
+                                item.mark_as_paid()
+                            except Exception:
+                                item.status = 'confirmed'
+                                item.save(update_fields=['status', 'stripe_payment_intent_id'])
+
+                        # Log payment
+                        try:
+                            amount = float(getattr(pi, 'amount', 0) or 0) / 100.0
+                            PaymentLog.objects.create(
+                                order=order,
+                                user=order.customer,
+                                action='charge',
+                                amount=amount,
+                                stripe_id=pi.id,
+                                status='succeeded',
+                                details={'finalized_via': 'pi_fallback'}
+                            )
+                        except Exception as _log_e:
+                            logger.warning(f"PAYMENT_STATUS: failed to log PI payment for order={order.id}: {_log_e}")
+
+                        payload["is_paid"] = True
+                        payload["status"] = order.status
+                else:
+                    logger.warning(f"PAYMENT_STATUS: PI metadata did not match order/user (order={order.id}, user={request.user.id})")
+            except Exception as pi_err:
+                logger.warning(f"PAYMENT_STATUS: PI fallback failed id={provided_pi_id}: {pi_err}")
+        return Response(payload)
+    except Order.DoesNotExist:
+        return Response({"error": "Order not found"}, status=404)
 
     try:
 
@@ -3461,17 +4063,21 @@ def api_dietary_preferences(request):
 @permission_classes([IsAuthenticated])
 def api_replace_meal_plan_meal(request):
     """
-    Replace a meal in a meal plan with a chef-created meal.
-    Handles creating/updating OrderMeal and ChefMealOrder atomically.
-    
+    Replace a meal in a meal plan with either a chef-created meal or an auto-generated/user-created meal.
+    Handles creating/updating OrderMeal and ChefMealOrder atomically when applicable.
+
     Required parameters:
     - meal_plan_meal_id: ID of the MealPlanMeal to replace
-    - chef_meal_id: ID of the chef-created meal to use as replacement
-    
-    Optional parameters:
+    - One of:
+      - chef_meal_id: ID of the chef-created Meal to use as replacement.
+        Note: If your frontend only knows a ChefMealEvent ID, you may pass that
+        value as chef_meal_id and the API will resolve it to the underlying Meal.
+      - new_meal_id: ID of a non-chef (auto-generated/user) Meal to use as replacement
+
+    Optional parameters (chef meals only unless noted):
     - event_id: Specific ChefMealEvent to use (if not provided, will attempt to find one)
     - quantity: Number of servings (default: 1)
-    - special_requests: Any special requests for the chef
+    - special_requests: Any special requests for the chef (chef meals only)
     """
     from django.db import transaction
     from django.db.models import F
@@ -3482,21 +4088,33 @@ def api_replace_meal_plan_meal(request):
         user = request.user
         meal_plan_meal_id = request.data.get('meal_plan_meal_id')
         chef_meal_id = request.data.get('chef_meal_id')
+        new_meal_id = request.data.get('new_meal_id')
         event_id = request.data.get('event_id')
         # --- Print incoming quantity ---
         quantity_str = request.data.get('quantity', '1') # Get as string first
 
-        quantity = int(quantity_str) 
+        try:
+            quantity = int(quantity_str)
+        except Exception:
+            return Response({'status': 'error', 'message': 'quantity must be an integer'}, status=status.HTTP_400_BAD_REQUEST)
 
         # --- End Print ---
         special_requests = request.data.get('special_requests', '')
-
+        print(f'all params: {request.data}')
         # Validate required parameters
-        if not meal_plan_meal_id or not chef_meal_id:
-            logger.warning(f"Missing required parameters: meal_plan_meal_id={meal_plan_meal_id}, chef_meal_id={chef_meal_id}")
+        if not meal_plan_meal_id:
+            logger.warning("Missing required parameter: meal_plan_meal_id")
             return Response({
                 'status': 'error',
-                'message': 'Missing required parameters: meal_plan_meal_id and chef_meal_id are required'
+                'message': 'meal_plan_meal_id is required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Ensure exactly one of chef_meal_id or new_meal_id is provided
+        if bool(chef_meal_id) == bool(new_meal_id):
+            logger.warning(f"Exactly one of chef_meal_id or new_meal_id must be provided. Provided chef_meal_id={chef_meal_id}, new_meal_id={new_meal_id}")
+            return Response({
+                'status': 'error',
+                'message': 'Provide exactly one of chef_meal_id or new_meal_id'
             }, status=status.HTTP_400_BAD_REQUEST)
 
         # Use transaction.atomic to ensure all operations are performed together
@@ -3520,46 +4138,88 @@ def api_replace_meal_plan_meal(request):
                     'message': 'Meal plan meal not found or not owned by this user'
                 }, status=status.HTTP_404_NOT_FOUND)
 
-            # Get the chef meal
-            try:
-                chef_meal = Meal.objects.select_related('chef').get(id=chef_meal_id, chef__isnull=False)
-                logger.info(f"Found chef meal: {chef_meal.id} - {chef_meal.name}")
-            except Meal.DoesNotExist:
-                logger.warning(f"Chef meal id={chef_meal_id} not found")
-                return Response({
-                    'status': 'error',
-                    'message': 'Chef meal not found'
-                }, status=status.HTTP_404_NOT_FOUND)
+            # Determine replacement meal
+            replacement_meal = None
+            is_chef_replacement = False
 
-            # Validate the meal type matches
-            if chef_meal.meal_type != meal_plan_meal.meal_type:
-                logger.warning(f"Meal type mismatch: meal_plan_meal={meal_plan_meal.meal_type}, chef_meal={chef_meal.meal_type}")
-                return Response({
-                    'status': 'error',
-                    'message': f'Chef meal type ({chef_meal.meal_type}) does not match meal plan meal type ({meal_plan_meal.meal_type})'
-                }, status=status.HTTP_400_BAD_REQUEST)
+            if chef_meal_id:
+                # Chef-created meal path
+                # First, try interpreting chef_meal_id as a Meal.id
+                try:
+                    replacement_meal = Meal.objects.select_related('chef').get(id=chef_meal_id, chef__isnull=False)
+                    is_chef_replacement = True
+                    logger.info(f"Found chef meal by Meal.id={chef_meal_id}: {replacement_meal.id} - {replacement_meal.name}")
+                except Meal.DoesNotExist:
+                    # If not found, try interpreting chef_meal_id as a ChefMealEvent.id
+                    try:
+                        event_obj = ChefMealEvent.objects.select_related('meal', 'chef').get(id=chef_meal_id)
+                        replacement_meal = event_obj.meal
+                        is_chef_replacement = True
+                        # If event_id wasn't provided, use this event
+                        if not event_id:
+                            event_id = str(event_obj.id)
+                        logger.info(f"Resolved chef_meal_id={chef_meal_id} as ChefMealEvent.id; using Meal.id={replacement_meal.id}")
+                    except ChefMealEvent.DoesNotExist:
+                        logger.warning(f"Chef meal not found as Meal.id or ChefMealEvent.id for value={chef_meal_id}")
+                        return Response({
+                            'status': 'error',
+                            'message': 'Chef meal not found'
+                        }, status=status.HTTP_404_NOT_FOUND)
 
-            # Validate the chef serves the user's postal code (if applicable)
-            if hasattr(user, 'address') and user.address and user.address.input_postalcode:
-                postal_code = user.address.input_postalcode
-                country = user.address.country
-                
-                # Check if chef serves this postal code
-                chef_serves_area = ChefPostalCode.objects.filter(
-                    chef=chef_meal.chef,
-                    postal_code__code=postal_code,
-                    postal_code__country=country
-                ).exists()
-                
-                if not chef_serves_area:
-                    logger.warning(f"Chef {chef_meal.chef.id} does not serve postal code {postal_code}")
+                # Validate the meal type matches
+                if replacement_meal.meal_type != meal_plan_meal.meal_type:
+                    logger.warning(f"Meal type mismatch: meal_plan_meal={meal_plan_meal.meal_type}, chef_meal={replacement_meal.meal_type}")
                     return Response({
                         'status': 'error',
-                        'message': 'This chef does not serve your postal code area'
+                        'message': f'Chef meal type ({replacement_meal.meal_type}) does not match meal plan meal type ({meal_plan_meal.meal_type})'
                     }, status=status.HTTP_400_BAD_REQUEST)
-                
-                logger.info(f"Chef {chef_meal.chef.id} serves postal code {postal_code}")
-            
+
+                # Validate the chef serves the user's postal code (if applicable)
+                if hasattr(user, 'address') and user.address and user.address.input_postalcode:
+                    postal_code = user.address.input_postalcode
+                    country = user.address.country
+                    
+                    chef_serves_area = ChefPostalCode.objects.filter(
+                        chef=replacement_meal.chef,
+                        postal_code__code=postal_code,
+                        postal_code__country=country
+                    ).exists()
+                    
+                    if not chef_serves_area:
+                        logger.warning(f"Chef {replacement_meal.chef.id} does not serve postal code {postal_code}")
+                        return Response({
+                            'status': 'error',
+                            'message': 'This chef does not serve your postal code area'
+                        }, status=status.HTTP_400_BAD_REQUEST)
+                    logger.info(f"Chef {replacement_meal.chef.id} serves postal code {postal_code}")
+
+            else:
+                # Non-chef (auto-generated/user-created) meal path
+                try:
+                    replacement_meal = Meal.objects.get(id=new_meal_id)
+                except Meal.DoesNotExist:
+                    logger.warning(f"Meal id={new_meal_id} not found")
+                    return Response({
+                        'status': 'error',
+                        'message': 'Replacement meal not found'
+                    }, status=status.HTTP_404_NOT_FOUND)
+
+                # Enforce non-chef for new_meal_id to avoid ambiguity
+                if replacement_meal.chef is not None:
+                    logger.warning(f"new_meal_id {new_meal_id} is a chef meal; use chef_meal_id instead")
+                    return Response({
+                        'status': 'error',
+                        'message': 'new_meal_id must refer to a non-chef meal; use chef_meal_id for chef meals'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
+                # Validate the meal type matches
+                if replacement_meal.meal_type != meal_plan_meal.meal_type:
+                    logger.warning(f"Meal type mismatch: meal_plan_meal={meal_plan_meal.meal_type}, new_meal={replacement_meal.meal_type}")
+                    return Response({
+                        'status': 'error',
+                        'message': f'Replacement meal type ({replacement_meal.meal_type}) does not match meal plan meal type ({meal_plan_meal.meal_type})'
+                    }, status=status.HTTP_400_BAD_REQUEST)
+
             # Mark plan as changed if approved
             if meal_plan.is_approved:
                 meal_plan.has_changes = True
@@ -3576,9 +4236,9 @@ def api_replace_meal_plan_meal(request):
 
             # Update the MealPlanMeal itself
             original_meal = meal_plan_meal.meal
-            meal_plan_meal.meal = chef_meal
+            meal_plan_meal.meal = replacement_meal
             meal_plan_meal.save(update_fields=['meal'])
-            logger.info(f"Updated MealPlanMeal id={meal_plan_meal.id} from Meal id={original_meal.id} to Meal id={chef_meal.id}")
+            logger.info(f"Updated MealPlanMeal id={meal_plan_meal.id} from Meal id={original_meal.id} to Meal id={replacement_meal.id}")
 
             # Process associated Order if it exists
             if order:
@@ -3592,7 +4252,7 @@ def api_replace_meal_plan_meal(request):
                     order=order,
                     meal_plan_meal=meal_plan_meal,
                     defaults={
-                        'meal': chef_meal,
+                        'meal': replacement_meal,
                         'quantity': quantity # <-- Make sure this uses the parsed quantity
                     }
                 )
@@ -3601,100 +4261,90 @@ def api_replace_meal_plan_meal(request):
                 # --- Print after OrderMeal update/create ---
 
                 # --- End Print ---
-
-                # 2. Find the target ChefMealEvent
-                chef_meal_event = None
-                if event_id:
-                    try:
-                        chef_meal_event = ChefMealEvent.objects.get(id=event_id, meal=chef_meal)
-                        
-                        # Validate the event is available for orders
-                        if not chef_meal_event.is_available_for_orders():
-                            logger.warning(f"ChefMealEvent id={event_id} is not available for orders")
+                if is_chef_replacement:
+                    # 2. Find the target ChefMealEvent
+                    chef_meal_event = None
+                    if event_id:
+                        try:
+                            chef_meal_event = ChefMealEvent.objects.get(id=event_id, meal=replacement_meal)
+                            # Validate the event is available for orders
+                            if not chef_meal_event.is_available_for_orders():
+                                logger.warning(f"ChefMealEvent id={event_id} is not available for orders")
+                                return Response({
+                                    'status': 'error',
+                                    'message': 'The selected chef meal event is not available for orders'
+                                }, status=status.HTTP_400_BAD_REQUEST)
+                            logger.info(f"Using provided ChefMealEvent id={event_id}")
+                        except ChefMealEvent.DoesNotExist:
+                            logger.warning(f"Provided event_id={event_id} not found or not valid")
                             return Response({
                                 'status': 'error',
-                                'message': 'The selected chef meal event is not available for orders'
-                            }, status=status.HTTP_400_BAD_REQUEST)
-                        
-                        logger.info(f"Using provided ChefMealEvent id={event_id}")
-                    except ChefMealEvent.DoesNotExist:
-                        logger.warning(f"Provided event_id={event_id} not found or not valid")
-                        return Response({
-                            'status': 'error',
-                            'message': 'The specified chef meal event was not found'
-                        }, status=status.HTTP_404_NOT_FOUND)
-                else:
-                    # Automatic event finding logic
-                    from django.utils import timezone
-                    
-                    today = timezone.now().date()
-                    meal_date = meal_plan_meal.meal_date or today
-                    
-                    # Find an available event for this meal
-                    available_events = ChefMealEvent.objects.filter(
-                        meal=chef_meal,
-                        event_date__gte=today,
-                        event_date__lte=meal_date + timedelta(days=3),  # Allow up to 3 days after meal date
-                        status__in=['scheduled', 'open'],
-                        order_cutoff_time__gt=timezone.now(),
-                        orders_count__lt=F('max_orders')
-                    ).order_by('event_date', 'event_time')
-                    
-                    if available_events.exists():
-                        chef_meal_event = available_events.first()
-                        logger.info(f"Automatically found ChefMealEvent id={chef_meal_event.id} for meal {chef_meal.id}")
+                                'message': 'The specified chef meal event was not found'
+                            }, status=status.HTTP_404_NOT_FOUND)
                     else:
-                        logger.warning(f"No available ChefMealEvent found for meal {chef_meal.id}")
+                        # Automatic event finding logic
+                        from django.utils import timezone
+                        today = timezone.now().date()
+                        meal_date = meal_plan_meal.meal_date or today
+                        available_events = ChefMealEvent.objects.filter(
+                            meal=replacement_meal,
+                            event_date__gte=today,
+                            event_date__lte=meal_date + timedelta(days=3),  # Allow up to 3 days after meal date
+                            status__in=['scheduled', 'open'],
+                            order_cutoff_time__gt=timezone.now(),
+                            orders_count__lt=F('max_orders')
+                        ).order_by('event_date', 'event_time')
+                        if available_events.exists():
+                            chef_meal_event = available_events.first()
+                            logger.info(f"Automatically found ChefMealEvent id={chef_meal_event.id} for meal {replacement_meal.id}")
+                        else:
+                            logger.warning(f"No available ChefMealEvent found for meal {replacement_meal.id}")
 
-                # 3. Update or create ChefMealOrder
-                if chef_meal_event:
-                    # --- Print before ChefMealOrder update/create ---
-                    calculated_price_paid = chef_meal_event.current_price * quantity
-
-
-
-
-                    # --- End Print ---
-                    chef_meal_order, cmo_created = ChefMealOrder.objects.update_or_create(
-                        order=order,
-                        meal_plan_meal=meal_plan_meal,  # Use this as the unique constraint
-                        defaults={
-                            'meal_event': chef_meal_event,
-                            'customer': user,
-                            'quantity': quantity, # <-- Make sure this uses the parsed quantity
-                            'price_paid': calculated_price_paid, # <-- Check this calculation
-                            'special_requests': special_requests
-                            # Note: price_paid should likely reflect the total for the quantity
-                        }
-                    )
-                    log_action = "Created" if cmo_created else "Updated"
-                    logger.info(f"{log_action} ChefMealOrder id={chef_meal_order.id} for MealPlanMeal id={meal_plan_meal.id}")
-                    # --- Print after ChefMealOrder update/create ---
-                    db_cmo = ChefMealOrder.objects.get(id=chef_meal_order.id)
-
-
-
-                    # --- End Print ---
-                    
-                    # Update the OrderMeal to link it to the ChefMealEvent
-                    order_meal.chef_meal_event = chef_meal_event
-                    order_meal.save(update_fields=['chef_meal_event'])
-                    logger.info(f"Linked OrderMeal id={order_meal.id} to ChefMealEvent id={chef_meal_event.id}")
+                    # 3. Update or create ChefMealOrder
+                    if chef_meal_event:
+                        calculated_price_paid = chef_meal_event.current_price * quantity
+                        chef_meal_order, cmo_created = ChefMealOrder.objects.update_or_create(
+                            order=order,
+                            meal_plan_meal=meal_plan_meal,  # Use this as the unique constraint
+                            defaults={
+                                'meal_event': chef_meal_event,
+                                'customer': user,
+                                'quantity': quantity,
+                                'price_paid': calculated_price_paid,
+                                'special_requests': special_requests
+                            }
+                        )
+                        log_action = "Created" if cmo_created else "Updated"
+                        logger.info(f"{log_action} ChefMealOrder id={chef_meal_order.id} for MealPlanMeal id={meal_plan_meal.id}")
+                        # Update the OrderMeal to link it to the ChefMealEvent
+                        order_meal.chef_meal_event = chef_meal_event
+                        order_meal.save(update_fields=['chef_meal_event'])
+                        logger.info(f"Linked OrderMeal id={order_meal.id} to ChefMealEvent id={chef_meal_event.id}")
+                    else:
+                        # No valid event found - ensure no ChefMealOrder exists for this slot
+                        deleted_count, _ = ChefMealOrder.objects.filter(
+                            order=order,
+                            meal_plan_meal=meal_plan_meal
+                        ).delete()
+                        if deleted_count > 0:
+                            logger.info(f"Deleted {deleted_count} ChefMealOrder(s) for MealPlanMeal id={meal_plan_meal.id}")
+                        # Clear link in OrderMeal
+                        if order_meal.chef_meal_event:
+                            order_meal.chef_meal_event = None
+                            order_meal.save(update_fields=['chef_meal_event'])
+                            logger.info(f"Cleared ChefMealEvent link from OrderMeal id={order_meal.id}")
                 else:
-                    # No valid event found - ensure no ChefMealOrder exists for this slot
+                    # Replacement is a non-chef meal: remove any ChefMealOrder and unlink event
                     deleted_count, _ = ChefMealOrder.objects.filter(
                         order=order,
                         meal_plan_meal=meal_plan_meal
                     ).delete()
-                    
                     if deleted_count > 0:
-                        logger.info(f"Deleted {deleted_count} ChefMealOrder(s) for MealPlanMeal id={meal_plan_meal.id}")
-                    
-                    # Clear link in OrderMeal
+                        logger.info(f"Deleted {deleted_count} ChefMealOrder(s) for MealPlanMeal id={meal_plan_meal.id} due to non-chef replacement")
                     if order_meal.chef_meal_event:
                         order_meal.chef_meal_event = None
                         order_meal.save(update_fields=['chef_meal_event'])
-                        logger.info(f"Cleared ChefMealEvent link from OrderMeal id={order_meal.id}")
+                        logger.info(f"Cleared ChefMealEvent link from OrderMeal id={order_meal.id} due to non-chef replacement")
             else:
                 logger.info(f"No Order associated with MealPlan id={meal_plan.id}. No OrderMeal/ChefMealOrder processing needed.")
 
@@ -3720,6 +4370,333 @@ def api_replace_meal_plan_meal(request):
             'message': 'An unexpected error occurred'
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_add_meal_slot(request):
+    """
+    Create or fill an empty meal slot for a user's meal plan when there is no existing MealPlanMeal to replace.
+
+    Required parameters:
+    - week_start_date: YYYY-MM-DD for the plan week
+    - day: Weekday name (e.g., 'Monday')
+    - meal_type: One of ['Breakfast','Lunch','Dinner']
+
+    One of:
+    - chef_meal_id: Use an existing chef-created meal
+    - new_meal_id: Use an existing non-chef meal
+
+    If neither chef_meal_id nor new_meal_id is provided, this will generate a new meal for that slot using existing generation logic.
+    """
+    from django.db import transaction
+    from datetime import datetime, timedelta
+    
+    user = request.user
+    week_start_date_str = request.data.get('week_start_date') or request.query_params.get('week_start_date')
+    day_name = request.data.get('day')
+    meal_type = request.data.get('meal_type')
+    chef_meal_id = request.data.get('chef_meal_id')
+    new_meal_id = request.data.get('new_meal_id')
+    user_prompt = request.data.get('user_prompt')
+    if not week_start_date_str or not day_name or not meal_type:
+        return Response({'status': 'error', 'message': 'week_start_date, day, and meal_type are required'}, status=400)
+    try:
+        start_of_week = datetime.strptime(week_start_date_str, '%Y-%m-%d').date()
+    except ValueError:
+        return Response({'status': 'error', 'message': 'Invalid week_start_date format. Use YYYY-MM-DD'}, status=400)
+    end_of_week = start_of_week + timedelta(days=6)
+
+    valid_days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+    if day_name not in valid_days:
+        return Response({'status': 'error', 'message': 'Invalid day'}, status=400)
+    if meal_type not in ['Breakfast','Lunch','Dinner']:
+        return Response({'status': 'error', 'message': 'Invalid meal_type'}, status=400)
+
+    # Get or create the meal plan for that week
+    with transaction.atomic():
+        meal_plan, _ = MealPlan.objects.get_or_create(
+            user=user,
+            week_start_date=start_of_week,
+            week_end_date=end_of_week,
+            defaults={}
+        )
+
+        # compute meal_date from day
+        day_to_idx = {name: idx for idx, name in enumerate(valid_days)}
+        meal_date = start_of_week + timedelta(days=day_to_idx[day_name])
+
+        # If slot already exists, return conflict
+        if MealPlanMeal.objects.filter(meal_plan=meal_plan, day=day_name, meal_type=meal_type).exists():
+            return Response({'status': 'error', 'message': 'Slot already filled'}, status=409)
+
+        # If a concrete meal id was given
+        if chef_meal_id or new_meal_id:
+            try:
+                meal_id = chef_meal_id or new_meal_id
+                meal = Meal.objects.get(id=meal_id)
+            except Meal.DoesNotExist:
+                return Response({'status': 'error', 'message': 'Meal not found'}, status=404)
+            if meal.meal_type != meal_type:
+                return Response({'status': 'error', 'message': 'Meal type mismatch'}, status=400)
+            mpm = MealPlanMeal.objects.create(
+                meal_plan=meal_plan,
+                meal=meal,
+                day=day_name,
+                meal_date=meal_date,
+                meal_type=meal_type,
+            )
+        else:
+            # Generate a new meal for this slot using existing helper
+            # Reuse generate_and_create_meal to ensure parity with planning pipeline
+            existing_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan)
+            existing_names = set(existing_meals.values_list('meal__name', flat=True))
+            existing_embs = list(existing_meals.values_list('meal__meal_embedding', flat=True))
+
+            from meals.meal_generation import generate_and_create_meal
+            result = generate_and_create_meal(
+                user=user,
+                meal_plan=meal_plan,
+                meal_type=meal_type,
+                existing_meal_names=existing_names,
+                existing_meal_embeddings=existing_embs,
+                user_id=user.id,
+                day_name=day_name,
+                user_prompt=user_prompt,
+            )
+            if result.get('status') != 'success':
+                return Response({'status': 'error', 'message': result.get('message', 'Generation failed')}, status=500)
+            # Find created slot
+            mpm = MealPlanMeal.objects.filter(meal_plan=meal_plan, day=day_name, meal_type=meal_type).order_by('-id').first()
+            if not mpm:
+                return Response({'status': 'error', 'message': 'Generated meal not attached'}, status=500)
+
+        # If plan was previously approved, mark as changed
+        if meal_plan.is_approved:
+            meal_plan.has_changes = True
+            meal_plan.is_approved = False
+            meal_plan.reminder_sent = False
+            meal_plan.save(update_fields=['has_changes','is_approved','reminder_sent'])
+
+    from meals.serializers import MealPlanMealSerializer
+    serializer = MealPlanMealSerializer(mpm, context={'request': request})
+    return Response({'status': 'success', 'meal_plan_meal': serializer.data})
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_suggest_alternatives_for_slot(request):
+    """
+    Suggest alternative meals for a slot where there is no existing MealPlanMeal.
+
+    Params:
+    - week_start_date: YYYY-MM-DD
+    - day: Monday–Sunday
+    - meal_type: Breakfast/Lunch/Dinner
+
+    Returns a list of alternative meals (chef-first then user/auto meals) suitable for that date and type.
+    """
+    from datetime import datetime, timedelta
+    user = request.user
+    week_start_date_str = request.data.get('week_start_date') or request.query_params.get('week_start_date')
+    day_name = request.data.get('day')
+    meal_type = request.data.get('meal_type')
+
+    if not week_start_date_str or not day_name or not meal_type:
+        return Response({'status': 'error', 'message': 'week_start_date, day, and meal_type are required'}, status=400)
+    try:
+        start_of_week = datetime.strptime(week_start_date_str, '%Y-%m-%d').date()
+    except ValueError:
+        return Response({'status': 'error', 'message': 'Invalid week_start_date format. Use YYYY-MM-DD'}, status=400)
+
+    valid_days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
+    if day_name not in valid_days:
+        return Response({'status': 'error', 'message': 'Invalid day'}, status=400)
+    if meal_type not in ['Breakfast','Lunch','Dinner']:
+        return Response({'status': 'error', 'message': 'Invalid meal_type'}, status=400)
+
+    # Compute the target date from the week start and day
+    day_to_idx = {name: idx for idx, name in enumerate(valid_days)}
+    target_date = start_of_week + timedelta(days=day_to_idx[day_name])
+
+    # Reuse suggest_alternative_meals by passing a dummy meal id list but correct day/type
+    # We'll pick a representative meal_id that won't be included (0), the util excludes by id but we just want candidates.
+    from shared.utils import suggest_alternative_meals
+    alt_response = suggest_alternative_meals(
+        request=request,
+        meal_ids=[0],
+        days_of_week=[day_name],
+        meal_types=[meal_type]
+    )
+    if isinstance(alt_response, dict) and alt_response.get('status') == 'error':
+        return Response({'status': 'error', 'message': alt_response.get('message', 'Failed to suggest alternatives')}, status=500)
+
+    alternatives = alt_response.get('alternative_meals', [])
+
+    # Filter to the exact target_date for chef meals (they include start_date), keep all user meals
+    filtered = []
+    for m in alternatives:
+        if m.get('is_chef_meal'):
+            # Include only if start_date matches target_date
+            if m.get('start_date') == target_date.strftime('%Y-%m-%d'):
+                filtered.append(m)
+        else:
+            filtered.append(m)
+
+    return Response({'status': 'success', 'alternatives': filtered})
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_fill_meal_slot(request):
+    """
+    Fill an empty meal slot with a specific existing meal (chef or non‑chef), mirroring order-handling from api_replace_meal_plan_meal.
+    This is the equivalent of replace when there is no existing MealPlanMeal.
+
+    Required:
+    - week_start_date: YYYY-MM-DD
+    - day: Monday–Sunday
+    - meal_type: Breakfast/Lunch/Dinner
+    - one of: chef_meal_id | new_meal_id
+
+    Optional (chef): event_id, quantity (default 1), special_requests
+    """
+    from django.db import transaction
+    from datetime import datetime, timedelta
+    from django.db.models import F
+
+    user = request.user
+    week_start_date_str = request.data.get('week_start_date') or request.query_params.get('week_start_date')
+    day_name = request.data.get('day')
+    meal_type = request.data.get('meal_type')
+    chef_meal_id = request.data.get('chef_meal_id')
+    new_meal_id = request.data.get('new_meal_id')
+    event_id = request.data.get('event_id')
+    quantity = int(request.data.get('quantity', 1))
+    special_requests = request.data.get('special_requests', '')
+
+    if not week_start_date_str or not day_name or not meal_type:
+        return Response({'status': 'error', 'message': 'week_start_date, day, and meal_type are required'}, status=400)
+    if bool(chef_meal_id) == bool(new_meal_id):
+        return Response({'status': 'error', 'message': 'Provide exactly one of chef_meal_id or new_meal_id'}, status=400)
+    try:
+        start_of_week = datetime.strptime(week_start_date_str, '%Y-%m-%d').date()
+    except ValueError:
+        return Response({'status': 'error', 'message': 'Invalid week_start_date format. Use YYYY-MM-DD'}, status=400)
+    if day_name not in ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']:
+        return Response({'status': 'error', 'message': 'Invalid day'}, status=400)
+    if meal_type not in ['Breakfast','Lunch','Dinner']:
+        return Response({'status': 'error', 'message': 'Invalid meal_type'}, status=400)
+
+    end_of_week = start_of_week + timedelta(days=6)
+    day_to_idx = {name: idx for idx, name in enumerate(['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'])}
+    meal_date = start_of_week + timedelta(days=day_to_idx[day_name])
+
+    with transaction.atomic():
+        meal_plan, _ = MealPlan.objects.get_or_create(
+            user=user,
+            week_start_date=start_of_week,
+            week_end_date=end_of_week,
+            defaults={}
+        )
+
+        # Prevent accidental overwrite
+        if MealPlanMeal.objects.filter(meal_plan=meal_plan, day=day_name, meal_type=meal_type).exists():
+            return Response({'status': 'error', 'message': 'Slot already filled'}, status=409)
+
+        # Determine meal to attach
+        if chef_meal_id:
+            try:
+                meal = Meal.objects.select_related('chef').get(id=chef_meal_id, chef__isnull=False)
+            except Meal.DoesNotExist:
+                return Response({'status': 'error', 'message': 'Chef meal not found'}, status=404)
+            if meal.meal_type != meal_type:
+                return Response({'status': 'error', 'message': 'Chef meal type mismatch'}, status=400)
+        else:
+            try:
+                meal = Meal.objects.get(id=new_meal_id)
+            except Meal.DoesNotExist:
+                return Response({'status': 'error', 'message': 'Meal not found'}, status=404)
+            if meal.chef is not None:
+                return Response({'status': 'error', 'message': 'new_meal_id must refer to a non-chef meal'}, status=400)
+            if meal.meal_type != meal_type:
+                return Response({'status': 'error', 'message': 'Meal type mismatch'}, status=400)
+
+        # Create the MealPlanMeal
+        meal_plan_meal = MealPlanMeal.objects.create(
+            meal_plan=meal_plan,
+            meal=meal,
+            day=day_name,
+            meal_date=meal_date,
+            meal_type=meal_type,
+        )
+
+        # If plan approved, mark changed
+        if meal_plan.is_approved:
+            meal_plan.has_changes = True
+            meal_plan.is_approved = False
+            meal_plan.reminder_sent = False
+            meal_plan.save(update_fields=['has_changes','is_approved','reminder_sent'])
+
+        # Order handling mirrors api_replace_meal_plan_meal
+        order = Order.objects.filter(associated_meal_plan=meal_plan).first()
+        if order:
+            order_meal, _ = OrderMeal.objects.update_or_create(
+                order=order,
+                meal_plan_meal=meal_plan_meal,
+                defaults={
+                    'meal': meal,
+                    'quantity': quantity,
+                }
+            )
+
+            if meal.chef is not None:
+                chef_meal_event = None
+                if event_id:
+                    try:
+                        chef_meal_event = ChefMealEvent.objects.get(id=event_id, meal=meal)
+                        if not chef_meal_event.is_available_for_orders():
+                            return Response({'status': 'error', 'message': 'The selected chef meal event is not available for orders'}, status=400)
+                    except ChefMealEvent.DoesNotExist:
+                        return Response({'status': 'error', 'message': 'The specified chef meal event was not found'}, status=404)
+                else:
+                    # Auto-pick an event near the slot date
+                    available_events = ChefMealEvent.objects.filter(
+                        meal=meal,
+                        event_date__gte=timezone.now().date(),
+                        event_date__lte=meal_date + timedelta(days=3),
+                        status__in=['scheduled', 'open'],
+                        order_cutoff_time__gt=timezone.now(),
+                        orders_count__lt=F('max_orders')
+                    ).order_by('event_date', 'event_time')
+                    chef_meal_event = available_events.first() if available_events.exists() else None
+
+                if chef_meal_event:
+                    chef_meal_order, _ = ChefMealOrder.objects.update_or_create(
+                        order=order,
+                        meal_plan_meal=meal_plan_meal,
+                        defaults={
+                            'meal_event': chef_meal_event,
+                            'customer': user,
+                            'quantity': quantity,
+                            'price_paid': chef_meal_event.current_price * quantity,
+                            'special_requests': special_requests,
+                        }
+                    )
+                    order_meal.chef_meal_event = chef_meal_event
+                    order_meal.save(update_fields=['chef_meal_event'])
+                else:
+                    # Ensure no stale ChefMealOrder link for chef meal without event
+                    ChefMealOrder.objects.filter(order=order, meal_plan_meal=meal_plan_meal).delete()
+                    if order_meal.chef_meal_event:
+                        order_meal.chef_meal_event = None
+                        order_meal.save(update_fields=['chef_meal_event'])
+            else:
+                # Non-chef path: remove any chef order if existed
+                ChefMealOrder.objects.filter(order=order, meal_plan_meal=meal_plan_meal).delete()
+                if hasattr(order_meal, 'chef_meal_event') and order_meal.chef_meal_event:
+                    order_meal.chef_meal_event = None
+                    order_meal.save(update_fields=['chef_meal_event'])
+
+    from meals.serializers import MealPlanMealSerializer
+    serializer = MealPlanMealSerializer(meal_plan_meal, context={'request': request})
+    return Response({'status': 'success', 'meal_plan_meal': serializer.data})
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def api_resend_payment_link(request, order_id):
@@ -4068,18 +5045,14 @@ def api_modify_meal_plan(request, meal_plan_id):
     - JSON data with meal plan details and status message
     """
     try:
-        print(f"DEBUG api_modify_meal_plan: Starting with meal_plan_id={meal_plan_id}, user={request.user.username}")
         
         # Get the meal plan and ensure it belongs to the requesting user
         meal_plan = MealPlan.objects.get(id=meal_plan_id, user=request.user)
-        print(f"DEBUG api_modify_meal_plan: Found meal_plan with id={meal_plan.id}")
         
         # Get the prompt from the request data
         prompt = request.data.get('prompt')
-        print(f"DEBUG api_modify_meal_plan: Got prompt: {prompt}")
         
         if not prompt:
-            print(f"DEBUG api_modify_meal_plan: No prompt provided, returning 400")
             return Response(
                 {"error": "Prompt is required"}, 
                 status=status.HTTP_400_BAD_REQUEST
@@ -4087,7 +5060,6 @@ def api_modify_meal_plan(request, meal_plan_id):
         
         # Generate a request_id for tracing
         request_id = str(uuid.uuid4())
-        print(f"DEBUG api_modify_meal_plan: Generated request_id={request_id}")
         
         try:
             # Apply the modifications
@@ -4097,17 +5069,17 @@ def api_modify_meal_plan(request, meal_plan_id):
                 raw_prompt=prompt,
                 request_id=request_id
             )
-            print(f"DEBUG api_modify_meal_plan: Successfully applied modifications to meal_plan={updated_meal_plan.id}")
         except Exception as e:
-            import traceback
-            print(f"DEBUG api_modify_meal_plan: Error in apply_modifications: {str(e)}")
-            print(f"DEBUG api_modify_meal_plan: Traceback: {traceback.format_exc()}")
-            raise  # Re-raise for the outer try/except block
-        
+            # N8N traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            try:
+                requests.post(n8n_traceback_url, json={"error": f"Error in api_modify_meal_plan: {str(e)}", "source":"api_modify_meal_plan", "traceback": traceback.format_exc()})
+            except Exception:
+                pass
+            raise
         try:
             # Fetch the updated meal plan meals to return in the response
             meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=updated_meal_plan).select_related('meal')
-            print(f"DEBUG api_modify_meal_plan: Found {meal_plan_meals.count()} meals in updated plan")
             
             # Format the response data
             meals_data = []
@@ -4123,7 +5095,13 @@ def api_modify_meal_plan(request, meal_plan_id):
                         "is_chef_meal": is_chef,
                     })
                 except Exception as meal_err:
-                    print(f"DEBUG api_modify_meal_plan: Error processing meal {mpm.id}: {str(meal_err)}")
+                    # N8N traceback
+                    n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                    try:
+                        requests.post(n8n_traceback_url, json={"error": f"Error in api_modify_meal_plan: {str(meal_err)}", "source":"api_modify_meal_plan", "traceback": traceback.format_exc()})
+                    except Exception:
+                        pass
+                    raise
             
             response_data = {
                 "status": "success",
@@ -4132,24 +5110,28 @@ def api_modify_meal_plan(request, meal_plan_id):
                 "meals": meals_data
             }
             
-            print(f"DEBUG api_modify_meal_plan: Returning success response with {len(meals_data)} meals")
             return Response(response_data, status=status.HTTP_200_OK)
         except Exception as format_err:
-            import traceback
-            print(f"DEBUG api_modify_meal_plan: Error formatting response: {str(format_err)}")
-            print(f"DEBUG api_modify_meal_plan: Traceback: {traceback.format_exc()}")
-            raise  # Re-raise for the outer try/except block
+            # N8N traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            try:
+                requests.post(n8n_traceback_url, json={"error": f"Error in api_modify_meal_plan: {str(format_err)}", "source":"api_modify_meal_plan", "traceback": traceback.format_exc()})
+            except Exception:
+                pass
+            raise
     
     except MealPlan.DoesNotExist:
-        print(f"DEBUG api_modify_meal_plan: Meal plan {meal_plan_id} not found for user {request.user.id}")
         return Response(
             {"error": "Meal plan not found or does not belong to you"}, 
             status=status.HTTP_404_NOT_FOUND
         )
     except Exception as e:
-        import traceback
-        print(f"DEBUG api_modify_meal_plan: Error: {str(e)}")
-        print(f"DEBUG api_modify_meal_plan: Traceback: {traceback.format_exc()}")
+        # N8N traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        try:
+            requests.post(n8n_traceback_url, json={"error": f"Error in api_modify_meal_plan: {str(e)}", "source":"api_modify_meal_plan", "traceback": traceback.format_exc()})
+        except Exception:
+            pass
         logger.error(f"Error modifying meal plan: {str(e)}")
         return Response(
             {"error": f"Failed to modify meal plan: {str(e)}"}, 
@@ -4175,7 +5157,8 @@ def api_generate_instacart_link(request):
         "instacart_url": string (if success),
         "message": string,
         "from_cache": bool (whether the URL was retrieved from database or newly generated),
-        "postal_code_used": bool (whether a postal code was used for location-based store selection)
+        "postal_code_used": bool (whether a postal code was used for location-based store selection),
+        "has_chef_meals": bool (whether the meal plan contains any chef-created meals)
     }
     """
     try:
@@ -4221,6 +5204,8 @@ def api_generate_instacart_link(request):
         from .instacart_service import generate_instacart_link
         result = generate_instacart_link(user_id, meal_plan_id, postal_code)
         
+        # The service now includes a has_chef_meals flag; avoid recomputing here
+
         # Add information about postal code to the response
         if result.get('status') == 'success':
             result['postal_code_used'] = postal_code is not None

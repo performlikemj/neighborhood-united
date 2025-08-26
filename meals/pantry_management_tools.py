@@ -490,11 +490,11 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
                     "role": "developer",
                     "content": (
                         """
-                        Generate a shopping list in JSON format according to the defined schema, factoring in a user's preferred serving size for each meal. Follow the structure provided for the `ShoppingList` and include the required fields for each `ShoppingListItem`.
+                        Generate a shopping list in JSON format according to the defined schema, factoring in a user's preferred serving size for each meal. Return one entry per unique ingredient and unit; if multiple meals require the same ingredient with the same unit, combine their quantities and list all meal names in `meal_names`. Follow the structure provided for the `ShoppingList` and include the required fields for each `ShoppingListItem`.
 
                         - **ShoppingList**: This is the main container that holds a list of `ShoppingListItem` objects.
                         - **ShoppingListItem**: Each item in the list should have the following attributes:
-                        - **meal_name**: The name of the meal the ingredient is for.
+                        - **meal_names**: The names of the meals the ingredient is for.
                         - **ingredient**: The specific ingredient needed.
                         - **quantity**: Numeric-only amount required, adjusted for serving size. Use numbers only (e.g., 200, 1.5, 12). Do not include text or units here.
                         - **unit**: The unit of measurement for the quantity. Place all unit text here (e.g., "grams", "ml", "pieces").
@@ -516,7 +516,7 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
                         {
                         "items": [
                             {
-                            "meal_name": "Spaghetti Bolognese",
+                            "meal_names": ["Spaghetti Bolognese"],
                             "ingredient": "Spaghetti",
                             "quantity": 300,
                             "unit": "grams",
@@ -524,7 +524,7 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
                             "category": "pasta"
                             },
                             {
-                            "meal_name": "Spaghetti Bolognese",
+                            "meal_names": ["Spaghetti Bolognese"],
                             "ingredient": "Ground Beef",
                             "quantity": 750,
                             "unit": "grams",
@@ -532,7 +532,7 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
                             "category": "meat"
                             },
                             {
-                            "meal_name": "Caesar Salad",
+                            "meal_names": ["Caesar Salad"],
                             "ingredient": "Romaine Lettuce",
                             "quantity": 2,
                             "unit": "heads",
@@ -540,7 +540,7 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
                             "category": "vegetables"
                             },
                             {
-                            "meal_name": "Caesar Salad",
+                            "meal_names": ["Caesar Salad"],
                             "ingredient": "Parmesan Cheese",
                             "quantity": 75,
                             "unit": "grams",

@@ -146,7 +146,7 @@ class PantryItemSchema(BaseModel):
         
 class ShoppingListItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    meal_name: str
+    meal_names: List[str]
     ingredient: str
     quantity: float
     unit: str

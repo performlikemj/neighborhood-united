@@ -1,6 +1,7 @@
 from __future__ import absolute_import, unicode_literals
 import os
 from celery import Celery
+from celery.signals import worker_ready
 from django.conf import settings
 from celery.schedules import crontab
 from dotenv import load_dotenv
@@ -16,6 +17,12 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 
 # Load task modules from all registered Django app configs.
 app.autodiscover_tasks(lambda: settings.INSTALLED_APPS)
+
+# Ensure shared tasks are registered even if not in INSTALLED_APPS
+try:
+    import meals.tasks  # noqa: F401
+except Exception:
+    pass
 
 
 app.conf.beat_schedule = {
@@ -68,4 +75,25 @@ app.conf.beat_schedule = {
         'schedule': crontab(hour=3, minute=0),  # Run daily at 3 AM
         'args': (),
     },
+    # Heartbeat every minute to confirm Beat is running
+    'celery-beat-heartbeat': {
+        'task': 'shared.tasks.celery_beat_heartbeat',
+        'schedule': crontab(),  # every minute
+    },
 }
+
+
+@worker_ready.connect
+def _start_monitor_on_worker_ready(sender=None, **kwargs):
+    """
+    Start the beat monitor task once the worker is fully booted.
+    Uses a short countdown to avoid thundering herd on multi-worker setups.
+    """
+    try:
+        from meals.tasks import monitor_celery_beat
+        # delay a few seconds to ensure caches and network are available
+        monitor_celery_beat.apply_async(countdown=5)
+    except Exception:
+        # Avoid raising during startup; logging via Celery logger
+        import logging
+        logging.getLogger(__name__).exception("Failed to start monitor_celery_beat on worker_ready")

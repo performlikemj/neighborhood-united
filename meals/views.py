@@ -286,11 +286,17 @@ def api_post_meal_plan_preference(request):
         else:
             return Response(serializer.errors, status=400)
         
-@api_view(['POST'])
+@csrf_exempt
+@api_view(['POST', 'GET', 'OPTIONS'])
 @permission_classes([AllowAny])  # Allow unauthenticated access
 def api_email_approved_meal_plan(request):
-    approval_token = request.data.get('approval_token')
-    meal_prep_preference = request.data.get('meal_prep_preference')
+    # Support GET query params for environments where POST may be blocked from email clients
+    if request.method == 'GET':
+        approval_token = request.GET.get('approval_token')
+        meal_prep_preference = request.GET.get('meal_prep_preference')
+    else:
+        approval_token = request.data.get('approval_token')
+        meal_prep_preference = request.data.get('meal_prep_preference')
     valid_preferences = dict(MealPlan.MEAL_PREP_CHOICES).keys()
 
     if not approval_token:

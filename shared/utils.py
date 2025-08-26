@@ -75,17 +75,23 @@ def day_to_offset(day_name: str) -> int:
 def get_dietary_preference_info(preference_name):
     """Retrieve the definition and details for a given dietary preference."""
     try:
-        # First check regular dietary preferences
-        if DietaryPreference.objects.filter(name=preference_name).exists():
-            return {'exists': True}
-        
-        # Then check custom dietary preferences
+        # Prefer custom dietary preferences (they carry detailed fields)
         custom_pref = CustomDietaryPreference.objects.filter(name=preference_name).first()
         if custom_pref:
             return {
+                'exists': True,
                 'description': custom_pref.description,
                 'allowed': custom_pref.allowed,
                 'excluded': custom_pref.excluded
+            }
+        
+        # Fallback: predefined dietary preference exists but has no extended fields
+        if DietaryPreference.objects.filter(name=preference_name).exists():
+            return {
+                'exists': True,
+                'description': '',
+                'allowed': [],
+                'excluded': []
             }
         return None
     except Exception as e:
@@ -343,9 +349,12 @@ def generate_user_context(user):
         for custom_pref in custom_preferences:
             dietary_pref_info = get_dietary_preference_info(custom_pref.name)
             if dietary_pref_info:
-                custom_preferences_info.append(f"{custom_pref.name}: {dietary_pref_info['description']}")
-                allowed_foods_list.extend(dietary_pref_info["allowed"])
-                excluded_foods_list.extend(dietary_pref_info["excluded"])
+                description = dietary_pref_info.get('description') or ''
+                allowed = dietary_pref_info.get('allowed') or []
+                excluded = dietary_pref_info.get('excluded') or []
+                custom_preferences_info.append(f"{custom_pref.name}: {description}")
+                allowed_foods_list.extend(allowed)
+                excluded_foods_list.extend(excluded)
             else:
                 custom_preferences_info.append(f"Custom preference '{custom_pref.name}' is being researched and will be added soon.")
     else:

@@ -23,10 +23,128 @@ from customer_dashboard.models import CustomUser
 from openai import OpenAI
 import time
 from .celery_utils import handle_task_failure
+import requests
+from django.core.cache import cache
+import os
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
+# TODO: Add a heartbeat task to prove Beat→broker→worker and network out to n8n for errors
+# Cache keys
+HEARTBEAT_CACHE_KEY = "celery_beat_heartbeat_ts"
+ALERT_LAST_SENT_CACHE_KEY = "celery_beat_alert_last_sent_ts"
+
+# Configurable thresholds via env with safe defaults
+HEARTBEAT_THRESHOLD_SECONDS = int(os.getenv("CELERY_BEAT_HEARTBEAT_THRESHOLD_SECONDS", "180"))
+MONITOR_INTERVAL_SECONDS = int(os.getenv("CELERY_BEAT_MONITOR_INTERVAL_SECONDS", "60"))
+ALERT_COOLDOWN_SECONDS = int(os.getenv("CELERY_BEAT_ALERT_COOLDOWN_SECONDS", "600"))
+
+
+def _now_ts() -> float:
+    return float(timezone.now().timestamp())
+
+
+def _should_send_alert(now_ts: float) -> bool:
+    last_sent = cache.get(ALERT_LAST_SENT_CACHE_KEY)
+    if not last_sent:
+        return True
+    try:
+        last_sent = float(last_sent)
+    except Exception:
+        return True
+    return (now_ts - last_sent) >= ALERT_COOLDOWN_SECONDS
+
+
+def _send_n8n_traceback(message: str, source: str, extra: Optional[Dict[str, Any]] = None) -> None:
+    url = getattr(settings, "N8N_TRACEBACK_URL", None) or os.getenv("N8N_TRACEBACK_URL")
+    if not url:
+        logger.warning("N8N_TRACEBACK_URL not configured; skipping alert: %s", message)
+        return
+    payload: Dict[str, Any] = {
+        "error": message,
+        "source": source,
+        "timestamp": timezone.now().isoformat(),
+    }
+    if extra:
+        payload.update(extra)
+    try:
+        requests.post(url, json=payload, timeout=10)
+    except Exception as post_error:
+        logger.error("Failed to POST traceback to n8n: %s", post_error, exc_info=True)
+
+
+@shared_task(bind=True, ignore_result=True)
+def celery_beat_heartbeat(self) -> bool:
+    """
+    Simple heartbeat task scheduled by Celery Beat.
+    Updates a cache key with the current timestamp so workers can verify Beat is alive.
+    """
+    try:
+        ts = _now_ts()
+        # Keep for an hour; monitor logic only checks recent freshness
+        cache.set(HEARTBEAT_CACHE_KEY, ts, timeout=3600)
+        return True
+    except Exception as e:
+        logger.error("Failed to update beat heartbeat: %s", e, exc_info=True)
+        _send_n8n_traceback(
+            message=f"Failed to update beat heartbeat: {e}",
+            source="celery_beat_heartbeat",
+        )
+        return False
+
+
+@shared_task(bind=True, ignore_result=True)
+def monitor_celery_beat(self) -> None:
+    """
+    Self-rescheduling monitor that checks if the last beat heartbeat is fresh.
+    If stale or missing, notify n8n (cooldown-limited) and continue monitoring.
+    This does not rely on Beat; it re-schedules itself with countdown.
+    """
+    try:
+        now_ts = _now_ts()
+        last_heartbeat = cache.get(HEARTBEAT_CACHE_KEY)
+
+        is_unhealthy = False
+        age_seconds = None
+        if last_heartbeat is None:
+            is_unhealthy = True
+        else:
+            try:
+                last_ts = float(last_heartbeat)
+                age_seconds = now_ts - last_ts
+                if age_seconds > HEARTBEAT_THRESHOLD_SECONDS:
+                    is_unhealthy = True
+            except Exception:
+                is_unhealthy = True
+
+        if is_unhealthy and _should_send_alert(now_ts):
+            cache.set(ALERT_LAST_SENT_CACHE_KEY, now_ts, timeout=ALERT_COOLDOWN_SECONDS * 2)
+            details: Dict[str, Any] = {"age_seconds": age_seconds}
+            _send_n8n_traceback(
+                message=(
+                    "Celery Beat heartbeat missing or stale. "
+                    f"Threshold={HEARTBEAT_THRESHOLD_SECONDS}s"
+                ),
+                source="monitor_celery_beat",
+                extra=details,
+            )
+        elif not is_unhealthy:
+            # Reset alert throttle when system is healthy
+            cache.delete(ALERT_LAST_SENT_CACHE_KEY)
+    except Exception as e:
+        logger.error("Error in monitor_celery_beat: %s", e, exc_info=True)
+    finally:
+        # Self-reschedule regardless of outcome to keep monitoring running without Beat
+        try:
+            self.apply_async(countdown=MONITOR_INTERVAL_SECONDS)
+        except Exception as schedule_error:
+            logger.error("Failed to reschedule monitor_celery_beat: %s", schedule_error, exc_info=True)
+
+
+
+    
 @shared_task
 @handle_task_failure
 def queue_system_update_email(system_update_id, test_mode=False, admin_id=None):

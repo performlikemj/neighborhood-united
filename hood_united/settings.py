@@ -492,7 +492,7 @@ LOGGING = {
         },
         'celery': {
             'handlers': ['console'],
-            'level': 'WARNING',
+            'level': 'DEBUG', #TODO: Change to WARNING
             'propagate': True,
         },
     }

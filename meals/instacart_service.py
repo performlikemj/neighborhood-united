@@ -427,7 +427,7 @@ def generate_instacart_link(user_id: int, meal_plan_id: int, postal_code: str = 
                 if chef_meal_names and original_count:
                     filtered_items = [
                         it for it in items
-                        if (it or {}).get('meal_name') not in chef_meal_names
+                        if not any(name in chef_meal_names for name in (it or {}).get('meal_names', []))
                     ]
                     removed_count = original_count - len(filtered_items)
                     if removed_count > 0:

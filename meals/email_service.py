@@ -505,6 +505,7 @@ def generate_shopping_list(meal_plan_id):
                             "For such bundles, include the dish name in the 'notes' field for each relevant item (e.g., 'For baby puree' or 'Vegan dish').\n"
                             "Respect substitutions for non-chef meals.\n"
                             "When available, prefer structured meal_dishes (MealDish rows) over composed_dishes JSON.\n"
+                            "Return one entry per unique ingredient and unit; if multiple meals require the same ingredient with the same unit, combine their quantities and list all meal names in `meal_names`.\n"
                         )
                     },
                     {
@@ -639,7 +640,7 @@ def generate_shopping_list(meal_plan_id):
         ingredient = item.get("ingredient")
         quantity_value = item.get("quantity", "")
         unit = item.get("unit", "")
-        meal_name = item.get("meal_name", "")
+        meal_names = item.get("meal_names", [])
         notes = item.get("notes", "")
 
         # Handle numeric quantities (schema enforces float), but remain defensive

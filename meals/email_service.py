@@ -89,7 +89,7 @@ def send_meal_plan_approval_email(meal_plan_id):
 
         # Generate the approval link with query parameters
         approval_token = meal_plan.approval_token
-        base_approval_url = f"{os.getenv('STREAMLIT_URL')}/meal_plans"
+        base_approval_url = f"{os.getenv('STREAMLIT_URL')}"
 
         # Create approval links with meal prep preferences
         query_params_daily = urlencode({

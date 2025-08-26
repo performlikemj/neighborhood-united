@@ -170,7 +170,7 @@ def email_authentication_view(request, auth_token):
             
             user_name_for_template = user.get_full_name() or user.username
             site_domain_for_template = os.getenv('STREAMLIT_URL') # Ensure STREAMLIT_URL is available
-            profile_url_for_template = f"{site_domain_for_template}/"
+            profile_url_for_template = f"{site_domain_for_template}/profile"
             personal_assistant_email_for_template = user.personal_assistant_email if hasattr(user, 'personal_assistant_email') and user.personal_assistant_email else f"mj+{user.email_token}@sautai.com"
 
             # Get user's preferred language and translate the email content
@@ -708,7 +708,7 @@ def update_profile_api(request):
                 </html>
                 """
 
-                zapier_data = {
+                n8n_data = {
                     'recipient_email': user_serializer.validated_data.get('email'),
                     'subject': 'Verify your email to resume access.',
                     'message': email_content,
@@ -717,7 +717,7 @@ def update_profile_api(request):
                     'html': True  # Indicate that the message is in HTML format
                 }
                 # Send data to Zapier
-                requests.post(os.getenv("ZAP_UPDATE_PROFILE_URL"), json=zapier_data)
+                requests.post(os.getenv("N8N_UPDATE_PROFILE_URL"), json=n8n_data)
 
             # Store original custom dietary preferences before update for task dispatching
             original_custom_prefs = set()

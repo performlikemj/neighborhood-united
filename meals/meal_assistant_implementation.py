@@ -2597,7 +2597,7 @@ class MealPlanningAssistant:
             logger.warning(f"User {self.user_id} not found when preparing email, using fallback name.")
         
         site_domain = os.getenv('STREAMLIT_URL')
-        profile_url = f"{site_domain}/" # Adjust if your profile URL is different
+        profile_url = f"{site_domain}/profile" # Adjust if your profile URL is different
 
         # 3.5. Route sections through a template router if a template_key was provided
         css_classes_extra: List[str] = []

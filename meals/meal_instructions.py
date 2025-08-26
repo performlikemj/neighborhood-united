@@ -597,7 +597,7 @@ def generate_instructions(meal_plan_meal_ids, send_via_assistant: bool = False):
         grouped_instructions[meal_type].append(item)
 
 
-    streamlit_url = os.getenv("STREAMLIT_URL") 
+    streamlit_url = os.getenv("STREAMLIT_URL") + '/meal-plans'
 
 
     if send_via_assistant and instructions_list:

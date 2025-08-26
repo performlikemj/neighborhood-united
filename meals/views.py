@@ -3236,8 +3236,8 @@ def api_create_stripe_account_link(request):
         
         account_link = stripe.AccountLink.create(
             account=account_id,
-            refresh_url=f"{base_url}/",
-            return_url=f"{base_url}/",
+            refresh_url=f"{base_url}/meal-plans",
+            return_url=f"{base_url}/meal-plans",
             type="account_onboarding",
         )
         print(f"Account link: {account_link}")
@@ -3429,6 +3429,168 @@ def api_process_meal_payment(request, order_id):
             status_code=400
         )
 
+    try:
+
+        total_price_decimal = order.total_price()
+        if total_price_decimal is None or total_price_decimal <= 0:
+
+            return standardize_stripe_response(
+                success=False,
+                message="Cannot process payment for an order with zero or invalid total price.",
+                status_code=400
+            )
+        
+        total_price_cents = int(total_price_decimal * 100)
+
+
+        # Get return URLs
+        return_urls = get_stripe_return_urls(
+            success_path="", 
+            cancel_path="" 
+        )
+
+
+        # Prepare line items for Stripe Checkout
+        line_items = []
+        for order_meal in order.ordermeal_set.all():
+            meal = order_meal.meal
+            chef_meal_event = order_meal.chef_meal_event
+            meal_plan_meal = order_meal.meal_plan_meal
+            
+            # Skip if no valid chef meal event
+            if not chef_meal_event:
+
+                continue
+            
+            # Get the quantity from the ChefMealOrder if it exists
+            try:
+                chef_meal_order = ChefMealOrder.objects.get(
+                    order=order,
+                    meal_plan_meal=meal_plan_meal
+                )
+                actual_quantity = chef_meal_order.quantity
+
+            except ChefMealOrder.DoesNotExist:
+                actual_quantity = order_meal.quantity
+
+            
+            # Always use the current price from the chef meal event
+            unit_price = chef_meal_event.current_price
+
+            if not unit_price or unit_price <= 0:
+
+                continue
+            
+            line_items.append({
+                'price_data': {
+                    'currency': 'usd',
+                    'product_data': {
+                        'name': meal.name,
+                    },
+                    'unit_amount': int(unit_price * 100), # Price per unit in cents
+                },
+                'quantity': actual_quantity,
+            })
+        
+        if not line_items:
+
+             return standardize_stripe_response(
+                 success=False,
+                 message="No items requiring payment found in this order.",
+                 status_code=400
+             )
+
+
+        
+        # Create an idempotency key based on order ID to prevent duplicate charges
+        idempotency_key = f"order_{order.id}_{int(time.time())}"
+        
+        # Create Stripe Checkout Session with idempotency key
+        session = stripe.checkout.Session.create(
+            customer_email=request.user.email,
+            payment_method_types=['card'],
+            line_items=line_items,
+            mode='payment',
+            **return_urls,
+            metadata={
+                'order_id': str(order.id),
+                'order_type': 'standard',
+                'customer_id': str(request.user.id)
+            },
+            idempotency_key=idempotency_key
+        )
+
+        
+        # Store the session ID in the order
+        order.stripe_session_id = session.id
+        order.save(update_fields=['stripe_session_id'])
+
+        # --- Start: Trigger n8n Webhook with HTML Email Body --- 
+        try:
+            n8n_webhook_url = os.getenv('N8N_PAYMENT_LINK_WEBHOOK_URL')
+            
+            # Check if user has unsubscribed from emails
+            user = request.user
+            if hasattr(user, 'unsubscribed_from_emails') and user.unsubscribed_from_emails:
+                logger.info(f"User {user.id} has unsubscribed from emails. Skipping payment link email.")
+            elif n8n_webhook_url and session.url:
+                meal_plan = order.meal_plan
+                user_name = user.get_full_name() or user.username
+                meal_plan_week_str = f"{meal_plan.week_start_date.strftime('%Y-%m-%d')} to {meal_plan.week_end_date.strftime('%Y-%m-%d')}" if meal_plan else 'N/A'
+
+                # Prepare context for the email template
+                context = {
+                    'user_name': user_name,
+                    'checkout_url': session.url,
+                    'order_id': order.id,
+                    'meal_plan_week': meal_plan_week_str,
+                    'profile_url': os.getenv('STREAMLIT_URL') + '/meal-plans' # Or construct your profile URL differently
+                }
+
+                # Render the HTML email body
+                email_body_html = render_to_string('meals/payment_link_email.html', context)
+
+                # Prepare payload for n8n (matching the shopping list format)
+                email_data = {
+                    'subject': f'Payment Required for Your Meal Plan (Order #{order.id})',
+                    'html_message': email_body_html, # Send rendered HTML
+                    'to': user.email,
+                    'from': getattr(settings, 'DEFAULT_FROM_EMAIL', 'support@sautai.com') # Use setting or default
+                }
+                
+
+                # Send POST request to n8n webhook (fire and forget)
+                response = requests.post(n8n_webhook_url, json=email_data, timeout=10) # Added timeout
+                response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
+
+            elif not session.url:
+                 print("[WARN] Stripe session URL not found. Cannot trigger n8n webhook.")
+            else:
+                print("[WARN] N8N_PAYMENT_LINK_WEBHOOK_URL not configured in Django settings. Skipping n8n trigger.")
+        except requests.exceptions.RequestException as webhook_error:
+            # Log error but don't fail the payment process
+            logger.error(f"Error triggering n8n webhook for order {order_id} email: {webhook_error}", exc_info=True)
+            print(f"[ERROR] Failed to trigger n8n webhook email: {webhook_error}")
+        except Exception as general_error: # Catch any other unexpected errors
+             logger.error(f"Unexpected error during n8n trigger for order {order_id} email: {general_error}", exc_info=True)
+             print(f"[ERROR] Unexpected error triggering n8n email: {general_error}")
+        # --- End: Trigger n8n Webhook --- 
+
+        # Return the original response to Streamlit
+        return standardize_stripe_response(
+            success=True,
+            message="Checkout session created successfully",
+            data={"session_id": session.id, "session_url": session.url},
+            status_code=200 # Explicitly set 200 OK
+        )
+
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error processing payment for order {order_id}: {str(e)}")
+        return handle_stripe_error(request, f"Payment processing error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error processing payment for order {order_id}: {str(e)}", exc_info=True) # Log traceback
+        return handle_stripe_error(request, "An unexpected error occurred while processing your payment.")
+    
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def api_order_payment_status(request, order_id):
@@ -3599,167 +3761,6 @@ def api_order_payment_status(request, order_id):
     except Order.DoesNotExist:
         return Response({"error": "Order not found"}, status=404)
 
-    try:
-
-        total_price_decimal = order.total_price()
-        if total_price_decimal is None or total_price_decimal <= 0:
-
-            return standardize_stripe_response(
-                success=False,
-                message="Cannot process payment for an order with zero or invalid total price.",
-                status_code=400
-            )
-        
-        total_price_cents = int(total_price_decimal * 100)
-
-
-        # Get return URLs
-        return_urls = get_stripe_return_urls(
-            success_path="", 
-            cancel_path="" 
-        )
-
-
-        # Prepare line items for Stripe Checkout
-        line_items = []
-        for order_meal in order.ordermeal_set.all():
-            meal = order_meal.meal
-            chef_meal_event = order_meal.chef_meal_event
-            meal_plan_meal = order_meal.meal_plan_meal
-            
-            # Skip if no valid chef meal event
-            if not chef_meal_event:
-
-                continue
-            
-            # Get the quantity from the ChefMealOrder if it exists
-            try:
-                chef_meal_order = ChefMealOrder.objects.get(
-                    order=order,
-                    meal_plan_meal=meal_plan_meal
-                )
-                actual_quantity = chef_meal_order.quantity
-
-            except ChefMealOrder.DoesNotExist:
-                actual_quantity = order_meal.quantity
-
-            
-            # Always use the current price from the chef meal event
-            unit_price = chef_meal_event.current_price
-
-            if not unit_price or unit_price <= 0:
-
-                continue
-            
-            line_items.append({
-                'price_data': {
-                    'currency': 'usd',
-                    'product_data': {
-                        'name': meal.name,
-                    },
-                    'unit_amount': int(unit_price * 100), # Price per unit in cents
-                },
-                'quantity': actual_quantity,
-            })
-        
-        if not line_items:
-
-             return standardize_stripe_response(
-                 success=False,
-                 message="No items requiring payment found in this order.",
-                 status_code=400
-             )
-
-
-        
-        # Create an idempotency key based on order ID to prevent duplicate charges
-        idempotency_key = f"order_{order.id}_{int(time.time())}"
-        
-        # Create Stripe Checkout Session with idempotency key
-        session = stripe.checkout.Session.create(
-            customer_email=request.user.email,
-            payment_method_types=['card'],
-            line_items=line_items,
-            mode='payment',
-            **return_urls,
-            metadata={
-                'order_id': str(order.id),
-                'order_type': 'standard',
-                'customer_id': str(request.user.id)
-            },
-            idempotency_key=idempotency_key
-        )
-
-        
-        # Store the session ID in the order
-        order.stripe_session_id = session.id
-        order.save(update_fields=['stripe_session_id'])
-
-        # --- Start: Trigger n8n Webhook with HTML Email Body --- 
-        try:
-            n8n_webhook_url = os.getenv('N8N_PAYMENT_LINK_WEBHOOK_URL')
-            
-            # Check if user has unsubscribed from emails
-            user = request.user
-            if hasattr(user, 'unsubscribed_from_emails') and user.unsubscribed_from_emails:
-                logger.info(f"User {user.id} has unsubscribed from emails. Skipping payment link email.")
-            elif n8n_webhook_url and session.url:
-                meal_plan = order.meal_plan
-                user_name = user.get_full_name() or user.username
-                meal_plan_week_str = f"{meal_plan.week_start_date.strftime('%Y-%m-%d')} to {meal_plan.week_end_date.strftime('%Y-%m-%d')}" if meal_plan else 'N/A'
-
-                # Prepare context for the email template
-                context = {
-                    'user_name': user_name,
-                    'checkout_url': session.url,
-                    'order_id': order.id,
-                    'meal_plan_week': meal_plan_week_str,
-                    'profile_url': os.getenv('STREAMLIT_URL') # Or construct your profile URL differently
-                }
-
-                # Render the HTML email body
-                email_body_html = render_to_string('meals/payment_link_email.html', context)
-
-                # Prepare payload for n8n (matching the shopping list format)
-                email_data = {
-                    'subject': f'Payment Required for Your Meal Plan (Order #{order.id})',
-                    'html_message': email_body_html, # Send rendered HTML
-                    'to': user.email,
-                    'from': getattr(settings, 'DEFAULT_FROM_EMAIL', 'support@sautai.com') # Use setting or default
-                }
-                
-
-                # Send POST request to n8n webhook (fire and forget)
-                response = requests.post(n8n_webhook_url, json=email_data, timeout=10) # Added timeout
-                response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
-
-            elif not session.url:
-                 print("[WARN] Stripe session URL not found. Cannot trigger n8n webhook.")
-            else:
-                print("[WARN] N8N_PAYMENT_LINK_WEBHOOK_URL not configured in Django settings. Skipping n8n trigger.")
-        except requests.exceptions.RequestException as webhook_error:
-            # Log error but don't fail the payment process
-            logger.error(f"Error triggering n8n webhook for order {order_id} email: {webhook_error}", exc_info=True)
-            print(f"[ERROR] Failed to trigger n8n webhook email: {webhook_error}")
-        except Exception as general_error: # Catch any other unexpected errors
-             logger.error(f"Unexpected error during n8n trigger for order {order_id} email: {general_error}", exc_info=True)
-             print(f"[ERROR] Unexpected error triggering n8n email: {general_error}")
-        # --- End: Trigger n8n Webhook --- 
-
-        # Return the original response to Streamlit
-        return standardize_stripe_response(
-            success=True,
-            message="Checkout session created successfully",
-            data={"session_id": session.id, "session_url": session.url},
-            status_code=200 # Explicitly set 200 OK
-        )
-
-    except stripe.error.StripeError as e:
-        logger.error(f"Stripe error processing payment for order {order_id}: {str(e)}")
-        return handle_stripe_error(request, f"Payment processing error: {str(e)}")
-    except Exception as e:
-        logger.error(f"Unexpected error processing payment for order {order_id}: {str(e)}", exc_info=True) # Log traceback
-        return handle_stripe_error(request, "An unexpected error occurred while processing your payment.")
 
 @api_view(['POST'])
 @permission_classes([])  # Allow unauthenticated requests from Stripe
@@ -4807,12 +4808,13 @@ def api_resend_payment_link(request, order_id):
                 meal_plan_week_str = f"{meal_plan.week_start_date.strftime('%Y-%m-%d')} to {meal_plan.week_end_date.strftime('%Y-%m-%d')}" if meal_plan else 'N/A'
 
                 # Prepare context for the email template with sanitized values
+                streamlit_url = os.getenv('STREAMLIT_URL') + '/meal-plans' if os.getenv('STREAMLIT_URL') else '#'
                 context = {
                     'user_name': html.escape(user_name),
                     'checkout_url': session.url,  # URLs from Stripe are safe
                     'order_id': order.id,
                     'meal_plan_week': html.escape(meal_plan_week_str),
-                    'profile_url': os.getenv('STREAMLIT_URL', '#')  # Fallback to # if not set
+                    'profile_url': streamlit_url  # Fallback to # if not set
                 }
 
                 # Render the HTML email body

@@ -799,7 +799,7 @@ def process_aggregated_emails(self, session_identifier_str, use_enhanced_formatt
                     formatted_content = f'<p>{formatted_content}</p>'
                 
                 email_body_data = f"<div class='assistant-response'>{formatted_content}</div>"
-                email_body_final = f"<p>Need more help? Just reply to this email or visit your <a href='{os.getenv('STREAMLIT_URL')}/'>SautAI dashboard</a>!</p>"
+                email_body_final = f"<p>Need more help? Just reply to this email or visit your <a href='{os.getenv('STREAMLIT_URL')}/meal-plans'>SautAI dashboard</a>!</p>"
                 css_classes = ['original-formatting']
                 
                 processing_metadata = {
@@ -845,7 +845,7 @@ def process_aggregated_emails(self, session_identifier_str, use_enhanced_formatt
                     'email_body_data': email_body_data,
                     'email_body_final': email_body_final,
                     'css_classes': ' '.join(css_classes),
-                    'profile_url': f"{os.getenv('STREAMLIT_URL')}/",
+                    'profile_url': f"{os.getenv('STREAMLIT_URL')}/profile",
                     'personal_assistant_email': getattr(session.user, 'personal_assistant_email', f"mj+{session.user.email_token}@sautai.com"),
                     # Add metadata for debugging (optional)
                     'debug_info': processing_metadata if os.getenv('DEBUG') == 'True' else {}

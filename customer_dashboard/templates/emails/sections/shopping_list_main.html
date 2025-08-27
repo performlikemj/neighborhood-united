@@ -4,7 +4,7 @@
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
       <h2 style="margin:0;">{% trans "Weekly Shopping List" %}{% if week_start and week_end %}: {{ week_start }} – {{ week_end }}{% endif %}</h2>
       {% if household_member_count %}
-        <span class="badge">{% blocktrans with n=household_member_count %}Servings: {{ n }}{% endblocktrans %}</span>
+        <span>{% blocktrans with n=household_member_count %}Servings: {{ n }}{% endblocktrans %}</span>
       {% endif %}
     </div>
     {% if main_text %}

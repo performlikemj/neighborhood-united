@@ -21,7 +21,7 @@
           {% for s in steps %}
             {% with parts=s|safe %}
             <tr>
-              <td class="qty" style="vertical-align:top;padding:12px 10px;"><span class="qty-pill">{{ forloop.counter }}</span></td>
+              <td class="qty" style="vertical-align:top;padding:12px 10px;">{{ forloop.counter }}</td>
               <td style="vertical-align:top;padding:12px 10px;">{{ s|safe }}</td>
               <td style="vertical-align:top;padding:12px 10px;"></td>
             </tr>

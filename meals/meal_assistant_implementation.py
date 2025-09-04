@@ -645,6 +645,12 @@ class DjangoTemplateEmailFormatter:
         # Clean up HTML (minimal for Django template compatibility)
         html = self._clean_email_html(html)
         
+        # Encode non‑ASCII chars as numeric entities to avoid mojibake in strict clients
+        try:
+            html = self._encode_non_ascii_to_entities(html)
+        except Exception:
+            pass
+        
         return html
     
     def _replace_instacart_links(self, html: str) -> str:
@@ -670,6 +676,19 @@ class DjangoTemplateEmailFormatter:
         html = html.strip()
         
         return html
+
+    def _encode_non_ascii_to_entities(self, html: str) -> str:
+        """Convert all non‑ASCII characters to numeric HTML entities.
+
+        This prevents smart quotes, en/em dashes, degree symbols, and other
+        Unicode characters from rendering as replacement glyphs in email
+        clients that mishandle charsets. Markup remains intact.
+        """
+        try:
+            # Encode using ASCII with xmlcharrefreplace to emit e.g. &#8217;
+            return html.encode('ascii', 'xmlcharrefreplace').decode('ascii')
+        except Exception:
+            return html
     
     def _create_fallback_django_body(self, raw_text: str) -> DjangoEmailBody:
         """Create a fallback Django body when OpenAI call fails"""
@@ -758,7 +777,7 @@ DEFAULT_GUEST_PROMPT = """
 <!-- =================================================================== -->
 <PromptTemplate id="guest" version="2025-06-13">
   <Identity>
-    <Role>MJ, sautAI's friendly meal‑planning consultant</Role>
+    <Role>MJ, sautai's friendly meal‑planning consultant</Role>
     <Persona origin="Jamaica" raisedIn="Brooklyn, NY"
              traits="thoughtful, considerate, confident, food‑savvy"/>
   </Identity>
@@ -824,7 +843,7 @@ DEFAULT_AUTH_PROMPT = """
 
   <!-- ───── 1. IDENTITY ───── -->
   <Identity>
-    <Role>MJ — sautAI's friendly meal-planning consultant</Role>
+    <Role>MJ — sautai's friendly meal-planning consultant</Role>
     <Persona origin="Jamaica"
              raisedIn="Brooklyn, NY"
              traits="thoughtful, considerate, confident, food-savvy"/>
@@ -945,7 +964,7 @@ TOOL_TEASER = (
     "- create_meal_plan: build and manage a weekly plan\n"
     "- approve_meal_plan: checkout & pay for plans that include your local and personal chef (when available)\n"
     "- list_upcoming_meals: see what's next\n"
-    "- …and 20 more when you sign up! As well as having your own personal sautAI assistant."
+    "- …and 20 more when you sign up! As well as having your own personal sautai assistant."
 )
 
 
@@ -953,7 +972,7 @@ TOOL_TEASER = (
 #  Assistant class
 # ───────────────────────────────────────────────────────────────────────────────
 class MealPlanningAssistant:
-    """sautAI meal‑planning assistant with guest/auth modes and parallel‑tool support."""
+    """sautai meal‑planning assistant with guest/auth modes and parallel‑tool support."""
 
     def __init__(self, user_id: Optional[Union[int, str]] = None):
         self.client = OpenAI(api_key=settings.OPENAI_KEY)
@@ -978,7 +997,7 @@ class MealPlanningAssistant:
         self._django_email_formatter = DjangoTemplateEmailFormatter(self.client)
         
         self.system_message = (
-            "You are sautAI's helpful meal‑planning assistant. "
+            "You are sautai's helpful meal‑planning assistant. "
             "Answer questions about food, nutrition and meal plans."
         )
 
@@ -1643,12 +1662,12 @@ class MealPlanningAssistant:
                 return prompt + language_instruction
             except CustomUser.DoesNotExist:
                 logger.warning(f"User with ID {self.user_id} not found while building prompt. Using fallback.")
-                return f"You are MJ, sautAI's friendly meal-planning consultant. You are currently experiencing issues with your setup and functionality. You cannot help with any of the user's requests at the moment but please let them know the sautAI team has been notified and will look into it as soon as possible."
+                return f"You are MJ, sautai's friendly meal-planning consultant. You are currently experiencing issues with your setup and functionality. You cannot help with any of the user's requests at the moment but please let them know the sautai team has been notified and will look into it as soon as possible."
             except Exception as e:
                 logger.error(f"Error generating prompt for user {self.user_id}: {str(e)}")
                 # Return a simple fallback prompt
                 username_str = user.username if user else f"user ID {self.user_id}"
-                return f"You are MJ, sautAI's friendly meal-planning consultant. You are currently chatting with {username_str} and experiencing issues with your setup and functionality. You cannot help with any of the user's requests at the moment but please let them know the sautAI team has been notified and will look into it as soon as possible."
+                return f"You are MJ, sautai's friendly meal-planning consultant. You are currently chatting with {username_str} and experiencing issues with your setup and functionality. You cannot help with any of the user's requests at the moment but please let them know the sautai team has been notified and will look into it as soon as possible."
 
     def _instructions(self, is_guest: bool) -> str:
         """
@@ -2512,7 +2531,7 @@ class MealPlanningAssistant:
 
         # 2. Get structured sections. If a template_key is provided, attempt JSON-schema output.
         structured_sections = None
-        if template_key:
+        if template_key and template_key != 'emergency_supply':
             try:
                 # Ask model to return structured JSON for the template_key
                 # Build a minimal, explicit instruction for structured output
@@ -2552,6 +2571,9 @@ class MealPlanningAssistant:
                 structured_sections = structured_payload
             except Exception as _shape_err:
                 logger.error(f"Email structured shaping failed for key '{template_key}': {_shape_err}")
+        elif template_key == 'emergency_supply':
+            # For emergency_supply, rely only on the Pydantic-validated context passed in (emergency_list)
+            logger.info("Skipping router-based JSON shaping for 'emergency_supply'; using Pydantic-derived context.")
 
         # Fallback: derive sections via formatter
         if not structured_sections:
@@ -2686,7 +2708,7 @@ class MealPlanningAssistant:
         # Ensure original_subject has content
         if not original_subject or original_subject.strip() == "":
             logger.warning(f"Empty subject received for user {self.user_id}. Using default subject.")
-            original_subject = "Message from your SautAI Assistant"
+            original_subject = "Message from your sautai Assistant"
         
         # Handle reply prefix
         subject_prefix = "Re: "
@@ -2945,7 +2967,7 @@ class MealPlanningAssistant:
             r'In-Reply-To:\s*[^\n\r]+',
             r'References:\s*[^\n\r]+',
             r'Return-Path:\s*[^\n\r]+',
-            r'Message from your sautAI assistant[^\n\r]*',
+            r'Message from your sautai assistant[^\n\r]*',
             r'Your latest meal plan[^\n\r]*',
             r'-IMAGE REMOVED-[^\n\r]*'
         ]
@@ -3032,7 +3054,7 @@ class OnboardingAssistant(MealPlanningAssistant):
             
             # Override system message for onboarding-specific flow
             self.system_message = (
-                "You are MJ, sautAI's friendly onboarding assistant. "
+                "You are MJ, sautai's friendly onboarding assistant. "
                 "Help users create their account through a simple conversation.\n\n"
 
                 "### PROCESS\n"

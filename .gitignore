@@ -61,3 +61,4 @@ setup-azure-secrets.sh
 Azure_Container_Apps_Troubleshooting_Guide.md
 Azure-Container-Apps-Command-Override-Recovery-Guide.md
 Azure-Container-Apps-KEDA-Scaling-Best-Practices.md
+DEPLOYMENT_SECURITY.md

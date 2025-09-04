@@ -1,16 +1,16 @@
-# sautAI - AI-Powered Meal Planning & Local Chef Connection Platform
+# sautai - AI-Powered Meal Planning & Local Chef Connection Platform
 
 **Part of the Neighborhood United ecosystem**
 
-sautAI is an intelligent meal-planning platform that connects users with local, certified chefs while providing AI-powered assistance for nutrition, recipes, and meal planning. This application bridges the gap between talented local chefs and community members seeking convenient, healthy meal solutions.
+sautai is an intelligent meal-planning platform that connects users with local, certified chefs while providing AI-powered assistance for nutrition, recipes, and meal planning. This application bridges the gap between talented local chefs and community members seeking convenient, healthy meal solutions.
 
 ## About
 
-sautAI revolutionizes how people approach meal planning by combining the expertise of local chefs with advanced AI assistance. Our platform is designed to save users time on meal planning, shopping, and cooking while promoting dietary health and supporting local culinary entrepreneurs.
+sautai revolutionizes how people approach meal planning by combining the expertise of local chefs with advanced AI assistance. Our platform is designed to save users time on meal planning, shopping, and cooking while promoting dietary health and supporting local culinary entrepreneurs.
 
 The application features MJ, an AI-powered meal-planning consultant born in Jamaica and raised in Brooklyn, NY, who provides thoughtful, considerate guidance on food, nutrition, recipes, and meal planning. Through this intelligent assistant and our network of local chefs, we create a comprehensive ecosystem that supports both individual health goals and community prosperity.
 
-By connecting users directly with local chefs and providing intelligent meal planning tools, sautAI fosters local entrepreneurship, promotes healthier dietary choices, and enhances cultural exchange through the power of shared meals. Every interaction aims to simplify the user's culinary journey while strengthening community bonds.
+By connecting users directly with local chefs and providing intelligent meal planning tools, sautai fosters local entrepreneurship, promotes healthier dietary choices, and enhances cultural exchange through the power of shared meals. Every interaction aims to simplify the user's culinary journey while strengthening community bonds.
 
 Join us in transforming how communities approach food, nutrition, and meal planning.
 
@@ -28,7 +28,7 @@ Step by step instructions on how to get your project setup:
 
 ## Usage
 
-sautAI serves multiple user types with tailored experiences:
+sautai serves multiple user types with tailored experiences:
 
 ### For Users/Customers:
 
@@ -51,12 +51,12 @@ sautAI serves multiple user types with tailored experiences:
 
 ## AI Assistant Prompts
 
-sautAI features MJ, an AI-powered meal planning consultant. Below are the core prompt templates that define MJ's personality and capabilities:
+sautai features MJ, an AI-powered meal planning consultant. Below are the core prompt templates that define MJ's personality and capabilities:
 
 ### Guest User Prompt Template
 
 ```
-GUEST_PROMPT_TEMPLATE="You are MJ, sautAI's friendly meal‑planning consultant. Your role is to help guests with their food, nutrition, recipe, and meal‑planning inquiries. Deliver guidance in a warm, business‑casual tone, embodying the character of MJ—a Jamaica‑born and Brooklyn, NY‑raised individual who is thoughtful, considerate, confident, and knowledgeable about sautAI and food‑related topics.
+GUEST_PROMPT_TEMPLATE="You are MJ, sautai's friendly meal‑planning consultant. Your role is to help guests with their food, nutrition, recipe, and meal‑planning inquiries. Deliver guidance in a warm, business‑casual tone, embodying the character of MJ—a Jamaica‑born and Brooklyn, NY‑raised individual who is thoughtful, considerate, confident, and knowledgeable about sautai and food‑related topics.
 
 # Goals
 - Provide clear and accurate answers to food/nutrition/recipe/meal‑planning questions.
@@ -66,7 +66,7 @@ GUEST_PROMPT_TEMPLATE="You are MJ, sautAI's friendly meal‑planning consultant.
 
 # Tone
 - Business‑casual, warm, and helpful.
-- Maintain a thoughtful and considerate approach, yet be straightforward on sautAI and food‑related subjects.
+- Maintain a thoughtful and considerate approach, yet be straightforward on sautai and food‑related subjects.
 
 # Constraints
 - You are limited to guest tools and must provide general nutrition guidance only. Medical advice is not permissible.
@@ -100,7 +100,7 @@ GUEST_PROMPT_TEMPLATE="You are MJ, sautAI's friendly meal‑planning consultant.
 
 ```
 AUTH_PROMPT_TEMPLATE="#Introduction
-You are MJ, sautAI's friendly meal-planning consultant. Born in Jamaica and raised in Brooklyn, NY, MJ is thoughtful, considerate, confident, and knowledgeable about food and meal-planning. sautAI is dedicated to saving users time spent on meal planning, shopping, and cooking, promoting dietary health, and providing convenient access to nutritious meals through local chefs.
+You are MJ, sautai's friendly meal-planning consultant. Born in Jamaica and raised in Brooklyn, NY, MJ is thoughtful, considerate, confident, and knowledgeable about food and meal-planning. sautai is dedicated to saving users time spent on meal planning, shopping, and cooking, promoting dietary health, and providing convenient access to nutritious meals through local chefs.
 
 The user is {username}. Recently, you discussed:
 {user_chat_summary}

@@ -3,7 +3,8 @@
 <div class="section section-data">
   <div class="card">
     <h3 style="margin:0 0 10px;">{% trans "Plan Overview" %}</h3>
-    <table class="table-slim" role="presentation" aria-label="{% trans 'Meals by day and type' %}">
+    <div style="overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;">
+    <table class="table-slim" role="presentation" aria-label="{% trans 'Meals by day and type' %}" style="width:100%;display:table;table-layout:fixed;border-collapse:collapse;">
       <colgroup>
         <col style="width:120px">
         <col style="width:30%">
@@ -21,11 +22,11 @@
       <tbody>
         {% if plan_rows %}
           {% for r in plan_rows %}
-          <tr {% if forloop.counter0|divisibleby:2 %}style="background:#f3faf5;"{% endif %}>
+          <tr {% if forloop.counter0|divisibleby:2 %}style="background:#fafafa;"{% endif %}>
             <td style="vertical-align:top;"><strong>{{ r.day }}</strong></td>
-            <td style="vertical-align:top;overflow-wrap:break-word;word-break:normal;hyphens:auto;">{{ r.breakfast|default:'—' }}</td>
-            <td style="vertical-align:top;overflow-wrap:break-word;word-break:normal;hyphens:auto;">{{ r.lunch|default:'—' }}</td>
-            <td style="vertical-align:top;overflow-wrap:break-word;word-break:normal;hyphens:auto;">{{ r.dinner|default:'—' }}</td>
+            <td style="vertical-align:top;overflow-wrap:anywhere;word-break:break-word;hyphens:auto;">{{ r.breakfast|default:'—' }}</td>
+            <td style="vertical-align:top;overflow-wrap:anywhere;word-break:break-word;hyphens:auto;">{{ r.lunch|default:'—' }}</td>
+            <td style="vertical-align:top;overflow-wrap:anywhere;word-break:break-word;hyphens:auto;">{{ r.dinner|default:'—' }}</td>
           </tr>
           {% endfor %}
         {% else %}
@@ -36,17 +37,18 @@
                 {% if m.meal_type == 'Lunch' %}{% firstof m.meal_name '' as l %}{% endif %}
                 {% if m.meal_type == 'Dinner' %}{% firstof m.meal_name '' as d %}{% endif %}
               {% endfor %}
-            <tr {% if forloop.counter0|divisibleby:2 %}style="background:#f3faf5;"{% endif %}>
+            <tr {% if forloop.counter0|divisibleby:2 %}style="background:#fafafa;"{% endif %}>
               <td style="vertical-align:top;"><strong>{{ day }}</strong></td>
-              <td style="vertical-align:top;overflow-wrap:break-word;word-break:normal;hyphens:auto;">{{ b }}</td>
-              <td style="vertical-align:top;overflow-wrap:break-word;word-break:normal;hyphens:auto;">{{ l }}</td>
-              <td style="vertical-align:top;overflow-wrap:break-word;word-break:normal;hyphens:auto;">{{ d }}</td>
+              <td style="vertical-align:top;overflow-wrap:anywhere;word-break:break-word;hyphens:auto;">{{ b }}</td>
+              <td style="vertical-align:top;overflow-wrap:anywhere;word-break:break-word;hyphens:auto;">{{ l }}</td>
+              <td style="vertical-align:top;overflow-wrap:anywhere;word-break:break-word;hyphens:auto;">{{ d }}</td>
             </tr>
             {% endwith %}
           {% endfor %}
         {% endif %}
       </tbody>
     </table>
+    </div>
   </div>
 </div>
 {% endif %}

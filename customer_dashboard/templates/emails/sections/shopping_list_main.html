@@ -7,10 +7,21 @@
         <span>{% blocktrans with n=household_member_count %}Servings: {{ n }}{% endblocktrans %}</span>
       {% endif %}
     </div>
+
+    {% if instacart_url %}
+      <div style="text-align:center;margin:10px 0 6px;">
+        <a href="{{ instacart_url }}" target="_blank" style="text-decoration:none;">
+          <div style="height:46px;display:inline-flex;align-items:center;padding:16px 18px;background:#FFFFFF;border:0.5px solid #E8E9EB;border-radius:8px;">
+            <img src="https://live.staticflickr.com/65535/54538897116_fb233f397f_m.jpg" alt="Instacart" style="height:22px;width:auto;margin-right:10px;">
+            <span style="font-family:Arial,sans-serif;font-size:16px;font-weight:500;color:#000000;white-space:nowrap;">Get Ingredients</span>
+          </div>
+        </a>
+      </div>
+    {% endif %}
     {% if main_text %}
       <p style="margin-top:10px;">{{ main_text|safe }}</p>
     {% endif %}
+
+    
   </div>
 </div>
-
-

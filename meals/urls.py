@@ -76,6 +76,9 @@ urlpatterns = [
     path('api/resend-payment-link/<int:order_id>/', views.api_resend_payment_link, name='api_resend_payment_link'),
     path('api/chef-received-orders/', views.api_chef_received_orders, name='api_chef_received_orders'),
     path('api/stripe-webhook/', chef_meals_views.stripe_webhook, name='api_stripe_webhook'),
+
+    # DEBUG-only preview for meals email templates (e.g., payment link)
+    path('debug/email/payment-link/', views.debug_payment_link_email, name='debug_payment_link_email'),
     
     # Pantry API Endpoints
     path('api/pantry-items/', views.api_pantry_items, name='api_pantry_items'),

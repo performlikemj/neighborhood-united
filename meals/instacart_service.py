@@ -109,7 +109,7 @@ def create_instacart_shopping_list(
     meal_plan_id: int = None,
     api_key: str = None,
     cache_duration_days: int = 30,
-    app_name: str = "sautAI",
+    app_name: str = "sautai",
     postal_code: str = None
 ) -> dict:
     """

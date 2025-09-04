@@ -56,7 +56,7 @@ def process_email(request):
         original_subject = data.get('original_subject', '')
         in_reply_to_header = data.get('in_reply_to_header')
         email_thread_id = data.get('email_thread_id')
-        openai_thread_context_id = data.get('openai_thread_context_id') # From X-SautAI-Thread header
+        openai_thread_context_id = data.get('openai_thread_context_id') # From X-sautai-Thread header
 
         # Early exit for emails sent from the system's own address to prevent loops/unwanted processing
         if sender_email:
@@ -184,8 +184,8 @@ def process_email(request):
                     f"<a href='{process_now_url}' style='display: inline-block; background: #4CAF50; color: white; "
                     f"padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;'>"
                     f"🚀 Process My Message Now</a></div><br>"
-                    "For urgent matters or a more interactive experience, please log in to your sautAI dashboard.<br><br>"
-                    "Best,<br>The sautAI Team"
+                    "For urgent matters or a more interactive experience, please log in to your sautai dashboard.<br><br>"
+                    "Best,<br>The sautai Team"
                 )
                 
                 # Wrap the message in paragraph tags to ensure proper translation
@@ -240,7 +240,7 @@ def process_email(request):
                             'reply_content': ack_email_html_content,
                             'recipient_email': sender_email,
                             'from_email': user.personal_assistant_email if hasattr(user, 'personal_assistant_email') and user.personal_assistant_email else f"mj+{user.email_token}@sautai.com",
-                            'original_subject': "Re: " + original_subject if original_subject else "Message from your SautAI Assistant",
+                            'original_subject': "Re: " + original_subject if original_subject else "Message from your sautai Assistant",
                             'in_reply_to_header': in_reply_to_header, 
                             'email_thread_id': email_thread_id
                         }
@@ -388,7 +388,7 @@ def process_email(request):
             profile_url_for_template = f"{site_domain_for_template}/"
             personal_assistant_email_for_template = user.personal_assistant_email if hasattr(user, 'personal_assistant_email') and user.personal_assistant_email else f"mj+{user.email_token}@sautai.com"
             auth_email_body_raw = (
-                f"<p>To continue your conversation with MJ, your SautAI assistant via email, please authenticate your session by clicking the link below:</p>"
+                f"<p>To continue your conversation with MJ, your sautai assistant via email, please authenticate your session by clicking the link below:</p>"
                 f"<p><a href=\"{auth_link}\" style=\"color: #4CAF50; text-decoration: underline; font-weight: bold;\">Authenticate My Email Session</a></p>"
                 f"<p>This link is valid for {settings.EMAIL_ASSISTANT_AUTH_TOKEN_EXPIRY_MINUTES if hasattr(settings, 'EMAIL_ASSISTANT_AUTH_TOKEN_EXPIRY_MINUTES') else 15} minutes.</p>"
                 f"<p>If you did not request this, please ignore this email.</p>"
@@ -440,7 +440,7 @@ def process_email(request):
                 requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
                 # Continue with partially translated content
 
-            auth_subject = "Activate Your SautAI Email Assistant Session"
+            auth_subject = "Activate Your sautai Email Assistant Session"
 
             # Check if user has unsubscribed from emails
             unsubscribe = getattr(user, 'unsubscribed_from_emails', False)
@@ -602,7 +602,7 @@ def enhanced_process_aggregated_emails_task(session_identifier_str, use_enhanced
                 message_content = str(response)
             
             # Apply basic formatting
-            email_body_main = f"<h2>Response from your SautAI Assistant</h2>"
+            email_body_main = f"<h2>Response from your sautai Assistant</h2>"
             email_body_data = f"<div class='assistant-response'>{message_content}</div>"
             email_body_final = f"<p>Need more help? Just reply to this email!</p>"
             css_classes = ['original-formatting']
@@ -640,7 +640,7 @@ def enhanced_process_aggregated_emails_task(session_identifier_str, use_enhanced
                     'reply_content': email_html_content,
                     'recipient_email': session.recipient_email,
                     'from_email': getattr(session.user, 'personal_assistant_email', f"mj+{session.user.email_token}@sautai.com"),
-                    'original_subject': "Re: " + session.original_subject if session.original_subject else "Response from your SautAI Assistant",
+                    'original_subject': "Re: " + session.original_subject if session.original_subject else "Response from your sautai Assistant",
                     'in_reply_to_header': session.in_reply_to_header,
                     'email_thread_id': session.email_thread_id,
                     'enhanced_formatting': use_enhanced_formatting  # Include this for tracking

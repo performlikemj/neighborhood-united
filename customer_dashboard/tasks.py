@@ -635,7 +635,7 @@ def process_aggregated_emails(self, session_identifier_str, use_enhanced_formatt
                 r'In-Reply-To:\s*[^\n\r]+',
                 r'References:\s*[^\n\r]+',
                 r'Return-Path:\s*[^\n\r]+',
-                r'Message from your sautAI assistant[^\n\r]*',
+                r'Message from your sautai assistant[^\n\r]*',
                 r'Your latest meal plan[^\n\r]*',
                 r'-IMAGE REMOVED-[^\n\r]*'
             ]
@@ -791,7 +791,7 @@ def process_aggregated_emails(self, session_identifier_str, use_enhanced_formatt
                     message_content = str(response)
                 
                 # Apply basic formatting to match the three-section structure
-                email_body_main = f"<h2>📧 Response from your SautAI Assistant</h2><p>Here's the response to your message:</p>"
+                email_body_main = f"<h2>📧 Response from your sautai Assistant</h2><p>Here's the response to your message:</p>"
                 
                 # Format the message content with basic HTML
                 formatted_content = message_content.replace('\n\n', '</p><p>').replace('\n', '<br>')
@@ -799,7 +799,7 @@ def process_aggregated_emails(self, session_identifier_str, use_enhanced_formatt
                     formatted_content = f'<p>{formatted_content}</p>'
                 
                 email_body_data = f"<div class='assistant-response'>{formatted_content}</div>"
-                email_body_final = f"<p>Need more help? Just reply to this email or visit your <a href='{os.getenv('STREAMLIT_URL')}/meal-plans'>SautAI dashboard</a>!</p>"
+                email_body_final = f"<p>Need more help? Just reply to this email or visit your <a href='{os.getenv('STREAMLIT_URL')}/meal-plans'>sautai dashboard</a>!</p>"
                 css_classes = ['original-formatting']
                 
                 processing_metadata = {
@@ -857,9 +857,9 @@ def process_aggregated_emails(self, session_identifier_str, use_enhanced_formatt
             email_html_content = f"""
             <html>
             <body>
-                <h2>Response from your SautAI Assistant</h2>
+                <h2>Response from your sautai Assistant</h2>
                 {email_body_data}
-                <p>Best regards,<br>Your SautAI Team</p>
+                <p>Best regards,<br>Your sautai Team</p>
             </body>
             </html>
             """
@@ -882,7 +882,7 @@ def process_aggregated_emails(self, session_identifier_str, use_enhanced_formatt
                     'reply_content': email_html_content,
                     'recipient_email': session.recipient_email,
                     'from_email': getattr(session.user, 'personal_assistant_email', f"mj+{session.user.email_token}@sautai.com"),
-                    'original_subject': "Re: " + session.original_subject if session.original_subject else "Response from your SautAI Assistant",
+                    'original_subject': "Re: " + session.original_subject if session.original_subject else "Response from your sautai Assistant",
                     'in_reply_to_header': session.in_reply_to_header,
                     'email_thread_id': session.email_thread_id,
                     # Include metadata for tracking and analytics

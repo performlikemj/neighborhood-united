@@ -32,6 +32,7 @@ from custom_auth.models import Address, CustomUser
 from django.core.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404, render
 from django.http import HttpResponseForbidden
+from django.http import HttpResponse
 from custom_auth.models import UserRole
 import json
 from django.utils import timezone
@@ -64,6 +65,7 @@ from meals.meal_plan_service import apply_modifications
 import pytz
 from django.views.decorators.csrf import csrf_exempt
 from zoneinfo import ZoneInfo
+from django.http import HttpResponseForbidden
 
 
 
@@ -247,6 +249,43 @@ def is_chef(user):
             logger.warning(f"UserRole does not exist for user {user.id}")
             return False
     return False
+
+
+def debug_payment_link_email(request):
+    """DEBUG-only: Render the meals/payment_link_email.html with sample or query data."""
+    if not settings.DEBUG:
+        return HttpResponseForbidden("Previews are only available in DEBUG mode.")
+
+    user = request.user if getattr(request.user, 'is_authenticated', False) else None
+    safe_user_name = 'there'
+    if user is not None:
+        try:
+            full_name = getattr(user, 'get_full_name', None)
+            if callable(full_name):
+                fn = full_name()
+                if fn:
+                    safe_user_name = fn
+            if safe_user_name == 'there':
+                uname = getattr(user, 'username', None)
+                if not uname and hasattr(user, 'get_username'):
+                    try:
+                        uname = user.get_username()
+                    except Exception:
+                        uname = None
+                if uname:
+                    safe_user_name = uname
+        except Exception:
+            pass
+    ctx = {
+        'user_name': safe_user_name,
+        'meal_plan_week': request.GET.get('week') or f"{timezone.now().date().strftime('%b %d')} – {(timezone.now().date()+timedelta(days=6)).strftime('%b %d')}",
+        'checkout_url': request.GET.get('checkout_url') or 'https://checkout.example.com/session/abc123',
+        'order_id': request.GET.get('order_id') or 'ORDER12345',
+        'profile_url': request.build_absolute_uri('/'),
+    }
+
+    html = render_to_string('meals/payment_link_email.html', ctx)
+    return HttpResponse(html)
 
 def is_customer(user):
     if user.is_authenticated:
@@ -1923,7 +1962,9 @@ def api_stream_meal_plan_generation(request):
                 yield f"event: error\n"
                 yield f"data: {json.dumps({'message': 'week_start_date is required (YYYY-MM-DD)'})}\n\n"
                 yield 'event: close\n\n'
-            return StreamingHttpResponse(err_stream(), content_type='text/event-stream')
+            response = StreamingHttpResponse(err_stream(), content_type='text/event-stream')
+            response['Cache-Control'] = 'no-cache, no-transform'
+            return response
         try:
             week_start_date = datetime.strptime(week_start_date_str, '%Y-%m-%d').date()
             week_end_date = week_start_date + timedelta(days=6)
@@ -1932,7 +1973,9 @@ def api_stream_meal_plan_generation(request):
                 yield f"event: error\n"
                 yield f"data: {json.dumps({'message': 'Invalid date format. Use YYYY-MM-DD'})}\n\n"
                 yield 'event: close\n\n'
-            return StreamingHttpResponse(err_stream2(), content_type='text/event-stream')
+            response = StreamingHttpResponse(err_stream2(), content_type='text/event-stream')
+            response['Cache-Control'] = 'no-cache, no-transform'
+            return response
 
         # Channel and keys
         user_id = request.user.id
@@ -1952,7 +1995,7 @@ def api_stream_meal_plan_generation(request):
                 yield f"data: {json.dumps({'pct': 100})}\n\n"
                 yield "event: done\n\n"
             response = StreamingHttpResponse(done_stream(), content_type='text/event-stream')
-            response['Cache-Control'] = 'no-cache'
+            response['Cache-Control'] = 'no-cache, no-transform'
             response['X-Accel-Buffering'] = 'no'
             return response
 
@@ -1963,7 +2006,9 @@ def api_stream_meal_plan_generation(request):
                 yield f"event: error\n"
                 yield f"data: {json.dumps({'message': 'Redis unavailable for SSE'})}\n\n"
                 yield 'event: close\n\n'
-            return StreamingHttpResponse(err_stream3(), content_type='text/event-stream')
+            response = StreamingHttpResponse(err_stream3(), content_type='text/event-stream')
+            response['Cache-Control'] = 'no-cache, no-transform'
+            return response
         pubsub = conn.pubsub()
         pubsub.subscribe(channel)
 
@@ -2043,7 +2088,7 @@ def api_stream_meal_plan_generation(request):
             yield 'event: close\n\n'
 
         response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
-        response['Cache-Control'] = 'no-cache'
+        response['Cache-Control'] = 'no-cache, no-transform'
         response['X-Accel-Buffering'] = 'no'
         return response
 
@@ -2055,7 +2100,7 @@ def api_stream_meal_plan_generation(request):
             yield 'event: done\n\n'
             yield 'event: close\n\n'
         response = StreamingHttpResponse(err_stream4(), content_type='text/event-stream')
-        response['Cache-Control'] = 'no-cache'
+        response['Cache-Control'] = 'no-cache, no-transform'
         response['X-Accel-Buffering'] = 'no'
         return response
 

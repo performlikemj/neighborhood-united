@@ -1,0 +1,49 @@
+{% load i18n %}
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>{% trans "Assistant Email Previews" %}</title>
+  <style>
+    body{font-family:Arial,sans-serif;padding:24px;color:#1f2937}
+    a{color:#2563eb;text-decoration:none}
+    h1{margin:0 0 16px;color:#15803d}
+    ul{line-height:1.9}
+    .hint{color:#6b7280;font-size:14px}
+    code{background:#f3f4f6;padding:2px 4px;border-radius:4px}
+  </style>
+ </head>
+<body>
+  <h1>{% trans "Assistant Email Previews" %}</h1>
+  <p class="hint">{% trans "These routes render assistant-driven emails using the same base template. Only available in DEBUG." %}</p>
+  <ul>
+    <li>
+      <a href="{% url 'customer_dashboard:preview_assistant_email' %}?key=meal_plan_approval{% if default_meal_plan_id %}&meal_plan_id={{ default_meal_plan_id }}{% endif %}">
+        {% trans "Meal Plan Approval" %}
+      </a>
+    </li>
+    <li>
+      <a href="{% url 'customer_dashboard:preview_assistant_email' %}?key=shopping_list{% if default_meal_plan_id %}&meal_plan_id={{ default_meal_plan_id }}{% endif %}">
+        {% trans "Shopping List" %}
+      </a>
+    </li>
+    <li>
+      <a href="{% url 'customer_dashboard:preview_assistant_email' %}?key=emergency_supply">{% trans "Emergency Supply" %}</a>
+    </li>
+    <li>
+      <a href="{% url 'customer_dashboard:preview_assistant_email' %}?key=system_update">{% trans "System Update" %}</a>
+    </li>
+    <li>
+      <a href="{% url 'customer_dashboard:preview_assistant_email' %}?key=payment_confirmation">{% trans "Payment Confirmation" %}</a>
+    </li>
+    <li>
+      <a href="{% url 'customer_dashboard:preview_assistant_email' %}?key=refund_notification">{% trans "Refund Notification" %}</a>
+    </li>
+    <li>
+      <a href="{% url 'customer_dashboard:preview_assistant_email' %}?key=order_cancellation">{% trans "Order Cancellation" %}</a>
+    </li>
+  </ul>
+  <p class="hint">{% trans "Tip: add query params like" %} <code>?user_id=1&amp;meal_plan_id=123</code> {% trans "to drive real data." %}</p>
+</body>
+</html>
+

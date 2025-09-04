@@ -77,7 +77,7 @@ app.conf.beat_schedule = {
     },
     # Heartbeat every minute to confirm Beat is running
     'celery-beat-heartbeat': {
-        'task': 'shared.tasks.celery_beat_heartbeat',
+        'task': 'meals.tasks.celery_beat_heartbeat',
         'schedule': crontab(),  # every minute
     },
 }

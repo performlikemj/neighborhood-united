@@ -5,7 +5,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta name="color-scheme" content="light only" />
-<title>{% blocktrans %}Message from your sautAI assistant{% endblocktrans %}</title>
+<title>{% blocktrans %}Message from your sautai assistant{% endblocktrans %}</title>
 
 <!-- 📧  Inline‑safe CSS  -->
 <style>
@@ -19,11 +19,11 @@ p{font-size:16px;line-height:1.6;margin:0 0 12px;color:#374151;}
 .email-body{padding:24px 28px;line-height:1.6;font-size:16px;}
 .email-body ul{margin:8px 0 16px;padding-left:20px;list-style-type:disc;}
 .email-body li{margin:0 0 6px;line-height:1.5;}
-.button{display:inline-block;background:#16a34a;color:#fff;padding:12px 28px;border-radius:6px;text-decoration:none;font-weight:600;font-size:16px;white-space:nowrap;border:1px solid #15803d;}
+.button{display:inline-block;padding:12px 24px;background-color:#5cb85c;color:#ffffff;text-decoration:none;border-radius:8px;margin:8px 4px;font-weight:600;border:1px solid #4A8B3A;}
 .footer{color:#6b7280;font-size:12px;text-align:center;margin:0;padding:18px;line-height:1.5;background:#fafafa;border-top:1px solid #f1f5f9;}
-.table-slim{border-collapse:collapse;border:1px solid #e5e7eb;border-radius:6px;display:block;overflow-x:auto;width:100%;}
-.table-slim th{background:#f8fafc;color:#0f172a;text-align:left;font-weight:600;font-size:13px;padding:8px;border-bottom:1px solid #e5e7eb;white-space:nowrap;}
-.table-slim td{padding:12px 12px;font-size:15px;line-height:1.55;border-bottom:1px solid #eef2f7;vertical-align:top;white-space:nowrap;}
+.table-slim{border-collapse:collapse;border:1px solid #e5e7eb;border-radius:6px;width:100%;display:table;table-layout:fixed;}
+.table-slim th{background:#f8fafc;color:#0f172a;text-align:left;font-weight:600;font-size:13px;padding:8px;border-bottom:1px solid #e5e7eb;white-space:nowrap;word-break:normal;overflow-wrap:normal;}
+.table-slim td{padding:12px 12px;font-size:15px;line-height:1.55;border-bottom:1px solid #eef2f7;vertical-align:top;white-space:nowrap;word-break:normal;overflow-wrap:normal;}
 .table-slim td.qty{text-align:right;font-weight:600;color:#111827;}
 .logo img{max-width:180px;height:auto;}
 .card{background:#ffffff;border:1px solid #eef2f7;border-radius:8px;padding:16px;margin:12px 0;}
@@ -53,6 +53,29 @@ p{font-size:16px;line-height:1.6;margin:0 0 12px;color:#374151;}
     padding: 8px;
     background: #f8f9fa;
     border-radius: 4px;
+}
+
+/* Emergency supply: tighten and left-align lists (tips, etc.) */
+.intent-emergency_supply .email-body-main h3 {
+    text-align: left !important;
+    margin-top: 16px;
+    margin-bottom: 8px;
+}
+.intent-emergency_supply .email-body-main ul {
+    text-align: left !important;
+    margin: 8px 0 12px;
+    padding-left: 18px; /* fallback bullets for clients without ::before */
+    list-style: disc;
+}
+.intent-emergency_supply .email-body-main li {
+    margin: 6px 0;
+}
+.intent-emergency_supply .email-body-main li::marker {
+    color: #15803d;
+    font-weight: 700;
+}
+.intent-emergency_supply .email-body-main li p {
+    margin: 0; /* remove extra gaps when LLM wraps items in <p> */
 }
 
 /* Tool-specific styling */
@@ -93,24 +116,9 @@ p{font-size:16px;line-height:1.6;margin:0 0 12px;color:#374151;}
     color: #721c24;
 }
 
-/* Button styling */
-.button {
-    display: inline-block;
-    padding: 12px 24px;
-    background-color: #007bff;
-    color: white;
-    text-decoration: none;
-    border-radius: 4px;
-    margin: 8px 4px;
-}
-
-.button.secondary {
-    background-color: #6c757d;
-}
-
-.button:hover {
-    opacity: 0.9;
-}
+/* Button styling (standardized for SautAI branding) */
+.button.secondary{background-color:#F8FAF7;color:#4A8B3A;border:1px solid #4A8B3A;}
+.button:hover{opacity:0.95;}
 
 /* Mobile responsiveness */
 @media (max-width: 600px) {
@@ -145,7 +153,7 @@ p{font-size:16px;line-height:1.6;margin:0 0 12px;color:#374151;}
 
   <!-- Logo -->
   <div class="logo">
-    <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI" role="presentation" />
+    <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautai" role="presentation" />
   </div>
 
   <!-- Greeting -->
@@ -157,7 +165,7 @@ p{font-size:16px;line-height:1.6;margin:0 0 12px;color:#374151;}
       <div style="background:#f0f8ff;border-left:4px solid #4CAF50;border-radius:8px;margin:24px 0;padding:20px 16px;">
         <h3 style="margin:0 0 8px;font-family:Arial,sans-serif;color:#2196F3;font-size:18px;">🤖 {% trans "Contact Your AI Assistant" %}</h3>
         <p style="margin:0 0 12px;">{% trans "Need something personalised?  Just reply or e‑mail:" %}</p>
-        <a href="mailto:{{ personal_assistant_email }}" class="button" style="background:#4CAF50;">📧 {% trans "Your sautAI Assistant" %}</a>
+        <a href="mailto:{{ personal_assistant_email }}" class="button">📧 {% trans "Your sautai Assistant" %}</a>
       </div>
     {% endif %}
 
@@ -182,14 +190,14 @@ p{font-size:16px;line-height:1.6;margin:0 0 12px;color:#374151;}
     <!-- Dashboard CTA (optional) -->
     {% if profile_url %}
       <p style="text-align:center;margin:28px 0;">
-        <a href="{{ profile_url }}" class="button">{% trans "Open Your sautAI Dashboard" %}</a>
+        <a href="{{ profile_url }}" class="button">{% trans "Open Your sautai Dashboard" %}</a>
       </p>
     {% endif %}
   </div><!-- /email‑body -->
 
   <!-- Footer -->
   <div class="footer">
-    <p><strong>{% trans "Disclaimer:" %}</strong> {% trans "SautAI uses generative AI. Please double‑check critical information." %}</p>
+    <p><strong>{% trans "Disclaimer:" %}</strong> {% trans "sautai uses generative AI. Please double‑check critical information." %}</p>
     <p><a href="{{ profile_url }}">{% trans "Authenticate and navigate to your profile to unsubscribe or update e‑mail preferences" %}</a></p>
   </div>
 

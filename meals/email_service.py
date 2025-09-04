@@ -761,6 +761,32 @@ def generate_shopping_list(meal_plan_id):
 
         subject = f"Your Shopping List for {meal_plan.week_start_date.strftime('%b %d')} - {meal_plan.week_end_date.strftime('%b %d')}"
 
+        # Generate Instacart link for US/CA users and include in context
+        instacart_url = None
+        try:
+            user_country_code = None
+            try:
+                if hasattr(user, 'address') and user.address and getattr(user.address, 'country', None):
+                    # Some Address.country are stored as codes, some as Country object with .code – handle both
+                    country_attr = user.address.country
+                    user_country_code = getattr(country_attr, 'code', None) or str(country_attr)
+                    user_country_code = str(user_country_code).upper() if user_country_code else None
+            except Exception:
+                user_country_code = None
+
+            if user_country_code in ("US", "CA"):
+                postal_code = None
+                try:
+                    postal_code = getattr(user.address, 'input_postalcode', None) or getattr(user.address, 'postalcode', None)
+                except Exception:
+                    postal_code = None
+                from meals.instacart_service import generate_instacart_link as _generate_instacart_link
+                gen_result = _generate_instacart_link(user.id, meal_plan.id, postal_code)
+                if gen_result and gen_result.get('status') == 'success' and gen_result.get('instacart_url'):
+                    instacart_url = gen_result.get('instacart_url')
+        except Exception as _insta_err:
+            logger.warning(f"Instacart link generation skipped or failed for user {user.id}: {_insta_err}")
+
         result = MealPlanningAssistant.send_notification_via_assistant(
             user_id=user.id,
             message_content=message_content,
@@ -772,6 +798,7 @@ def generate_shopping_list(meal_plan_id):
                 'week_start': meal_plan.week_start_date.strftime('%B %d, %Y'),
                 'week_end': meal_plan.week_end_date.strftime('%B %d, %Y'),
                 'shopping_tables': shopping_tables,
+                'instacart_url': instacart_url,
             }
         )
 
@@ -1189,15 +1216,54 @@ def generate_emergency_supply_list(user_id):
         )
 
         gpt_output_str = response.output_text
-        
+
+        # Always validate with Pydantic schema. On failure: send error email and emit N8N traceback.
+        emergency_list: list = []
+        notes: str = ""
         try:
-            emergency_supply_data = json.loads(gpt_output_str)
-            emergency_list = emergency_supply_data.get("emergency_list", [])
-            notes = emergency_supply_data.get("notes", "")
-        except json.JSONDecodeError:
-            logger.warning("EMAIL SERVICE DEBUG: GPT output was not valid JSON; storing raw text.")
-            emergency_list = []
-            notes = f"GPT returned non-JSON output: {gpt_output_str}"
+            from meals.pydantic_models import EmergencySupplyList as _EmergencySupplyList
+            parsed = _EmergencySupplyList.model_validate_json(gpt_output_str)
+            # Convert to plain dicts for template safety
+            emergency_list = [
+                {
+                    'item_name': item.item_name,
+                    'quantity_to_buy': item.quantity_to_buy,
+                    'unit': item.unit,
+                    'notes': item.notes,
+                }
+                for item in parsed.emergency_list
+            ]
+            notes = parsed.notes or ""
+        except Exception as e_validate:
+            logger.error(f"EMAIL SERVICE DEBUG: EmergencySupplyList schema validation failed: {e_validate}")
+            # n8n traceback with raw model output for diagnostics
+            try:
+                requests.post(os.getenv('N8N_TRACEBACK_URL'), json={
+                    'error': f'Pydantic validation failed: {str(e_validate)}',
+                    'source': 'emergency_supply_list',
+                    'raw_output': gpt_output_str,
+                    'user_id': user.id,
+                })
+            except Exception:
+                pass
+
+            # Send a concise error email to the user and exit early
+            try:
+                from meals.meal_assistant_implementation import MealPlanningAssistant
+                error_message = (
+                    "We hit a snag generating your emergency supply plan just now. "
+                    "Our system has logged the error and we’ll retry shortly. If this persists, please reply to this email."
+                )
+                MealPlanningAssistant.send_notification_via_assistant(
+                    user_id=user.id,
+                    message_content=error_message,
+                    subject="Emergency Supply Plan – Temporary Error",
+                    template_key=None,
+                    template_context=None,
+                )
+            except Exception as _e_send:
+                logger.error(f"EMAIL SERVICE DEBUG: Failed to send validation error email: {_e_send}")
+            return  # Abort normal flow
 
         # Format the safe items into a simpler structure for the template
         safe_items_data = []
@@ -1269,57 +1335,19 @@ def generate_emergency_supply_list(user_id):
             if notes:
                 message_content += f"ADDITIONAL NOTES:\n{notes}\n\n"
             
-            # Get regular shopping list items if available
+            # Log the number of emergency items gathered for template rendering
             try:
-                from meals.models import MealPlan, ShoppingList as ShoppingListModel # Alias to avoid conflict
-                from collections import defaultdict # Ensure defaultdict is imported
-                recent_meal_plan = MealPlan.objects.filter(
-                    user=user,
-                    # is_active=True # Consider if you only want active meal plans
-                ).order_by('-created_date').first()
-                
-                if recent_meal_plan:
-                    shopping_list_obj = ShoppingListModel.objects.filter(meal_plan=recent_meal_plan).first()
-                    if shopping_list_obj and shopping_list_obj.items:
-                        try:
-                            shopping_data = json.loads(shopping_list_obj.items)
-                            shopping_items = shopping_data.get('items', [])
-                            if shopping_items:
-                                by_category = defaultdict(list)
-                                for item_sl in shopping_items:
-                                    category = item_sl.get('category', 'Miscellaneous')
-                                    by_category[category].append(item_sl)
-                                
-                                message_content += "\nREGULAR SHOPPING LIST (from your latest meal plan):\n"
-                                for category, cat_items in by_category.items():
-                                    message_content += f"\n{category.upper()}:\n"
-                                    for item_detail in cat_items:
-                                        ingredient = item_detail.get('ingredient', 'Unknown item')
-                                        quantity = item_detail.get('quantity', '')
-                                        unit = item_detail.get('unit', '')
-                                        item_notes = item_detail.get('notes', '')
-                                        
-                                        message_content += f"- {ingredient}: {quantity} {unit}"
-                                        if item_notes:
-                                            message_content += f" (Note: {item_notes})"
-                                        message_content += "\n"
-                                message_content += "\n"
-                        except json.JSONDecodeError:
-                            logger.warning(f"EMAIL SERVICE DEBUG: Could not parse regular shopping list for user {user.id}: invalid JSON")
-                        except Exception as e_sl_parse:
-                            logger.warning(f"EMAIL SERVICE DEBUG: Error processing regular shopping list for user {user.id}: {e_sl_parse}")
-            except Exception as e_sl_fetch:
-                logger.warning(f"EMAIL SERVICE DEBUG: Error retrieving regular shopping list data for user {user.id}: {e_sl_fetch}")
-            
-            # Add emergency preparedness tips
+                logger.info(f"EMAIL SERVICE DEBUG: Emergency list items count: {len(emergency_list) if isinstance(emergency_list, list) else 0}")
+            except Exception:
+                pass
+
+            # Add emergency preparedness tips and explicit constraints
             message_content += (
-                "Please craft a helpful email about emergency food preparedness that includes the list of items the user "
-                "should purchase. Explain why having these emergency supplies is important and include practical tips for "
-                "storage and rotation. Make sure to acknowledge any allergies and explain how the recommended items account "
-                "for those restrictions. The tone should be informative and supportive, not alarmist."
+                "Write a concise, helpful email about emergency food preparedness that includes ONLY the emergency "
+                "supplies the user should purchase and practical storage/rotation tips. Do not include or mention any "
+                "weekly or regular shopping lists. Acknowledge allergies and explain how the recommended items account "
+                "for those restrictions. Keep the tone informative and supportive, not alarmist."
             )
-            # Ensure the AI is prompted to include BOTH lists
-            message_content += "\n\nPlease also include the REGULAR SHOPPING LIST items if they were provided above, clearly distinguishing them from the emergency supplies."
             
             subject = f"Your Emergency Supply List for {days_of_supply} Days"
             
@@ -1327,7 +1355,11 @@ def generate_emergency_supply_list(user_id):
                 user_id=user.id,
                 message_content=message_content,
                 subject=subject,
-                template_key='emergency_supply'
+                template_key='emergency_supply',
+                template_context={
+                    # Provide the flat list parsed from the schema for template rendering
+                    'emergency_list': emergency_list if isinstance(emergency_list, list) else [],
+                }
             )
             
             if result.get('status') == 'success':
@@ -1445,173 +1477,6 @@ def send_system_update_email(subject, message, user_ids=None):
         }
         requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         raise
-
-@shared_task
-@handle_task_failure
-def send_meal_plan_reminder_email():
-    """
-    Send reminders for unapproved meal plans on Monday for the current week's meal plan
-    (which was sent on Saturday night).
-    """
-    pass
-    # from meals.models import MealPlan
-    # from customer_dashboard.models import GoalTracking
-    
-    # # Get current time once
-    # current_utc_time = timezone.now()
-    # today = current_utc_time.date()
-    
-    # # Get the date range for this week's meal plan
-    # this_week_start = today - timedelta(days=today.weekday())  # Monday
-    # this_week_end = this_week_start + timedelta(days=6)  # Sunday
-    
-    # # Get meal plans that were created on Saturday (2 days ago) and are still unapproved
-    # two_days_ago = today - timedelta(days=2)
-    # pending_meal_plans = MealPlan.objects.filter(
-    #     is_approved=False,
-    #     created_date__date=two_days_ago,
-    #     week_start_date=this_week_start,
-    #     week_end_date=this_week_end,
-    #     reminder_sent=False
-    # )
-
-    # for meal_plan in pending_meal_plans:
-    #     user = meal_plan.user
-        
-    #     # Skip if user has opted out of emails
-    #     if hasattr(user, 'unsubscribed_from_emails') and user.unsubscribed_from_emails:
-    #         logger.info(f"User {user.username} has unsubscribed from emails. Skipping meal plan reminder.")
-    #         # Mark reminder as sent to avoid future attempts
-    #         meal_plan.reminder_sent = True
-    #         meal_plan.save()
-    #         continue
-            
-    #     # Skip if not user's Monday
-    #     try:
-    #         user_timezone = pytz.timezone(user.timezone)
-    #         user_time = current_utc_time.astimezone(user_timezone)
-    #     except pytz.UnknownTimeZoneError:
-    #         logger.error(f"Unknown timezone for user {user.email}: {user.timezone}")
-    #         continue
-
-    #     # Check if it's a Monday in the user's time zone
-    #     if user_time.weekday() != 0:
-    #         continue
-
-    #     try:
-    #         # Get user's goals for motivation
-    #         goals = GoalTracking.objects.get(user=user)
-    #         goal_description = goals.goal_description
-            
-    #         # Create approval links with meal prep preferences
-    #         approval_token = meal_plan.approval_token
-    #         base_approval_url = f"{os.getenv('STREAMLIT_URL')}/meal_plans"
-            
-    #         query_params_daily = urlencode({
-    #             'approval_token': approval_token,
-    #             'meal_prep_preference': 'daily'
-    #         })
-    #         query_params_bulk = urlencode({
-    #             'approval_token': approval_token,
-    #             'meal_prep_preference': 'one_day_prep'
-    #         })
-
-    #         # Get meal plan details
-    #         meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan).select_related('meal')
-    #         meals_by_day = defaultdict(list)
-    #         for mpm in meal_plan_meals:
-    #             meals_by_day[mpm.day].append({
-    #                 'name': mpm.meal.name,
-    #                 'type': mpm.meal_type
-    #             })
-            
-    #         # Mark reminder as sent
-    #         meal_plan.reminder_sent = True
-    #         meal_plan.save()
-            
-    #         logger.info(f"Monday reminder email sent to n8n for: {user.email}")
-
-    #         # Send via MealPlanningAssistant instead of n8n
-    #         try:
-    #             from meals.meal_assistant_implementation import MealPlanningAssistant
-                
-    #             # Get user's health metrics for context if available
-    #             user_health_metrics = None
-    #             try:
-    #                 from customer_dashboard.models import UserHealthMetrics
-    #                 latest_metrics = UserHealthMetrics.objects.filter(user=user).order_by('-date_recorded').first()
-    #                 if latest_metrics:
-    #                     user_health_metrics = {
-    #                         'weight': latest_metrics.weight,
-    #                         'bmi': latest_metrics.bmi,
-    #                         'mood': latest_metrics.mood,
-    #                         'energy_level': latest_metrics.energy_level,
-    #                     }
-    #             except Exception as e:
-    #                 logger.error(f"Error retrieving health metrics: {e}")
-                
-    #             # Build comprehensive message with context
-    #             message_content = (
-    #                 f"I need to send a meal plan reminder to {user.username} for their meal plan from {this_week_start.strftime('%B %d')} "
-    #                 f"to {this_week_end.strftime('%B %d')}. This is a Monday reminder for a meal plan that was created on Saturday but hasn't "
-    #                 f"been approved yet. Here's all the context:\n\n"
-                    
-    #                 f"USER GOALS:\n{goal_description}\n\n"
-                    
-    #                 f"MEAL PLAN DETAILS:\n"
-    #                 f"- Week: {this_week_start.strftime('%B %d, %Y')} to {this_week_end.strftime('%B %d, %Y')}\n"
-    #                 f"- Current day in user's timezone: {user_time.strftime('%A, %B %d')}\n"
-    #                 f"- Approval links:\n"
-    #                 f"  • Daily prep option: {f'{base_approval_url}?{query_params_daily}'}\n"
-    #                 f"  • One-day bulk prep option: {f'{base_approval_url}?{query_params_bulk}'}\n\n"
-    #             )
-                
-    #             # Add meals by day
-    #             message_content += "MEALS IN THIS PLAN:\n"
-    #             for day, meals in meals_by_day.items():
-    #                 message_content += f"\n{day}:\n"
-    #                 for meal in meals:
-    #                     message_content += f"- {meal['type']}: {meal['name']}\n"
-                
-    #             # Add health metrics if available
-    #             if user_health_metrics:
-    #                 message_content += "\nUSER HEALTH METRICS:\n"
-    #                 for metric, value in user_health_metrics.items():
-    #                     if value is not None:
-    #                         message_content += f"- {metric}: {value}\n"
-                
-    #             # Add instructions for the assistant
-    #             message_content += (
-    #                 f"\nPlease craft a motivational Monday reminder email encouraging the user to approve their meal plan for the week. "
-    #                 f"Mention how approving the plan aligns with their health goals. Emphasize that they need to take action today "
-    #                 f"to properly prepare for the week ahead. Include both meal prep options (daily vs. bulk) and explain the benefits "
-    #                 f"of each approach. The tone should be motivational and supportive, not pushy."
-    #             )
-                
-    #             # Send via assistant
-    #             subject = "Start Your Week Right - Your Meal Plan is Waiting!"
-                
-    #             result = MealPlanningAssistant.send_notification_via_assistant(
-    #                 user_id=user.id,
-    #                 message_content=message_content,
-    #                 subject=subject
-    #             )
-                
-    #             if result.get('status') == 'success':
-    #                 # Mark reminder as sent
-    #                 meal_plan.reminder_sent = True
-    #                 meal_plan.save()
-    #                 logger.info(f"Meal plan reminder sent via assistant for: {user.email}")
-    #             else:
-    #                 logger.error(f"Error sending meal plan reminder via assistant for: {user.email}, error: {str(result)}")
-                    
-    #         except Exception as e:
-    #             logger.error(f"Error sending meal plan reminder via assistant for: {user.email}, error: {str(e)}")
-    #             traceback.print_exc()
-
-    #     except Exception as e:
-    #         logger.error(f"Error sending reminder email for user {user.email}: {e}")
-    #         traceback.print_exc()
 
 # TODO: Set up configuration in n8n
 @shared_task

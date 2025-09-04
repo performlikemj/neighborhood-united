@@ -57,6 +57,8 @@ import logging
 import threading
 from django.views import View
 from django.http import JsonResponse, StreamingHttpResponse
+from django.http import HttpResponseForbidden
+from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from meals.meal_assistant_implementation import (
@@ -70,6 +72,7 @@ from asgiref.sync import async_to_sync
 from meals.guest_tool_registration import get_guest_tool_registry
 from meals.tool_registration import get_all_tools, handle_tool_call
 from meals.enhanced_email_processor import process_email_with_enhanced_formatting
+from customer_dashboard.template_router import render_email_sections
 
 class GuestChatThrottle(UserRateThrottle):
     rate = '100/day'  
@@ -1140,7 +1143,9 @@ def stream_message(request):
             
         # close the SSE stream
         yield 'event: close\n\n'
-    return StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+    response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+    response['Cache-Control'] = 'no-cache, no-transform'
+    return response
 
 
 @csrf_exempt
@@ -1245,6 +1250,7 @@ def guest_stream_message(request):
         yield 'event: close\n\n'
 
     response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+    response['Cache-Control'] = 'no-cache, no-transform'
     response["X-Guest-ID"] = guest_id
     return response
 
@@ -1790,6 +1796,7 @@ def onboarding_stream_message(request):
             yield 'event: close\n\n'
 
         response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+        response['Cache-Control'] = 'no-cache, no-transform'
         response["X-Guest-ID"] = guest_id
         return response
         
@@ -2081,6 +2088,315 @@ def get_response_id_from_thread(thread):
     
     return None
 
+def preview_assistant_email(request):
+    """DEBUG-only: Render assistant email templates locally without sending emails.
+    Query params:
+      - key: template_key (e.g., meal_plan_approval, shopping_list, emergency_supply, system_update,
+             payment_confirmation, refund_notification, order_cancellation)
+      - user_id: optional; defaults to current user
+      - meal_plan_id: for meal_plan_approval/shopping_list to use real data
+      - order_id: for payment/refund/cancellation contexts
+    """
+    if not settings.DEBUG:
+        return HttpResponseForbidden("Previews are only available in DEBUG mode.")
+
+    template_key = request.GET.get('key') or request.GET.get('template_key') or 'meal_plan_approval'
+
+    # Resolve user (optional)
+    user = None
+    try:
+        user_id_param = request.GET.get('user_id')
+        if user_id_param:
+            user = CustomUser.objects.get(id=int(user_id_param))
+        elif getattr(request.user, 'is_authenticated', False):
+            user = request.user
+    except Exception:
+        user = None
+
+    # Compute safe display name
+    safe_user_name = 'there'
+    if user is not None:
+        try:
+            full_name = getattr(user, 'get_full_name', None)
+            if callable(full_name):
+                fn = full_name()
+                if fn:
+                    safe_user_name = fn
+            if safe_user_name == 'there':
+                uname = getattr(user, 'username', None)
+                if not uname and hasattr(user, 'get_username'):
+                    try:
+                        uname = user.get_username()
+                    except Exception:
+                        uname = None
+                if uname:
+                    safe_user_name = uname
+        except Exception:
+            pass
+
+    # Base section HTML if the template-specific context doesn't fully populate sections
+    section_html = {
+        'main': '<p>Sample main content</p>',
+        'data': '<p>No structured data provided.</p>',
+        'final': '<p>Thanks for using sautai.</p>',
+    }
+
+    extra_ctx = {}
+
+    # Build context by template_key
+    if template_key == 'meal_plan_approval':
+        # Try to use a real MealPlan if provided
+        meals_by_day = {}
+        plan_rows = []
+        week_start = None
+        week_end = None
+        try:
+            meal_plan_id = request.GET.get('meal_plan_id')
+            if meal_plan_id:
+                if user is not None:
+                    meal_plan = MealPlan.objects.get(id=int(meal_plan_id), user=user)
+                else:
+                    meal_plan = MealPlan.objects.get(id=int(meal_plan_id))
+                week_start = meal_plan.week_start_date.strftime('%B %d, %Y')
+                week_end = meal_plan.week_end_date.strftime('%B %d, %Y')
+                mpm_qs = MealPlanMeal.objects.filter(meal_plan=meal_plan).select_related('meal')
+                day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+                plan_grid = {d: {'Breakfast': '', 'Lunch': '', 'Dinner': ''} for d in day_order}
+                for mpm in mpm_qs:
+                    meals_by_day.setdefault(mpm.day, []).append({'meal_name': mpm.meal.name, 'meal_type': mpm.meal_type})
+                    if mpm.meal_type in plan_grid.get(mpm.day, {}):
+                        plan_grid[mpm.day][mpm.meal_type] = mpm.meal.name
+                for d in day_order:
+                    row = plan_grid.get(d, {'Breakfast': '', 'Lunch': '', 'Dinner': ''})
+                    plan_rows.append({'day': d, 'breakfast': row.get('Breakfast', ''), 'lunch': row.get('Lunch', ''), 'dinner': row.get('Dinner', '')})
+        except Exception:
+            # Fallback sample
+            week_start = timezone.now().date().strftime('%B %d, %Y')
+            week_end = (timezone.now().date() + timedelta(days=6)).strftime('%B %d, %Y')
+            meals_by_day = {
+                'Monday': [{'meal_name': 'Oatmeal', 'meal_type': 'Breakfast'}, {'meal_name': 'Chicken Salad', 'meal_type': 'Lunch'}, {'meal_name': 'Salmon & Veg', 'meal_type': 'Dinner'}]
+            }
+            plan_rows = [
+                {'day': 'Monday', 'breakfast': 'Oatmeal', 'lunch': 'Chicken Salad', 'dinner': 'Salmon & Veg'}
+            ]
+
+        extra_ctx.update({
+            'approval_link_daily': request.GET.get('approval_link_daily') or 'https://example.com/approve?pref=daily',
+            'approval_link_one_day': request.GET.get('approval_link_one_day') or 'https://example.com/approve?pref=one_day_prep',
+            'meals_by_day': meals_by_day,
+            'plan_rows': plan_rows,
+            'week_start': week_start,
+            'week_end': week_end,
+            'key_highlights': [
+                'Balanced plan for the week',
+                'Allergy-aware selections',
+                'Includes toddler-safe portions'
+            ],
+            'main_text': '<p>Your meal plan is ready for review and approval.</p>'
+        })
+
+    elif template_key == 'shopping_list':
+        # Provide a sample categorized shopping table
+        sample_tables = [
+            {
+                'category': 'Produce',
+                'items': [
+                    {'ingredient': 'Spinach', 'quantity': '2', 'unit': 'bunches', 'notes': ''},
+                    {'ingredient': 'Bananas', 'quantity': '6', 'unit': 'pieces', 'notes': ''},
+                    {'ingredient': 'Cherry Tomatoes', 'quantity': '1', 'unit': 'pint', 'notes': ''},
+                ],
+            },
+            {
+                'category': 'Dairy',
+                'items': [
+                    {'ingredient': 'Greek Yogurt', 'quantity': '32', 'unit': 'oz', 'notes': ''},
+                    {'ingredient': 'Cheddar Cheese', 'quantity': '8', 'unit': 'oz', 'notes': ''},
+                ],
+            },
+            {
+                'category': 'Meat',
+                'items': [
+                    {'ingredient': 'Chicken Breast', 'quantity': '2', 'unit': 'lb', 'notes': ''},
+                    {'ingredient': 'Ground Turkey', 'quantity': '1', 'unit': 'lb', 'notes': ''},
+                ],
+            },
+            {
+                'category': 'Grains',
+                'items': [
+                    {'ingredient': 'Brown Rice', 'quantity': '2', 'unit': 'lb', 'notes': ''},
+                    {'ingredient': 'Whole Wheat Bread', 'quantity': '1', 'unit': 'loaf', 'notes': ''},
+                ],
+            },
+            {
+                'category': 'Frozen',
+                'items': [
+                    {'ingredient': 'Mixed Vegetables', 'quantity': '16', 'unit': 'oz', 'notes': ''},
+                    {'ingredient': 'Berries', 'quantity': '12', 'unit': 'oz', 'notes': ''},
+                ],
+            },
+            {
+                'category': 'Condiments',
+                'items': [
+                    {'ingredient': 'Olive Oil', 'quantity': '16', 'unit': 'oz', 'notes': ''},
+                    {'ingredient': 'Balsamic Vinegar', 'quantity': '8', 'unit': 'oz', 'notes': ''},
+                ],
+            },
+            {
+                'category': 'Snacks',
+                'items': [
+                    {'ingredient': 'Almonds', 'quantity': '12', 'unit': 'oz', 'notes': ''},
+                    {'ingredient': 'Whole Grain Crackers', 'quantity': '1', 'unit': 'box', 'notes': ''},
+                ],
+            },
+            {
+                'category': 'Beverages',
+                'items': [
+                    {'ingredient': 'Sparkling Water', 'quantity': '12', 'unit': 'cans', 'notes': ''},
+                ],
+            },
+            {
+                'category': 'Bakery',
+                'items': [
+                    {'ingredient': 'Whole Wheat Tortillas', 'quantity': '10', 'unit': 'pieces', 'notes': ''},
+                ],
+            },
+            {
+                'category': 'Miscellaneous',
+                'items': [
+                    {'ingredient': 'Sea Salt', 'quantity': '1', 'unit': 'jar', 'notes': ''},
+                    {'ingredient': 'Black Pepper', 'quantity': '1', 'unit': 'jar', 'notes': ''},
+                ],
+            },
+        ]
+
+        extra_ctx.update({
+            'has_categories': True,
+            'household_member_count': (getattr(user, 'household_member_count', None) or 2) if user is not None else 2,
+            'week_start': (timezone.now().date()).strftime('%B %d, %Y'),
+            'week_end': (timezone.now().date() + timedelta(days=6)).strftime('%B %d, %Y'),
+            'shopping_tables': sample_tables,
+        })
+
+    elif template_key == 'daily_prep_instructions':
+        # Sample based on a typical daily prep structure
+        extra_ctx.update({
+            'sections_by_day': {
+                'Monday': [
+                    {'meal_type': 'Dinner', 'description': 'Thaw <strong>chicken breast</strong> in the refrigerator.'},
+                    {'meal_type': 'Lunch', 'description': 'Cook <strong>brown rice</strong> (2 cups dry) for the week and refrigerate.'},
+                    {'meal_type': 'Lunch', 'description': 'Wash and chop <strong>spinach</strong> and <strong>cherry tomatoes</strong>.'}
+                ],
+                'Tuesday': [
+                    {'meal_type': 'Dinner', 'description': 'Marinate chicken with <em>olive oil</em>, garlic, and herbs (20 min).'},
+                    {'meal_type': 'Dinner', 'description': 'Roast <strong>mixed vegetables</strong> at 400°F (200°C) for 20–25 min.'}
+                ],
+                'Wednesday': [
+                    {'meal_type': 'Breakfast', 'description': 'Prepare <strong>Greek yogurt</strong> parfait jars with berries and almonds (3 jars).'}
+                ],
+                'Thursday': [
+                    {'meal_type': 'Dinner', 'description': 'Cook <strong>ground turkey</strong> and season to taste; store for tacos/wraps.'}
+                ],
+                'Friday': [
+                    {'meal_type': 'Lunch', 'description': 'Top‑up rice if needed (1 cup dry).'},
+                    {'meal_type': 'Dinner', 'description': 'Make <strong>balsamic vinaigrette</strong> (olive oil + vinegar).'} 
+                ],
+            }
+        })
+
+    elif template_key == 'bulk_prep_instructions':
+        # Sample grouped prep in batches
+        extra_ctx.update({
+            'batch_sections': {
+                'Proteins': [
+                    'Grill chicken breasts: season with salt, pepper, olive oil. Grill 6–7 min/side.',
+                    'Brown ground turkey in skillet; drain and season. Portion into 3 containers.'
+                ],
+                'Carbs': [
+                    'Cook brown rice in rice cooker (2:1 water:rice). Fluff and cool.',
+                    'Warm whole wheat tortillas in a dry pan, stack, and wrap in foil.'
+                ],
+                'Veggies': [
+                    'Roast mixed vegetables (broccoli, carrots, peppers) at 400°F for 20–25 minutes.',
+                    'Rinse and portion salad greens; store with paper towel to keep crisp.'
+                ]
+            }
+        })
+
+    elif template_key == 'emergency_supply':
+        # Sample derived from EmergencySupplyItem schema
+        extra_ctx.update({
+            'supplies_by_category': [
+                {
+                    'category': 'Water & Beverages',
+                    'items': [
+                        {'ingredient': 'Bottled Water', 'quantity': '10', 'unit': 'liters', 'notes': 'At least 1 gal/person/day'},
+                        {'ingredient': 'Electrolyte Drink', 'quantity': '6', 'unit': 'bottles', 'notes': ''},
+                    ]
+                },
+                {
+                    'category': 'Canned & Dry Goods',
+                    'items': [
+                        {'ingredient': 'Canned Beans', 'quantity': '8', 'unit': 'cans', 'notes': 'Easy‑open lids preferred'},
+                        {'ingredient': 'Peanut Butter', 'quantity': '1', 'unit': 'jar', 'notes': 'If nut‑free household, swap for seed butter'},
+                        {'ingredient': 'Rice', 'quantity': '5', 'unit': 'lb', 'notes': ''},
+                    ]
+                },
+                {
+                    'category': 'Medical & Misc',
+                    'items': [
+                        {'ingredient': 'First Aid Kit', 'quantity': '1', 'unit': None, 'notes': 'Bandages, antiseptics, medications'},
+                        {'ingredient': 'Flashlight + Batteries', 'quantity': '2', 'unit': 'sets', 'notes': ''},
+                    ]
+                },
+            ]
+        })
+
+    elif template_key in ('emergency_supply', 'system_update', 'payment_confirmation', 'refund_notification', 'order_cancellation'):
+        # These rely mostly on main/data/final wrappers; leave defaults but allow caller to inject
+        pass
+
+    # Render the per-section wrappers
+    rendered_sections, css_classes = render_email_sections(
+        template_key=template_key,
+        section_html=section_html,
+        extra_context=extra_ctx,
+    )
+
+    # Final email shell
+    html = render_to_string(
+        'customer_dashboard/assistant_email_template.html',
+        {
+            'user_name': safe_user_name,
+            'email_body_main': rendered_sections['main'],
+            'email_body_data': rendered_sections['data'],
+            'email_body_final': rendered_sections['final'],
+            'profile_url': request.build_absolute_uri('/'),
+            'personal_assistant_email': getattr(user, 'personal_assistant_email', None) if user is not None else None,
+            'css_classes': css_classes,
+        }
+    )
+
+    return HttpResponse(html)
+
+def preview_index(request):
+    """Simple index of available assistant email previews (DEBUG-only)."""
+    if not settings.DEBUG:
+        return HttpResponseForbidden("Previews are only available in DEBUG mode.")
+
+    # Try to pick a default MealPlan for convenience when authenticated
+    default_meal_plan_id = None
+    try:
+        if getattr(request.user, 'is_authenticated', False):
+            mp = MealPlan.objects.filter(user=request.user).order_by('-created_date').first()
+            if mp:
+                default_meal_plan_id = mp.id
+    except Exception:
+        default_meal_plan_id = None
+
+    return render(request, 'customer_dashboard/preview_index.html', {
+        'default_meal_plan_id': default_meal_plan_id,
+    })
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_stream_user_summary(request):
@@ -2116,7 +2432,7 @@ def api_stream_user_summary(request):
         content_type='text/event-stream'
     )
     # Add required headers for SSE
-    response['Cache-Control'] = 'no-cache'
+    response['Cache-Control'] = 'no-cache, no-transform'
     response['X-Accel-Buffering'] = 'no'  # For Nginx
     
     return response

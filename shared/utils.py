@@ -330,7 +330,7 @@ def find_nearby_supermarkets(request):
         logger.error(f"Google Places error: {e}")
         return {"status": "error", "message": str(e)}
 
-# sautAI functions
+# sautai functions
 
 def generate_user_context(user):
     """Creates a detailed user context prompt with location, timezone, language, and household member information."""

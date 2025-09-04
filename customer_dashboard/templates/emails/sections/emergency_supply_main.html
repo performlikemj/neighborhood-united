@@ -2,8 +2,8 @@
 <div class="section section-main">
   <div class="card">
     <h2 style="margin:0 0 8px;">{% trans "Emergency Supply List" %}</h2>
-    {% if content_html %}
-      {{ content_html|safe }}
+    {% if main_text %}
+      <p style="margin-top:8px;">{{ main_text|safe }}</p>
     {% endif %}
   </div>
 </div>

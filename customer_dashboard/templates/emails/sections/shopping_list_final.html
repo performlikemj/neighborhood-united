@@ -1,11 +1,19 @@
 {% load i18n %}
 <div class="section section-final">
   <div class="card">
-    {{ content_html|safe }}
+    {% if instacart_url %}
+      <div style="text-align:center;margin:8px 0 14px;">
+        <a href="{{ instacart_url }}" target="_blank" style="text-decoration:none;">
+          <div style="height:46px;display:inline-flex;align-items:center;padding:16px 18px;background:#FFFFFF;border:0.5px solid #E8E9EB;border-radius:8px;">
+            <img src="https://live.staticflickr.com/65535/54538897116_fb233f397f_m.jpg" alt="Instacart" style="height:22px;width:auto;margin-right:10px;">
+            <span style="font-family:Arial,sans-serif;font-size:16px;font-weight:500;color:#000000;white-space:nowrap;">Get Ingredients</span>
+          </div>
+        </a>
+      </div>
+    {% endif %}
+    {# Omit any raw links or LLM text here to avoid plain Instacart URLs #}
     <p style="margin-top:10px;color:#64748b;font-size:14px;">
       {% trans "Tip: Check your expiring items before you buy. Reply if you want Instacart links added automatically." %}
     </p>
   </div>
 </div>
-
-

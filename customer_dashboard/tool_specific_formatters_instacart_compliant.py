@@ -12,9 +12,14 @@ logger = logging.getLogger(__name__)
 
 
 def _append_instacart_utm_params(url: str) -> str:
-    """Append UTM parameters for affiliate tracking (placeholder)"""
-    # You would implement your actual UTM parameter logic here
-    return url
+    """Append required UTM parameters to Instacart URLs for affiliate tracking."""
+    utm_params = (
+        "utm_campaign=instacart-idp&utm_medium=affiliate&utm_source=instacart_idp"
+        "&utm_term=partnertype-mediapartner&utm_content=campaignid-20313_partnerid-6356307"
+    )
+    if "?" in url:
+        return f"{url}&{utm_params}"
+    return f"{url}?{utm_params}"
 
 
 def _format_instacart_button(url: str, text: str) -> str:
@@ -459,5 +464,4 @@ Ingredients:
 """
     
     recipe_result = manager.format_content(recipe_content, ['recipe_tool'])
-
 

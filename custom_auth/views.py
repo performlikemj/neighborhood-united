@@ -145,7 +145,7 @@ def email_authentication_view(request, auth_token):
             )
 
             # Optionally, send an acknowledgment for the processed pending message
-            ack_subject = f"Re: {pending_message.original_subject}" if pending_message.original_subject else "Your SautAI Assistant is Ready"
+            ack_subject = f"Re: {pending_message.original_subject}" if pending_message.original_subject else "Your sautai Assistant is Ready"
             # Create the process now button URL
             try:
                 base_url = os.getenv('STREAMLIT_URL', 'http://localhost:8501')
@@ -164,8 +164,8 @@ def email_authentication_view(request, auth_token):
                 f"<a href='{process_now_url}' style='display: inline-block; background: #4CAF50; color: white; "
                 f"padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold;'>"
                 f"🚀 Process My Message Now</a></div><br>"
-                "For urgent matters or a more interactive experience, please log in to your sautAI dashboard.<br><br>"
-                "Best,<br>The sautAI Team"
+                "For urgent matters or a more interactive experience, please log in to your sautai dashboard.<br><br>"
+                "Best,<br>The sautai Team"
             )
             
             user_name_for_template = user.get_full_name() or user.username
@@ -543,7 +543,7 @@ def password_reset_request(request):
         <html>
         <body>
             <div style="text-align: center;">
-                <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+                <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautai Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
             </div>
             <h2 style="color: #333;">Password Reset Request</h2>
             <p>Hi {user.username},</p>
@@ -554,7 +554,7 @@ def password_reset_request(request):
             <p>If the button above doesn't work, you can copy and paste the following link into your web browser:</p>
             <p><a href="{reset_link}" style="color: #4CAF50;">{reset_link}</a></p>
             <p>If you did not request a password reset, please ignore this email or contact us at <a href="mailto:support@sautai.com">support@sautai.com</a>.</p>
-            <p>Thanks,<br>The SautAI Support Team</p>
+            <p>Thanks,<br>The sautai Support Team</p>
         </body>
         </html>
         """
@@ -693,7 +693,7 @@ def update_profile_api(request):
                 <html>
                 <body>
                     <div style="text-align: center;">
-                        <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+                        <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautai Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
                     </div>
                     <h2 style="color: #333;">Email Verification Required, {user.username}</h2>
                     <p>We noticed that you've updated your email address. To continue accessing your account, please verify your new email address by clicking the button below:</p>
@@ -703,7 +703,7 @@ def update_profile_api(request):
                     <p>If the button above doesn't work, you can copy and paste the following link into your web browser:</p>
                     <p><a href="{activation_link}" style="color: #4CAF50;">{activation_link}</a></p>
                     <p>If you did not request this change, please contact our support team at <a href="mailto:support@sautai.com">support@sautai.com</a> immediately.</p>
-                    <p>Thanks,<br>The SautAI Support Team</p>
+                    <p>Thanks,<br>The sautai Support Team</p>
                 </body>
                 </html>
                 """
@@ -1215,9 +1215,9 @@ def register_api_view(request):
             <html>
             <body>
                 <div style="text-align: center;">
-                    <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+                    <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautai Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
                 </div>
-                <h2 style="color: #333;">Welcome to SautAI, {user.username}!</h2>
+                <h2 style="color: #333;">Welcome to sautai, {user.username}!</h2>
                 <p>Thank you for signing up! We're excited to have you on board.</p>
                 <p>To get started, please confirm your email address by clicking the button below:</p>
                 <div style="text-align: center; margin: 20px 0;">
@@ -1225,8 +1225,8 @@ def register_api_view(request):
                 </div>
                 <p>If the button above doesn't work, you can copy and paste the following link into your web browser:</p>
                 <p><a href="{activation_link}" style="color: #4CAF50;">{activation_link}</a></p>
-                <p>If you have any issues, feel free to reach out to us at <a href="mailto:support@sautAI.com">support@sautAI.com</a>.</p>
-                <p>Thanks,<br>The SautAI Support Team</p>
+                <p>If you have any issues, feel free to reach out to us at <a href="mailto:support@sautai.com">support@sautai.com</a>.</p>
+                <p>Thanks,<br>The sautai Support Team</p>
             </body>
             </html>
             """
@@ -1346,17 +1346,17 @@ def send_activation_email_to_user(user, email_subject_prefix=""):
         <html>
         <body>
             <div style="text-align: center;">
-                <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+                <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautai Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
             </div>
-            <h2 style="color: #333;">Welcome back to SautAI, {user.username}!</h2>
+            <h2 style="color: #333;">Welcome back to sautai, {user.username}!</h2>
             <p>You requested a new activation link. Please confirm your email address by clicking the button below:</p>
             <div style="text-align: center; margin: 20px 0;">
                 <a href="{activation_link}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Activate Your Account</a>
             </div>
             <p>If the button above doesn't work, you can copy and paste the following link into your web browser:</p>
             <p><a href="{activation_link}" style="color: #4CAF50;">{activation_link}</a></p>
-            <p>If you have any issues, feel free to reach out to us at <a href="mailto:support@sautAI.com">support@sautAI.com</a>.</p>
-            <p>Thanks,<br>The SautAI Support Team</p>
+            <p>If you have any issues, feel free to reach out to us at <a href="mailto:support@sautai.com">support@sautai.com</a>.</p>
+            <p>Thanks,<br>The sautai Support Team</p>
         </body>
         </html>
         """
@@ -2002,9 +2002,9 @@ def onboarding_complete_registration(request):
             <html>
             <body>
                 <div style="text-align: center;">
-                    <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautAI Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+                    <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautai Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
                 </div>
-                <h2 style="color: #333;">Welcome to SautAI, {user.username}!</h2>
+                <h2 style="color: #333;">Welcome to sautai, {user.username}!</h2>
                 <p>Thank you for signing up! We're excited to have you on board.</p>
                 <p>To get started, please confirm your email address by clicking the button below:</p>
                 <div style="text-align: center; margin: 20px 0;">
@@ -2012,8 +2012,8 @@ def onboarding_complete_registration(request):
                 </div>
                 <p>If the button above doesn't work, you can copy and paste the following link into your web browser:</p>
                 <p><a href="{activation_link}" style="color: #4CAF50;">{activation_link}</a></p>
-                <p>If you have any issues, feel free to reach out to us at <a href="mailto:support@sautAI.com">support@sautAI.com</a>.</p>
-                <p>Thanks,<br>The SautAI Support Team</p>
+                <p>If you have any issues, feel free to reach out to us at <a href="mailto:support@sautai.com">support@sautai.com</a>.</p>
+                <p>Thanks,<br>The sautai Support Team</p>
             </body>
             </html>
             """

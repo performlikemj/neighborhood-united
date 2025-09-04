@@ -3,17 +3,12 @@
   {% if shopping_tables %}
     {% for tbl in shopping_tables %}
       <div class="category" style="margin-bottom:12px;">
-        <h3 style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <h3 id="cat-{{ tbl.category|slugify }}" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
           <span style="display:inline-block;width:8px;height:8px;background:#0ea5e9;border-radius:999px;"></span>
           {{ tbl.category }}
         </h3>
-        <table class="table-slim" role="presentation" aria-label="{% trans 'Shopping list table' %}">
-          <colgroup>
-            <col style="width:35%">
-            <col style="width:15%">
-            <col style="width:15%">
-            <col style="width:35%">
-          </colgroup>
+        <div style="overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;">
+        <table class="table-slim" role="presentation" aria-label="{% trans 'Shopping list table' %}" style="margin-bottom:8px;width:100%;display:table;table-layout:fixed;border-collapse:collapse;">
           <thead>
             <tr>
               <th scope="col">{% trans 'Item' %}</th>
@@ -24,8 +19,13 @@
           </thead>
           <tbody>
           {% for it in tbl.items %}
-            <tr>
-              <td>{{ it.ingredient }}</td>
+            <tr {% if forloop.counter0|divisibleby:2 %}style="background:#fafafa;"{% endif %}>
+              <td>
+                {{ it.ingredient }}
+                {% if it.alt_for %}
+                  <div style="color:#64748b;font-size:12px;margin-top:2px;">{% blocktrans with base=it.alt_for %}Alternative to {{ base }}{% endblocktrans %}</div>
+                {% endif %}
+              </td>
               <td style="text-align:left;">{% if it.quantity %}{{ it.quantity }}{% else %}—{% endif %}</td>
               <td style="text-align:left;">{% if it.unit %}{{ it.unit }}{% else %}—{% endif %}</td>
               <td style="text-align:left;">{% if it.notes %}{{ it.notes|truncatechars:64 }}{% else %}—{% endif %}</td>
@@ -33,6 +33,8 @@
           {% endfor %}
           </tbody>
         </table>
+        </div>
+        <div style="color:#6b7280;font-size:12px;">{% blocktrans with count=tbl.items|length %}{{ count }} items in {{ tbl.category }}{% endblocktrans %}</div>
       </div>
     {% endfor %}
   {% endif %}

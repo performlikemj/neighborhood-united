@@ -53,6 +53,9 @@ urlpatterns = [
     path('api/assistant/guest-new-conversation/', views.guest_new_conversation, name='guest_new_conversation'),
     path('api/assistant/onboarding/stream-message/', views.onboarding_stream_message, name='onboarding_stream_message'),
     path('api/assistant/onboarding/new-conversation/', views.onboarding_new_conversation, name='onboarding_new_conversation'),
-    path('api/email-assistant/process/', secure_email_integration.process_email, name='process_email')
+    path('api/email-assistant/process/', secure_email_integration.process_email, name='process_email'),
+    # DEBUG-only preview routes
+    path('debug/assistant-email/preview/', views.preview_assistant_email, name='preview_assistant_email'),
+    path('debug/assistant-email/', views.preview_index, name='assistant_email_preview_index'),
 
 ]

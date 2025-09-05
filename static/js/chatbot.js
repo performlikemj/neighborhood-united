@@ -329,14 +329,7 @@
         titleElement.textContent = title;
         gallerySection.appendChild(titleElement);
 
-        // Add the Approve Meal Plan button at the bottom
-        const approveButton = document.createElement('button');
-        approveButton.className = 'btn';
-        approveButton.textContent = 'Approve Meal Plan';
-        approveButton.onclick = function() {
-            window.location.href = document.querySelector('div[data-approve-meal-plan-url]').dataset.approveMealPlanUrl;
-        };
-        gallerySection.appendChild(approveButton);
+        // Approval flow removed — no manual approval button
     
         // Group meals by day
         const mealsByDay = groupMealsByDay(mealPlans);

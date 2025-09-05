@@ -11,8 +11,8 @@ logger = logging.getLogger(__name__)
 
 # Available models in order of capability/cost
 MODEL_GPTo4_MINI = "o4-mini-2025-04-16"
-MODEL_GPT41_MINI = "gpt-4.1-mini"
-MODEL_GPT41_NANO = "gpt-4.1-nano"
+MODEL_GPT41_MINI = "gpt-5-mini"
+MODEL_GPT41_NANO = "gpt-5-nano"
 
 # Smart keywords that trigger upgrade to GPT-4.1
 SMART_KEYWORDS = {

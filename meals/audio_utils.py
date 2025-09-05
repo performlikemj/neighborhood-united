@@ -76,7 +76,7 @@ def extract_pantry_item_info(transcription: str) -> Dict[str, Any]:
     # Use GPT to extract structured information from the transcription
     try:
         response = get_openai_client().responses.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             input=[
                 {"role": "developer", "content": ("""
                  # Identity

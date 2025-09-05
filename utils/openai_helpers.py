@@ -5,7 +5,7 @@ import tiktoken
 
 # Initialize the encoder once
 # Use a well-known model name that tiktoken recognizes
-# gpt-4 tokenizer works for gpt-4.1 family as well
+# gpt-4 tokenizer works for gpt-5 family as well
 enc = tiktoken.encoding_for_model("gpt-4o")
 
 def token_length(text: str) -> int:

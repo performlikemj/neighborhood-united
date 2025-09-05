@@ -2091,16 +2091,16 @@ def get_response_id_from_thread(thread):
 def preview_assistant_email(request):
     """DEBUG-only: Render assistant email templates locally without sending emails.
     Query params:
-      - key: template_key (e.g., meal_plan_approval, shopping_list, emergency_supply, system_update,
+      - key: template_key (e.g., shopping_list, emergency_supply, system_update,
              payment_confirmation, refund_notification, order_cancellation)
       - user_id: optional; defaults to current user
-      - meal_plan_id: for meal_plan_approval/shopping_list to use real data
+      - meal_plan_id: for shopping_list to use real data
       - order_id: for payment/refund/cancellation contexts
     """
     if not settings.DEBUG:
         return HttpResponseForbidden("Previews are only available in DEBUG mode.")
 
-    template_key = request.GET.get('key') or request.GET.get('template_key') or 'meal_plan_approval'
+    template_key = request.GET.get('key') or request.GET.get('template_key') or 'system_update'
 
     # Resolve user (optional)
     user = None
@@ -2144,58 +2144,7 @@ def preview_assistant_email(request):
     extra_ctx = {}
 
     # Build context by template_key
-    if template_key == 'meal_plan_approval':
-        # Try to use a real MealPlan if provided
-        meals_by_day = {}
-        plan_rows = []
-        week_start = None
-        week_end = None
-        try:
-            meal_plan_id = request.GET.get('meal_plan_id')
-            if meal_plan_id:
-                if user is not None:
-                    meal_plan = MealPlan.objects.get(id=int(meal_plan_id), user=user)
-                else:
-                    meal_plan = MealPlan.objects.get(id=int(meal_plan_id))
-                week_start = meal_plan.week_start_date.strftime('%B %d, %Y')
-                week_end = meal_plan.week_end_date.strftime('%B %d, %Y')
-                mpm_qs = MealPlanMeal.objects.filter(meal_plan=meal_plan).select_related('meal')
-                day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-                plan_grid = {d: {'Breakfast': '', 'Lunch': '', 'Dinner': ''} for d in day_order}
-                for mpm in mpm_qs:
-                    meals_by_day.setdefault(mpm.day, []).append({'meal_name': mpm.meal.name, 'meal_type': mpm.meal_type})
-                    if mpm.meal_type in plan_grid.get(mpm.day, {}):
-                        plan_grid[mpm.day][mpm.meal_type] = mpm.meal.name
-                for d in day_order:
-                    row = plan_grid.get(d, {'Breakfast': '', 'Lunch': '', 'Dinner': ''})
-                    plan_rows.append({'day': d, 'breakfast': row.get('Breakfast', ''), 'lunch': row.get('Lunch', ''), 'dinner': row.get('Dinner', '')})
-        except Exception:
-            # Fallback sample
-            week_start = timezone.now().date().strftime('%B %d, %Y')
-            week_end = (timezone.now().date() + timedelta(days=6)).strftime('%B %d, %Y')
-            meals_by_day = {
-                'Monday': [{'meal_name': 'Oatmeal', 'meal_type': 'Breakfast'}, {'meal_name': 'Chicken Salad', 'meal_type': 'Lunch'}, {'meal_name': 'Salmon & Veg', 'meal_type': 'Dinner'}]
-            }
-            plan_rows = [
-                {'day': 'Monday', 'breakfast': 'Oatmeal', 'lunch': 'Chicken Salad', 'dinner': 'Salmon & Veg'}
-            ]
-
-        extra_ctx.update({
-            'approval_link_daily': request.GET.get('approval_link_daily') or 'https://example.com/approve?pref=daily',
-            'approval_link_one_day': request.GET.get('approval_link_one_day') or 'https://example.com/approve?pref=one_day_prep',
-            'meals_by_day': meals_by_day,
-            'plan_rows': plan_rows,
-            'week_start': week_start,
-            'week_end': week_end,
-            'key_highlights': [
-                'Balanced plan for the week',
-                'Allergy-aware selections',
-                'Includes toddler-safe portions'
-            ],
-            'main_text': '<p>Your meal plan is ready for review and approval.</p>'
-        })
-
-    elif template_key == 'shopping_list':
+    if template_key == 'shopping_list':
         # Provide a sample categorized shopping table
         sample_tables = [
             {
@@ -2436,7 +2385,6 @@ def api_stream_user_summary(request):
     response['X-Accel-Buffering'] = 'no'  # For Nginx
     
     return response
-
 
 
 

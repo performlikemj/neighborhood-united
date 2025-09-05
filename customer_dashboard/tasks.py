@@ -72,7 +72,7 @@ def generate_chat_title(thread_id):
             client = openai.OpenAI(api_key=settings.OPENAI_KEY)
             prompt = f"Generate a very short, concise title (max 5 words) for a chat conversation that starts with this user message: '{first_user_message_content}'. Do not use quotes in the title."
             response = client.responses.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 input=[
                     {"role": "developer", "content": "You are a helpful assistant that creates concise chat titles based on the user's message."},
                     {"role": "user", "content": prompt}
@@ -323,7 +323,7 @@ def generate_chat_session_summary(summary_id):
         
         try:
             response = client.responses.create(
-                model="gpt-4.1-mini",
+                model="gpt-5-mini",
                 input=input_messages,
                 stream=False
             )
@@ -507,7 +507,7 @@ def generate_consolidated_user_summary(user_id):
         
         try:
             response = client.responses.create(
-                model="gpt-4.1-mini",
+                model="gpt-5-mini",
                 input=input_messages,
                 stream=False
             )

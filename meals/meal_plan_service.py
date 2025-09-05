@@ -25,7 +25,7 @@ from custom_auth.models import CustomUser
 from meals.meal_generation import generate_and_create_meal, perform_openai_sanity_check
 from meals.models import Meal, MealPlan, MealPlanMeal, MealPlanInstruction, ChefMealEvent, Dish, Ingredient
 from meals.tasks import MAX_ATTEMPTS
-from meals.pydantic_models import (MealsToReplaceSchema, MealPlanApprovalEmailSchema, BulkPrepInstructions,
+from meals.pydantic_models import (MealsToReplaceSchema, BulkPrepInstructions,
                                   MealPlanModificationRequest, PromptMealMap, ModifiedMealSchema)
 from meals.meal_modification_parser import parse_modification_request
 from shared.utils import (generate_user_context, get_embedding, cosine_similarity, replace_meal_in_plan,
@@ -173,7 +173,7 @@ def analyze_meal_compatibility(meal, dietary_preference):
 
         # Make API call
         response = get_openai_client().responses.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             input=input,
             text={
                 "format": {
@@ -339,15 +339,7 @@ def create_meal_plan_for_new_user(user_id):
             end_of_week=end_of_week,
             monday_date=monday_of_week,   # canonical Monday for reference
         )
-        if meal_plan:
-            try:
-                # Add local import to avoid circular dependency
-                from meals.email_service import send_meal_plan_approval_email
-                send_meal_plan_approval_email(meal_plan.id)
-            except Exception as e:
-                # n8n traceback
-                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-                requests.post(n8n_traceback_url, json={"error": str(e), "source":"create_meal_plan_for_new_user", "traceback": traceback.format_exc()})
+        # Auto‑approval handled inside create_meal_plan_for_user
             
     except CustomUser.DoesNotExist:
         # n8n traceback
@@ -387,16 +379,7 @@ def create_meal_plan_for_all_users():
             
             # Create meal plan for the user
             meal_plan = create_meal_plan_for_user(user=user, start_of_week=start_of_week, end_of_week=end_of_week)
-            
-            if meal_plan and not meal_plan.approval_email_sent:
-                try:
-                    from meals.email_service import send_meal_plan_approval_email
-                    send_meal_plan_approval_email(meal_plan.id)
-                    logger.info(f"Sent meal plan approval email to user {user.username} for week starting {start_of_week}")
-                except Exception as e:
-                    # n8n traceback
-                    n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-                    requests.post(n8n_traceback_url, json={"error": str(e), "source":"create_meal_plan_for_all_users", "traceback": traceback.format_exc()})
+            # Auto‑approval handled inside create_meal_plan_for_user
 
 
 def day_to_offset(day_name: str) -> int:
@@ -538,7 +521,7 @@ def create_meal_plan_for_user(
                 }
             ]
             call = get_openai_client().responses.create(
-                model="gpt-4.1-mini",
+                model="gpt-5-mini",
                 input=input,
                 text={
                     "format": {
@@ -917,14 +900,12 @@ def create_meal_plan_for_user(
     logger.info(f"[{request_id}] Running variety analysis and replacements (if needed).")
     analyze_and_replace_meals(user, meal_plan, meal_types, request_id)
 
-    # Apply the meal plan approval token and expiry
-    meal_plan.approval_token = str(uuid.uuid4())
-    meal_plan.approval_expires = timezone.now() + timedelta(days=7)
+    # Auto‑approve newly created meal plans and clear change flags
+    meal_plan.is_approved = True
+    meal_plan.has_changes = False
     meal_plan.save()
 
-    # Now notify the user about their meal plan
-    from meals.email_service import send_meal_plan_approval_email, generate_emergency_supply_list
-    send_meal_plan_approval_email(meal_plan.id)
+    # No approval email — plan is considered approved immediately
 
     # # Generate emergency supply list if user has enabled this
     # if user.emergency_supply_goal and user.emergency_supply_goal > 0:
@@ -1124,15 +1105,10 @@ def modify_existing_meal_plan(
     # 5. Re‑analyse plan for similarity after changes
     analyze_and_replace_meals(user, meal_plan, meal_types, request_id)
 
-    # 6. Persist & notify
+    # 6. Persist & flag: require manual approval after modifications
+    meal_plan.is_approved = False
+    meal_plan.has_changes = True
     meal_plan.save()
-    try:
-        from meals.email_service import send_meal_plan_approval_email
-        send_meal_plan_approval_email(meal_plan.id)
-    except Exception as e:
-        # n8n traceback
-        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-        requests.post(n8n_traceback_url, json={"error": str(e), "source":"modify_existing_meal_plan", "traceback": traceback.format_exc()})
 
     logger.info(f"{log_prefix} Meal plan modification complete.")
     return meal_plan
@@ -1254,7 +1230,7 @@ def analyze_and_replace_meals(user, meal_plan, meal_types, request_id=None):
         #store=True,
         #metadata={'tag': 'meal-plan-analysis'}
         response = get_openai_client().responses.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             input=input,
             text={
                 "format": {
@@ -1763,7 +1739,7 @@ def guess_meal_ingredients_gpt(meal_name: str, meal_description: str) -> List[st
     
     try:
         response = get_openai_client().responses.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             input=prompt_messages,
             text={
                 "format": {
@@ -2011,7 +1987,7 @@ def check_meal_for_allergens_gpt(meal, user) -> Tuple[bool, List[str], Dict[str,
     
     try:
         response = get_openai_client().responses.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             input=prompt_messages,
             text={
                 "format": {
@@ -2187,7 +2163,7 @@ def get_substitution_suggestions(flagged_ingredients, user_allergies, meal_name)
         ]
         
         response = get_openai_client().responses.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             input=prompt_messages,
             text={
                 "format": {
@@ -2534,7 +2510,7 @@ def apply_substitutions_to_meal(meal, substitutions, user):
         ]
         
         response = get_openai_client().responses.create(
-            model="gpt-4.1-mini",  # Using more capable model for recipe adaptation
+            model="gpt-5-mini",  # Using more capable model for recipe adaptation
             input=prompt_messages,
             text={
                 "format": {
@@ -2771,9 +2747,7 @@ def regenerate_replaced_meal(original_meal_id, user, meal_type, meal_plan, reque
         )
         
         if result['status'] == 'success':
-            # Send user notification
-            from meals.email_service import send_meal_plan_approval_email
-            send_meal_plan_approval_email(meal_plan.id)
+            # No approval flow — nothing to notify here
             return True
         else:
             logger.error(f"[{request_id}] Failed to regenerate meal for {original_meal.name}")

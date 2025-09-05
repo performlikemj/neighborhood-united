@@ -31,7 +31,7 @@ def get_meal_macro_information(meal_name: str, meal_description: str, ingredient
     
     try:
         response = get_openai_client().responses.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             input=f"""
             Analyze the following meal and provide detailed macro nutritional information:
             

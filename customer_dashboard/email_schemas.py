@@ -34,14 +34,6 @@ class CategoryTable(_StrictModel):
     items: List[CategoryItem]
 
 
-class EmailMealPlanApproval(_StrictModel):
-    main_text: str
-    final_text: str
-    week_start: Optional[str] = None
-    week_end: Optional[str] = None
-    meals_by_day: Optional[dict] = None  # {day: [{meal_type, meal_name, ...}]}
-    key_highlights: Optional[List[str]] = None  # 3–5 bullets summarizing plan
-
 
 class EmailShoppingList(_StrictModel):
     main_text: str
@@ -85,5 +77,4 @@ class EmailRefundNotification(_StrictModel):
 class EmailOrderCancellation(_StrictModel):
     main_text: str
     final_text: str
-
 

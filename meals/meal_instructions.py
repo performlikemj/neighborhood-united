@@ -436,7 +436,7 @@ def generate_instructions(meal_plan_meal_ids, send_via_assistant: bool = False):
                 # --- End Metadata Prompt ---
 
                 response = get_openai_client().responses.create(
-                    model="gpt-4.1-mini",
+                    model="gpt-5-mini",
                     input=[
                         {
                             "role": "developer",
@@ -893,7 +893,7 @@ def generate_bulk_prep_instructions(meal_plan_id, send_via_assistant: bool = Tru
         ]
         # Generate the bulk prep instructions using OpenAI
         response = get_openai_client().responses.create(
-            model="gpt-4.1-mini", # Or gpt-4-turbo if more complexity needed
+            model="gpt-5-mini", # Or gpt-4-turbo if more complexity needed
             input=messages,
             text={
                 "format": {

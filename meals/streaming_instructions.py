@@ -156,7 +156,7 @@ def _generate_daily_instructions(meal_plan_meals) -> str:
     try:
         # Call OpenAI to generate instructions
         response = client.responses.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             input=[
                 {
                     "role": "developer",
@@ -331,7 +331,7 @@ def _generate_bulk_prep_instructions(meal_plan) -> str:
     try:
         # Call OpenAI to generate instructions
         response = client.responses.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             input=[
                 {
                     "role": "developer",

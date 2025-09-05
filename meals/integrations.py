@@ -45,7 +45,7 @@ def get_macro_info(meal_name: str, meal_description: str, ingredients: List[str]
         
         # Call OpenAI API
         response = get_openai_client().chat.completions.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             messages=[
                 {"role": "developer", "content": "You are a nutritionist who provides accurate macro information for meals."},
                 {"role": "user", "content": prompt}
@@ -117,7 +117,7 @@ def find_youtube_videos(meal_name: str, meal_description: str) -> Dict[str, Any]
         
         # Call OpenAI API
         response = get_openai_client().chat.completions.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             messages=[
                 {"role": "developer", "content": "You are a helpful assistant that finds cooking videos."},
                 {"role": "user", "content": prompt}

@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 def normalize_lines(lines: list[str]) -> dict:
     prompt = "Turn these loose shopping-list lines into structured JSON ensuring the items are actual shopping list items.\n---\n" + "\n".join(lines)
     r = get_openai_client().responses.create(
-        model="gpt-4.1-nano",
+        model="gpt-5-nano",
         input=[{"role": "user", "content": prompt}],
         text={
             "format": {

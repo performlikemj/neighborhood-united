@@ -15,7 +15,7 @@ def parse_modification_request(
     raw_prompt: str,
     meal_plan: MealPlan,
     *,
-    model: str = "gpt-4.1-mini"
+    model: str = "gpt-5-mini"
 ) -> MealPlanModificationRequest:
     """
     Convert a free-form user prompt into a structured MealPlanModificationRequest.

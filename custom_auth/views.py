@@ -395,6 +395,13 @@ class RegisterView(View):
                 address.full_clean()  # run validators
                 address.save()
 
+                # Default measurement system by country for HTML registration flow
+                try:
+                    user.measurement_system = 'US' if str(address.country) == 'US' else 'METRIC'
+                    user.save(update_fields=['measurement_system'])
+                except Exception:
+                    pass
+
             user.backend = "django.contrib.auth.backends.ModelBackend"   # <- guarantee backend attr
             login(request, user, backend="django.contrib.auth.backends.ModelBackend")
             return redirect("custom_auth:profile")  # 302 expected by the test
@@ -772,6 +779,9 @@ def update_profile_api(request):
             if 'household_member_count' in user_serializer.validated_data:
                 user.household_member_count = user_serializer.validated_data['household_member_count']
 
+            if 'measurement_system' in user_serializer.validated_data:
+                user.measurement_system = user_serializer.validated_data['measurement_system']
+
             # Final save to persist any manual field updates
             user.save()
 
@@ -1014,6 +1024,7 @@ def login_api_view(request):
                 'email_confirmed': user.email_confirmed,
                 'timezone': user.timezone,
                 'preferred_language': user.preferred_language,
+                'measurement_system': user.measurement_system,
                 'allergies': list(user.allergies),  # Convert to list immediately
                 'custom_allergies': user.custom_allergies,
                 'dietary_preferences': list(user.dietary_preferences.values_list('name', flat=True)),
@@ -1097,7 +1108,7 @@ def _normalize_registration_payload(data):
         # Legacy flat payload -> split into user/address/goal
         user_keys = {
             'username','email','password','phone_number','preferred_language',
-            'allergies','custom_allergies','emergency_supply_goal','household_member_count',
+            'allergies','custom_allergies','emergency_supply_goal','household_member_count','measurement_system',
             'dietary_preferences','custom_dietary_preferences','week_shift','timezone'
         }
         address_keys = {'street','city','state','postalcode','country','input_postalcode'}
@@ -1192,7 +1203,18 @@ def register_api_view(request):
                     error_msg = f"Address serializer errors: {address_serializer.errors} | Country received: '{country_code_received}' | Postal code received: '{postal_code_received}'"
                     logger.error(error_msg)
                     raise serializers.ValidationError(f"We've experienced an issue when updating your address information: {address_serializer.errors}")
-                address_serializer.save()
+                address_instance = address_serializer.save()
+
+                # Default measurement system by country if not explicitly provided by user
+                try:
+                    ms_provided = 'measurement_system' in user_serializer.validated_data
+                    if not ms_provided:
+                        country_code = str(address_instance.country) if address_instance and address_instance.country else None
+                        user.measurement_system = 'US' if country_code == 'US' else 'METRIC'
+                        user.save(update_fields=['measurement_system'])
+                except Exception:
+                    # Non-fatal; keep serializer/model default
+                    pass
 
             # Handle goal data
             goal_data = normalized.get('goal')
@@ -1763,7 +1785,7 @@ Return the translated and categorized items in the specified JSON structure."""
         
         # Call Responses API with JSON-mode + schema
         response = get_openai_client().responses.create(
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             input=[{"role": "developer", "content": system_message},
                    {"role": "user", "content": json.dumps(user_payload)}],
             text={
@@ -2076,4 +2098,3 @@ def onboarding_complete_registration(request):
         }
         requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return Response({'errors': str(e)}, status=500)
-

@@ -31,7 +31,7 @@ def find_youtube_cooking_videos(meal_name: str, meal_description: str, limit: in
     try:
         # First, generate an optimal search query using OpenAI
         query_response = client.responses.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             input=f"""
             Create the best YouTube search query to find a cooking tutorial for this meal:
             
@@ -49,7 +49,7 @@ def find_youtube_cooking_videos(meal_name: str, meal_description: str, limit: in
         
         # Now use the web search tool to find YouTube videos
         video_response = client.responses.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             tools=[{"type": "web_search_preview"}],
             input=f"Find {limit} YouTube cooking videos for: {search_query} site:youtube.com",
             text={

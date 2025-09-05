@@ -481,7 +481,7 @@ def perform_openai_sanity_check(meal, user):
         Meal dietary tags: {meal.dietary_preferences.all()} {meal.custom_dietary_preferences.all()}
         """
         response = get_openai_client().responses.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             input=[
                 {
                     "role": "developer",
@@ -750,7 +750,7 @@ def generate_meal_details(
                     "additionalProperties": False,
                 }
                 response = get_openai_client().responses.create(
-                    model="gpt-4.1-mini",
+                    model="gpt-5-mini",
                     input=[
                         {"role": "developer", "content": static_rules + "\n\nOutput must include a 'composed_dishes' array that covers all household members: at minimum provide dishes for babies (<2 years) as baby-safe, vegans if present, and a general dish for unrestricted members. Reuse one dish to cover multiple groups when possible (e.g., a vegan-general dish). Each dish object must match the ComposedDish schema in MealData: name, dietary_tags, target_groups, optional notes and ingredients, and include is_chef_dish. The meal 'name' MUST reference at least the primary composed dish (e.g., include that dish’s name)."},
                         {"role": "user", "content": base_prompt}
@@ -954,7 +954,7 @@ def determine_usage_for_meal(
 
     try:
         response = get_openai_client().responses.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             input=[
                 {"role": "developer", "content": system_msg},
                 {"role": "user", "content": user_msg}

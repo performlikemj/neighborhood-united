@@ -37,7 +37,7 @@ def normalize_ingredient(name: str) -> str:
     try:
         client = get_openai_client()
         response = client.responses.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             input=[{"role": "user", "content": prompt}],
         )
         canonical = response.output_text.strip().lower()

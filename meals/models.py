@@ -511,7 +511,6 @@ class MealPlan(models.Model):
     is_approved = models.BooleanField(default=False)  # Track if the meal plan is approved
     has_changes = models.BooleanField(default=False)  # Track if there are changes to the plan
     approval_token = models.UUIDField(default=uuid.uuid4, unique=True)   
-    reminder_sent = models.BooleanField(default=False)
     approval_email_sent = models.BooleanField(default=False)
     instacart_url = models.URLField(max_length=1000, blank=True, null=True, help_text="URL to the Instacart shopping list for this meal plan")
     order = models.OneToOneField(
@@ -614,6 +613,7 @@ class MealPlanMeal(models.Model):
         super().save(*args, **kwargs)
         # If this is a new MealPlanMeal or an update, we should update the MealPlan
         if is_new or self.meal_plan.has_changes:
+            # Mark plan changed and require re‑approval after edits
             self.meal_plan.is_approved = False
             self.meal_plan.has_changes = True
             self.meal_plan.save()

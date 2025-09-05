@@ -551,9 +551,9 @@ def submit_meal_plan_updates(request):
                 meal_date=meal_date
             )
 
+        # Mark plan as changed and require manual approval
         meal_plan.has_changes = True
         meal_plan.is_approved = False
-        meal_plan.reminder_sent = False
         meal_plan.save()
         return JsonResponse({'status': 'success', 'message': 'Meal plan updated successfully.'})
     except Exception as e:
@@ -1483,9 +1483,9 @@ def api_update_meals_with_prompt(request):
         # Mark the meal plan as having changes
         if updates:
             logger.info(f"Updates completed: {len(updates)} meals updated out of {total_meals} selected")
+            # Mark plan changed; keep unapproved until user approves
             meal_plan.has_changes = True
             meal_plan.is_approved = False
-            meal_plan.reminder_sent = False
             meal_plan.save()
         
         logger.info("Successfully completed meal updates")
@@ -1804,7 +1804,7 @@ def api_generate_meal_plan(request):
         if existing_plan:
             meal_count = MealPlanMeal.objects.filter(meal_plan=existing_plan).count()
             if meal_count > 0:
-                status_message = "approved" if existing_plan.is_approved else "pending approval"
+                status_message = "approved" if existing_plan.is_approved else "ready"
                 return Response({
                     "status": "existing_plan",
                     "message": f"A meal plan already exists for this week ({status_message})",
@@ -4272,12 +4272,11 @@ def api_replace_meal_plan_meal(request):
                         'message': f'Replacement meal type ({replacement_meal.meal_type}) does not match meal plan meal type ({meal_plan_meal.meal_type})'
                     }, status=status.HTTP_400_BAD_REQUEST)
 
-            # Mark plan as changed if approved
+            # Mark plan as changed and require manual approval
             if meal_plan.is_approved:
                 meal_plan.has_changes = True
                 meal_plan.is_approved = False
-                meal_plan.reminder_sent = False
-                meal_plan.save(update_fields=['has_changes', 'is_approved', 'reminder_sent'])
+                meal_plan.save(update_fields=['has_changes', 'is_approved'])
                 logger.info(f"Marked MealPlan id={meal_plan.id} as having changes and not approved")
 
             # Mark as already paid if associated order is paid
@@ -4525,8 +4524,7 @@ def api_add_meal_slot(request):
         if meal_plan.is_approved:
             meal_plan.has_changes = True
             meal_plan.is_approved = False
-            meal_plan.reminder_sent = False
-            meal_plan.save(update_fields=['has_changes','is_approved','reminder_sent'])
+            meal_plan.save(update_fields=['has_changes','is_approved'])
 
     from meals.serializers import MealPlanMealSerializer
     serializer = MealPlanMealSerializer(mpm, context={'request': request})
@@ -4683,8 +4681,7 @@ def api_fill_meal_slot(request):
         if meal_plan.is_approved:
             meal_plan.has_changes = True
             meal_plan.is_approved = False
-            meal_plan.reminder_sent = False
-            meal_plan.save(update_fields=['has_changes','is_approved','reminder_sent'])
+            meal_plan.save(update_fields=['has_changes','is_approved'])
 
         # Order handling mirrors api_replace_meal_plan_meal
         order = Order.objects.filter(associated_meal_plan=meal_plan).first()
@@ -5559,4 +5556,3 @@ def api_fix_restricted_stripe_account(request):
         return Response({
             "error": f"Failed to fix account: {str(e)}"
         }, status=500)
-

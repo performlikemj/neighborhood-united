@@ -15,6 +15,10 @@ import uuid
 
 # Create your models here.
 class CustomUser(AbstractUser):
+    MEASUREMENT_CHOICES = [
+        ('US', 'US Customary'),
+        ('METRIC', 'Metric'),
+    ]
     DIETARY_CHOICES = [
     ('Vegan', 'Vegan'),
     ('Vegetarian', 'Vegetarian'),
@@ -93,6 +97,12 @@ class CustomUser(AbstractUser):
     # Field to store week_shift for context when chatting with assistant
     week_shift = models.IntegerField(default=0)
     email_token = models.UUIDField(editable=False, unique=True, db_index=True)
+    # Measurement system preference (default Metric; US users can switch or be defaulted during onboarding)
+    measurement_system = models.CharField(
+        max_length=10,
+        choices=MEASUREMENT_CHOICES,
+        default='METRIC'
+    )
     dietary_preferences = models.ManyToManyField(
         'meals.DietaryPreference',  # Use the app name and model name as a string
         blank=True,
@@ -328,4 +338,3 @@ class OnboardingSession(models.Model):
     def __str__(self):
         return f"OnboardingSession({self.guest_id})"
     
-

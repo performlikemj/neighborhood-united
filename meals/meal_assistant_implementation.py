@@ -956,13 +956,12 @@ logger = logging.getLogger(__name__)
 #  Constants
 # ───────────────────────────────────────────────────────────────────────────────
 # Default fallback models if model selection fails
-MODEL_AUTH_FALLBACK = "gpt-4.1-mini"
-MODEL_GUEST_FALLBACK = "gpt-4.1-nano"
+MODEL_AUTH_FALLBACK = "gpt-5-mini"
+MODEL_GUEST_FALLBACK = "gpt-5-nano"
 
 #  ▸ A < 50‑token teaser shown to guests every turn
 TOOL_TEASER = (
     "- create_meal_plan: build and manage a weekly plan\n"
-    "- approve_meal_plan: checkout & pay for plans that include your local and personal chef (when available)\n"
     "- list_upcoming_meals: see what's next\n"
     "- …and 20 more when you sign up! As well as having your own personal sautai assistant."
 )

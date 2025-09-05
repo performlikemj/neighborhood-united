@@ -202,7 +202,7 @@ def translate_paragraphs(html: str, target_lang: str) -> str:
             # Call OpenAI API with the batch
             try:
                 response = client.responses.create(
-                    model="gpt-4.1-nano", 
+                    model="gpt-5-nano", 
                     temperature=0.2,
                     input=[
                         {

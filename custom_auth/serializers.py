@@ -82,7 +82,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'id', 'username', 'email', 'unsubscribed_from_emails', 'password',
             'phone_number', 'dietary_preferences', 'custom_dietary_preferences',
             'allergies', 'custom_allergies', 'week_shift', 'email_confirmed',
-            'preferred_language', 'timezone', 'emergency_supply_goal',
+            'preferred_language', 'timezone', 'emergency_supply_goal', 'measurement_system',
             'personal_assistant_email', 'is_chef', 'current_role',
             'household_member_count', 'household_members'
         ]
@@ -154,6 +154,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
             allergies=validated_data.get('allergies', []),
             custom_allergies=validated_data.get('custom_allergies', []),
             emergency_supply_goal=validated_data.get('emergency_supply_goal', 0), 
+            measurement_system=validated_data.get('measurement_system', 'METRIC'),
             household_member_count=requested_household_count,
         )
         user.set_password(validated_data['password'])
@@ -319,7 +320,7 @@ class OnboardingUserSerializer(serializers.ModelSerializer):
             'phone_number', 'preferred_language', 'timezone',
             'dietary_preferences', 'custom_dietary_preferences',
             'allergies', 'custom_allergies',
-            'emergency_supply_goal', 'household_member_count', 'household_members'
+            'emergency_supply_goal', 'measurement_system', 'household_member_count', 'household_members'
         ]
         extra_kwargs = {
             'password': {'write_only': True},
@@ -333,6 +334,7 @@ class OnboardingUserSerializer(serializers.ModelSerializer):
             'allergies': {'required': False},
             'custom_allergies': {'required': False},
             'emergency_supply_goal': {'required': False},
+            'measurement_system': {'required': False},
             'household_member_count': {'required': False},
         }
     
@@ -351,6 +353,7 @@ class OnboardingUserSerializer(serializers.ModelSerializer):
             'allergies': [],
             'custom_allergies': [],
             'emergency_supply_goal': 7,
+            'measurement_system': 'METRIC',
             'household_member_count': 1,
             'is_active': True,
         }

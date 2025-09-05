@@ -253,7 +253,7 @@ def find_nearby_supermarkets(request):
             from shared.pydantic_models import GeoCoordinates
             user_address_string = f"The user's postal code is {address.input_postalcode} in the country of {address.country}"
             response = get_openai_client().responses.create(
-                model="gpt-4.1-mini",
+                model="gpt-5-mini",
                 input=[
                     {
                         "role": "developer",
@@ -498,7 +498,7 @@ def is_question_relevant(question):
     """
 
     response = get_openai_client().chat.completions.create(
-        model="gpt-4.1-nano",
+        model="gpt-5-nano",
         messages=[
             {
                 "role": "developer",
@@ -651,7 +651,7 @@ def recommend_follow_up(request, context):
 
     try:
         response = get_openai_client().responses.create(
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             input=[
                 {
                     "role": "developer",
@@ -992,7 +992,7 @@ def update_user_info(request):
             # Use responses API to update the goal name
             if not user_goal_name:
                 response = get_openai_client().responses.create(
-                    model="gpt-4.1-nano",
+                    model="gpt-5-nano",
                     instructions="Based on the user's goal description, generate a concise and descriptive goal name.",
                     input=[{"role":"user","content":user_goal}],
                 )
@@ -1145,7 +1145,7 @@ def generate_review_summary(object_id, category):
     # Step 3: Feed the formatted string into GPT-3.5-turbo-1106 to generate the overall summary
     try:
         response = get_openai_client().chat.completions.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             messages=[{"role": "user", "content": formatted_summaries}],
         )
         overall_summary = response['choices'][0]['message']['content']
@@ -1165,7 +1165,7 @@ def generate_review_summary(object_id, category):
 def generate_summary_title(question):
     try:
         response = get_openai_client().responses.create(
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             messages=[
                 {
                     "role": "developer",
@@ -1320,7 +1320,6 @@ def replace_meal_in_plan(request, meal_plan_id, old_meal_id, new_meal_id, day, m
             
             meal_plan.has_changes = True
             meal_plan.is_approved = False
-            meal_plan.reminder_sent = False
             meal_plan.save()
             logger.info(f"Replaced meal '{old_meal.name}' with '{new_meal.name}' for {meal_type} on {day}.")
     
@@ -1394,7 +1393,6 @@ def remove_meal_from_plan(request, meal_plan_id, meal_id, day, meal_type):
             meal_plan_meal.delete()
             meal_plan.has_changes = True
             meal_plan.is_approved = False
-            meal_plan.reminder_sent = False
             meal_plan.save()
     except Exception as e:
         logger.error(f"Failed to remove meal from plan: {e}")
@@ -1503,7 +1501,7 @@ def create_meal(request=None, user_id=None, name=None, dietary_preferences=None,
                 )
                 try:
                     response = get_openai_client().chat.completions.create(
-                        model="gpt-4.1-mini",
+                        model="gpt-5-mini",
                         messages=[
                             {
                                 "role": "developer",
@@ -1776,7 +1774,6 @@ def add_meal_to_plan(request, meal_plan_id, meal_id, day, meal_type, allow_dupli
                 MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day, meal_type=meal_type, meal_date=meal_date)
                 meal_plan.has_changes = True
                 meal_plan.is_approved = False
-                meal_plan.reminder_sent = False
                 meal_plan.save()
             return {'status': 'success', 'action': 'added_duplicate', 'new_meal': meal.name, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
         else:
@@ -1798,7 +1795,6 @@ def add_meal_to_plan(request, meal_plan_id, meal_id, day, meal_type, allow_dupli
             MealPlanMeal.objects.create(meal_plan=meal_plan, meal=meal, day=day, meal_type=meal_type, meal_date=meal_date)
             meal_plan.has_changes = True
             meal_plan.is_approved = False
-            meal_plan.reminder_sent = False
             meal_plan.save()
         return {'status': 'success', 'action': 'added', 'new_meal': meal.name, 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
@@ -1971,9 +1967,9 @@ def replace_meal_based_on_preferences(request, meal_plan_id, old_meal_ids, days_
                     'meal_type': meal_type
                 })
 
+                # Mark plan changed; require manual approval
                 meal_plan.has_changes = True
                 meal_plan.is_approved = False
-                meal_plan.reminder_sent = False
                 meal_plan.save()
 
         except Meal.DoesNotExist:

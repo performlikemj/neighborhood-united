@@ -16,11 +16,14 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from django.http import HttpResponse
 from django.conf.urls.static import static
 from django.conf import settings
 
 
 urlpatterns = [
+    # Simple health check endpoint for load balancers and CI smoke tests
+    path('healthz/', lambda request: HttpResponse('ok'), name='healthz'),
     path('admin/', admin.site.urls),
     path('chefs/', include('chefs.urls')),
     path('chef_admin/', include('chef_admin.urls')),
@@ -40,6 +43,5 @@ if getattr(settings, 'GAMIFICATION_ENABLED', False):
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
     # Static files are automatically served by Django's development server when DEBUG=True
-
 
 

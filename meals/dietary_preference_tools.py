@@ -424,7 +424,7 @@ def check_meal_compatibility(user_id: int, meal_id: int) -> dict:
 
         # === 3. Call Responses API with JSON-mode + schema =================
         response = get_openai_client().responses.create(
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             input=[{"role": "developer", "content": system_message},
                    {"role": "user",   "content": json.dumps(user_payload)}],
             text={
@@ -635,7 +635,7 @@ def check_allergy_alert(user_id: int, description: str = None) -> dict:
         # Check the description of the meal and cross-reference it with the user's allergies
         if description:
             response = get_openai_client().responses.create(
-                model="gpt-4.1-nano",
+                model="gpt-5-nano",
                 input= (
                 """
                 Expand the assistant's capabilities to check for allergens in meals and report them accordingly. Integrate allergy detection with the structured schema provided.

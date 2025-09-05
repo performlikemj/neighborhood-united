@@ -23,7 +23,7 @@ from openai import OpenAI
 from pydantic import ValidationError
 from custom_auth.models import CustomUser
 from meals.models import MealPlan, MealPlanMeal, MealPlanInstruction
-from meals.pydantic_models import MealPlanApprovalEmailSchema, ShoppingList as ShoppingListSchema
+from meals.pydantic_models import ShoppingList as ShoppingListSchema
 from meals.pantry_management import get_user_pantry_items, get_expiring_pantry_items
 from meals.meal_embedding import serialize_data
 from meals.serializers import MealPlanSerializer
@@ -36,258 +36,7 @@ from .celery_utils import handle_task_failure
 
 logger = logging.getLogger(__name__)
 
-@shared_task
-@handle_task_failure
-def send_meal_plan_approval_email(meal_plan_id):
-    from meals.models import MealPlan, MealPlanMeal
-    from shared.utils import generate_user_context
-    import uuid
-    from django.utils import timezone
-    import json
-    from jinja2 import Environment, FileSystemLoader
-    from django.conf import settings
-    from urllib.parse import urlencode
-    import os
-
-    try:
-        # Start a database transaction
-        with transaction.atomic():
-            meal_plan = get_object_or_404(MealPlan, id=meal_plan_id)
-            
-            # Assign approval_token if not present
-            if not meal_plan.approval_token:
-                meal_plan.approval_token = uuid.uuid4()
-                meal_plan.token_created_at = timezone.now()
-                meal_plan.save()
-            
-            # Retrieve the full user object
-            user = meal_plan.user
-            user_name = user.username
-            user_email = user.email
-
-            # **Check if the user has opted out of emails**
-            if user.unsubscribed_from_emails:
-                logger.info(f"User {user.username} has unsubscribed from emails.")
-                return  # Do not send the email
-
-            if meal_plan.approval_email_sent:
-                logger.info(f"Approval email already sent for MealPlan ID {meal_plan_id}.")
-                return  # Do not send the email
-
-        # Proceed with external calls after the transaction is successful
-        try:
-            user_context = generate_user_context(user)
-        except Exception as e:
-            logger.error(f"Error generating user context: {e}")
-            user_context = "User context not available."
-
-        try:
-            preferred_language = _get_language_name(user.preferred_language)
-        except Exception as e:
-            logger.error(f"Error fetching preferred language for user {user.username}: {e}")
-            preferred_language = "English"
-
-        # Generate the approval link with query parameters
-        approval_token = meal_plan.approval_token
-        base_approval_url = f"{os.getenv('STREAMLIT_URL')}"
-
-        # Create approval links with meal prep preferences
-        query_params_daily = urlencode({
-            'approval_token': approval_token,
-            'meal_prep_preference': 'daily'
-        })
-        query_params_one_day = urlencode({
-            'approval_token': approval_token,
-            'meal_prep_preference': 'one_day_prep'
-        })
-
-        approval_link_daily = f"{base_approval_url}?{query_params_daily}"
-        approval_link_one_day = f"{base_approval_url}?{query_params_one_day}"
-
-        # Fetch the meals associated with the meal plan
-        meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan).select_related('meal')
-
-        # Create the meals_list
-        meals_list = []
-        for meal in meal_plan_meals:
-            meals_list.append({
-                "meal_name": meal.meal.name,
-                "meal_type": meal.meal_type,
-                "day": meal.day,
-                "description": meal.meal.description or "A delicious meal prepared for you.",
-                "nutrition": meal.meal.macro_info if hasattr(meal.meal, 'macro_info') else None,
-            })
-
-        # Sort the meals_list by day and meal type
-        day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        meal_type_order = ['Breakfast', 'Lunch', 'Dinner']
-        day_order_map = {day: index for index, day in enumerate(day_order)}
-        meal_type_order_map = {meal_type: index for index, meal_type in enumerate(meal_type_order)}
-        meals_list.sort(key=lambda x: (
-            day_order_map.get(x['day'], 7),
-            meal_type_order_map.get(x['meal_type'], 3)
-        ))
-
-        # Build a comprehensive, detailed message for the assistant
-        message_content = (
-            f"I need to send a meal plan approval email to {user_name}. Here's all the context you'll need:\n\n"
-            f"USER CONTEXT: {user_context}\n\n"
-            f"MEAL PLAN DETAILS:\n"
-            f"- Week: {meal_plan.week_start_date.strftime('%B %d, %Y')} to {meal_plan.week_end_date.strftime('%B %d, %Y')}\n"
-            f"- Preference: {meal_plan.meal_prep_preference if meal_plan.meal_prep_preference else 'Not specified'}\n"
-            f"- Dietary restrictions: {user.dietary_restrictions if hasattr(user, 'dietary_restrictions') else 'None specified'}\n\n"
-            f"APPROVAL LINKS:\n"
-            f"- Daily prep: {approval_link_daily}\n"
-            f"- One-day bulk prep: {approval_link_one_day}\n\n"
-            f"MEALS (sorted by day and meal type):\n"
-        )
-
-        # Group meals by day for better organization
-        meals_by_day = {}
-        for meal in meals_list:
-            day = meal['day']
-            if day not in meals_by_day:
-                meals_by_day[day] = []
-            meals_by_day[day].append(meal)
-
-        # Add each day's meals to the message
-        for day in day_order:
-            if day in meals_by_day:
-                message_content += f"\n{day}:\n"
-                for meal in meals_by_day[day]:
-                    message_content += f"- {meal['meal_type']}: {meal['meal_name']}"
-                    if meal['description'] and meal['description'] != "A delicious meal prepared for you.":
-                        message_content += f" - {meal['description']}"
-                    message_content += "\n"
-
-        # Add nutrition information if available
-        message_content += "\nNUTRITION INFORMATION:\n"
-        has_nutrition = False
-        for meal in meals_list:
-            if meal.get('nutrition'):
-                has_nutrition = True
-                message_content += f"- {meal['meal_name']}: {meal['nutrition']}\n"
-        
-        if not has_nutrition:
-            message_content += "Detailed nutrition information not available for these meals.\n"
-
-        # Add user goals if available
-        try:
-            from customer_dashboard.models import GoalTracking
-            goals = GoalTracking.objects.filter(user=user).first()
-            if goals:
-                message_content += f"\nUSER GOALS:\n{goals.goal_description}\n\n"
-        except Exception as e:
-            logger.error(f"Error retrieving user goals: {e}")
-
-        # Build a clean HTML intro for the main section so we don't rely on LLM formatting
-        week_range_full = f"{meal_plan.week_start_date.strftime('%B %d, %Y')} – {meal_plan.week_end_date.strftime('%B %d, %Y')}"
-        main_text_html = (
-            f"<p>Your meal plan for the week of <strong>{week_range_full}</strong> is ready for review and approval.</p>"
-            f"<p>This plan supports your goals while respecting household allergies and toddler‑safe textures.</p>"
-        )
-
-        # Prepare a tabular grid for the Plan Overview: day x meal type
-        day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        plan_grid = {day: {'Breakfast': '', 'Lunch': '', 'Dinner': ''} for day in day_order}
-        for day, items in meals_by_day.items():
-            row = plan_grid.get(day)
-            if row is None:
-                continue
-            for m in items:
-                mt = m.get('meal_type')
-                name = m.get('meal_name')
-                if mt in row and name:
-                    row[mt] = name
-
-        # Provide a template-friendly list to avoid custom filters in email partials
-        plan_rows = []
-        for day in day_order:
-            data = plan_grid.get(day, {'Breakfast': '', 'Lunch': '', 'Dinner': ''})
-            plan_rows.append({
-                'day': day,
-                'breakfast': data.get('Breakfast', ''),
-                'lunch': data.get('Lunch', ''),
-                'dinner': data.get('Dinner', ''),
-            })
-
-        # Send the notification via the assistant
-        subject = f'Approve Your Meal Plan for {meal_plan.week_start_date.strftime("%b %d")} - {meal_plan.week_end_date.strftime("%b %d")}'
-        
-        # Derive brief key highlights (3–5 bullets) for the approval email
-        key_highlights = []
-        try:
-            # Goals-based highlight
-            try:
-                from customer_dashboard.models import GoalTracking as _GT
-                _goals = _GT.objects.filter(user=user).first()
-                if _goals and _goals.goal_description:
-                    key_highlights.append(str(_goals.goal_description)[:160])
-            except Exception:
-                pass
-
-            # Count-based highlights
-            total_meals = len(meals_list)
-            breakfast_count = sum(1 for m in meals_list if m.get('meal_type') == 'Breakfast')
-            lunch_count = sum(1 for m in meals_list if m.get('meal_type') == 'Lunch')
-            dinner_count = sum(1 for m in meals_list if m.get('meal_type') == 'Dinner')
-            key_highlights.append(f"Balanced plan: {breakfast_count} breakfasts, {lunch_count} lunches, {dinner_count} dinners")
-
-            # Chef meal indicator (if any present)
-            try:
-                chef_meal_flag = any(is_chef_meal(mpm.meal) for mpm in meal_plan_meals)
-                if chef_meal_flag:
-                    key_highlights.append("Includes chef-prepared dishes — no substitutions needed")
-            except Exception:
-                pass
-
-            # Safety / family notes if present in user context string
-            if isinstance(user_context, str):
-                if 'allerg' in user_context.lower():
-                    key_highlights.append("Allergy-aware selections")
-                if 'toddler' in user_context.lower() or 'child' in user_context.lower():
-                    key_highlights.append("Toddler-safe portions and textures")
-
-            # Trim to 5 bullets
-            key_highlights = [k for k in key_highlights if k][:5]
-        except Exception:
-            key_highlights = []
-
-        result = MealPlanningAssistant.send_notification_via_assistant(
-            user_id=user.id,
-            message_content=message_content,
-            subject=subject,
-            template_key='meal_plan_approval',
-            template_context={
-                'approval_link_daily': approval_link_daily,
-                'approval_link_one_day': approval_link_one_day,
-                'meals_by_day': meals_by_day,
-                'plan_rows': plan_rows,
-                'week_start': meal_plan.week_start_date.strftime('%B %d, %Y'),
-                'week_end': meal_plan.week_end_date.strftime('%B %d, %Y'),
-                'key_highlights': key_highlights,
-                'main_text': main_text_html,
-            }
-        )
-        
-        # Mark as sent if successful
-        if result.get('status') == 'success':
-            with transaction.atomic():
-                meal_plan.approval_email_sent = True
-                meal_plan.save()
-            logger.info(f"Meal plan approval email sent via assistant for: {user.email}")
-        else:
-            logger.error(f"Error sending meal plan approval email via assistant for: {user.email}, error: {str(result)}")
-
-    except Exception as e:
-        logger.error(f"Error in send_meal_plan_approval_email: {e}")
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(e),
-            'source': 'meal_plan_approval_email',
-            'traceback': traceback.format_exc()
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+# Approval emails removed; we keep other email tasks intact.
 
 @shared_task
 @handle_task_failure
@@ -495,7 +244,7 @@ def generate_shopping_list(meal_plan_id):
                 chef_note = "IMPORTANT: Some meals in this plan are chef-created and must be prepared exactly as specified. Do not suggest substitutions for chef-created meals. Include all ingredients for chef meals without alternatives."
             
             response = get_openai_client().responses.create(
-                model="gpt-4.1-mini",
+                model="gpt-5-mini",
                 input=[
                     {
                         "role": "developer",
@@ -624,6 +373,52 @@ def generate_shopping_list(meal_plan_id):
             return qty, unit_norm
         return qty, unit_norm
 
+    def _format_for_measurement_system(qty: float, unit_norm: str, measurement_system: str):
+        """
+        Convert canonical qty/unit (g, ml, or other normalized units) into a user‑friendly
+        representation based on the user's measurement system preference.
+        - For METRIC: prefer kg for >= 1000 g; l for >= 1000 ml.
+        - For US: convert grams to oz/lb (>= 16 oz -> lb), ml to cups (>= 240 ml) else fl oz.
+        Other units are returned unchanged.
+        Returns (display_qty: float|str|None, display_unit: str)
+        """
+        system = (measurement_system or 'METRIC').upper()
+        try:
+            if qty is None:
+                return qty, unit_norm
+
+            # Weight handling
+            if unit_norm == 'g':
+                if system == 'US':
+                    oz = qty / 28.3495
+                    if oz >= 16.0:
+                        lb = oz / 16.0
+                        return lb, 'lb'
+                    return oz, 'oz'
+                # metric
+                if qty >= 1000.0:
+                    return qty / 1000.0, 'kg'
+                return qty, 'g'
+
+            # Volume handling
+            if unit_norm == 'ml':
+                if system == 'US':
+                    # Prefer cups for larger volumes, fl oz for small
+                    if qty >= 240.0:
+                        cups = qty / 240.0
+                        return cups, 'cups'
+                    fl_oz = qty / 29.5735
+                    return fl_oz, 'fl oz'
+                # metric
+                if qty >= 1000.0:
+                    return qty / 1000.0, 'l'
+                return qty, 'ml'
+
+            # leave everything else as-is
+            return qty, unit_norm
+        except Exception:
+            return qty, unit_norm
+
     def _clean_note(note: str) -> str:
         if not note:
             return ''
@@ -697,6 +492,123 @@ def generate_shopping_list(meal_plan_id):
     try:
         from meals.meal_assistant_implementation import MealPlanningAssistant
 
+        # Convert emergency_list units to user's preferred measurement system for display
+        try:
+            measurement_system = getattr(user, 'measurement_system', 'METRIC')
+        except Exception:
+            measurement_system = 'METRIC'
+
+        def _es_normalize_unit(u: str) -> str:
+            if not u:
+                return ''
+            unit = str(u).strip().lower()
+            mapping = {
+                'grams': 'g', 'gram': 'g', 'g': 'g',
+                'kilogram': 'kg', 'kilograms': 'kg', 'kg': 'kg',
+                'milliliter': 'ml', 'milliliters': 'ml', 'ml': 'ml',
+                'liter': 'l', 'liters': 'l', 'l': 'l',
+                'ounce': 'oz', 'ounces': 'oz', 'oz': 'oz',
+                'pound': 'lb', 'pounds': 'lb', 'lb': 'lb', 'lbs': 'lb',
+                'fluid ounce': 'fl oz', 'fluid ounces': 'fl oz', 'floz': 'fl oz', 'fl oz': 'fl oz',
+                'cup': 'cups', 'cups': 'cups',
+                'piece': 'pieces', 'pieces': 'pieces', 'pcs': 'pieces',
+                'can': 'cans', 'cans': 'cans',
+                'bottle': 'bottles', 'bottles': 'bottles',
+                'packet': 'packets', 'packets': 'packets',
+            }
+            return mapping.get(unit, unit)
+
+        def _es_parse_qty(val):
+            try:
+                if isinstance(val, (int, float)):
+                    return float(val)
+                s = str(val).strip()
+                import re
+                if '/' in s and re.match(r'^\s*\d+\s*/\s*\d+\s*$', s):
+                    a, b = s.split('/')
+                    return float(a) / float(b)
+                m = re.match(r'^\s*([0-9]+(?:\.[0-9]+)?)', s)
+                if m:
+                    return float(m.group(1))
+            except Exception:
+                pass
+            return None
+
+        def _es_to_canonical(qty: float, unit_norm: str):
+            if qty is None:
+                return qty, unit_norm
+            try:
+                if unit_norm == 'kg':
+                    return qty * 1000.0, 'g'
+                if unit_norm == 'l':
+                    return qty * 1000.0, 'ml'
+                if unit_norm == 'lb':
+                    return qty * 453.592, 'g'
+                if unit_norm == 'oz':
+                    return qty * 28.3495, 'g'
+                if unit_norm == 'fl oz':
+                    return qty * 29.5735, 'ml'
+                if unit_norm == 'cups':
+                    return qty * 240.0, 'ml'
+            except Exception:
+                return qty, unit_norm
+            return qty, unit_norm
+
+        def _es_format_for_system(qty: float, unit_norm: str):
+            sys = (measurement_system or 'METRIC').upper()
+            try:
+                if qty is None:
+                    return qty, unit_norm
+                if unit_norm == 'g':
+                    if sys == 'US':
+                        oz = qty / 28.3495
+                        if oz >= 16.0:
+                            return oz / 16.0, 'lb'
+                        return oz, 'oz'
+                    return (qty / 1000.0, 'kg') if qty >= 1000.0 else (qty, 'g')
+                if unit_norm == 'ml':
+                    if sys == 'US':
+                        if qty >= 240.0:
+                            return qty / 240.0, 'cups'
+                        return qty / 29.5735, 'fl oz'
+                    return (qty / 1000.0, 'l') if qty >= 1000.0 else (qty, 'ml')
+                return qty, unit_norm
+            except Exception:
+                return qty, unit_norm
+
+        converted_emergency_list = []
+        for it in emergency_list:
+            if isinstance(it, dict):
+                name = it.get('item_name')
+                qty_raw = it.get('quantity_to_buy')
+                unit_raw = it.get('unit')
+                notes_item = it.get('notes')
+            else:
+                name = getattr(it, 'item_name', None)
+                qty_raw = getattr(it, 'quantity_to_buy', None)
+                unit_raw = getattr(it, 'unit', None)
+                notes_item = getattr(it, 'notes', None)
+            unit_norm = _es_normalize_unit(unit_raw)
+            qty_val = _es_parse_qty(qty_raw)
+            if qty_val is not None and unit_norm in ('g', 'kg', 'ml', 'l', 'oz', 'lb', 'fl oz', 'cups'):
+                c_qty, c_unit = _es_to_canonical(qty_val, unit_norm)
+                d_qty, d_unit = _es_format_for_system(c_qty, c_unit)
+                if isinstance(d_qty, (int, float)):
+                    dq = float(d_qty)
+                    qty_out = (f"{dq:.2f}".rstrip('0').rstrip('.') if dq % 1 != 0 else f"{int(dq)}")
+                else:
+                    qty_out = str(d_qty)
+                unit_out = d_unit
+            else:
+                qty_out = str(qty_raw) if qty_raw is not None else ''
+                unit_out = unit_raw or ''
+            converted_emergency_list.append({
+                'item_name': name,
+                'quantity_to_buy': qty_out,
+                'unit': unit_out,
+                'notes': notes_item or ''
+            })
+
         # Format the safe items into a simpler structure for the template
         safe_items_data = []
         for pi in user_pantry_items:
@@ -736,25 +648,35 @@ def generate_shopping_list(meal_plan_id):
             f"Use the structured tables provided; avoid meal-by-meal commentary."
         )
 
-        # Build structured tables for template rendering, if we have categorized_items
+        # Build structured tables for template rendering, honoring user's measurement preference
         shopping_tables = []
         if categorized_items:
+            try:
+                measurement_system = getattr(user, 'measurement_system', 'METRIC')
+            except Exception:
+                measurement_system = 'METRIC'
             for category, items_in_category in categorized_items.items():
                 table_items = []
                 for ingredient, details in items_in_category.items():
                     qty = details.get('quantity')
                     unit = details.get('unit')
+                    # Convert canonical qty/unit to user's display system
+                    if isinstance(qty, (int, float)):
+                        qty_disp, unit_disp = _format_for_measurement_system(float(qty), str(unit or ''), measurement_system)
+                    else:
+                        qty_disp, unit_disp = qty, _normalize_unit(unit)
                     notes_list = details.get('notes', []) or []
                     # Normalize quantity to a friendly string
-                    if isinstance(qty, (int, float)):
-                        qty_str = (f"{qty:.1f}".rstrip('0').rstrip('.') if isinstance(qty, float) and qty % 1 != 0 else f"{int(qty)}")
+                    if isinstance(qty_disp, (int, float)):
+                        qf = float(qty_disp)
+                        qty_str = (f"{qf:.2f}".rstrip('0').rstrip('.') if qf % 1 != 0 else f"{int(qf)}")
                     else:
-                        qty_str = str(qty)
+                        qty_str = str(qty_disp)
                     # Build a concise, normalized row
                     table_items.append({
                         'ingredient': ingredient,
                         'quantity': qty_str,
-                        'unit': _normalize_unit(unit),
+                        'unit': _normalize_unit(unit_disp),
                         'notes': '; '.join([n for n in (notes_list[:2] if isinstance(notes_list, list) else [notes_list]) if n]) or '',
                     })
                 shopping_tables.append({'category': category, 'items': table_items})
@@ -919,7 +841,6 @@ def generate_user_summary(user_id: int, summary_date=None) -> None:
             }
             for c in calories
         ],
-        "meal_plan_needs_approval": not user.mealplan_set.filter(is_approved=True).exists(),
     }
     
     # Calculate data hash for idempotency check
@@ -942,14 +863,14 @@ def generate_user_summary(user_id: int, summary_date=None) -> None:
         "• Overview ≤ 5 sentences.\n"
         "• Sections: 1) Goals & Status, 2) Health Metrics trends, 3) Calorie-Intake insights.\n"
         "• Omit any empty section.\n"
-        "• If meal_plan_needs_approval is true, add one gentle reminder at the end.\n"
+        ""
         "• Encouraging, business-casual tone.\n"
         f"• Respond ONLY in {_get_language_name(user.preferred_language)}."
     )
 
     try:
         resp = get_openai_client().responses.create(
-            model="gpt-4.1-nano",
+            model="gpt-5-nano",
             input=[
                 {
                     "role": "developer",
@@ -1090,7 +1011,7 @@ def generate_emergency_supply_list(user_id):
     try:
         from meals.pydantic_models import EmergencySupplyList
         response = get_openai_client().responses.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             input=[
                 {
                     "role": "developer",
@@ -1302,22 +1223,14 @@ def generate_emergency_supply_list(user_id):
                 message_content = "CURRENT SAFE PANTRY ITEMS: None available\n\n"
             
             # Add recommended emergency supplies to purchase
-            if emergency_list:
+            if converted_emergency_list:
                 message_content += "RECOMMENDED EMERGENCY SUPPLIES TO PURCHASE:\n"
-                for item in emergency_list:
+                for item in converted_emergency_list:
                     try:
-                        # Access attributes safely based on type
-                        if isinstance(item, dict):
-                            item_name = item.get('item_name', 'Unknown item')
-                            quantity = item.get('quantity_to_buy', '')
-                            unit = item.get('unit', '')
-                            notes = item.get('notes', '')
-                        else:
-                            # Assume it's a Pydantic model or similar object with attributes
-                            item_name = getattr(item, 'item_name', 'Unknown item') 
-                            quantity = getattr(item, 'quantity_to_buy', '')
-                            unit = getattr(item, 'unit', '')
-                            notes = getattr(item, 'notes', '')
+                        item_name = item.get('item_name', 'Unknown item')
+                        quantity = item.get('quantity_to_buy', '')
+                        unit = item.get('unit', '')
+                        notes = item.get('notes', '')
                             
                         message_content += f"- {item_name}: {quantity} {unit or ''}"
                         if notes:
@@ -1337,7 +1250,7 @@ def generate_emergency_supply_list(user_id):
             
             # Log the number of emergency items gathered for template rendering
             try:
-                logger.info(f"EMAIL SERVICE DEBUG: Emergency list items count: {len(emergency_list) if isinstance(emergency_list, list) else 0}")
+                logger.info(f"EMAIL SERVICE DEBUG: Emergency list items count: {len(converted_emergency_list)}")
             except Exception:
                 pass
 
@@ -1358,7 +1271,7 @@ def generate_emergency_supply_list(user_id):
                 template_key='emergency_supply',
                 template_context={
                     # Provide the flat list parsed from the schema for template rendering
-                    'emergency_list': emergency_list if isinstance(emergency_list, list) else [],
+                    'emergency_list': converted_emergency_list,
                 }
             )
             

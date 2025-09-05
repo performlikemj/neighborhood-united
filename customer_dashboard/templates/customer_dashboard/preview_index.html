@@ -18,11 +18,6 @@
   <p class="hint">{% trans "These routes render assistant-driven emails using the same base template. Only available in DEBUG." %}</p>
   <ul>
     <li>
-      <a href="{% url 'customer_dashboard:preview_assistant_email' %}?key=meal_plan_approval{% if default_meal_plan_id %}&meal_plan_id={{ default_meal_plan_id }}{% endif %}">
-        {% trans "Meal Plan Approval" %}
-      </a>
-    </li>
-    <li>
       <a href="{% url 'customer_dashboard:preview_assistant_email' %}?key=shopping_list{% if default_meal_plan_id %}&meal_plan_id={{ default_meal_plan_id }}{% endif %}">
         {% trans "Shopping List" %}
       </a>
@@ -46,4 +41,3 @@
   <p class="hint">{% trans "Tip: add query params like" %} <code>?user_id=1&amp;meal_plan_id=123</code> {% trans "to drive real data." %}</p>
 </body>
 </html>
-

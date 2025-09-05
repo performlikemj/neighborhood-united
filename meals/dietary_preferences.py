@@ -26,7 +26,7 @@ def handle_custom_dietary_preference(custom_prefs):
             try:
                 # Step 4: Use OpenAI to generate structured JSON
                 response = get_openai_client().responses.create(
-                    model="gpt-4.1-mini",
+                    model="gpt-5-mini",
                     input=[
                         {
                             "role": "developer",
@@ -165,7 +165,7 @@ def assign_dietary_preferences(meal_id: int, gpt_tags: Optional[List[str]] = Non
         if not tags:
             messages = meal.generate_messages()
             response = get_openai_client().responses.create(
-                model="gpt-4.1-mini",
+                model="gpt-5-mini",
                 input=messages,
                 text={
                     "format": {

@@ -750,12 +750,11 @@ def replace_meal_plan_meal(
                 if not serves:
                     return {"status": "error", "message": "Chef does not serve your postal code area"}
 
-            # Mark plan as changed if it was previously approved
+            # If plan approved, mark changed and require re‑approval
             if meal_plan.is_approved:
                 meal_plan.has_changes = True
                 meal_plan.is_approved = False
-                meal_plan.reminder_sent = False
-                meal_plan.save(update_fields=["has_changes", "is_approved", "reminder_sent"])
+                meal_plan.save(update_fields=["has_changes", "is_approved"])
 
             # Mark slot as paid if the order is already paid
             if order and order.is_paid:

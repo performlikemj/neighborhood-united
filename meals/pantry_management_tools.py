@@ -484,7 +484,7 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
     # --- 2. Call OpenAI -------------------------------------------------------
     try:
         response = get_openai_client().responses.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             input=[
                 {
                     "role": "developer",

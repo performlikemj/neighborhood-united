@@ -304,60 +304,7 @@ class ReplenishItemsSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
     items_to_replenish: List[ReplenishItem] = Field(..., description="List of items to replenish")
 
-# New Pydantic Models for Approving Meal Plans
-class MealItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    meal_name: str = Field(..., description="Name of the meal.")
-    meal_type: str = Field(..., description="Type of the meal (e.g., Breakfast, Lunch, Dinner).")
-    day: str = Field(..., description="Day of the week the meal is planned for.")
-    description: str = Field(..., description="A tempting description of the meal.")
-    is_chef_meal: bool = Field(
-        ...,
-        description="Indicates if this meal was created by a chef"
-    )
-    chef_name: Optional[str] = Field(
-        ...,
-        description="Name of the chef who created this meal, if applicable"
-    )
-    chef_meal_event_id: Optional[int] = Field(
-        ...,
-        description="ID of the chef meal event, if this is a chef meal"
-    )
-
-class MealPlanApprovalEmailSchema(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    user_name: str = Field(..., description="Name of the user.")
-    meal_plan_week_start: str = Field(..., description="Start date of the meal plan week.")
-    meal_plan_week_end: str = Field(..., description="End date of the meal plan week.")
-    meals: List[MealItem] = Field(..., description="The full list of the meals included in the meal plan, ordered by day and meal type.")
-    summary_text: str = Field(..., description="A tempting summary of the meal plan designed to entice the user to click the approval link.")
-
-    example : ClassVar[Dict[str, Any]] = {
-            "user_name": "JohnDoe",
-            "meal_plan_week_start": "2024-10-22",
-            "meal_plan_week_end": "2024-10-28",
-            "meals": [
-                    {
-                        "meal_name": "Oatmeal with Fresh Berries",
-                        "meal_type": "Breakfast",
-                        "day": "Monday",
-                        "description": "A warm bowl of hearty oatmeal topped with juicy, fresh berries to start your day off right.",
-                        "is_chef_meal": False,
-                        "chef_name": None,
-                        "chef_meal_event_id": None
-                    },
-                    {
-                        "meal_name": "Grilled Chicken Salad",
-                        "meal_type": "Lunch",
-                        "day": "Monday",
-                        "description": "Tender grilled chicken over a bed of crisp greens with a zesty vinaigrette.",
-                        "is_chef_meal": False,
-                        "chef_name": None,
-                        "chef_meal_event_id": None
-                    }
-                ],
-                "summary_text": "We've put together a week of mouthwatering meals just for you, JohnDoe! Whether you're enjoying a hearty breakfast of Oatmeal with Fresh Berries or a refreshing Grilled Chicken Salad, your week is set to be delicious. Ready to approve your meal plan?"
-            }
+# (Removed) Approval email schema models: no longer used.
 
 
 # Bulk Meal Plan Prepping

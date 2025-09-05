@@ -121,8 +121,7 @@ class MealPlanFormatter(BaseToolFormatter):
         <div class="meal-plan-actions">
             <h3>What's Next?</h3>
             <p>Ready to get started with your meal plan?</p>
-            {self._create_button("Approve Meal Plan", f"/approve-meal-plan/{meal_plan_id}", "primary")}
-            {self._create_button("Generate Shopping List", f"/shopping-list/{meal_plan_id}", "secondary")}
+            {self._create_button("Generate Shopping List", f"/shopping-list/{meal_plan_id}", "primary")}
             {self._create_button("View Recipe Instructions", f"/recipes/{meal_plan_id}", "secondary")}
         </div>
         """
@@ -1465,4 +1464,3 @@ if __name__ == "__main__":
     for section in sections:
         print(f"\n--- {section.section_type.upper()} SECTION ---")
         print(section.content)
-

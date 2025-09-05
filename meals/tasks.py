@@ -602,7 +602,7 @@ def generate_user_chat_summaries():
             # Call OpenAI API to generate consolidated summary
             try:
                 response = client.responses.create(
-                    model="gpt-4.1-mini",
+                    model="gpt-5-mini",
                     input=[
                         {"role": "system", "content": "You are an assistant that creates concise user summaries from chat data."},
                         {"role": "user", "content": prompt}
@@ -737,7 +737,7 @@ def generate_chat_session_summaries():
             # Call OpenAI API
             try:
                 response = client.responses.create(
-                    model="gpt-4.1-mini", # Use a smaller model for summaries
+                    model="gpt-5-mini", # Use a smaller model for summaries
                     input=[
                         {"role": "system", "content": "You are an assistant that summarizes conversations accurately and concisely."},
                         {"role": "user", "content": prompt}

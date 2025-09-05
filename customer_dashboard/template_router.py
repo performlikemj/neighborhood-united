@@ -22,7 +22,6 @@ from pydantic import BaseModel, ValidationError
 
 from .email_schemas import (
     EmailBody,
-    EmailMealPlanApproval,
     EmailShoppingList,
     EmailDailyPrep,
     EmailBulkPrep,
@@ -38,11 +37,6 @@ from .email_schemas import (
 # Only include overrides you actually have; router will fallback to generic.
 TEMPLATE_MAP: Dict[str, Dict[str, str]] = {
     # Example mappings (add concrete partials over time):
-    'meal_plan_approval': {
-        'main': 'emails/sections/meal_plan_approval_main.html',
-        'data': 'emails/sections/meal_plan_approval_data.html',
-        'final': 'emails/sections/meal_plan_approval_final.html',
-    },
     'bulk_prep_instructions': {
         'main': 'emails/sections/bulk_prep_instructions_main.html',
         'data': 'emails/sections/bulk_prep_instructions_data.html',
@@ -85,7 +79,6 @@ TEMPLATE_MAP: Dict[str, Dict[str, str]] = {
     },
 }
 SCHEMA_MAP: Dict[str, Type[BaseModel]] = {
-    'meal_plan_approval': EmailMealPlanApproval,
     'daily_prep_instructions': EmailDailyPrep,
     'bulk_prep_instructions': EmailBulkPrep,
     'shopping_list': EmailShoppingList,
@@ -166,5 +159,4 @@ def render_email_sections(
             rendered[section] = render_to_string(fallback_path, ctx)
 
     return rendered, css_classes
-
 

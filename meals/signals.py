@@ -31,8 +31,9 @@ def trigger_assign_pantry_tags(sender, instance, created, **kwargs):
 @receiver(m2m_changed, sender=MealPlan.meal.through)
 def mealplan_meal_changed(sender, instance, action, **kwargs):
     if action in ["post_add", "post_remove", "post_clear"]:
+        # Record change and require manual re‑approval
         instance.has_changes = True
-        instance.is_approved = False  # Reset approval when changes are detected
+        instance.is_approved = False
         instance.save()
 
 @receiver(pre_save, sender=MealPlan)

@@ -170,7 +170,7 @@ def _rank_videos_with_openai(meal_name: str, meal_description: str, videos: List
         
         # Call OpenAI Responses API to analyze and rank videos
         response = client.responses.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             input=f"""
             Analyze these YouTube cooking videos and rank them based on relevance to this meal:
             

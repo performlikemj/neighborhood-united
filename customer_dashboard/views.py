@@ -41,6 +41,7 @@ from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
 from .serializers import ChatThreadSerializer, GoalTrackingSerializer, UserHealthMetricsSerializer, CalorieIntakeSerializer
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.decorators import renderer_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from .permissions import IsCustomer
 from rest_framework import status
@@ -66,6 +67,7 @@ from meals.meal_assistant_implementation import (
     OnboardingAssistant,
     generate_guest_id,
 )
+from meals.views import EventStreamRenderer
 import traceback
 from django.conf import settings
 from asgiref.sync import async_to_sync
@@ -984,6 +986,7 @@ def update_goal_api(request):
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@renderer_classes([EventStreamRenderer])
 def stream_message(request):
     """
     Stream a message from the assistant for logged‑in users via SSE.
@@ -1150,6 +1153,8 @@ def stream_message(request):
 
 @csrf_exempt
 @api_view(['POST'])
+@permission_classes([AllowAny])
+@renderer_classes([EventStreamRenderer])
 def guest_stream_message(request):
     """
     Stream a message from the assistant for guest users via SSE.
@@ -1564,6 +1569,8 @@ def guest_new_conversation(request):
 
 @csrf_exempt
 @api_view(['POST'])
+@permission_classes([AllowAny])
+@renderer_classes([EventStreamRenderer])
 def onboarding_stream_message(request):
     """Stream onboarding chat messages for guest users via SSE."""
     import traceback
@@ -1823,6 +1830,7 @@ def onboarding_stream_message(request):
 
 
 @api_view(['POST'])
+@permission_classes([AllowAny])
 def onboarding_new_conversation(request):
     """Start a fresh onboarding chat."""
     import traceback
@@ -2385,6 +2393,3 @@ def api_stream_user_summary(request):
     response['X-Accel-Buffering'] = 'no'  # For Nginx
     
     return response
-
-
-

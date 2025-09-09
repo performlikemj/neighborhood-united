@@ -46,6 +46,9 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from .permissions import IsCustomer
 from rest_framework import status
 from rest_framework.response import Response
+from django_countries.fields import Country
+import decimal as _decimal
+import datetime as _dt
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
@@ -83,6 +86,36 @@ class AuthChatThrottle(UserRateThrottle):
     rate = '1000/day'
 
 logger = logging.getLogger(__name__) 
+
+def _json_default(obj):
+    """Safely coerce non-JSON types found in tool outputs into JSON.
+    - Country → country code (or string)
+    - Decimal → float
+    - date/datetime → ISO8601 string
+    - Fallback → str(obj)
+    """
+    try:
+        if isinstance(obj, Country):
+            try:
+                return obj.code or str(obj)
+            except Exception:
+                return str(obj)
+    except Exception:
+        pass
+    try:
+        if isinstance(obj, _decimal.Decimal):
+            return float(obj)
+    except Exception:
+        pass
+    try:
+        if isinstance(obj, (_dt.date, _dt.datetime)):
+            return obj.isoformat()
+    except Exception:
+        pass
+    return str(obj)
+
+def _sse_json(data: dict) -> str:
+    return json.dumps(data, default=_json_default)
 
 @login_required
 @require_http_methods(["POST"]) 
@@ -992,7 +1025,8 @@ def stream_message(request):
     Stream a message from the assistant for logged‑in users via SSE.
     """
     user_id = request.user.id
-    message = request.data.get('message')
+    # Support both 'message' and legacy 'question' from frontend
+    message = request.data.get('message') or request.data.get('question')
     thread_id = request.data.get('thread_id')  # Check if we're getting thread_id
     response_id = request.data.get('response_id')  # Check if we're getting response_id
     # Optional meal context from frontend
@@ -1002,6 +1036,14 @@ def stream_message(request):
         
     # Use the correct ID - prefer thread_id if provided, fallback to response_id
     effective_thread_id = thread_id or response_id
+
+    # If the front end requested a new conversation, ignore any provided ID once
+    try:
+        if request.session.pop('chat_reset', False):
+            effective_thread_id = None
+            request.session.save()
+    except Exception:
+        pass
     
     # Build an augmented message that includes optional meal context
     augmented_message = message or ""
@@ -1060,11 +1102,17 @@ def stream_message(request):
     
     # Check if this thread exists before we start
     try:
+        found_match = False
         threads = ChatThread.objects.filter(user=request.user)
         for t in threads:
             if (isinstance(t.openai_thread_id, list) and effective_thread_id in t.openai_thread_id) or \
                (t.latest_response_id == effective_thread_id):
                 logger.info(f"DEBUG STREAM - Found existing thread {t.id} matching ID {effective_thread_id}")
+                found_match = True
+                break
+        if effective_thread_id and not found_match:
+            logger.info("DEBUG STREAM - No matching thread found for provided ID; starting new")
+            effective_thread_id = None
     except Exception as e:
         # n8n traceback
         n8n_traceback = {
@@ -1079,6 +1127,30 @@ def stream_message(request):
     def event_stream():
         emitted_id = False
         chunk_count = 0
+
+        def _sse_log(kind: str, payload: dict):
+            """Log SSE payloads with safe previews to help diagnose ordering/mixups."""
+            try:
+                preview = {}
+                if isinstance(payload, dict):
+                    preview.update(payload)
+                    # Trim large text deltas
+                    if isinstance(preview.get("delta"), dict) and isinstance(preview["delta"].get("text"), str):
+                        t = preview["delta"]["text"]
+                        preview["delta"]["text"] = (t[:200] + "…") if len(t) > 200 else t
+                    # Trim tool outputs
+                    if "output" in preview:
+                        out = preview["output"]
+                        if isinstance(out, dict) and isinstance(out.get("markdown"), str):
+                            md = out["markdown"]
+                            preview["output"] = {"markdown_preview": (md[:200] + "…") if len(md) > 200 else md}
+                        elif isinstance(out, str):
+                            preview["output"] = (out[:200] + "…") if len(out) > 200 else out
+                logger.info(f"SSE AUTH [{chunk_count}] -> {kind}: {preview}")
+                # Also print directly to stdout so it appears in container/terminal logs
+                # stdout prints removed after debugging
+            except Exception as e:
+                logger.warning(f"SSE AUTH log error for {kind}: {e}")
         try:
             for chunk in assistant.stream_message(augmented_message, effective_thread_id):
                 chunk_count += 1
@@ -1094,7 +1166,8 @@ def stream_message(request):
                     response_id = chunk.get("id")
                     logger.info(f"DEBUG STREAM - Got new response_id: {response_id}")
                     event_payload = {"type": "response.created", "id": response_id}
-                    yield f"data: {json.dumps(event_payload)}\n\n"
+                    _sse_log("response.created", event_payload)
+                    yield f"data: {_sse_json(event_payload)}\n\n"
                     emitted_id = True
                     continue
 
@@ -1103,9 +1176,11 @@ def stream_message(request):
                     payload = {
                         "type": "response.tool",
                         "id": chunk.get("tool_call_id"),
+                        "name": chunk.get("name"),
                         "output": chunk.get("output"),
                     }
-                    yield f"data: {json.dumps(payload)}\n\n"
+                    _sse_log("response.tool", payload)
+                    yield f"data: {_sse_json(payload)}\n\n"
                     continue
 
                 # 3) assistant text deltas (always 'text')
@@ -1114,19 +1189,22 @@ def stream_message(request):
                         "type": "response.output_text.delta",
                         "delta": {"text": chunk.get("content")},
                     }
-                    yield f"data: {json.dumps(payload)}\n\n"
+                    _sse_log("response.output_text.delta", payload)
+                    yield f"data: {_sse_json(payload)}\n\n"
                     continue
 
                 # 4) follow‑up assistant response (rare)
                 if chunk.get("type") == "follow_up_response":
-                    yield f"data: {json.dumps(chunk)}\n\n"
+                    _sse_log("follow_up_response", chunk)
+                    yield f"data: {_sse_json(chunk)}\n\n"
                     continue
 
                 # 5) conversation completed
                 if chunk.get("type") == "response.completed":
                     logger.info(f"DEBUG STREAM - Stream completed")
                     payload = {"type": "response.completed"}
-                    yield f"data: {json.dumps(payload)}\n\n"
+                    _sse_log("response.completed", payload)
+                    yield f"data: {_sse_json(payload)}\n\n"
                     continue
 
                 # 6) assistant wants to run *another* tool (rare edge case)
@@ -1136,18 +1214,20 @@ def stream_message(request):
                         "name": chunk.get("name"),
                         "output": chunk.get("output"),
                     }
-                    yield f"data: {json.dumps(payload)}\n\n"
+                    _sse_log("response.function_call", payload)
+                    yield f"data: {_sse_json(payload)}\n\n"
                     continue
             
         except Exception as e:
             logger.error(f"Error in stream_message: {str(e)}")
             traceback.print_exc()
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            yield f"data: {_sse_json({'type': 'error', 'message': str(e)})}\n\n"
             
         # close the SSE stream
         yield 'event: close\n\n'
     response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
     response['Cache-Control'] = 'no-cache, no-transform'
+    response['X-Accel-Buffering'] = 'no'
     return response
 
 
@@ -1187,14 +1267,44 @@ def guest_stream_message(request):
         request.session.save()
         logger.info(f"GUEST_STREAM: Generated new guest_id {guest_id}")
     
-    message = request.data.get('message')
+    # Support both 'message' and legacy 'question' from frontend
+    message = request.data.get('message') or request.data.get('question')
     thread_id = request.data.get('response_id')
+    # If a guest reset was requested, ignore any prior response_id once
+    try:
+        if request.session.pop('guest_chat_reset', False):
+            thread_id = None
+            request.session.save()
+    except Exception:
+        pass
     
     assistant = MealPlanningAssistant(guest_id)
     def event_stream():
         emitted_id = False
+        chunk_count = 0
+
+        def _sse_log(kind: str, payload: dict):
+            try:
+                preview = {}
+                if isinstance(payload, dict):
+                    preview.update(payload)
+                    if isinstance(preview.get("delta"), dict) and isinstance(preview["delta"].get("text"), str):
+                        t = preview["delta"]["text"]
+                        preview["delta"]["text"] = (t[:200] + "…") if len(t) > 200 else t
+                    if "output" in preview:
+                        out = preview["output"]
+                        if isinstance(out, dict) and isinstance(out.get("markdown"), str):
+                            md = out["markdown"]
+                            preview["output"] = {"markdown_preview": (md[:200] + "…") if len(md) > 200 else md}
+                        elif isinstance(out, str):
+                            preview["output"] = (out[:200] + "…") if len(out) > 200 else out
+                logger.info(f"SSE GUEST [{chunk_count}] -> {kind}: {preview}")
+                # stdout prints removed after debugging
+            except Exception as e:
+                logger.warning(f"SSE GUEST log error for {kind}: {e}")
         try:
             for chunk in assistant.stream_message(message, thread_id):
+                chunk_count += 1
                 # Skip if chunk is not a dictionary
                 if not isinstance(chunk, dict):
                     continue
@@ -1202,7 +1312,8 @@ def guest_stream_message(request):
                 # initial response.created event
                 if not emitted_id and chunk.get("type") == "response_id":
                     payload = {"type": "response.created", "id": chunk.get("id")}
-                    yield f"data: {json.dumps(payload)}\n\n"
+                    _sse_log("response.created", payload)
+                    yield f"data: {_sse_json(payload)}\n\n"
                     emitted_id = True
                     continue
 
@@ -1214,7 +1325,8 @@ def guest_stream_message(request):
                         "name": chunk.get("name"),
                         "output": chunk.get("output"),
                     }
-                    yield f"data: {json.dumps(payload)}\n\n"
+                    _sse_log("response.tool", payload)
+                    yield f"data: {_sse_json(payload)}\n\n"
                     continue
 
                 # 3) assistant text deltas (always 'text')
@@ -1223,18 +1335,21 @@ def guest_stream_message(request):
                         "type": "response.output_text.delta",
                         "delta": {"text": chunk.get("content")},
                     }
-                    yield f"data: {json.dumps(payload)}\n\n"
+                    _sse_log("response.output_text.delta", payload)
+                    yield f"data: {_sse_json(payload)}\n\n"
                     continue
 
                 # 4) follow‑up assistant response (rare)
                 if chunk.get("type") == "follow_up_response":
+                    _sse_log("follow_up_response", chunk)
                     yield f"data: {json.dumps(chunk)}\n\n"
                     continue
 
                 # 5) conversation completed
                 if chunk.get("type") == "response.completed":
                     payload = {"type": "response.completed"}
-                    yield f"data: {json.dumps(payload)}\n\n"
+                    _sse_log("response.completed", payload)
+                    yield f"data: {_sse_json(payload)}\n\n"
                     continue
 
                 # 6) assistant wants to run *another* tool (rare edge case)
@@ -1244,6 +1359,7 @@ def guest_stream_message(request):
                         "name": chunk.get("name"),
                         "output": chunk.get("output"),
                     }
+                    _sse_log("response.function_call", payload)
                     yield f"data: {json.dumps(payload)}\n\n"
                     continue
         except Exception as e:
@@ -1256,6 +1372,7 @@ def guest_stream_message(request):
 
     response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
     response['Cache-Control'] = 'no-cache, no-transform'
+    response['X-Accel-Buffering'] = 'no'
     response["X-Guest-ID"] = guest_id
     return response
 
@@ -1269,8 +1386,8 @@ def chat_with_gpt(request):
     along with the new response ID.
     """
     try:
-        # Extract parameters from request
-        message = request.data.get('message')
+        # Extract parameters from request (support 'message' or legacy 'question')
+        message = request.data.get('message') or request.data.get('question')
         thread_id = request.data.get('thread_id')  # Previous response ID
         user_id = request.user.id
         
@@ -1357,6 +1474,7 @@ def ai_tool_call(request):
     maintain this endpoint for compatibility with the frontend.
     """
     try:
+        # Debug prints removed
         user_id = request.data.get('user_id')
         user = CustomUser.objects.get(id=user_id)
         tool_call = request.data.get('tool_call')
@@ -1504,6 +1622,13 @@ def new_conversation(request):
         assistant = MealPlanningAssistant(user_id)
         assistant.reset_conversation()
 
+        # 2a) Instruct next SSE request to ignore any prior thread/response id
+        try:
+            request.session['chat_reset'] = True
+            request.session.save()
+        except Exception:
+            pass
+
         # 3) Let front-end know we're ready for a new chat
         return JsonResponse({"status": "success", "message": "New conversation started."})
     except Exception as e:
@@ -1526,11 +1651,17 @@ def guest_new_conversation(request):
             # Store it in session for backward compatibility
             request.session['guest_id'] = guest_id
             request.session.save()
-            print(f"GUEST_NEW_CONVERSATION: Using guest_id {guest_id} from request")
+            # Debug prints removed
             
             # Reset the conversation for this guest_id
             assistant = MealPlanningAssistant(guest_id)
             assistant.reset_conversation()
+            # Mark session so the next SSE ignores any prior response_id
+            try:
+                request.session['guest_chat_reset'] = True
+                request.session.save()
+            except Exception:
+                pass
             
             return JsonResponse({
                 "status": "success",
@@ -1546,13 +1677,19 @@ def guest_new_conversation(request):
                 guest_id = generate_guest_id()
                 request.session['guest_id'] = guest_id
                 request.session.save()
-                print(f"GUEST_NEW_CONVERSATION: Generated new guest_id {guest_id}")
+                # Debug prints removed
             else:
-                print(f"GUEST_NEW_CONVERSATION: Using existing guest_id {guest_id}")
+                # Debug prints removed
+                pass
                 
             # Reset the conversation
             assistant = MealPlanningAssistant(guest_id)
             assistant.reset_conversation()
+            try:
+                request.session['guest_chat_reset'] = True
+                request.session.save()
+            except Exception:
+                pass
             
             return JsonResponse({
                 "status": "success",
@@ -1725,6 +1862,26 @@ def onboarding_stream_message(request):
         def event_stream():
             emitted_id = False
             chunk_count = 0
+
+            def _sse_log(kind: str, payload: dict):
+                try:
+                    preview = {}
+                    if isinstance(payload, dict):
+                        preview.update(payload)
+                        if isinstance(preview.get("delta"), dict) and isinstance(preview["delta"].get("text"), str):
+                            t = preview["delta"]["text"]
+                            preview["delta"]["text"] = (t[:200] + "…") if len(t) > 200 else t
+                        if "output" in preview:
+                            out = preview["output"]
+                            if isinstance(out, dict) and isinstance(out.get("markdown"), str):
+                                md = out["markdown"]
+                                preview["output"] = {"markdown_preview": (md[:200] + "…") if len(md) > 200 else md}
+                            elif isinstance(out, str):
+                                preview["output"] = (out[:200] + "…") if len(out) > 200 else out
+                    logger.info(f"SSE ONBOARD [{chunk_count}] -> {kind}: {preview}")
+                    # stdout prints removed after debugging
+                except Exception as e:
+                    logger.warning(f"SSE ONBOARD log error for {kind}: {e}")
             
             try:
                 for chunk in assistant.stream_message(message, thread_id):
@@ -1736,10 +1893,11 @@ def onboarding_stream_message(request):
                     
                     if not emitted_id and chunk.get("type") == "response_id":
                         response_id = chunk.get('id')
-                        payload = {'type': 'response.created', 'id': response_id}
-                        yield f"data: {json.dumps(payload)}\n\n"
-                        emitted_id = True
-                        continue
+                    payload = {'type': 'response.created', 'id': response_id}
+                    _sse_log('response.created', payload)
+                    yield f"data: {json.dumps(payload)}\n\n"
+                    emitted_id = True
+                    continue
 
                     if chunk.get("type") == "tool_result":
                         tool_call_id = chunk.get("tool_call_id")
@@ -1752,7 +1910,8 @@ def onboarding_stream_message(request):
                             "name": tool_name,
                             "output": tool_output,
                         }
-                        yield f"data: {json.dumps(payload)}\n\n"
+                        _sse_log('response.tool', payload)
+                        yield f"data: {_sse_json(payload)}\n\n"
                         continue
 
                     if chunk.get("type") == "text":
@@ -1762,7 +1921,8 @@ def onboarding_stream_message(request):
                             "type": "response.output_text.delta",
                             "delta": {"text": text_content},
                         }
-                        yield f"data: {json.dumps(payload)}\n\n"
+                        _sse_log('response.output_text.delta', payload)
+                        yield f"data: {_sse_json(payload)}\n\n"
                         continue
 
                     if chunk.get("type") == "password_request":
@@ -1772,17 +1932,20 @@ def onboarding_stream_message(request):
                             "type": "password_request",
                             "is_password_request": is_password_request,
                         }
-                        yield f"data: {json.dumps(payload)}\n\n"
+                        _sse_log('password_request', payload)
+                        yield f"data: {_sse_json(payload)}\n\n"
                         continue
 
                     if chunk.get("type") == "response.completed":
-                        yield f"data: {json.dumps({'type': 'response.completed'})}\n\n"
+                        payload = {'type': 'response.completed'}
+                        _sse_log('response.completed', payload)
+                        yield f"data: {_sse_json(payload)}\n\n"
                         continue
                     
                     if chunk.get("type") == "error":
                         error_message = chunk.get('message', 'Unknown error')
                         logger.error(f"onboarding_stream_message: Error chunk received: {error_message}")
-                        yield f"data: {json.dumps(chunk)}\n\n"
+                        yield f"data: {_sse_json(chunk)}\n\n"
                         continue
                     
             except Exception as stream_error:
@@ -1798,12 +1961,13 @@ def onboarding_stream_message(request):
                         "thread_id": thread_id,
                         "traceback": traceback.format_exc()
                     })
-                yield f"data: {json.dumps({'type': 'error', 'message': str(stream_error)})}\n\n"
+                yield f"data: {_sse_json({'type': 'error', 'message': str(stream_error)})}\n\n"
 
             yield 'event: close\n\n'
 
         response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
         response['Cache-Control'] = 'no-cache, no-transform'
+        response['X-Accel-Buffering'] = 'no'
         response["X-Guest-ID"] = guest_id
         return response
         

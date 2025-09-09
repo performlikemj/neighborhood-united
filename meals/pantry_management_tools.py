@@ -33,7 +33,7 @@ PANTRY_MANAGEMENT_TOOLS = [
     {
         "type": "function",
         "name": "check_pantry_items",
-        "description": "Get a list of items in the user's pantry",
+        "description": "Get the authoritative list of items in the user's pantry from the database. Do not infer or invent items.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -93,7 +93,7 @@ PANTRY_MANAGEMENT_TOOLS = [
     {
         "type": "function",
         "name": "get_expiring_items",
-        "description": "Get a list of pantry items that will expire soon",
+        "description": "Get a list of pantry items that will expire soon (from the database). Do not fabricate expiries.",
         "parameters": {
                 "type": "object",
                 "properties": {
@@ -583,7 +583,6 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
                     "schema": ShoppingListSchema.model_json_schema(),
                 }
             },
-            temperature=0.4,
         )
         shopping_list_raw = response.output_text
     except Exception as e:
@@ -702,7 +701,7 @@ def determine_items_to_replenish(user_id: int):
 
     try:
         response = get_openai_client().responses.create(
-            model="gpt-4o-mini",
+            model="gpt-5-mini",
             input=[
                 {"role": "developer", "content": sys_prompt},
                 {"role": "user", "content": usr_prompt},
@@ -714,7 +713,6 @@ def determine_items_to_replenish(user_id: int):
                     "schema": ReplenishItemsSchema.model_json_schema(),
                 }
             },
-            temperature=0.3,
         )
         raw = response.output_text
     except Exception as e:

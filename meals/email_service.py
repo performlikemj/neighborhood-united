@@ -244,7 +244,7 @@ def generate_shopping_list(meal_plan_id):
                 chef_note = "IMPORTANT: Some meals in this plan are chef-created and must be prepared exactly as specified. Do not suggest substitutions for chef-created meals. Include all ingredients for chef meals without alternatives."
             
             response = get_openai_client().responses.create(
-                model="gpt-5-mini",
+                model="o4-mini-2025-04-16",
                 input=[
                     {
                         "role": "developer",
@@ -492,154 +492,7 @@ def generate_shopping_list(meal_plan_id):
     try:
         from meals.meal_assistant_implementation import MealPlanningAssistant
 
-        # Convert emergency_list units to user's preferred measurement system for display
-        try:
-            measurement_system = getattr(user, 'measurement_system', 'METRIC')
-        except Exception:
-            measurement_system = 'METRIC'
-
-        def _es_normalize_unit(u: str) -> str:
-            if not u:
-                return ''
-            unit = str(u).strip().lower()
-            mapping = {
-                'grams': 'g', 'gram': 'g', 'g': 'g',
-                'kilogram': 'kg', 'kilograms': 'kg', 'kg': 'kg',
-                'milliliter': 'ml', 'milliliters': 'ml', 'ml': 'ml',
-                'liter': 'l', 'liters': 'l', 'l': 'l',
-                'ounce': 'oz', 'ounces': 'oz', 'oz': 'oz',
-                'pound': 'lb', 'pounds': 'lb', 'lb': 'lb', 'lbs': 'lb',
-                'fluid ounce': 'fl oz', 'fluid ounces': 'fl oz', 'floz': 'fl oz', 'fl oz': 'fl oz',
-                'cup': 'cups', 'cups': 'cups',
-                'piece': 'pieces', 'pieces': 'pieces', 'pcs': 'pieces',
-                'can': 'cans', 'cans': 'cans',
-                'bottle': 'bottles', 'bottles': 'bottles',
-                'packet': 'packets', 'packets': 'packets',
-            }
-            return mapping.get(unit, unit)
-
-        def _es_parse_qty(val):
-            try:
-                if isinstance(val, (int, float)):
-                    return float(val)
-                s = str(val).strip()
-                import re
-                if '/' in s and re.match(r'^\s*\d+\s*/\s*\d+\s*$', s):
-                    a, b = s.split('/')
-                    return float(a) / float(b)
-                m = re.match(r'^\s*([0-9]+(?:\.[0-9]+)?)', s)
-                if m:
-                    return float(m.group(1))
-            except Exception:
-                pass
-            return None
-
-        def _es_to_canonical(qty: float, unit_norm: str):
-            if qty is None:
-                return qty, unit_norm
-            try:
-                if unit_norm == 'kg':
-                    return qty * 1000.0, 'g'
-                if unit_norm == 'l':
-                    return qty * 1000.0, 'ml'
-                if unit_norm == 'lb':
-                    return qty * 453.592, 'g'
-                if unit_norm == 'oz':
-                    return qty * 28.3495, 'g'
-                if unit_norm == 'fl oz':
-                    return qty * 29.5735, 'ml'
-                if unit_norm == 'cups':
-                    return qty * 240.0, 'ml'
-            except Exception:
-                return qty, unit_norm
-            return qty, unit_norm
-
-        def _es_format_for_system(qty: float, unit_norm: str):
-            sys = (measurement_system or 'METRIC').upper()
-            try:
-                if qty is None:
-                    return qty, unit_norm
-                if unit_norm == 'g':
-                    if sys == 'US':
-                        oz = qty / 28.3495
-                        if oz >= 16.0:
-                            return oz / 16.0, 'lb'
-                        return oz, 'oz'
-                    return (qty / 1000.0, 'kg') if qty >= 1000.0 else (qty, 'g')
-                if unit_norm == 'ml':
-                    if sys == 'US':
-                        if qty >= 240.0:
-                            return qty / 240.0, 'cups'
-                        return qty / 29.5735, 'fl oz'
-                    return (qty / 1000.0, 'l') if qty >= 1000.0 else (qty, 'ml')
-                return qty, unit_norm
-            except Exception:
-                return qty, unit_norm
-
-        converted_emergency_list = []
-        for it in emergency_list:
-            if isinstance(it, dict):
-                name = it.get('item_name')
-                qty_raw = it.get('quantity_to_buy')
-                unit_raw = it.get('unit')
-                notes_item = it.get('notes')
-            else:
-                name = getattr(it, 'item_name', None)
-                qty_raw = getattr(it, 'quantity_to_buy', None)
-                unit_raw = getattr(it, 'unit', None)
-                notes_item = getattr(it, 'notes', None)
-            unit_norm = _es_normalize_unit(unit_raw)
-            qty_val = _es_parse_qty(qty_raw)
-            if qty_val is not None and unit_norm in ('g', 'kg', 'ml', 'l', 'oz', 'lb', 'fl oz', 'cups'):
-                c_qty, c_unit = _es_to_canonical(qty_val, unit_norm)
-                d_qty, d_unit = _es_format_for_system(c_qty, c_unit)
-                if isinstance(d_qty, (int, float)):
-                    dq = float(d_qty)
-                    qty_out = (f"{dq:.2f}".rstrip('0').rstrip('.') if dq % 1 != 0 else f"{int(dq)}")
-                else:
-                    qty_out = str(d_qty)
-                unit_out = d_unit
-            else:
-                qty_out = str(qty_raw) if qty_raw is not None else ''
-                unit_out = unit_raw or ''
-            converted_emergency_list.append({
-                'item_name': name,
-                'quantity_to_buy': qty_out,
-                'unit': unit_out,
-                'notes': notes_item or ''
-            })
-
-        # Format the safe items into a simpler structure for the template
-        safe_items_data = []
-        for pi in user_pantry_items:
-            # Handle both PantryItem objects and strings
-            if isinstance(pi, str):
-                safe_items_data.append({
-                    "item_name": pi,
-                    "quantity_available": "Unknown",
-                    "unit": "",
-                    "notes": "",
-                })
-            else:
-                # Assume it's a PantryItem object with attributes
-                safe_items_data.append({
-                    "item_name": getattr(pi, 'item_name', str(pi)),
-                    "quantity_available": getattr(pi, 'quantity', "Unknown"),
-                    "unit": getattr(pi, 'weight_unit', "") or "",
-                    "notes": getattr(pi, 'notes', "") or "",
-                })
-
-        # Add information about current safe pantry items
-        if safe_items_data:
-            message_content = "CURRENT SAFE PANTRY ITEMS:\n"
-            for item in safe_items_data:
-                message_content += f"- {item['item_name']}: {item['quantity_available']} {item['unit'] or 'units'}"
-                if item['notes']:
-                    message_content += f" (Note: {item['notes']})"
-                message_content += "\n"
-            message_content += "\n"
-        else:
-            message_content = "CURRENT SAFE PANTRY ITEMS: None available\n\n"
+        # (Removed emergency supply unit conversion and pantry preface — not applicable to shopping list email)
 
         # Keep the assistant text minimal; the template renders tables from structured context
         message_content = (
@@ -870,7 +723,7 @@ def generate_user_summary(user_id: int, summary_date=None) -> None:
 
     try:
         resp = get_openai_client().responses.create(
-            model="gpt-5-nano",
+            model="o4-mini-2025-04-16",
             input=[
                 {
                     "role": "developer",
@@ -884,7 +737,6 @@ def generate_user_summary(user_id: int, summary_date=None) -> None:
                     ),
                 },
             ],
-            temperature=0.7,
             # metadata={"tag": "user_summary"},  # uncomment if you're tagging
         )
 
@@ -1011,7 +863,7 @@ def generate_emergency_supply_list(user_id):
     try:
         from meals.pydantic_models import EmergencySupplyList
         response = get_openai_client().responses.create(
-            model="gpt-5-mini",
+            model="o4-mini-2025-04-16",
             input=[
                 {
                     "role": "developer",
@@ -1186,6 +1038,117 @@ def generate_emergency_supply_list(user_id):
                 logger.error(f"EMAIL SERVICE DEBUG: Failed to send validation error email: {_e_send}")
             return  # Abort normal flow
 
+        # Convert emergency_list units to user's preferred measurement system for display
+        try:
+            measurement_system = getattr(user, 'measurement_system', 'METRIC')
+        except Exception:
+            measurement_system = 'METRIC'
+
+        def _es_normalize_unit(u: str) -> str:
+            if not u:
+                return ''
+            unit = str(u).strip().lower()
+            mapping = {
+                'grams': 'g', 'gram': 'g', 'g': 'g',
+                'kilogram': 'kg', 'kilograms': 'kg', 'kg': 'kg',
+                'milliliter': 'ml', 'milliliters': 'ml', 'ml': 'ml',
+                'liter': 'l', 'liters': 'l', 'l': 'l',
+                'ounce': 'oz', 'ounces': 'oz', 'oz': 'oz',
+                'pound': 'lb', 'pounds': 'lb', 'lb': 'lb', 'lbs': 'lb',
+                'fluid ounce': 'fl oz', 'fluid ounces': 'fl oz', 'floz': 'fl oz', 'fl oz': 'fl oz',
+                'cup': 'cups', 'cups': 'cups',
+                'piece': 'pieces', 'pieces': 'pieces', 'pcs': 'pieces',
+                'can': 'cans', 'cans': 'cans',
+                'bottle': 'bottles', 'bottles': 'bottles',
+                'packet': 'packets', 'packets': 'packets',
+            }
+            return mapping.get(unit, unit)
+
+        def _es_parse_qty(val):
+            try:
+                if isinstance(val, (int, float)):
+                    return float(val)
+                s = str(val).strip()
+                import re
+                if '/' in s and re.match(r'^\s*\d+\s*/\s*\d+\s*$', s):
+                    a, b = s.split('/')
+                    return float(a) / float(b)
+                m = re.match(r'^\s*([0-9]+(?:\.[0-9]+)?)', s)
+                if m:
+                    return float(m.group(1))
+            except Exception:
+                pass
+            return None
+
+        def _es_to_canonical(qty: float, unit_norm: str):
+            if qty is None:
+                return qty, unit_norm
+            try:
+                if unit_norm == 'kg':
+                    return qty * 1000.0, 'g'
+                if unit_norm == 'l':
+                    return qty * 1000.0, 'ml'
+                if unit_norm == 'lb':
+                    return qty * 453.592, 'g'
+                if unit_norm == 'oz':
+                    return qty * 28.3495, 'g'
+                if unit_norm == 'fl oz':
+                    return qty * 29.5735, 'ml'
+                if unit_norm == 'cups':
+                    return qty * 240.0, 'ml'
+            except Exception:
+                return qty, unit_norm
+            return qty, unit_norm
+
+        def _es_format_for_system(qty: float, unit_norm: str):
+            sys = (measurement_system or 'METRIC').upper()
+            try:
+                if qty is None:
+                    return qty, unit_norm
+                if unit_norm == 'g':
+                    if sys == 'US':
+                        oz = qty / 28.3495
+                        if oz >= 16.0:
+                            return oz / 16.0, 'lb'
+                        return oz, 'oz'
+                    return (qty / 1000.0, 'kg') if qty >= 1000.0 else (qty, 'g')
+                if unit_norm == 'ml':
+                    if sys == 'US':
+                        if qty >= 240.0:
+                            return qty / 240.0, 'cups'
+                        return qty / 29.5735, 'fl oz'
+                    return (qty / 1000.0, 'l') if qty >= 1000.0 else (qty, 'ml')
+                return qty, unit_norm
+            except Exception:
+                return qty, unit_norm
+
+        converted_emergency_list = []
+        for it in emergency_list:
+            name = it.get('item_name')
+            qty_raw = it.get('quantity_to_buy')
+            unit_raw = it.get('unit')
+            notes_item = it.get('notes')
+            unit_norm = _es_normalize_unit(unit_raw)
+            qty_val = _es_parse_qty(qty_raw)
+            if qty_val is not None and unit_norm in ('g', 'kg', 'ml', 'l', 'oz', 'lb', 'fl oz', 'cups'):
+                c_qty, c_unit = _es_to_canonical(qty_val, unit_norm)
+                d_qty, d_unit = _es_format_for_system(c_qty, c_unit)
+                if isinstance(d_qty, (int, float)):
+                    dq = float(d_qty)
+                    qty_out = (f"{dq:.2f}".rstrip('0').rstrip('.') if dq % 1 != 0 else f"{int(dq)}")
+                else:
+                    qty_out = str(d_qty)
+                unit_out = d_unit
+            else:
+                qty_out = str(qty_raw) if qty_raw is not None else ''
+                unit_out = unit_raw or ''
+            converted_emergency_list.append({
+                'item_name': name,
+                'quantity_to_buy': qty_out,
+                'unit': unit_out,
+                'notes': notes_item or ''
+            })
+
         # Format the safe items into a simpler structure for the template
         safe_items_data = []
         for pi in safe_pantry_items:
@@ -1302,7 +1265,7 @@ def generate_emergency_supply_list(user_id):
 
 @shared_task
 @handle_task_failure
-def send_system_update_email(subject, message, user_ids=None):
+def send_system_update_email(subject, message, user_ids=None, template_key='system_update', template_context=None):
     """
     Send system updates or apology emails to users.
     Args:
@@ -1369,7 +1332,8 @@ def send_system_update_email(subject, message, user_ids=None):
                     user_id=user.id,
                     message_content=enhanced_message,
                     subject=subject,
-                    template_key='system_update'
+                    template_key=template_key or 'system_update',
+                    template_context=template_context or None
                 )
                 
                 if result.get('status') == 'success':

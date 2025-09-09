@@ -11,24 +11,24 @@
         <table class="table-slim" role="presentation" aria-label="{% trans 'Shopping list table' %}" style="margin-bottom:8px;width:100%;display:table;table-layout:fixed;border-collapse:collapse;">
           <thead>
             <tr>
-              <th scope="col">{% trans 'Item' %}</th>
-              <th scope="col">{% trans 'Qty' %}</th>
-              <th scope="col">{% trans 'Unit' %}</th>
-              <th scope="col">{% trans 'Notes' %}</th>
+              <th scope="col" class="item">{% trans 'Item' %}</th>
+              <th scope="col" class="qty">{% trans 'Qty' %}</th>
+              <th scope="col" class="unit">{% trans 'Unit' %}</th>
+              <th scope="col" class="notes">{% trans 'Notes' %}</th>
             </tr>
           </thead>
           <tbody>
           {% for it in tbl.items %}
             <tr {% if forloop.counter0|divisibleby:2 %}style="background:#fafafa;"{% endif %}>
-              <td>
+              <td class="item">
                 {{ it.ingredient }}
                 {% if it.alt_for %}
                   <div style="color:#64748b;font-size:12px;margin-top:2px;">{% blocktrans with base=it.alt_for %}Alternative to {{ base }}{% endblocktrans %}</div>
                 {% endif %}
               </td>
-              <td style="text-align:left;">{% if it.quantity %}{{ it.quantity }}{% else %}—{% endif %}</td>
-              <td style="text-align:left;">{% if it.unit %}{{ it.unit }}{% else %}—{% endif %}</td>
-              <td style="text-align:left;">{% if it.notes %}{{ it.notes|truncatechars:64 }}{% else %}—{% endif %}</td>
+              <td class="qty">{% if it.quantity %}{{ it.quantity }}{% else %}—{% endif %}</td>
+              <td class="unit">{% if it.unit %}{{ it.unit }}{% else %}—{% endif %}</td>
+              <td class="notes">{% if it.notes %}{{ it.notes|truncatechars:64 }}{% else %}—{% endif %}</td>
             </tr>
           {% endfor %}
           </tbody>
@@ -40,5 +40,4 @@
   {% endif %}
   {{ content_html|safe }}
 </div>
-
 

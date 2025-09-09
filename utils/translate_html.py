@@ -203,7 +203,6 @@ def translate_paragraphs(html: str, target_lang: str) -> str:
             try:
                 response = client.responses.create(
                     model="gpt-5-nano", 
-                    temperature=0.2,
                     input=[
                         {
                             "role": "system",

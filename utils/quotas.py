@@ -71,7 +71,7 @@ def _key(user_id: str, model: str) -> str:
     The key includes the date to automatically reset quotas daily.
     """
     # For guests, use a stable ID-based key instead of session-based
-    if isinstance(user_id, str) and (user_id.startswith('guest_') or user_id == 'guest'):
+    if isinstance(user_id, str) and (user_id.startswith('guest_') or user_id.startswith('guest:') or user_id == 'guest'):
         today = datetime.date.today().isoformat()  # server date
         return f"quota:{today}:{user_id}:{model}"  # guest-stable ID
         
@@ -106,7 +106,9 @@ def hit_quota(user_id: str, model: str, limit: int) -> bool:
         if n == 1:  # First hit today, set expiration to midnight in user's timezone
             try:
                 # Consistent guest check: if it's a string AND starts with guest_ OR is 'guest'
-                is_guest_user = isinstance(user_id, str) and (user_id.startswith('guest_') or user_id == 'guest')
+                is_guest_user = isinstance(user_id, str) and (
+                    user_id.startswith('guest_') or user_id.startswith('guest:') or user_id == 'guest'
+                )
                 
                 if not is_guest_user:
                     # Get user's timezone
@@ -122,21 +124,22 @@ def hit_quota(user_id: str, model: str, limit: int) -> bool:
                     
                     seconds_till_midnight = int((midnight - now).total_seconds())
                 else:
-                    # For guests, use server time
-                    seconds_till_midnight = (
-                        (datetime.datetime.combine(
-                            datetime.date.today() + datetime.timedelta(days=1),
-                            datetime.time.min
-                        ) - timezone.now()).seconds
+                    # For guests, use server time (timezone-aware)
+                    # Compute seconds until next midnight in the server's current timezone
+                    server_tz = timezone.get_current_timezone()
+                    now_server = timezone.now().astimezone(server_tz)
+                    midnight_server = (now_server + datetime.timedelta(days=1)).replace(
+                        hour=0, minute=0, second=0, microsecond=0
                     )
+                    seconds_till_midnight = int((midnight_server - now_server).total_seconds())
             except (ValueError, CustomUser.DoesNotExist):
-                # Fallback to server time
-                seconds_till_midnight = (
-                    (datetime.datetime.combine(
-                        datetime.date.today() + datetime.timedelta(days=1),
-                        datetime.time.min
-                    ) - timezone.now()).seconds
+                # Fallback to server time (timezone-aware)
+                server_tz = timezone.get_current_timezone()
+                now_server = timezone.now().astimezone(server_tz)
+                midnight_server = (now_server + datetime.timedelta(days=1)).replace(
+                    hour=0, minute=0, second=0, microsecond=0
                 )
+                seconds_till_midnight = int((midnight_server - now_server).total_seconds())
             
             r.expire(k, seconds_till_midnight)
         

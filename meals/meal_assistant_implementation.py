@@ -1,5 +1,5 @@
 # meals/meal_assistant_implementation.py
-import json, logging, uuid, traceback
+import json, logging, uuid, traceback, sys
 import time
 from typing import Dict, Any, List, Generator, Optional, Union, ClassVar, Literal, Tuple
 import numbers
@@ -29,6 +29,9 @@ from openai.types.responses import (
     ResponseFunctionCallArgumentsDoneEvent,
 )
 from openai import BadRequestError
+from django_countries.fields import Country
+import decimal as _decimal
+import datetime as _dt
 from pydantic import BaseModel, Field, ConfigDict, ValidationError
 from .tool_registration import get_all_tools, get_all_guest_tools, handle_tool_call
 from customer_dashboard.models import ChatThread, UserMessage, WeeklyAnnouncement, UserDailySummary, UserChatSummary, AssistantEmailToken
@@ -45,8 +48,8 @@ import os
 import requests # Added for n8n webhook call
 import traceback
 from django.template.loader import render_to_string # Added for rendering email templates
-from django.db import close_old_connections
-from django.db.utils import OperationalError, InterfaceError
+from django.db import close_old_connections, connection
+from django.db.utils import OperationalError, InterfaceError, DatabaseError
 
 # Add the translation utility
 from utils.translate_html import translate_paragraphs
@@ -58,6 +61,30 @@ load_dotenv()
 
 # Control character regex for JSON sanitization
 CTRL_CHARS = re.compile(r'[\x00-\x1F]')
+
+def _json_default(obj):
+    try:
+        if isinstance(obj, Country):
+            try:
+                return obj.code or str(obj)
+            except Exception:
+                return str(obj)
+    except Exception:
+        pass
+    try:
+        if isinstance(obj, _decimal.Decimal):
+            return float(obj)
+    except Exception:
+        pass
+    try:
+        if isinstance(obj, (_dt.date, _dt.datetime)):
+            return obj.isoformat()
+    except Exception:
+        pass
+    return str(obj)
+
+def _safe_json_dumps(obj) -> str:
+    return json.dumps(obj, default=_json_default)
 
 def _safe_load_and_validate(model_cls, raw: str):
     """
@@ -105,6 +132,14 @@ class EmailBody(BaseModel):
         ..., description="Optional HTML block for charts/tables/lists"
     )
     final_message: str = Field(..., description="Closing message in HTML. This should be a short message that guides the user on next steps or summarises key points without being too verbose.")
+
+class ChatRender(BaseModel):
+    """Structured chat rendering payload for frontend consumption.
+    Ensures the assistant output is valid GitHub‑Flavored Markdown (GFM).
+    """
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+    markdown: str = Field(..., description="Final GFM content suitable for ReactMarkdown/remark-gfm")
+    meta: Optional[Dict[str, Any]] = Field(default=None, description="Optional metadata such as date_range or layout hints")
 
 # EmailResponse model removed - EmailBody now handles all email formatting
 
@@ -312,6 +347,45 @@ class DjangoTemplateEmailFormatter:
         for placeholder, original_url in url_placeholders.items():
             html = html.replace(placeholder, original_url)
         return html
+
+    def _shape_chat_markdown(self, raw_text: str) -> Dict[str, Any]:
+        """
+        Ask the model to normalize the assistant's reply into strict GFM Markdown
+        using a small structured JSON schema. Falls back to raw text on error.
+        """
+        try:
+            schema = self._clean_schema_for_openai(ChatRender.model_json_schema())
+            prompt = (
+                "Return ONLY JSON with a `markdown` field that contains valid GitHub‑Flavored Markdown (GFM). "
+                "Rules: Use headings, lists, and pipe tables when appropriate. "
+                "For weekly meal plans, include a pipe table with columns | Day | Breakfast | Lunch | Dinner | and a separator row. "
+                "Format date ranges like `Mon–Sun, Sep 8–14, 2025` using an en dash. "
+                "Ensure a blank line before the table, preserve Unicode (NFC), and never include commentary outside JSON."
+            )
+            resp = self.client.responses.create(
+                model="gpt-5-mini",
+                input=[
+                    {"role": "developer", "content": prompt},
+                    {"role": "user", "content": f"RAW:\n{raw_text}"},
+                ],
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "chat_render",
+                        "schema": schema,
+                        "strict": True,
+                    }
+                },
+            )
+            shaped = _safe_load_and_validate(ChatRender, resp.output_text)
+            return shaped.model_dump()
+        except Exception:
+            # Fallback to raw text as GFM
+            try:
+                logger.warning("CHAT_RENDER shaping failed; falling back to raw text")
+            except Exception:
+                pass
+            return {"markdown": raw_text}
     
     def _get_structured_django_formatting(self, text: str, intent_context: Optional[Dict] = None) -> DjangoEmailBody:
         """Get structured formatting from OpenAI responses API for Django template"""
@@ -388,7 +462,7 @@ class DjangoTemplateEmailFormatter:
             schema = self._clean_schema_for_openai(DjangoEmailBody.model_json_schema())
             
             response = self.client.responses.create(
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 input=[
                     {"role": "developer", "content": "You are a precise Django template email formatter. Return ONLY structured JSON without commentary. Preserve all text exactly including measurements and placeholders."},
                     {"role": "user", "content": prompt_content}
@@ -821,7 +895,27 @@ DEFAULT_GUEST_PROMPT = """
       Politely refuse any request outside food topics.  
       No medical, legal, or non‑food advice.
     </Safety>
+    <Truthfulness>
+      • Do not invent pantry items, IDs, quantities, or expiry dates. Use only
+        data returned by tools you actually called (e.g., from
+        <code>check_pantry_items</code> or <code>get_expiring_items</code>).  
+      • If a requested action lacks a tool (e.g., deleting items), state this
+        clearly and provide short manual guidance instead of claiming you can do it.
+    </Truthfulness>
   </Guidelines>
+
+  <Format>
+    <Markdown>
+      Render replies in **GitHub‑Flavored Markdown (GFM)** with headings, lists,
+      and pipe tables for structured data. Avoid raw HTML unless asked.  
+    </Markdown>
+    <Tables>
+      For weekly plans, use a table: `| Day | Breakfast | Lunch | Dinner |`.
+    </Tables>
+    <Dates>
+      Format ranges like `Mon–Sun, Sep 8–14, 2025` (en dash, proper spacing).
+    </Dates>
+  </Format>
 
   <ExampleFormat>
     <Paragraph>An answer introduction …</Paragraph>
@@ -837,7 +931,7 @@ DEFAULT_GUEST_PROMPT = """
 
 DEFAULT_AUTH_PROMPT = """
 <!-- ==================  S A U T A I   A S S I S T A N T   ================== -->
-<!--  Runs on: gpt-4o (primary) | gpt-o4-mini (fallback)                     -->
+<!--  Runs on: gpt-5 (primary) | gpt-o4-mini (fallback)                     -->
 <!--  Version: 2025-07-03                                                   -->
 <PromptTemplate id="authenticated" version="2025-07-03">
 
@@ -869,7 +963,14 @@ DEFAULT_AUTH_PROMPT = """
   </Mission>
 
   <!-- ───── 4. CAPABILITIES (TOOLS) ───── -->
-  <Capabilities>{all_tools}</Capabilities>
+  <Capabilities>
+    The assistant is limited to the following registered tools for this session.
+    You may not imply actions beyond these tools. When suggesting next steps,
+    prefer using one of these tools; otherwise clearly explain the limitation and
+    offer concise manual guidance.
+
+{all_tools}
+  </Capabilities>
 
   <!-- ───── 5. OPERATING INSTRUCTIONS ───── -->
   <OperatingInstructions>
@@ -887,24 +988,47 @@ DEFAULT_AUTH_PROMPT = """
           <code>adjust_week_shift</code>, <code>reset_current_week</code>.  
         • Create plans with <code>create_meal_plan</code> then swap meals
           via <code>replace_meal_plan_meal</code> when mixing AI & chef meals.  
+
+        <!-- STRICT: Meal‑plan edits must use tools -->
+        <MealPlanEdits>
+          • If the user asks to “change/replace/swap” a meal, or says they
+            “don’t have/missing” an ingredient and wants an alternative, you
+            MUST call tools to update the actual meal plan — do not reply with
+            a standalone recipe instead of changing the plan.  
+          • Preferred flow:
+            1) Call <code>list_user_meal_plans</code> and pick the most recent plan.  
+            2) If day and meal_type are explicit (e.g., “Monday breakfast”), call
+               <code>modify_meal_plan</code> with those fields and the user_prompt.  
+            3) If the slot is ambiguous, call <code>get_meal_plan_meals_info</code>
+               to identify candidates, ask ONE short clarifying question, then
+               call <code>modify_meal_plan</code>.  
+          • Keep confirmations brief and structured; prioritize the tool call(s)
+            and a compact summary of the changed slot(s).
+        </MealPlanEdits>
       </MealPlans>
 
       <!-- Macro-nutrients & media -->
       <MealPlanPrepping>
-        • After generating or editing a meal, call
-          <code>update_meal_macros</code> (your macro tool) so totals are accurate.  
-        • Offer to add a YouTube tutorial link **on request** (use
-          <code>attach_youtube_tutorial</code> if available).  
+        • To fetch accurate macros for a meal, call
+          <code>get_meal_macro_info</code> with a specific <code>meal_id</code>.  
+        • To surface a cooking tutorial on request, call
+          <code>find_related_youtube_videos</code> with a <code>meal_id</code>.  
       </MealPlanPrepping>
 
       <!-- Pantry & shopping -->
       <PantryManagement>
         • Once per week suggest a pantry audit, highlighting environmental,
           financial, and health benefits of minimizing waste.  
+        • Never invent pantry inventory, IDs, quantities, or expiry dates. Only
+          report items returned by tools such as <code>check_pantry_items</code>
+          and <code>get_expiring_items</code>.
+        • If a requested action has no tool (e.g., deleting pantry items), say so
+          explicitly and offer concise manual steps. Do not fabricate app‑specific
+          flows, IDs, or confirmations.
       </PantryManagement>
       <Instacart>
-        • Provide <code>instacart_shopping_list</code> links; note US/Canada
-          availability if user locale ≠ US/CA.  
+        • Provide shopping links using <code>generate_instacart_link_tool</code>.
+          Note US/Canada availability if user locale ≠ US/CA.  
       </Instacart>
 
       <!-- Payments -->
@@ -915,6 +1039,21 @@ DEFAULT_AUTH_PROMPT = """
 
     <!-- 5-B. OUTPUT & STYLE -->
     <Format>
+      <Markdown>
+        Render answers in **GitHub‑Flavored Markdown (GFM)**.  
+        • Use headings (##), paragraphs, and bulleted/numbered lists.  
+        • For structured content (meal plans, comparisons), use **GFM pipe tables**.  
+        • Avoid raw HTML unless explicitly requested.
+      </Markdown>
+      <Tables>
+        For weekly meal plans, output a compact GFM table with columns:  
+        `| Day | Breakfast | Lunch | Dinner |`.  
+        Keep entries concise; use line breaks within a cell only when necessary.
+      </Tables>
+      <Dates>
+        Format date ranges as: `Mon–Sun, Sep 8–14, 2025` (en dash).  
+        Always include appropriate spaces; never run words together.
+      </Dates>
       <Paragraph maxSentences="3-4"/>
       <Lists>Use bulleted or numbered lists where logical.</Lists>
       <Data>
@@ -1007,6 +1146,18 @@ class MealPlanningAssistant:
         
         # Log initialization details
         is_guest = self._is_guest(self.user_id)
+        # Streaming debug toggle (env or Django DEBUG)
+        try:
+            self._stream_debug = os.getenv('ASSISTANT_STREAM_DEBUG', '').lower() in ('1','true','yes','on') or getattr(settings, 'DEBUG', False)
+        except Exception:
+            self._stream_debug = False
+
+    def _dbg(self, msg: str):
+        if getattr(self, '_stream_debug', False):
+            try:
+                logger.info(f"STREAMDEBUG: {msg}")
+            except Exception:
+                pass
 
     # ───────────────────────────────────────── schema utils (adapter)
     def _clean_schema_for_openai(self, schema: dict) -> dict:
@@ -1373,10 +1524,12 @@ class MealPlanningAssistant:
 
             new_id = None
             buf = ""
+            sent_text_delta = False  # Track if we emitted any incremental text
             calls: List[Dict[str, Any]] = []
             wrapper_to_call: Dict[str, str] = {}
             latest_id_in_stream = previous_response_id # Initialize with previous ID
             response_completed = False
+            self._dbg(f"turn_start user={self.user_id} prev_id={previous_response_id} model={model}")
 
             # 2) Consume the event stream
             for ev in stream:
@@ -1386,6 +1539,7 @@ class MealPlanningAssistant:
                     latest_id_in_stream = new_id # Always update with the latest ID
                     final_response_id = new_id # Track the latest ID received
                     yield {"type": "response_id", "id": new_id}
+                    self._dbg(f"response_created id={new_id}")
                     continue
 
                 # 2b) End of this assistant turn
@@ -1395,14 +1549,21 @@ class MealPlanningAssistant:
 
                 # 2c) Stream text deltas
                 if isinstance(ev, ResponseTextDeltaEvent):
-                    if ev.delta and not buf.endswith(ev.delta):
+                    if ev.delta:
+                        # Append and emit only the new delta
                         buf += ev.delta
+                        sent_text_delta = True
                         yield {"type": "text", "content": ev.delta}
+                        if len(buf) % 200 == 0:
+                            self._dbg(f"delta_progress chars={len(buf)}")
                     continue
                 if isinstance(ev, ResponseTextDoneEvent):
-                    if ev.text and not buf.endswith(ev.text):
-                        buf += ev.text
+                    # If no deltas were emitted (rare), emit the final text once
+                    if ev.text and not sent_text_delta:
+                        buf = ev.text
+                        sent_text_delta = True
                         yield {"type": "text", "content": ev.text}
+                    # Otherwise, do not re-emit full text to avoid duplication
                     continue
 
                 # 2d) Function‑call argument fragments
@@ -1482,13 +1643,32 @@ class MealPlanningAssistant:
 
             # 3) Flush any buffered text
             if buf:
-                yield {"type": "text", "content": buf}
+                # Only flush text if we never emitted deltas (fallback case)
+                if not sent_text_delta:
+                    yield {"type": "text", "content": buf}
 
                 # Also persist the assistant's reply into the running history
                 current_history.append({
                     "role": "assistant",
                     "content": buf.strip()
                 })
+                
+                # 3a) Shape the final content into strict GFM for the frontend
+                shaped = None
+                try:
+                    shaped = self._shape_chat_markdown(buf)
+                except Exception as e:
+                    # Absolute fallback to ensure frontend always receives a render payload
+                    shaped = {"markdown": buf}
+                md_len = len((shaped or {}).get('markdown', '') or '')
+                self._dbg(f"render_ready len={md_len} deltas={sent_text_delta}")
+                # Emit as a tool_result for compatibility with existing SSE mapping
+                yield {
+                    "type": "tool_result",
+                    "tool_call_id": "render_1",
+                    "name": "response.render",
+                    "output": shaped,
+                }
                 
             # Store the final response ID in Redis for this user (expires in 24h)
             if final_response_id:
@@ -1503,12 +1683,14 @@ class MealPlanningAssistant:
                     self._store_guest_state(final_response_id,
                                             current_history)
                 yield {"type": "response.completed"}
+                self._dbg(f"turn_end completed=1 len={len(buf)} calls={len(calls)} id={final_response_id}")
                 break
             
             # 4.1) If no function calls were requested, finish up
             
             if not calls:
                 yield {"type": "response.completed"}
+                self._dbg(f"turn_end no_calls len={len(buf)} id={final_response_id}")
                 break # Exit the while loop
             
             # 4.2) If response was completed but there are function calls, we need to handle them first
@@ -1571,8 +1753,35 @@ class MealPlanningAssistant:
                     "output":      result,
                 }
 
+                # If this tool modifies the meal plan, emit a final render payload to update the UI
+                try:
+                    if call["name"] in ("modify_meal_plan", "replace_meal_plan_meal"):
+                        md = None
+                        if isinstance(result, dict) and result.get("status") == "success":
+                            meals = result.get("meals") or []
+                            tgt_day = result.get("target_day")
+                            tgt_type = result.get("target_meal_type")
+                            # Prefer to render only the targeted slot(s) when known
+                            subset = [m for m in meals if (not tgt_day or m.get("day") == tgt_day) and (not tgt_type or m.get("meal_type") == tgt_type)]
+                            rows = subset if subset else meals
+                            # Build a small GFM summary table
+                            lines = ["### Meal Plan Updated", "", "| Day | Meal Type | Meal |", "| --- | --- | --- |"]
+                            for m in rows[:12]:  # cap to avoid giant payloads
+                                lines.append(f"| {m.get('day','?')} | {m.get('meal_type','?')} | {m.get('meal_name','?')} |")
+                            md = "\n".join(lines)
+                        if md:
+                            shaped = {"markdown": md}
+                            yield {
+                                "type":        "tool_result",
+                                "tool_call_id": f"render_after_{call_id}",
+                                "name":        "response.render",
+                                "output":      shaped,
+                            }
+                except Exception:
+                    pass
+
                 # 7a) Inject the function_call_output into CURRENT history
-                result_json = json.dumps(result)
+                result_json = _safe_json_dumps(result)
                 output_entry = {
                     "type":     "function_call_output",
                     "call_id":  call_id,
@@ -1620,7 +1829,10 @@ class MealPlanningAssistant:
         all_tools = self._get_tools_for_user(is_guest)
         if is_guest:
             guest_tools = self._get_tools_for_user(is_guest)
-            return GUEST_PROMPT_TEMPLATE.format(guest_tools=guest_tools, all_tools=all_tools)
+            return GUEST_PROMPT_TEMPLATE.format(
+                guest_tools=self._summarize_tools_for_prompt(guest_tools),
+                all_tools=self._summarize_tools_for_prompt(all_tools)
+            )
         else:
             user = None
             try:
@@ -1652,7 +1864,7 @@ class MealPlanningAssistant:
                     username=username,
                     user_ctx=user_ctx,
                     admin_section=admin_section,
-                    all_tools=", ".join([t['name'] for t in self._get_tools_for_user(is_guest)]),
+                    all_tools=self._summarize_tools_for_prompt(self._get_tools_for_user(is_guest)),
                     user_chat_summary=user_chat_summary,
                     local_chef_and_meal_events=local_chef_and_meal_events
                 )
@@ -1675,6 +1887,33 @@ class MealPlanningAssistant:
         authenticated‑user prompt.  Both are < 350 tokens.
         """
         return self.build_prompt(is_guest)
+
+    def _summarize_tools_for_prompt(self, tools: List[Dict[str, Any]]) -> str:
+        """Render a concise, friendly list of available tools for the prompt.
+
+        Example output:
+          • create_meal_plan — Create a weekly meal plan for a user
+          • modify_meal_plan — Modify a specific slot in a plan
+        """
+        try:
+            lines: List[str] = []
+            for t in tools or []:
+                name = t.get("name", "unknown_tool")
+                desc = (t.get("description") or "").strip()
+                if desc:
+                    # keep it to one line, ~90 chars max
+                    if len(desc) > 90:
+                        desc = desc[:87].rstrip() + "…"
+                    lines.append(f"  • {name} — {desc}")
+                else:
+                    lines.append(f"  • {name}")
+            return "\n".join(lines) if lines else "  • (no tools registered)"
+        except Exception:
+            # Never break prompt building on summarization
+            try:
+                return "\n".join([f"  • {t.get('name','unknown_tool')}" for t in tools or []])
+            except Exception:
+                return "  • (tools unavailable)"
 
     # ────────────────────────────────────────────────────────────────────
     #  Conversation‑reset helper
@@ -1855,6 +2094,11 @@ class MealPlanningAssistant:
         """Ensure that user_id and guest_id are correctly set in function arguments."""
         try:
             args = json.loads(args_str)
+            try:
+                if function_name in ("modify_meal_plan", "replace_meal_plan_meal"):
+                    print(f"FIX_ARGS before func={function_name} args={args}", flush=True)
+            except Exception:
+                pass
             
             # If the function has a user_id parameter and it's not the current user
             if "user_id" in args:
@@ -1895,6 +2139,11 @@ class MealPlanningAssistant:
                     logger.info(f"  quantity: {args.get('quantity')}")
                     logger.info(f"  special_instructions: {args.get('special_instructions')}")
             
+            try:
+                if function_name in ("modify_meal_plan", "replace_meal_plan_meal"):
+                    print(f"FIX_ARGS after func={function_name} args={args}", flush=True)
+            except Exception:
+                pass
             return args_str
         except Exception as e:
             # n8n traceback
@@ -2776,19 +3025,43 @@ class MealPlanningAssistant:
             Dict with status and result information
         """
         try:
-            # Ensure DB connection is fresh for long-running worker processes
-            try:
-                close_old_connections()
-            except Exception:
-                pass
+            # In CI tests, avoid side effects unless explicitly allowed
+            if getattr(settings, "TEST_MODE", False):
+                running_pytest = bool(os.getenv("PYTEST_CURRENT_TEST")) or "pytest" in sys.modules or any(arg == "test" or "pytest" in arg for arg in sys.argv)
+                allow_emails = os.getenv("ALLOW_ASSISTANT_EMAILS", "").lower() in ("1", "true", "yes", "on")
+                if running_pytest and not allow_emails:
+                    return {"status": "skipped", "reason": "test_mode"}
 
-            # Get user (retry once on stale connection)
-            try:
-                user = CustomUser.objects.get(id=user_id)
-            except (OperationalError, InterfaceError):
-                logger.warning("DB connection issue when fetching user in send_notification_via_assistant; refreshing and retrying once")
-                close_old_connections()
-                user = CustomUser.objects.get(id=user_id)
+            # Ensure DB connection is usable; be resilient in tests/workers
+            user = None
+            for attempt in range(3):
+                try:
+                    # Refresh or reopen a stale/closed connection
+                    try:
+                        close_old_connections()
+                        connection.ensure_connection()
+                    except Exception:
+                        # Best‑effort: if ensure_connection isn't available or fails, continue to query
+                        pass
+
+                    user = (
+                        CustomUser.objects
+                        .only("id", "email", "email_confirmed", "unsubscribed_from_emails", "email_token")
+                        .get(id=user_id)
+                    )
+                    break
+                except (OperationalError, InterfaceError, DatabaseError) as db_err:
+                    logger.warning(
+                        f"send_notification_via_assistant: DB fetch attempt {attempt+1} failed for user {user_id}: {db_err}"
+                    )
+                    # brief backoff then retry
+                    time.sleep(0.05)
+                    continue
+            if user is None:
+                logger.error(
+                    f"send_notification_via_assistant: skipping notification; database unavailable for user {user_id}"
+                )
+                return {"status": "skipped", "reason": "db_unavailable"}
             
             # Skip if email not confirmed
             if not user.email_confirmed:
@@ -2826,13 +3099,21 @@ class MealPlanningAssistant:
         except CustomUser.DoesNotExist:
             # n8n traceback
             n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-            requests.post(n8n_traceback_url, json={"error": "User with ID {user_id} not found when sending notification", "source":"send_notification_via_assistant", "traceback": traceback.format_exc()})
+            try:
+                if n8n_traceback_url:
+                    requests.post(n8n_traceback_url, json={"error": f"User with ID {user_id} not found when sending notification", "source":"send_notification_via_assistant", "traceback": traceback.format_exc()}, timeout=5)
+            except Exception:
+                pass
             return {"status": "error", "reason": "user_not_found"}
         except Exception as e:
             # n8n traceback
             n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
             # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
-            requests.post(n8n_traceback_url, json={"error": str(e), "source":"send_notification_via_assistant", "traceback": traceback.format_exc()})
+            try:
+                if n8n_traceback_url:
+                    requests.post(n8n_traceback_url, json={"error": str(e), "source":"send_notification_via_assistant", "traceback": traceback.format_exc()}, timeout=5)
+            except Exception:
+                pass
             return {"status": "error", "reason": str(e)}
 
     def _estimate_tokens(self, text: str) -> int:
@@ -3234,7 +3515,7 @@ class OnboardingAssistant(MealPlanningAssistant):
                 try:
                     # Use structured output for password prompts
                     resp = self.client.responses.create(
-                        model="gpt-4o-mini",
+                        model="gpt-5-mini",
                         input=history,
                         instructions=self._instructions(is_guest),
                         text={

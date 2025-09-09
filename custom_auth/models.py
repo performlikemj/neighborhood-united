@@ -133,6 +133,11 @@ class CustomUser(AbstractUser):
         default=1,
         help_text="Total number of people in the user's household."
     )
+    # Controls whether the system auto-generates weekly meal plans for the user
+    auto_meal_plans_enabled = models.BooleanField(
+        default=True,
+        help_text="If False, do not auto-generate weekly meal plans."
+    )
     
     @property
     def personal_assistant_email(self):

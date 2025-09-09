@@ -488,7 +488,6 @@ def generate_instructions(meal_plan_meal_ids, send_via_assistant: bool = False):
                         'schema': InstructionsSchema.model_json_schema()
                         }
                     },
-                    temperature=0.4,
                 )
 
                 instructions_content = response.output_text

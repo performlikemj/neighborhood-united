@@ -80,7 +80,7 @@ class ChefPublicSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Chef
-        fields = ['id', 'user', 'experience', 'bio', 'serving_postalcodes', 'profile_pic_url', 'banner_url', 'review_summary', 'photos']
+        fields = ['id', 'user', 'experience', 'bio', 'is_on_break', 'serving_postalcodes', 'profile_pic_url', 'banner_url', 'review_summary', 'photos']
 
     def get_profile_pic_url(self, obj):
         # Safe check: ImageFieldFile.url raises if no file; rely on name to detect presence
@@ -107,4 +107,4 @@ class ChefPublicSerializer(serializers.ModelSerializer):
 class ChefMeUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Chef
-        fields = ['experience', 'bio', 'profile_pic', 'banner_image']
+        fields = ['experience', 'bio', 'profile_pic', 'banner_image', 'is_on_break']

@@ -111,7 +111,7 @@ MEAL_PLANNING_TOOLS = [
     {
         "type": "function",
         "name": "modify_meal_plan",
-        "description": "Modify an existing meal plan using natural language prompts. Can modify specific meals or apply changes across the entire plan.",
+        "description": "Modify an existing meal plan. For a targeted single‑slot change, provide both `day` and `meal_type` — only that slot will be updated (no variety pass). If either is omitted, the assistant may apply broader changes across the plan.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -125,16 +125,17 @@ MEAL_PLANNING_TOOLS = [
                 },
                 "day": {
                     "type": "string",
-                    "description": "Optional day to focus changes on (e.g., 'Monday', 'Tuesday'). If omitted, changes may apply to the entire plan."
+                    "enum": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+                    "description": "Optional. When used together with `meal_type`, performs a targeted change for that slot only."
                 },
                 "meal_type": {
                     "type": "string",
                     "enum": ["Breakfast", "Lunch", "Dinner"],
-                    "description": "Optional meal type to focus changes on. If omitted, changes may apply to all meal types."
+                    "description": "Optional. When used together with `day`, performs a targeted change for that slot only."
                 },
                 "user_prompt": {
                     "type": "string",
-                    "description": "Natural language description of the requested changes (e.g., 'make all dinners vegan', 'replace Tuesday lunch with pasta', 'no rice in any meals')."
+                    "description": "Natural language description of the requested change(s)."
                 }
             },
             "required": ["user_id", "meal_plan_id", "user_prompt"],
@@ -370,7 +371,7 @@ MEAL_PLANNING_TOOLS = [
     {
         "type": "function",
         "name": "get_meal_macro_info",
-        "description": "Return macro-nutrient info (kcal, protein, fat, carbs, fiber, etc.) for a single meal using LLM estimation.",
+        "description": "Return macro‑nutrient info (kcal, protein, fat, carbs, fiber, etc.) for a single meal. Tip: call `get_meal_plan_meals_info` first to discover a valid `meal_id` for the current plan.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -386,7 +387,7 @@ MEAL_PLANNING_TOOLS = [
     {
         "type": "function",
         "name": "find_related_youtube_videos",
-        "description": "Find & rank relevant YouTube videos that teach how to cook the given meal.",
+        "description": "Find & rank relevant YouTube videos for a given meal. Tip: call `get_meal_plan_meals_info` first to discover a valid `meal_id` for the current plan.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -592,6 +593,7 @@ def modify_meal_plan(user_id: int, meal_plan_id: int, day: str = None, meal_type
         Dict containing the modified meal plan details
     """
     try:
+        # Debug prints removed
         
         # Get the user and meal plan
         user = get_object_or_404(CustomUser, id=user_id)
@@ -620,20 +622,35 @@ def modify_meal_plan(user_id: int, meal_plan_id: int, day: str = None, meal_type
             # Create valid prioritized_meals dictionary
             prioritized_meals = {day: [meal_type]}
             days_to_modify = [day]
+            # Debug prints removed
         
         
-        # Use the new apply_modifications function from meal_plan_service
-        from meals.meal_plan_service import apply_modifications
+        # Use targeted modify when day + meal_type are specified; otherwise fall back to parser‑driven apply_modifications
+        from meals.meal_plan_service import apply_modifications, modify_existing_meal_plan
         
         request_id = str(uuid.uuid4())
         
         try:
-            updated_meal_plan = apply_modifications(
-                user=user,
-                meal_plan=meal_plan,
-                raw_prompt=prompt,
-                request_id=request_id
-            )
+            if day and meal_type:
+                # Debug prints removed
+                updated_meal_plan = modify_existing_meal_plan(
+                    user=user,
+                    meal_plan_id=meal_plan.id,
+                    user_prompt=prompt,
+                    days_to_modify=[day],
+                    prioritized_meals={day: [meal_type]},
+                    request_id=request_id,
+                    should_remove=False,
+                    run_variety_analysis=False,
+                )
+            else:
+                # Debug prints removed
+                updated_meal_plan = apply_modifications(
+                    user=user,
+                    meal_plan=meal_plan,
+                    raw_prompt=prompt,
+                    request_id=request_id
+                )
             
             if updated_meal_plan is None:
                 return {
@@ -650,17 +667,20 @@ def modify_meal_plan(user_id: int, meal_plan_id: int, day: str = None, meal_type
                 "status": "error",
                 "message": f"Failed to modify meal plan"
             }
+        # Debug prints removed
         
         # Fetch the updated meal plan meals to return in the response
         meal_plan_meals = MealPlanMeal.objects.filter(meal_plan=updated_meal_plan).select_related("meal")
         
-        # Format response data
+        # Format response data (include both meal_plan_meal_id and meal_id so downstream tools have what they need)
         meals_data = []
         for mpm in meal_plan_meals:
             try:
                 is_chef = mpm.meal.is_chef_created() if hasattr(mpm.meal, 'is_chef_created') else False
                 meals_data.append({
-                    "id": mpm.id,
+                    "id": mpm.id,  # meal_plan_meal_id (legacy field)
+                    "meal_plan_meal_id": mpm.id,
+                    "meal_id": mpm.meal.id if mpm.meal else None,
                     "day": mpm.day,
                     "meal_type": mpm.meal_type,
                     "meal_name": mpm.meal.name,
@@ -677,6 +697,8 @@ def modify_meal_plan(user_id: int, meal_plan_id: int, day: str = None, meal_type
             "status": "success",
             "message": "Meal plan modified successfully",
             "meal_plan_id": updated_meal_plan.id,
+            "target_day": day,
+            "target_meal_type": meal_type,
             "meals": meals_data
         }
         
@@ -1002,6 +1024,7 @@ def get_meal_macro_info(meal_id: int) -> Dict[str, Any]:
         Dictionary containing the meal's macro-nutrient information
     """
     try:
+        # Debug prints removed
         meal = Meal.objects.get(id=meal_id)
         
         # Check if we have cached macro info in the meal model
@@ -1049,6 +1072,7 @@ def find_related_youtube_videos(meal_id: int, max_results: int = 5) -> Dict[str,
         Dictionary containing ranked YouTube video information
     """
     try:
+        # Debug prints removed
         # Ensure max_results is within bounds
         max_results = min(max(1, max_results), 10)
         

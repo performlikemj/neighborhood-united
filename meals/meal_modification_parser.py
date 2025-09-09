@@ -60,6 +60,8 @@ def parse_modification_request(
             """
         ).strip()
 
+        # Debug prints removed
+
         messages = [
             {"role": "developer", "content": system_msg},
             {"role": "user", "content": raw_prompt},
@@ -90,6 +92,7 @@ def parse_modification_request(
 
         # 4. Validate & return
         try:
+            # Debug prints removed
             parsed = MealPlanModificationRequest.model_validate_json(resp.output_text)
             
             # Handle missing should_remove values by coercing to False

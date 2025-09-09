@@ -244,7 +244,7 @@ def email_authentication_view(request, auth_token):
         'message': 'Email session activated successfully. If you had a pending message, it is now being processed.'
     }, status=200)
 
-@api_view(['GET'])
+@api_view(['GET', 'POST'])
 @permission_classes([AllowAny])
 def process_now_view(request):
     """
@@ -252,8 +252,12 @@ def process_now_view(request):
     Similar to email_authentication_view but for immediate processing.
     """
     try:
-        # Get user token from query parameters
-        user_token = request.data.get('token')
+        # Get user token from body or query for robustness
+        user_token = (
+            (getattr(request, 'data', {}) or {}).get('token')
+            or request.query_params.get('token')
+            or request.GET.get('token')
+        )
         
         if not user_token:
             logger.error("process_now_view: Missing token parameter")
@@ -786,7 +790,6 @@ def update_profile_api(request):
             user.save()
 
         else:
-            print(f"User Serializer Errors: {user_serializer.errors}")
             return Response({'status': 'failure', 'message': user_serializer.errors}, status=400)
 
         # Update or create address data
@@ -1109,7 +1112,8 @@ def _normalize_registration_payload(data):
         user_keys = {
             'username','email','password','phone_number','preferred_language',
             'allergies','custom_allergies','emergency_supply_goal','household_member_count','measurement_system',
-            'dietary_preferences','custom_dietary_preferences','week_shift','timezone'
+            'dietary_preferences','custom_dietary_preferences','week_shift','timezone',
+            'auto_meal_plans_enabled'
         }
         address_keys = {'street','city','state','postalcode','country','input_postalcode'}
         goal_keys = {'goal_name','goal_description'}

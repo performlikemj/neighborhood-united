@@ -15,6 +15,14 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 from .serializers import ChefPublicSerializer, ChefMeUpdateSerializer, ChefPhotoSerializer
+from .models import ChefWaitlistConfig, ChefWaitlistSubscription, ChefAvailabilityState
+from django.utils import timezone
+from django.db.models import F, Q
+from meals.models import (
+    ChefMealEvent, ChefMealOrder, PaymentLog,
+    STATUS_SCHEDULED, STATUS_OPEN, STATUS_CANCELLED, STATUS_COMPLETED,
+    STATUS_PLACED, STATUS_CONFIRMED,
+)
 from custom_auth.models import Address
 from django_countries import countries
 import os
@@ -22,8 +30,11 @@ import requests
 import traceback
 import logging
 from local_chefs.models import PostalCode, ChefPostalCode
+from django.db import transaction
+import stripe
 
 logger = logging.getLogger(__name__)
+stripe.api_key = settings.STRIPE_SECRET_KEY
 
 def chef_list(request):
     return HttpResponseBadRequest('Legacy endpoint removed')
@@ -282,13 +293,11 @@ def submit_chef_request(request):
 def me_chef_profile(request):
     try:
         chef = Chef.objects.get(user=request.user)
-        print(f"Chef: {chef}")
     except Chef.DoesNotExist:
         return Response({'detail': 'Not a chef'}, status=status.HTTP_404_NOT_FOUND)
     # Ensure user is in chef mode and approved
     try:
         user_role = UserRole.objects.get(user=request.user)
-        print(f"User Role: {user_role}")
         if not user_role.is_chef or user_role.current_role != 'chef':
             return Response({'detail': 'Switch to chef mode to access profile'}, status=status.HTTP_403_FORBIDDEN)
     except UserRole.DoesNotExist:
@@ -329,13 +338,11 @@ def me_update_profile(request):
 def me_upload_photo(request):
     try:
         chef = Chef.objects.get(user=request.user)
-        print(f"Chef: {chef}")
     except Chef.DoesNotExist:
         return Response({'detail': 'Not a chef'}, status=status.HTTP_404_NOT_FOUND)
     # Ensure user is in chef mode and approved
     try:
         user_role = UserRole.objects.get(user=request.user)
-        print(f"User Role: {user_role}")
         if not user_role.is_chef or user_role.current_role != 'chef':
             return Response({'detail': 'Switch to chef mode to upload photos'}, status=status.HTTP_403_FORBIDDEN)
     except UserRole.DoesNotExist:
@@ -345,12 +352,10 @@ def me_upload_photo(request):
         pass
 
     form = ChefPhotoForm(request.POST, request.FILES)
-    print(f"Form: {form}")
     if not form.is_valid():
         return Response(form.errors, status=status.HTTP_400_BAD_REQUEST)
 
     photo = form.save(commit=False)
-    print(f"Photo: {photo}")
     photo.chef = chef
     if photo.is_featured:
         ChefPhoto.objects.filter(chef=chef, is_featured=True).update(is_featured=False)
@@ -375,6 +380,155 @@ def me_delete_photo(request, photo_id):
     photo = get_object_or_404(ChefPhoto, id=photo_id, chef=chef)
     photo.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def me_set_break(request):
+    """
+    Toggle a chef's break status. When enabling break, cancel all upcoming events and refund paid orders.
+
+    Request JSON:
+    - is_on_break: bool (required)
+    - reason: str (optional; defaults to "Chef is on break")
+
+    Response JSON (when enabling break):
+    - is_on_break: true
+    - cancelled_events: int
+    - orders_cancelled: int
+    - refunds_processed: int
+    - refunds_failed: int
+    - errors: [str]
+    """
+    try:
+        chef = Chef.objects.get(user=request.user)
+    except Chef.DoesNotExist:
+        return Response({'detail': 'Not a chef'}, status=status.HTTP_404_NOT_FOUND)
+
+    # Ensure user is in chef mode and approved
+    try:
+        user_role = UserRole.objects.get(user=request.user)
+        if not user_role.is_chef or user_role.current_role != 'chef':
+            return Response({'detail': 'Switch to chef mode to modify break status'}, status=status.HTTP_403_FORBIDDEN)
+    except UserRole.DoesNotExist:
+        return Response({'detail': 'Switch to chef mode to modify break status'}, status=status.HTTP_403_FORBIDDEN)
+
+    is_on_break = request.data.get('is_on_break', None)
+    if is_on_break is None:
+        return Response({'error': 'is_on_break is required'}, status=status.HTTP_400_BAD_REQUEST)
+    if not isinstance(is_on_break, bool):
+        return Response({'error': 'is_on_break must be a boolean'}, status=status.HTTP_400_BAD_REQUEST)
+
+    reason = request.data.get('reason') or 'Chef is going on break'
+
+    # Turning OFF break: just flip the flag
+    if is_on_break is False:
+        chef.is_on_break = False
+        chef.save(update_fields=['is_on_break'])
+        return Response({'is_on_break': False})
+
+    # Turning ON break: set flag, then cancel upcoming events + refund
+    chef.is_on_break = True
+    chef.save(update_fields=['is_on_break'])
+
+    today = timezone.now().date()
+    # Future/present events not already finalized
+    events_qs = (
+        ChefMealEvent.objects
+        .filter(chef=chef)
+        .exclude(status__in=[STATUS_CANCELLED, STATUS_COMPLETED])
+        .filter(event_date__gte=today)
+        .order_by('event_date', 'event_time')
+    )
+
+    cancelled_events = 0
+    orders_cancelled = 0
+    refunds_processed = 0
+    refunds_failed = 0
+    errors = []
+
+    for event in events_qs:
+        try:
+            with transaction.atomic():
+                # Cancel all active orders on this event
+                orders = ChefMealOrder.objects.select_for_update().filter(
+                    meal_event=event,
+                    status__in=[STATUS_PLACED, STATUS_CONFIRMED]
+                )
+
+                for order in orders:
+                    prev_status = order.status
+                    order.status = STATUS_CANCELLED
+                    # Non-persistent attribute used by some email templates; safe if absent
+                    try:
+                        order.cancellation_reason = f'Event cancelled by chef: {reason}'
+                    except Exception:
+                        pass
+                    order.save(update_fields=['status'])
+                    orders_cancelled += 1
+
+                    # If previously confirmed and paid, refund
+                    if prev_status == STATUS_CONFIRMED and order.stripe_payment_intent_id:
+                        try:
+                            refund = stripe.Refund.create(payment_intent=order.stripe_payment_intent_id)
+                            # Persist refund id if field exists
+                            try:
+                                order.stripe_refund_id = refund.id
+                                order.save(update_fields=['stripe_refund_id'])
+                            except Exception:
+                                pass
+                            # Log payment
+                            try:
+                                PaymentLog.objects.create(
+                                    chef_meal_order=order,
+                                    user=order.customer,
+                                    chef=chef,
+                                    action='refund',
+                                    amount=(order.price_paid or 0) * (order.quantity or 1),
+                                    stripe_id=refund.id,
+                                    status='succeeded',
+                                    details={'reason': 'Chef break – bulk cancellation'},
+                                )
+                            except Exception:
+                                pass
+                            # Notify user
+                            try:
+                                from meals.email_service import (
+                                    send_refund_notification_email,
+                                    send_order_cancellation_email,
+                                )
+                                send_refund_notification_email.delay(order.id)
+                                send_order_cancellation_email.delay(order.id)
+                            except Exception:
+                                pass
+                            refunds_processed += 1
+                        except Exception as e:
+                            refunds_failed += 1
+                            errors.append(f"Order {order.id} refund failed: {str(e)}")
+                            # Still send cancellation email
+                            try:
+                                from meals.email_service import send_order_cancellation_email
+                                send_order_cancellation_email.delay(order.id)
+                            except Exception:
+                                pass
+
+                # Finally, cancel the event itself
+                event.status = STATUS_CANCELLED
+                event.cancellation_reason = reason if hasattr(event, 'cancellation_reason') else getattr(event, 'cancellation_reason', None)
+                event.cancellation_date = timezone.now() if hasattr(event, 'cancellation_date') else getattr(event, 'cancellation_date', None)
+                event.save(update_fields=['status'])
+                cancelled_events += 1
+        except Exception as e:
+            errors.append(f"Event {event.id} cancellation error: {str(e)}")
+
+    return Response({
+        'is_on_break': True,
+        'cancelled_events': cancelled_events,
+        'orders_cancelled': orders_cancelled,
+        'refunds_processed': refunds_processed,
+        'refunds_failed': refunds_failed,
+        'errors': errors,
+    })
 
 
 @api_view(['GET'])
@@ -506,3 +660,84 @@ def chef_serves_my_area(request, chef_id):
         'user_postal_code': address.display_postalcode or address.input_postalcode,
         'user_country': address.country.code if hasattr(address.country, 'code') else str(address.country)
     })
+
+
+# =========================
+# Waitlist API Endpoints
+# =========================
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def waitlist_config(request):
+    # Simplified: treat waitlist as enabled by default
+    cfg = ChefWaitlistConfig.get_config()
+    enabled = True if cfg is None else bool(getattr(cfg, 'enabled', True))
+    return Response({'enabled': enabled})
+
+
+def _count_upcoming_events(chef_id):
+    now = timezone.now()
+    return ChefMealEvent.objects.filter(
+        chef_id=chef_id,
+        status__in=[STATUS_SCHEDULED, STATUS_OPEN],
+        order_cutoff_time__gt=now,
+        orders_count__lt=F('max_orders')
+    ).count()
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def waitlist_status(request, chef_id):
+    try:
+        chef = Chef.objects.get(id=chef_id)
+    except Chef.DoesNotExist:
+        return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    # Simplified: waitlist is enabled by default
+    enabled = True
+    upcoming = _count_upcoming_events(chef.id)
+
+    subscribed = False
+    can_subscribe = False
+    if getattr(request, 'user', None) and request.user.is_authenticated:
+        subscribed = ChefWaitlistSubscription.objects.filter(user=request.user, chef=chef, active=True).exists()
+        # Allow subscribing if chef is on break or has no upcoming orderable events
+        can_subscribe = enabled and not subscribed and (chef.is_on_break or upcoming == 0)
+
+    return Response({
+        'enabled': enabled,
+        'subscribed': subscribed,
+        'can_subscribe': can_subscribe,
+        'chef_is_on_break': chef.is_on_break,
+        'upcoming_events_count': upcoming,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def waitlist_subscribe(request, chef_id):
+    try:
+        chef = Chef.objects.get(id=chef_id)
+    except Chef.DoesNotExist:
+        return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    sub, created = ChefWaitlistSubscription.objects.get_or_create(
+        user=request.user,
+        chef=chef,
+        active=True,
+        defaults={}
+    )
+    return Response({'status': 'ok', 'subscribed': True})
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def waitlist_unsubscribe(request, chef_id):
+    try:
+        chef = Chef.objects.get(id=chef_id)
+    except Chef.DoesNotExist:
+        return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
+    updated = ChefWaitlistSubscription.objects.filter(user=request.user, chef=chef, active=True).update(active=False)
+    if updated == 0:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+    return Response(status=status.HTTP_204_NO_CONTENT)

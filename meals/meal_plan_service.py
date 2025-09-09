@@ -355,8 +355,8 @@ def create_meal_plan_for_all_users():
     """
     server_today = timezone.now().date()
     
-    # Fetch all users with confirmed emails
-    users = CustomUser.objects.filter(email_confirmed=True)
+    # Fetch all users with confirmed emails and auto-plans enabled
+    users = CustomUser.objects.filter(email_confirmed=True, auto_meal_plans_enabled=True)
     
     for user in users:
         # Check if it's Saturday in the user's timezone
@@ -953,6 +953,7 @@ def modify_existing_meal_plan(
     prioritized_meals: Optional[Dict[str, List[str]]] = None,
     request_id: Optional[str] = None,
     should_remove: bool = False,
+    run_variety_analysis: bool = True,
 ):
     """
     Modify an existing meal plan for a user in‑place.
@@ -992,7 +993,7 @@ def modify_existing_meal_plan(
 
     log_prefix = f"[{request_id}]"
     logger.info(f"{log_prefix} Modifying meal_plan {meal_plan_id} for {user.username}")
-
+    print(f"MOD_EXIST [{request_id}] Modifying meal_plan {meal_plan_id} for {user.username}", flush=True)
     # 1. Fetch & sanity‑check the meal plan
     try:
         with transaction.atomic():
@@ -1050,14 +1051,21 @@ def modify_existing_meal_plan(
 
                 for meal_type in day_meal_types:
                     log_ctx = f"{log_prefix} {day_name} {meal_type}"
+                    try:
+                        print(f"MOD_EXIST begin {day_name} {meal_type} meal_date={meal_date}", flush=True)
+                    except Exception:
+                        pass
 
                     # Remove current MealPlanMeal (if any) – we regenerate from scratch
-                    MealPlanMeal.objects.filter(
+                    mpm_to_delete = MealPlanMeal.objects.filter(
                         meal_plan=meal_plan,
                         meal_date=meal_date,
                         day=day_name,
                         meal_type=meal_type
-                    ).delete()
+                    )
+                    for mpm in mpm_to_delete:
+                        print(f"MOD_EXIST deleting meal_plan_meal_id={mpm.id}", flush=True)
+                        mpm.delete()
 
                     # If meal should be removed, skip generation
                     if should_remove:
@@ -1070,6 +1078,10 @@ def modify_existing_meal_plan(
 
                     while attempt < MAX_ATTEMPTS and not meal_added:
                         attempt += 1
+                        try:
+                            print(f"MOD_EXIST attempt {attempt} for {day_name} {meal_type}", flush=True)
+                        except Exception:
+                            pass
 
                         # Re‑use the existing helper that prefers pantry items / uniqueness
                         result = generate_and_create_meal(
@@ -1090,8 +1102,16 @@ def modify_existing_meal_plan(
                             existing_meal_embeddings.append(new_meal.meal_embedding)
                             meal_added = True
                             logger.info(f"{log_ctx} added '{new_meal.name}'")
+                            try:
+                                print(f"MOD_EXIST created meal id={getattr(new_meal, 'id', None)} name={getattr(new_meal, 'name', '')}", flush=True)
+                            except Exception:
+                                pass
                         else:
                             logger.warning(f"{log_ctx} {result['message']}")
+                            try:
+                                print(f"MOD_EXIST failure: {result}", flush=True)
+                            except Exception:
+                                pass
 
                     if not meal_added:
                         logger.error(f"{log_ctx} failed after {MAX_ATTEMPTS} attempts")
@@ -1102,8 +1122,9 @@ def modify_existing_meal_plan(
         logger.error(f"{log_prefix} MealPlan {meal_plan_id} does not exist or is not owned by user.")
         return None
 
-    # 5. Re‑analyse plan for similarity after changes
-    analyze_and_replace_meals(user, meal_plan, meal_types, request_id)
+    # 5. Re‑analyse plan for similarity after changes (optional)
+    if run_variety_analysis:
+        analyze_and_replace_meals(user, meal_plan, meal_types, request_id)
 
     # 6. Persist & flag: require manual approval after modifications
     meal_plan.is_approved = False
@@ -1282,6 +1303,10 @@ def analyze_and_replace_meals(user, meal_plan, meal_types, request_id=None):
                 possible_replacements = all_possible_replacements.get(meal_type, [])
                 if not possible_replacements:
                     logger.warning(f"No possible replacements found for meal type {meal_type} on {day}")
+                    # If we don't have a valid old_meal_id, skip removal to avoid 'Meal None not found.'
+                    if not old_meal_id:
+                        logger.warning(f"[{request_id}] Skipping removal for {day} {meal_type}: old_meal_id is None")
+                        continue
                     # Delete the meal from the meal plan
                     result_remove = remove_meal_from_plan(
                         request=SimpleNamespace(data={'user_id': user.id}),
@@ -2773,9 +2798,27 @@ def apply_modifications(
         request_id = str(uuid.uuid4())
 
     logger.info("[%s] Parsing modification request for MealPlan %s", request_id, meal_plan.id)
+    try:
+        print(f"APPLY_MODS [{request_id}] meal_plan_id={meal_plan.id} raw_prompt={raw_prompt}", flush=True)
+    except Exception:
+        pass
     
     try:
         parsed_req = parse_modification_request(raw_prompt, meal_plan)
+        try:
+            slot_summ = [
+                {
+                    "meal_plan_meal_id": getattr(s, 'meal_plan_meal_id', None),
+                    "should_remove": getattr(s, 'should_remove', False),
+                    "rules_count": len(getattr(s, 'change_rules', []) or []),
+                    "rules": getattr(s, 'change_rules', []),
+                }
+                for s in parsed_req.slots
+            ]
+            preview = str(slot_summ)
+            print(f"APPLY_MODS [{request_id}] parsed_slots={preview[:800]}", flush=True)
+        except Exception:
+            pass
     except Exception as e:
         # n8n traceback
         n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
@@ -2789,6 +2832,10 @@ def apply_modifications(
             mpm.id: mpm
             for mpm in meals
         }
+        try:
+            print(f"APPLY_MODS [{request_id}] id_map_size={len(id_to_mpm)}", flush=True)
+        except Exception:
+            pass
     except Exception as e:
         # n8n traceback
         n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")

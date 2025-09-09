@@ -44,7 +44,7 @@ with tab_voice:
 1. User speaks into their microphone via the Streamlit `st.audio_input()` widget
 2. The audio is sent to the Django backend API
 3. Backend transcribes the audio using OpenAI's Whisper API
-4. The transcription is processed by GPT-4.1-nano to extract pantry item details
+4. The transcription is processed by gpt-5-nano to extract pantry item details
 5. A new pantry item is created with the extracted information
 6. The result is returned to the Streamlit frontend
 

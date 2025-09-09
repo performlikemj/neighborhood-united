@@ -9,11 +9,43 @@ import logging
 import json
 import traceback
 from typing import Any, Optional, Union
+try:
+    from django.conf import settings as dj_settings
+except Exception:
+    dj_settings = None
 
 logger = logging.getLogger(__name__)
 
+def _true(val: str) -> bool:
+    return str(val).lower() in ('true', '1', 'yes', 'on')
+
+def _redis_disabled() -> bool:
+    """Return True when Redis usage should be disabled (tests/local dev).
+    Can be overridden by ENABLE_REDIS/REDIS_ENABLED env or Django setting.
+    """
+    # Explicit enable override wins
+    if _true(os.getenv('ENABLE_REDIS', '')) or _true(os.getenv('REDIS_ENABLED', '')):
+        return False
+    if dj_settings is not None and getattr(dj_settings, 'ENABLE_REDIS', False):
+        return False
+
+    # Otherwise, disable in TEST/DEBUG
+    if _true(os.getenv('TEST_MODE', '')):
+        return True
+    if dj_settings is not None:
+        if getattr(dj_settings, 'TEST_MODE', False):
+            return True
+        if getattr(dj_settings, 'DEBUG', False):
+            return True
+    return False
+
+
 def get_redis_connection():
     """Get a properly configured Redis connection with SSL support for Azure Redis."""
+    if _redis_disabled():
+        # In tests/local dev we short‑circuit to avoid noisy connection failures
+        logger.debug("Redis disabled by TEST/DEBUG (set ENABLE_REDIS=1 to override); returning None connection")
+        return None
     redis_url = os.getenv('REDIS_URL', '') or os.getenv('CELERY_BROKER_URL', '')
     
     
@@ -94,6 +126,9 @@ class RedisClient:
     
     def _get_connection(self):
         """Get or create Redis connection."""
+        if _redis_disabled():
+            logger.debug("Redis disabled by TEST/DEBUG (set ENABLE_REDIS=1 to override); skipping connection")
+            return None
         if self._connection is None:
             if not self._redis_url:
                 logger.error("REDIS_URL environment variable not set")
@@ -166,7 +201,11 @@ class RedisClient:
         try:
             conn = self._get_connection()
             if conn is None:
-                logger.warning(f"Redis connection not available for GET {key} - returning default")
+                # Only debug when explicitly disabled to reduce noise
+                if _redis_disabled():
+                    logger.debug(f"Redis disabled; GET {key} → default")
+                else:
+                    logger.warning(f"Redis connection not available for GET {key} - returning default")
                 return default
                 
             value = conn.get(key)
@@ -206,7 +245,10 @@ class RedisClient:
         try:
             conn = self._get_connection()
             if conn is None:
-                logger.warning(f"Redis connection not available for SET {key} - operation skipped")
+                if _redis_disabled():
+                    logger.debug(f"Redis disabled; SET {key} skipped")
+                else:
+                    logger.warning(f"Redis connection not available for SET {key} - operation skipped")
                 return False
             
             # Serialize complex objects as JSON
@@ -246,7 +288,10 @@ class RedisClient:
         try:
             conn = self._get_connection()
             if conn is None:
-                logger.warning(f"Redis connection not available for DELETE {key} - operation skipped")
+                if _redis_disabled():
+                    logger.debug(f"Redis disabled; DELETE {key} skipped")
+                else:
+                    logger.warning(f"Redis connection not available for DELETE {key} - operation skipped")
                 return False
                 
             conn.delete(key)
@@ -276,7 +321,10 @@ class RedisClient:
         try:
             conn = self._get_connection()
             if conn is None:
-                logger.warning(f"Redis connection not available for EXISTS {key} - returning False")
+                if _redis_disabled():
+                    logger.debug(f"Redis disabled; EXISTS {key} → False")
+                else:
+                    logger.warning(f"Redis connection not available for EXISTS {key} - returning False")
                 return False
                 
             return bool(conn.exists(key))

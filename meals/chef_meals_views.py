@@ -2206,7 +2206,6 @@ def api_create_chef_ingredient(request):
         
         # Save the ingredient
         ingredient.save()
-        print(f"Created ingredient: {ingredient.id} - {ingredient.name}")
         logger.info(f"Created ingredient: {ingredient.id} - {ingredient.name}")
         
         serializer = IngredientSerializer(ingredient)

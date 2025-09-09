@@ -691,7 +691,6 @@ def provide_nutrition_advice(request, user_id):
     try:
         print("Fetching user...")
         user = CustomUser.objects.get(id=user_id)
-        print("Fetching user role...")
         user_role = UserRole.objects.get(user=user)
 
         if user_role.current_role == 'chef':
@@ -915,7 +914,14 @@ def get_user_info(request):
         if isinstance(postal_code, str) and postal_code.isdigit():
             postal_code = int(postal_code)
 
-        country = address.country if address.country else 'Not provided'
+        # Normalize country to a JSON-serializable string (prefer ISO code)
+        if address.country:
+            try:
+                country = getattr(address.country, 'code', None) or str(address.country)
+            except Exception:
+                country = 'Not provided'
+        else:
+            country = 'Not provided'
         allergies = user.allergies if user.allergies != [{}] else []
 
         # Convert the QuerySet to a list of values (e.g., names of dietary preferences)

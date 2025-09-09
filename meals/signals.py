@@ -97,19 +97,51 @@ def handle_model_update(sender, instance, **kwargs):
 
 @receiver(post_save, sender=CustomUser)
 def create_meal_plan_on_user_registration(sender, instance, created, **kwargs):
-    if created and instance.email_confirmed:
-        # Define a callback function to trigger after the transaction commits
-        def trigger_meal_plan_creation():
-            create_meal_plan_for_new_user.delay(instance.id)  # Queue the task to create a meal plan
+    """
+    Create an initial meal plan once a user's email is confirmed.
+    - On create: if email_confirmed is True, queue meal plan generation.
+    - On update: if email_confirmed transitioned from False->True, queue meal plan generation (idempotent for current week).
+    For all updates with confirmed email, mark daily summary stale.
+    """
+    from meals.models import MealPlan
+    from datetime import timedelta
+    from django.utils import timezone
 
-        transaction.on_commit(trigger_meal_plan_creation)
-        
-    # For any update to a user (created or modified), mark their daily summary as stale
-    elif not created and instance.email_confirmed:
-        def trigger_summary_stale():
-            mark_summary_stale(instance)
-            
-        transaction.on_commit(trigger_summary_stale)
+    def _queue_meal_plan_if_needed():
+        # Compute current week window (Monday..Sunday) in server tz
+        today = timezone.now().date()
+        week_start = today - timedelta(days=today.weekday())
+        week_end = week_start + timedelta(days=6)
+        # Avoid duplicate plan generation for this user/week
+        exists = MealPlan.objects.filter(user=instance, week_start_date=week_start, week_end_date=week_end).exists()
+        if not exists:
+            create_meal_plan_for_new_user.delay(instance.id)
+
+    if created:
+        if instance.email_confirmed and getattr(instance, 'auto_meal_plans_enabled', True):
+            transaction.on_commit(_queue_meal_plan_if_needed)
+    else:
+        # Detect False -> True transition
+        prev_confirmed = getattr(instance, '_previous_email_confirmed', None)
+        if instance.email_confirmed and prev_confirmed is False and getattr(instance, 'auto_meal_plans_enabled', True):
+            transaction.on_commit(_queue_meal_plan_if_needed)
+
+        if instance.email_confirmed:
+            def trigger_summary_stale():
+                mark_summary_stale(instance)
+            transaction.on_commit(trigger_summary_stale)
+
+@receiver(pre_save, sender=CustomUser)
+def _track_prev_email_confirmed(sender, instance, **kwargs):
+    """Track previous email_confirmed value to detect transitions on post_save."""
+    if instance.pk:
+        try:
+            previous = CustomUser.objects.get(pk=instance.pk)
+            instance._previous_email_confirmed = bool(previous.email_confirmed)
+        except CustomUser.DoesNotExist:
+            instance._previous_email_confirmed = None
+    else:
+        instance._previous_email_confirmed = None
 
 @receiver(post_save, sender=ChefMealOrder)
 def push_order_event(sender, instance, created, **kwargs):

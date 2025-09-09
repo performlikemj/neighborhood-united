@@ -6,7 +6,7 @@ and provides a unified interface for registering and accessing them.
 """
 
 import logging
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, Tuple
 
 # Import all tool modules
 from .meal_planning_tools import get_meal_planning_tools
@@ -95,6 +95,56 @@ from .guest_tools import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Build a lookup of tool schemas (required args) from the tool metadata
+def _build_tool_schema_index() -> Dict[str, Dict[str, Any]]:
+    index: Dict[str, Dict[str, Any]] = {}
+    try:
+        # Concatenate all tool metadata lists
+        tool_lists: List[List[Dict[str, Any]]] = [
+            get_meal_planning_tools(),
+            get_pantry_management_tools(),
+            get_chef_connection_tools(),
+            get_payment_processing_tools(),
+            get_dietary_preference_tools(),
+            get_customer_dashboard_tools(),
+            get_guest_tools(),
+        ]
+        for tools in tool_lists:
+            for t in tools:
+                name = t.get("name")
+                params = (t.get("parameters") or {})
+                required = params.get("required") or []
+                properties = params.get("properties") or {}
+                if name:
+                    index[name] = {"required": required, "properties": properties}
+    except Exception as e:
+        logger.warning(f"Failed building tool schema index: {e}")
+    return index
+
+_TOOL_SCHEMAS = _build_tool_schema_index()
+
+def _coerce_types(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    """Best‑effort type coercion for simple scalar fields (e.g., ids).
+    Converts numeric strings to ints when the schema declares type integer.
+    """
+    schema = _TOOL_SCHEMAS.get(name) or {}
+    props: Dict[str, Any] = schema.get("properties", {})
+    out = dict(args)
+    for key, prop in props.items():
+        if key in out and out[key] is not None:
+            try:
+                if isinstance(prop, dict) and prop.get("type") == "integer" and isinstance(out[key], str) and out[key].isdigit():
+                    out[key] = int(out[key])
+            except Exception:
+                pass
+    return out
+
+def _validate_required(name: str, args: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    schema = _TOOL_SCHEMAS.get(name) or {}
+    required: List[str] = schema.get("required", [])
+    missing = [k for k in required if args.get(k) in (None, "", [])]
+    return (len(missing) == 0), missing
 
 # Dictionary mapping tool names to their implementation functions
 TOOL_FUNCTION_MAP = {
@@ -256,9 +306,25 @@ def execute_tool(tool_name: str, **kwargs):
     try:
         # Get the tool function
         tool_function = TOOL_FUNCTION_MAP[tool_name]
-        
+        # Coerce types and validate required args from schema
+        coerced = _coerce_types(tool_name, kwargs)
+        # Debug prints removed
+        ok, missing = _validate_required(tool_name, coerced)
+        if not ok:
+            # Provide model‑useful guidance for common patterns
+            hint = None
+            if tool_name in ("get_meal_macro_info", "find_related_youtube_videos", "get_meal_details") and "meal_id" in missing:
+                hint = "Call get_meal_plan_meals_info to list meal_plan_meal_id & meal_id, then recall this tool with a specific meal_id."
+            res = {
+                "status": "error",
+                "message": "missing_required_argument",
+                "missing": missing,
+                **({"hint": hint} if hint else {}),
+            }
+            return res
+
         # Execute the tool function with the provided arguments
-        result = tool_function(**kwargs)
+        result = tool_function(**coerced)
         
         return result
     except Exception as e:
@@ -285,7 +351,10 @@ def handle_tool_call(tool_call):
         
         # Parse the arguments
         import json
-        args = json.loads(arguments)
+        try:
+            args = json.loads(arguments)
+        except Exception:
+            args = {}
         
         # Execute the tool using the standard flow
         result = execute_tool(tool_name, **args)

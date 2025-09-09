@@ -5,10 +5,10 @@ from rest_framework.throttling import SimpleRateThrottle
 
 class GPT4DailyThrottle(SimpleRateThrottle):
     """
-    Throttle for limiting access to GPT-4.1 models.
+    Throttle for limiting access to gpt-5 models.
     
     This throttle limits authenticated users to a fixed number of
-    requests per day to endpoints that use the GPT-4.1 model.
+    requests per day to endpoints that use the gpt-5 model.
     """
     scope = "gpt4"
 
@@ -44,10 +44,10 @@ class GPT4DailyThrottle(SimpleRateThrottle):
 
 class GuestGPT4MiniThrottle(SimpleRateThrottle):
     """
-    Throttle for limiting guest access to GPT-4.1-mini models.
+    Throttle for limiting guest access to gpt-5-mini models.
     
     This throttle limits guest users to a fixed number of
-    requests per day to endpoints that use the GPT-4.1-mini model.
+    requests per day to endpoints that use the gpt-5-mini model.
     """
     scope = "gpt4_mini_guest"
 

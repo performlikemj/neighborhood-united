@@ -62,6 +62,12 @@ TEMPLATE_MAP: Dict[str, Dict[str, str]] = {
         'data': 'emails/sections/system_update_data.html',
         'final': 'emails/sections/system_update_final.html',
     },
+    # Chef waitlist activation: dedicated partials for nicer heading/CTA
+    'chef_waitlist_activation': {
+        'main': 'emails/sections/chef_waitlist_activation_main.html',
+        'data': 'emails/sections/chef_waitlist_activation_data.html',
+        'final': 'emails/sections/chef_waitlist_activation_final.html',
+    },
     'payment_confirmation': {
         'main': 'emails/sections/payment_confirmation_main.html',
         'data': 'emails/sections/payment_confirmation_data.html',
@@ -87,6 +93,8 @@ SCHEMA_MAP: Dict[str, Type[BaseModel]] = {
     'payment_confirmation': EmailPaymentConfirmation,
     'refund_notification': EmailRefundNotification,
     'order_cancellation': EmailOrderCancellation,
+    # Treat waitlist activation as a system update-style payload
+    'chef_waitlist_activation': EmailSystemUpdate,
 }
 
 def get_schema_for_key(template_key: Optional[str]) -> Type[BaseModel]:
@@ -159,4 +167,3 @@ def render_email_sections(
             rendered[section] = render_to_string(fallback_path, ctx)
 
     return rendered, css_classes
-

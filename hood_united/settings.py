@@ -37,7 +37,7 @@ def str_to_bool(value, default=False):
         return value.lower() in ('true', '1', 'yes', 'on')
     return bool(value)
 
-# Test mode flag for disabling external API calls during tests
+# Test mode flag (used by some components), but does not alter core settings
 TEST_MODE = str_to_bool(os.getenv("TEST_MODE", "False"))
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -56,8 +56,8 @@ DEBUG = True
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '').split(',')
 
 # Model quota limits
-GPT41_AUTH_LIMIT = int(os.getenv('GPT41_AUTH_LIMIT', 5))  # GPT-4.1 per authenticated user / day
-GPT41_MINI_GUEST_LIMIT = int(os.getenv('GPT41_MINI_GUEST_LIMIT', 10))  # GPT-4.1-mini per guest / day
+GPT41_AUTH_LIMIT = int(os.getenv('GPT41_AUTH_LIMIT', 5))  # gpt-5 per authenticated user / day
+GPT41_MINI_GUEST_LIMIT = int(os.getenv('GPT41_MINI_GUEST_LIMIT', 10))  # gpt-5-mini per guest / day
 
 # Application definition
 
@@ -212,6 +212,15 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 # Rest framework settings
+# In development, support both Session and JWT auth to ease local testing.
+# In production, keep JWT-only.
+_DEFAULT_AUTH_CLASSES = (
+    'rest_framework.authentication.SessionAuthentication',
+    'rest_framework_simplejwt.authentication.JWTAuthentication',
+) if DEBUG else (
+    'rest_framework_simplejwt.authentication.JWTAuthentication',
+)
+
 REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
@@ -221,9 +230,7 @@ REST_FRAMEWORK = {
         'anon': '100/day',
         'user': '1000/day'
     },
-    'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
-    ),
+    'DEFAULT_AUTHENTICATION_CLASSES': _DEFAULT_AUTH_CLASSES,
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 10,
 }
@@ -426,10 +433,9 @@ broker_transport_options = {                        # <— add
 if not CELERY_BROKER_URL:
     import logging
     logging.getLogger(__name__).error("CELERY_BROKER_URL environment variable not set! Celery will not function properly.")
-    # Don't set a default localhost URL - better to fail explicitly
 
 # Add additional Celery configuration to prevent localhost fallback
-CELERY_TASK_ALWAYS_EAGER = False  # Set to True only for testing
+CELERY_TASK_ALWAYS_EAGER = False
 CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_BROKER_CONNECTION_RETRY = True

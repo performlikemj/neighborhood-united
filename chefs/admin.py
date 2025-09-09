@@ -1,6 +1,16 @@
 from django.contrib import admin
 from meals.models import Meal  
-from .models import Chef, ChefRequest, ChefPostalCode, PostalCode, ChefPhoto, ChefDefaultBanner
+from .models import (
+    Chef,
+    ChefRequest,
+    ChefPostalCode,
+    PostalCode,
+    ChefPhoto,
+    ChefDefaultBanner,
+    ChefWaitlistConfig,
+    ChefWaitlistSubscription,
+    ChefAvailabilityState,
+)
 from custom_auth.models import UserRole
 from django.contrib import messages
 from django.db import transaction
@@ -12,16 +22,19 @@ class MealInline(admin.TabularInline):  # You can also use admin.StackedInline
     model = Meal
     extra = 1  # How many extra empty rows to display
     # Any other options you want to include
+    exclude = ('meal_embedding',)
 
 class ChefPostalCodeInline(admin.TabularInline):
     model = ChefPostalCode
     extra = 1  # Number of extra forms to display
 
 class ChefAdmin(admin.ModelAdmin):
-    list_display = ('user', 'experience', 'bio',)
+    list_display = ('user', 'experience', 'bio', 'is_on_break')
     search_fields = ('user__username', 'experience', 'bio')
-    list_filter = ('user__is_active',)
-    fields = ('user', 'experience', 'bio', 'profile_pic', 'banner_image', 'chef_embedding')
+    list_filter = ('user__is_active', 'is_on_break')
+    # Exclude the pgvector field from the editable form to avoid numpy truth-value issues
+    fields = ('user', 'experience', 'bio', 'is_on_break', 'profile_pic', 'banner_image')
+    readonly_fields = ()
     inlines = [MealInline, ChefPostalCodeInline]
     
     def save_model(self, request, obj, form, change):
@@ -168,3 +181,27 @@ class ChefPhotoAdmin(admin.ModelAdmin):
 class ChefDefaultBannerAdmin(admin.ModelAdmin):
     list_display = ('id', 'created_at', 'updated_at')
     readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(ChefWaitlistConfig)
+class ChefWaitlistConfigAdmin(admin.ModelAdmin):
+    list_display = ('enabled', 'cooldown_hours', 'updated_at')
+    list_editable = ('enabled', 'cooldown_hours')
+    # Make a non-editable column the change-link target so the first
+    # editable column passes Django admin validation
+    list_display_links = ('updated_at',)
+    readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(ChefAvailabilityState)
+class ChefAvailabilityStateAdmin(admin.ModelAdmin):
+    list_display = ('chef', 'is_active', 'activation_epoch', 'last_activated_at', 'last_deactivated_at')
+    list_filter = ('is_active',)
+    search_fields = ('chef__user__username',)
+
+
+@admin.register(ChefWaitlistSubscription)
+class ChefWaitlistSubscriptionAdmin(admin.ModelAdmin):
+    list_display = ('user', 'chef', 'active', 'last_notified_epoch', 'last_notified_at', 'created_at')
+    list_filter = ('active',)
+    search_fields = ('user__username', 'user__email', 'chef__user__username')

@@ -84,7 +84,8 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'allergies', 'custom_allergies', 'week_shift', 'email_confirmed',
             'preferred_language', 'timezone', 'emergency_supply_goal', 'measurement_system',
             'personal_assistant_email', 'is_chef', 'current_role',
-            'household_member_count', 'household_members'
+            'household_member_count', 'household_members',
+            'auto_meal_plans_enabled'
         ]
         extra_kwargs = {
             'password': {'write_only': True},
@@ -94,7 +95,8 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'dietary_preferences': {'required': False},
             'allergies': {'required': False},
             'custom_dietary_preferences': {'required': False},  # Optional field
-            'personal_assistant_email': {'read_only': True}  # Mark as read-only
+            'personal_assistant_email': {'read_only': True},  # Mark as read-only
+            'auto_meal_plans_enabled': {'required': False},
         }
 
     def get_is_chef(self, obj):
@@ -145,7 +147,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
             requested_household_count = 1
         if household_members_data:
             requested_household_count = len(household_members_data)
-        user = get_user_model()(
+        user = get_user_model()( 
             username=validated_data.get('username'),
             email=validated_data.get('email'),
             phone_number=validated_data.get('phone_number', ''),
@@ -156,6 +158,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
             emergency_supply_goal=validated_data.get('emergency_supply_goal', 0), 
             measurement_system=validated_data.get('measurement_system', 'METRIC'),
             household_member_count=requested_household_count,
+            auto_meal_plans_enabled=validated_data.get('auto_meal_plans_enabled', True),
         )
         user.set_password(validated_data['password'])
         user.save()
@@ -320,7 +323,8 @@ class OnboardingUserSerializer(serializers.ModelSerializer):
             'phone_number', 'preferred_language', 'timezone',
             'dietary_preferences', 'custom_dietary_preferences',
             'allergies', 'custom_allergies',
-            'emergency_supply_goal', 'measurement_system', 'household_member_count', 'household_members'
+            'emergency_supply_goal', 'measurement_system', 'household_member_count', 'household_members',
+            'auto_meal_plans_enabled'
         ]
         extra_kwargs = {
             'password': {'write_only': True},
@@ -336,6 +340,7 @@ class OnboardingUserSerializer(serializers.ModelSerializer):
             'emergency_supply_goal': {'required': False},
             'measurement_system': {'required': False},
             'household_member_count': {'required': False},
+            'auto_meal_plans_enabled': {'required': False},
         }
     
     def create(self, validated_data):

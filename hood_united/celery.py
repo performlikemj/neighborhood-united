@@ -86,6 +86,9 @@ def _start_monitor_on_worker_ready(sender=None, **kwargs):
     Start the beat monitor task once the worker is fully booted.
     Uses a short countdown to avoid thundering herd on multi-worker setups.
     """
+    # Feature flag: gate the monitor wiring to reduce noise when disabled
+    if os.getenv("CELERY_BEAT_MONITOR_ENABLED", "false").lower() != "true":
+        return
     try:
         from meals.tasks import monitor_celery_beat
         # delay a few seconds to ensure caches and network are available

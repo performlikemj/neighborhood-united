@@ -23,8 +23,17 @@ p{font-size:16px;line-height:1.6;margin:0 0 12px;color:#374151;}
 .footer{color:#6b7280;font-size:12px;text-align:center;margin:0;padding:18px;line-height:1.5;background:#fafafa;border-top:1px solid #f1f5f9;}
 .table-slim{border-collapse:collapse;border:1px solid #e5e7eb;border-radius:6px;width:100%;display:table;table-layout:fixed;}
 .table-slim th{background:#f8fafc;color:#0f172a;text-align:left;font-weight:600;font-size:13px;padding:8px;border-bottom:1px solid #e5e7eb;white-space:nowrap;word-break:normal;overflow-wrap:normal;}
-.table-slim td{padding:12px 12px;font-size:15px;line-height:1.55;border-bottom:1px solid #eef2f7;vertical-align:top;white-space:nowrap;word-break:normal;overflow-wrap:normal;}
+/* Allow natural wrapping for readability; prevent mid-word breaks unless necessary */
+.table-slim td{padding:12px 12px;font-size:15px;line-height:1.55;border-bottom:1px solid #eef2f7;vertical-align:top;white-space:normal;word-break:break-word;overflow-wrap:anywhere;hyphens:auto;}
+/* Keep compact columns on a single line */
+.table-slim td.qty,.table-slim td.unit{white-space:nowrap;}
+.table-slim td.notes{white-space:normal;word-break:break-word;overflow-wrap:anywhere;hyphens:auto;}
 .table-slim td.qty{text-align:right;font-weight:600;color:#111827;}
+/* Give the Item column more width for small screens */
+.table-slim th.item,.table-slim td.item{width:56%;}
+.table-slim th.qty,.table-slim td.qty{width:12%;}
+.table-slim th.unit,.table-slim td.unit{width:12%;}
+.table-slim th.notes,.table-slim td.notes{width:20%;}
 .logo img{max-width:180px;height:auto;}
 .card{background:#ffffff;border:1px solid #eef2f7;border-radius:8px;padding:16px;margin:12px 0;}
 /* graphs */
@@ -126,6 +135,11 @@ p{font-size:16px;line-height:1.6;margin:0 0 12px;color:#374151;}
     .meal-plan-calendar th,
     .meal-plan-calendar td { padding: 8px 4px; }
     .table-slim td, .table-slim th { padding: 10px 8px; }
+    /* Give Notes a bit more space on phones */
+    .table-slim th.item,.table-slim td.item{width:52%;}
+    .table-slim th.qty,.table-slim td.qty{width:12%;}
+    .table-slim th.unit,.table-slim td.unit{width:12%;}
+    .table-slim th.notes,.table-slim td.notes{width:24%;}
     .email-body { padding: 18px; }
     .card { padding: 12px; }
     .button { display: block; text-align: center; margin: 8px 0; }

@@ -106,7 +106,6 @@ class Command(BaseCommand):
                             "schema": MealTypeAssignment.model_json_schema()  # Pydantic v2 method
                         }
                     },
-                    temperature=0  # Set to 0 for deterministic output
                 )
 
                 # Extract the meal_type from the response

@@ -256,7 +256,7 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
         api_key = settings.OPENAI_KEY
         client = OpenAI(api_key=api_key)
         output = client.responses.create(
-            model="gpt-4o-mini",
+            model="gpt-5-mini",
             input=[
                 {"role": "developer", "content": (
                     """

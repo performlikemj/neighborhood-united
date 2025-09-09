@@ -1,0 +1,7 @@
+{% load i18n %}
+<div class="section section-main">
+  <h2 style="margin:0 0 12px;">{% trans "Chef Update" %}</h2>
+  <p>{% blocktrans with name=chef_username %}Chef <strong>{{ name }}</strong> is now accepting orders.{% endblocktrans %}</p>
+  {{ content_html|safe }}
+</div>
+

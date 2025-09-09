@@ -52,6 +52,7 @@ class MealPlanFlowTests(TestCase):
             email="test@example.com",
         )
 
+    @patch("meals.signals.generate_shopping_list.delay", lambda *args, **kwargs: None)
     @patch("meals.meal_plan_service.analyze_and_replace_meals", lambda *args, **kwargs: None)
     @patch("meals.meal_plan_service.generate_and_create_meal", side_effect=_stub_generate_and_create_meal)
     def test_generate_meal_plan_is_auto_approved(self, _mock_gen):
@@ -72,6 +73,7 @@ class MealPlanFlowTests(TestCase):
         # And at least one slot was created
         self.assertTrue(MealPlanMeal.objects.filter(meal_plan=meal_plan).exists())
 
+    @patch("meals.signals.generate_shopping_list.delay", lambda *args, **kwargs: None)
     @patch("meals.meal_plan_service.analyze_and_replace_meals", lambda *args, **kwargs: None)
     @patch("meals.meal_plan_service.generate_and_create_meal", side_effect=_stub_generate_and_create_meal)
     def test_edit_requires_manual_approval(self, _mock_gen):
@@ -107,6 +109,7 @@ class MealPlanFlowTests(TestCase):
         self.assertFalse(meal_plan.is_approved)
         self.assertTrue(meal_plan.has_changes)
 
+    @patch("meals.signals.generate_shopping_list.delay", lambda *args, **kwargs: None)
     @patch("meals.meal_plan_service.analyze_and_replace_meals", lambda *args, **kwargs: None)
     @patch("meals.meal_plan_service.generate_and_create_meal", side_effect=_stub_generate_and_create_meal)
     def test_api_approval_finalizes_changes(self, _mock_gen):

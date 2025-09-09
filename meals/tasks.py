@@ -27,6 +27,7 @@ import requests
 from django.core.cache import cache
 import os
 from typing import Any, Dict, Optional
+import traceback
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -91,6 +92,7 @@ def celery_beat_heartbeat(self) -> bool:
         _send_n8n_traceback(
             message=f"Failed to update beat heartbeat: {e}",
             source="celery_beat_heartbeat",
+            extra={"traceback": traceback.format_exc()},
         )
         return False
 
@@ -102,6 +104,9 @@ def monitor_celery_beat(self) -> None:
     If stale or missing, notify n8n (cooldown-limited) and continue monitoring.
     This does not rely on Beat; it re-schedules itself with countdown.
     """
+    # Feature flag: allow disabling the monitor entirely to reduce noise
+    if os.getenv("CELERY_BEAT_MONITOR_ENABLED", "false").lower() != "true":
+        return
     try:
         now_ts = _now_ts()
         last_heartbeat = cache.get(HEARTBEAT_CACHE_KEY)
@@ -135,12 +140,28 @@ def monitor_celery_beat(self) -> None:
             cache.delete(ALERT_LAST_SENT_CACHE_KEY)
     except Exception as e:
         logger.error("Error in monitor_celery_beat: %s", e, exc_info=True)
+        try:
+            _send_n8n_traceback(
+                message=f"Error in monitor_celery_beat: {e}",
+                source="monitor_celery_beat",
+                extra={"traceback": traceback.format_exc()},
+            )
+        except Exception:
+            pass
     finally:
         # Self-reschedule regardless of outcome to keep monitoring running without Beat
         try:
             self.apply_async(countdown=MONITOR_INTERVAL_SECONDS)
         except Exception as schedule_error:
             logger.error("Failed to reschedule monitor_celery_beat: %s", schedule_error, exc_info=True)
+            try:
+                _send_n8n_traceback(
+                    message=f"Failed to reschedule monitor_celery_beat: {schedule_error}",
+                    source="monitor_celery_beat_reschedule",
+                    extra={"traceback": traceback.format_exc()},
+                )
+            except Exception:
+                pass
 
 
 

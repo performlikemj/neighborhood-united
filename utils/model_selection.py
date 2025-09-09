@@ -14,7 +14,7 @@ MODEL_GPTo4_MINI = "o4-mini-2025-04-16"
 MODEL_GPT41_MINI = "gpt-5-mini"
 MODEL_GPT41_NANO = "gpt-5-nano"
 
-# Smart keywords that trigger upgrade to GPT-4.1
+# Smart keywords that trigger upgrade to gpt-5
 SMART_KEYWORDS = {
     # meal planning
     "meal plan", "weekly menu", "macro breakdown", "calorie split",
@@ -38,7 +38,7 @@ COMPLEXITY_THRESHOLD = 80  # Tokens
 def choose_model(user_id, is_guest: bool, question: str, history_tokens: int = 0) -> str:
     """
     Choose the appropriate model based on:
-    1. Keyword matching (upgrade to GPT-4.1 if any smart keyword is present)
+    1. Keyword matching (upgrade to gpt-5 if any smart keyword is present)
     2. Total token complexity (question + history)
     3. User authentication status
     4. User's quota usage
@@ -75,7 +75,7 @@ def choose_model(user_id, is_guest: bool, question: str, history_tokens: int = 0
                 logger.info(f"MODEL_SELECTION: Guest {user_id} quota exhausted - Using {MODEL_GPT41_NANO}")
                 return MODEL_GPT41_NANO
         else:
-            # Guests never get full GPT-4.1, downgrade to mini
+            # Guests never get full gpt-5, downgrade to mini
             logger.info(f"MODEL_SELECTION: Guest {user_id} - Using {MODEL_GPT41_MINI} (downgraded from {MODEL_GPTo4_MINI})")
             return MODEL_GPT41_MINI
     else:

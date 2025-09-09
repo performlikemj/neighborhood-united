@@ -297,7 +297,7 @@ Provide detailed intent analysis following the EmailIntent schema."""
             schema = self._clean_schema_for_openai(EmailIntent.model_json_schema())
             
             response = self.client.responses.create(
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 input=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}

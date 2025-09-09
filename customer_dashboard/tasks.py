@@ -564,6 +564,10 @@ def process_aggregated_emails(self, session_identifier_str, use_enhanced_formatt
         
         logger.info(f"Processing aggregated emails for session {session_identifier_str} (enhanced: {use_enhanced_formatting})")
         
+        # Idempotency key for final send step
+        EMAIL_SENT_KEY_PREFIX = "email_session_sent_"
+        email_sent_key = f"{EMAIL_SENT_KEY_PREFIX}{session_identifier_str}"
+
         # Get the session
         try:
             session = EmailAggregationSession.objects.get(
@@ -571,27 +575,38 @@ def process_aggregated_emails(self, session_identifier_str, use_enhanced_formatt
                 is_active=True
             )
         except EmailAggregationSession.DoesNotExist:
-            # Check if the session exists but is inactive (already processed)
+            # Session might have been marked inactive earlier in a prior attempt
             try:
                 inactive_session = EmailAggregationSession.objects.get(
                     session_identifier=uuid.UUID(session_identifier_str),
                     is_active=False
                 )
-                logger.info(f"📨 Session {session_identifier_str} already processed (scheduled task arrived after immediate processing) - this is normal behavior")
-                return {
-                    'status': 'success', 
-                    'message': 'Session already processed by earlier task',
-                    'session_id': session_identifier_str,
-                    'note': 'This occurs when immediate processing completed before the scheduled 5-minute task'
-                }
+                # If we never actually sent the email, continue processing anyway (resilient retry)
+                if not get(email_sent_key, default=False):
+                    logger.warning(
+                        f"Resuming processing for inactive session {session_identifier_str} because no send confirmation was recorded"
+                    )
+                    session = inactive_session
+                else:
+                    logger.info(
+                        f"📨 Session {session_identifier_str} already processed and email sent — skipping duplicate send"
+                    )
+                    return {
+                        'status': 'success', 
+                        'message': 'Session already processed by earlier task',
+                        'session_id': session_identifier_str,
+                        'note': 'Idempotent skip: email already sent'
+                    }
             except EmailAggregationSession.DoesNotExist:
                 # Session truly doesn't exist - this is a real error
                 logger.error(f"❌ EmailAggregationSession {session_identifier_str} not found in database - this is unexpected")
                 return {'status': 'error', 'message': 'Session not found in database'}
         
-        # Mark session as inactive
-        session.is_active = False
-        session.save()
+        # Mark session as inactive early to prevent concurrent processors
+        # (If the worker dies before sending, we rely on the idempotency key to resume.)
+        if session.is_active:
+            session.is_active = False
+            session.save()
         
         # Clear the cache flag
         active_session_flag_key = f"{ACTIVE_DB_AGGREGATION_SESSION_FLAG_PREFIX}{session.user.id}"
@@ -897,6 +912,8 @@ def process_aggregated_emails(self, session_identifier_str, use_enhanced_formatt
                     response = requests.post(n8n_webhook_url, json=payload, timeout=30)
                     response.raise_for_status()
                     logger.info(f"Email successfully sent for session {session_identifier_str} (enhanced: {use_enhanced_formatting})")
+                    # Mark idempotency key so retries/duplicates don’t resend
+                    set(email_sent_key, True, timeout=7 * 24 * 60 * 60)  # 7 days
                     
                     return {
                         'status': 'success',
@@ -933,6 +950,8 @@ def process_aggregated_emails(self, session_identifier_str, use_enhanced_formatt
                 }
         else:
             logger.info(f"User {session.user.username} has unsubscribed from emails")
+            # Consider the session completed to avoid repeated processing
+            set(email_sent_key, True, timeout=7 * 24 * 60 * 60)
             return {
                 'status': 'success',
                 'message': 'Processing completed but email not sent due to user preferences',

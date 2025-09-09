@@ -40,7 +40,6 @@ def find_youtube_cooking_videos(meal_name: str, meal_description: str, limit: in
             
             Return only the search query text, nothing else.
             """,
-            temperature=0.3,
             max_output_tokens=100
         )
         

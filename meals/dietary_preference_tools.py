@@ -356,7 +356,6 @@ def check_meal_compatibility(user_id: int, meal_id: int) -> dict:
     Uses OpenAI Responses API + Structured Output to decide whether a meal
     meets a user's dietary preferences. Falls back to rule-based logic on error.
     """
-    print(f'checking meal compatibility for user {user_id} and meal {meal_id}')
     try:
         # === 1. DB fetches (unchanged) =====================================
         user = get_object_or_404(CustomUser, id=user_id)
@@ -726,7 +725,6 @@ def list_dietary_preferences() -> Dict[str, Any]:
     Returns:
         Dict containing all standard dietary preferences
     """
-    print('listing dietary preferences')
     try:
         # Get all standard dietary preferences
         preferences = DietaryPreference.objects.all()
@@ -745,7 +743,6 @@ def list_dietary_preferences() -> Dict[str, Any]:
                 "name": pref.name,
                 "description": pref.description,
             })
-        print(f'preference_list: {preference_list}')
         return {
             "status": "success",
             "preferences": preference_list,

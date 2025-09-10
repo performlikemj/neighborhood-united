@@ -7,11 +7,25 @@ import traceback
 from typing import Dict, List, Optional, Any, ClassVar
 from django.conf import settings
 from openai import OpenAI, OpenAIError
+try:
+    from groq import Groq  # optional Groq client
+except Exception:
+    Groq = None
+import os
 from pydantic import ValidationError
 from shared.utils import get_openai_client
 from meals.pydantic_models import MealMacroInfo
 
 logger = logging.getLogger(__name__)
+
+def _get_groq_client():
+    try:
+        api_key = getattr(settings, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
+        if api_key and Groq is not None:
+            return Groq(api_key=api_key)
+    except Exception:
+        pass
+    return None
 
 def get_meal_macro_information(meal_name: str, meal_description: str, ingredients: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
     """
@@ -30,9 +44,9 @@ def get_meal_macro_information(meal_name: str, meal_description: str, ingredient
         ingredients_text = "Ingredients:\n" + "\n".join([f"- {ingredient}" for ingredient in ingredients])
     
     try:
-        response = get_openai_client().responses.create(
-            model="gpt-5-mini",
-            input=f"""
+        # Prefer Groq structured output if available
+        groq_client = _get_groq_client()
+        user_text = f"""
             Analyze the following meal and provide detailed macro nutritional information:
             
             Meal: {meal_name}
@@ -40,19 +54,41 @@ def get_meal_macro_information(meal_name: str, meal_description: str, ingredient
             {ingredients_text}
             
             Provide accurate nutritional estimates based on standard serving sizes.
-            """,
-            text={
-                "format": {
-                    'type': 'json_schema',
-                    'name': 'meal_macros',
-                    'schema': MealMacroInfo.model_json_schema()
+        """
+        if groq_client:
+            groq_resp = groq_client.chat.completions.create(
+                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                messages=[
+                    {"role": "system", "content": "Return only JSON matching the provided schema."},
+                    {"role": "user", "content": user_text},
+                ],
+                temperature=0.2,
+                top_p=1,
+                stream=False,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "meal_macros",
+                        "schema": MealMacroInfo.model_json_schema(),
+                    },
+                },
+            )
+            macro_data = json.loads(groq_resp.choices[0].message.content or "{}")
+        else:
+            response = get_openai_client().responses.create(
+                model="gpt-5-mini",
+                input=user_text,
+                text={
+                    "format": {
+                        'type': 'json_schema',
+                        'name': 'meal_macros',
+                        'schema': MealMacroInfo.model_json_schema()
+                    }
                 }
-            }
-        )
-        
-        # Parse the structured output
-        macro_data = json.loads(response.output_text)
-        print(f"Macro data: {macro_data}")
+            )
+            
+            # Parse the structured output
+            macro_data = json.loads(response.output_text)
         # Validate the data against our schema
         validated_data = MealMacroInfo.model_validate(macro_data)
         

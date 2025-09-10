@@ -24,10 +24,26 @@ from meals.pantry_management import (
     determine_items_to_replenish,
 )
 from shared.utils import get_openai_client
+try:
+    from groq import Groq  # optional Groq client
+except Exception:
+    Groq = None
+from django.conf import settings
+from pydantic import ValidationError
 from meals.serializers import PantryItemSerializer
 
 logger = logging.getLogger(__name__)
 n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+
+# Lazy Groq client factory
+def _get_groq_client():
+    try:
+        api_key = getattr(settings, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
+        if api_key and Groq is not None:
+            return Groq(api_key=api_key)
+    except Exception:
+        pass
+    return None
 # Tool definitions for the OpenAI Responses API
 PANTRY_MANAGEMENT_TOOLS = [
     {
@@ -481,14 +497,9 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
         else ""
     )
 
-    # --- 2. Call OpenAI -------------------------------------------------------
+    # --- 2. Call LLM (Groq preferred) ---------------------------------------
     try:
-        response = get_openai_client().responses.create(
-            model="gpt-5-mini",
-            input=[
-                {
-                    "role": "developer",
-                    "content": (
+        developer_content = (
                         """
                         Generate a shopping list in JSON format according to the defined schema, factoring in a user's preferred serving size for each meal. Return one entry per unique ingredient and unit; if multiple meals require the same ingredient with the same unit, combine their quantities and list all meal names in `meal_names`. Follow the structure provided for the `ShoppingList` and include the required fields for each `ShoppingListItem`.
 
@@ -557,11 +568,8 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
                         - `notes` field is optional and can be `null` if no special notes are necessary.
                         - Adhere strictly to the schema provided for compatibility with `ShoppingList`.
                         """
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
+        )
+        user_content = (
                         f"Answer in the user's preferred language: {user.preferred_language or 'English'}.\n"
                         f"Generate a shopping list based on the following meals: {json.dumps(meal_plan_data)}.\n"
                         f"User context: {user_context}.\n"
@@ -573,18 +581,43 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
                         f"{substitution_str}\n{chef_note}\n"
                         "IMPORTANT: For ingredients in non‑chef meals that have substitution options, include BOTH the "
                         "original ingredient AND its substitutes, clearly marking them as alternatives."
-                    ),
-                },
-            ],
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": "shopping_list",
-                    "schema": ShoppingListSchema.model_json_schema(),
-                }
-            },
         )
-        shopping_list_raw = response.output_text
+        groq_client = _get_groq_client()
+        if groq_client:
+            groq_resp = groq_client.chat.completions.create(
+                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                messages=[
+                    {"role": "system", "content": developer_content},
+                    {"role": "user", "content": user_content},
+                ],
+                temperature=0.2,
+                top_p=1,
+                stream=False,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "shopping_list",
+                        "schema": ShoppingListSchema.model_json_schema(),
+                    },
+                },
+            )
+            shopping_list_raw = groq_resp.choices[0].message.content or "{}"
+        else:
+            response = get_openai_client().responses.create(
+                model="gpt-5-mini",
+                input=[
+                    {"role": "developer", "content": developer_content},
+                    {"role": "user", "content": user_content},
+                ],
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "shopping_list",
+                        "schema": ShoppingListSchema.model_json_schema(),
+                    }
+                },
+            )
+            shopping_list_raw = response.output_text
     except Exception as e:
         n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
         # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
@@ -700,21 +733,43 @@ def determine_items_to_replenish(user_id: int):
     )
 
     try:
-        response = get_openai_client().responses.create(
-            model="gpt-5-mini",
-            input=[
-                {"role": "developer", "content": sys_prompt},
-                {"role": "user", "content": usr_prompt},
-            ],
-            text={
-                "format": {
+        groq_client = _get_groq_client()
+        if groq_client:
+
+            groq_resp = groq_client.chat.completions.create(
+                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                messages=[
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": usr_prompt},
+                ],
+                temperature=0.2,
+                top_p=1,
+                stream=False,
+                response_format={
                     "type": "json_schema",
-                    "name": "replenish_items",
-                    "schema": ReplenishItemsSchema.model_json_schema(),
-                }
-            },
-        )
-        raw = response.output_text
+                    "json_schema": {
+                        "name": "replenish_items",
+                        "schema": ReplenishItemsSchema.model_json_schema(),
+                    },
+                },
+            )
+            raw = groq_resp.choices[0].message.content or "{}"
+        else:
+            response = get_openai_client().responses.create(
+                model="gpt-5-mini",
+                input=[
+                    {"role": "developer", "content": sys_prompt},
+                    {"role": "user", "content": usr_prompt},
+                ],
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "replenish_items",
+                        "schema": ReplenishItemsSchema.model_json_schema(),
+                    }
+                },
+            )
+            raw = response.output_text
     except Exception as e:
         # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
         requests.post(n8n_traceback_url, json={"error": str(e), "source":"determine_items_to_replenish", "traceback": traceback.format_exc()})

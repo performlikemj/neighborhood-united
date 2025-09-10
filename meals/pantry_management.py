@@ -14,8 +14,24 @@ from shared.utils import generate_user_context, get_openai_client
 from meals.models import PantryItem, Tag, MealPlanMealPantryUsage
 from meals.pydantic_models import ReplenishItemsSchema, PantryTagsSchema
 from openai import OpenAI, OpenAIError
+try:
+    from groq import Groq  # optional Groq client for inference
+except Exception:
+    Groq = None
+import os
 
 logger = logging.getLogger(__name__)
+
+# Lazy Groq client factory
+def _get_groq_client():
+    try:
+        api_key = getattr(settings, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
+        if api_key and Groq is not None:
+            return Groq(api_key=api_key)
+
+    except Exception:
+        pass
+    return None
 
 def get_user_pantry_items(user):
     """
@@ -115,28 +131,45 @@ def check_item_for_allergies_gpt(item_name: str, user) -> bool:
     ]
 
     try:
-        response = get_openai_client().responses.create(
-            model="gpt-5-mini",
-            input=prompt_messages,
-            text={
-                "format": {
-                    'type': 'json_schema',
-                    'name': 'safe_check',
-                    "schema": {
-                            "type": "object",
-                            "properties": {
-                                "safe_check": {
-                                    "type": "boolean"
-                                }
-                            },
-                            "required": ["safe_check"],
-                            "additionalProperties": False
-                        }
+        groq_client = _get_groq_client()
+        schema = {
+            "type": "object",
+            "properties": {"safe_check": {"type": "boolean"}},
+            "required": ["safe_check"],
+            "additionalProperties": False,
+        }
+        if groq_client:
+            # Map developer->system
+            groq_messages = [
+                {"role": ("system" if m.get("role") == "developer" else m.get("role")), "content": m.get("content")}
+                for m in prompt_messages
+            ]
+            groq_resp = groq_client.chat.completions.create(
+                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                messages=groq_messages,
+                temperature=0.2,
+                top_p=1,
+                stream=False,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {"name": "safe_check", "schema": schema},
+                },
+            )
+            raw = groq_resp.choices[0].message.content or "{}"
+        else:
+            response = get_openai_client().responses.create(
+                model="gpt-5-mini",
+                input=prompt_messages,
+                text={
+                    "format": {
+                        'type': 'json_schema',
+                        'name': 'safe_check',
+                        "schema": schema,
                     }
                 }
-        )
-        gpt_output = response.output_text
-        data = json.loads(gpt_output)
+            )
+            raw = response.output_text
+        data = json.loads(raw)
         return data.get("safe_check", False)
 
     except Exception as e:
@@ -371,21 +404,42 @@ def determine_items_to_replenish(user):
     
     # Step 6: Call OpenAI API
     try:
-        response = get_openai_client().responses.create(
-            model="gpt-5-mini",
-            input=[
-                {"role": "developer", "content": prompt_system},
-                {"role": "user", "content": prompt_user},
-            ],
-            text={
-                "format": {
-                    'type': 'json_schema',
-                    'name': 'replenish_items',
-                    'schema': ReplenishItemsSchema.model_json_schema()
+        groq_client = _get_groq_client()
+        if groq_client:
+            groq_resp = groq_client.chat.completions.create(
+                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                messages=[
+                    {"role": "system", "content": prompt_system},
+                    {"role": "user", "content": prompt_user},
+                ],
+                temperature=0.2,
+                top_p=1,
+                stream=False,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "replenish_items",
+                        "schema": ReplenishItemsSchema.model_json_schema(),
+                    },
+                },
+            )
+            assistant_message = groq_resp.choices[0].message.content or "{}"
+        else:
+            response = get_openai_client().responses.create(
+                model="gpt-5-mini",
+                input=[
+                    {"role": "developer", "content": prompt_system},
+                    {"role": "user", "content": prompt_user},
+                ],
+                text={
+                    "format": {
+                        'type': 'json_schema',
+                        'name': 'replenish_items',
+                        'schema': ReplenishItemsSchema.model_json_schema()
+                    }
                 }
-            }
-        )
-        assistant_message = response.output_text
+            )
+            assistant_message = response.output_text
         
         # Step 7: Parse and validate GPT response
         try:
@@ -418,10 +472,7 @@ def assign_pantry_tags(pantry_item_id):
     )
 
     try:
-        response = get_openai_client().responses.create(
-            model="gpt-5-mini",
-            input=[
-                {"role": "developer", "content": (
+        developer_content = (
                     """
                     Generate tags for a pantry item in JSON format using the specified schema.
 
@@ -469,20 +520,45 @@ def assign_pantry_tags(pantry_item_id):
                     - Use concise and relevant tags based on common attributes of the pantry item.
                     - Forbidden to include extra keys or unrelated information in the JSON output.
                     """
-                )},
-                {"role": "user", "content": prompt}
-            ],
-            text={
-                "format": {
-                    'type': 'json_schema',
-                    'name': 'pantry_tags',
-                    'schema': PantryTagsSchema.model_json_schema()
-                }
-            }
         )
+        groq_client = _get_groq_client()
+        if groq_client:
+            groq_resp = groq_client.chat.completions.create(
+                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                messages=[
+                    {"role": "system", "content": developer_content},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.2,
+                top_p=1,
+                stream=False,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        'name': 'pantry_tags',
+                        'schema': PantryTagsSchema.model_json_schema(),
+                    },
+                },
+            )
+            response_content = groq_resp.choices[0].message.content or "{}"
+        else:
+            response = get_openai_client().responses.create(
+                model="gpt-5-mini",
+                input=[
+                    {"role": "developer", "content": developer_content},
+                    {"role": "user", "content": prompt}
+                ],
+                text={
+                    "format": {
+                        'type': 'json_schema',
+                        'name': 'pantry_tags',
+                        'schema': PantryTagsSchema.model_json_schema()
+                    }
+                }
+            )
 
-        # The OpenAI response should now be JSON that matches PantryTagsSchema
-        response_content = response.output_text
+            # The OpenAI response should now be JSON that matches PantryTagsSchema
+            response_content = response.output_text
         logger.info(f"Raw OpenAI response for pantry item {pantry_item_id}: {response_content}")
 
         # Parse and validate with Pydantic

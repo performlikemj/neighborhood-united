@@ -15,16 +15,60 @@ from django.conf import settings
 from utils.redis_client import get, set, delete
 from meals.pydantic_models import Ingredient
 from openai import OpenAI
+try:
+    from groq import Groq  # optional groq client
+except Exception:
+    Groq = None
 from django.conf import settings
 import traceback
 from shared.utils import get_openai_client
+
+# internal helper to lazily instantiate Groq
+def _get_groq_client():
+    try:
+        api_key = getattr(settings, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
+        if api_key and Groq is not None:
+            return Groq(api_key=api_key)
+    except Exception:
+        pass
+    return None
 
 logger = logging.getLogger(__name__)
 
 
 
 def normalize_lines(lines: list[str]) -> dict:
-    prompt = "Turn these loose shopping-list lines into structured JSON ensuring the items are actual shopping list items.\n---\n" + "\n".join(lines)
+    prompt = (
+        "Turn these loose shopping-list lines into structured JSON ensuring the items are actual shopping list items.\n"
+        "Return a JSON object with an 'items' array of normalized entries.\n---\n"
+        + "\n".join(lines)
+    )
+    # Prefer Groq structured output to directly produce a ShoppingList payload
+    try:
+        groq_client = _get_groq_client()
+        if groq_client:
+            # Use ShoppingList schema for a proper top-level 'items' list
+            from meals.pydantic_models import ShoppingList as ShoppingListSchema
+            groq_resp = groq_client.chat.completions.create(
+                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                top_p=1,
+                stream=False,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "normalized_ingredient_list",
+                        "schema": ShoppingListSchema.model_json_schema(),
+                    },
+                },
+            )
+            content = groq_resp.choices[0].message.content or "{}"
+            return json.loads(content)
+    except Exception as _groq_err:
+        logger.debug(f"normalize_lines: Groq path failed or unavailable: {_groq_err}")
+
+    # Fallback to existing OpenAI responses client
     r = get_openai_client().responses.create(
         model="gpt-5-nano",
         input=[{"role": "user", "content": prompt}],
@@ -36,7 +80,7 @@ def normalize_lines(lines: list[str]) -> dict:
             }
         }
     )
-    # GPT‑4.1‑nano returns JSON‑text; convert to dict
+    # OpenAI responses returns JSON‑text; convert to dict
     return json.loads(r.output_text)
 
 
@@ -214,7 +258,6 @@ def _transform_to_instacart_payload(
     if items and isinstance(items, list) and items and isinstance(items[0], str):
         try:
             shopping_list_data = normalize_lines(items)
-            print("[transform] Normalized items preview:", shopping_list_data.get('items', [])[:5])
         except Exception as e:
             logger.warning(f"normalize_lines failed; continuing with raw items: {e}")
     # ------------------------------------------------------------------------

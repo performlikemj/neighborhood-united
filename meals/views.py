@@ -1944,9 +1944,11 @@ def api_stream_meal_plan_generation(request):
     from .models import MealPlan, MealPlanMeal
     
     try:
+        print("[SSE] Enter api_stream_meal_plan_generation", flush=True)
         # Troubleshooting headers
         try:
             accept = request.META.get('HTTP_ACCEPT')
+            print(f"[SSE] HTTP_ACCEPT={accept}", flush=True)
             
         except Exception:
             pass
@@ -1955,8 +1957,10 @@ def api_stream_meal_plan_generation(request):
         week_start_date_str = None
         if hasattr(request, 'query_params') and request.query_params is not None:
             week_start_date_str = request.query_params.get('week_start_date')
+            print(f"[SSE] query_params.week_start_date={week_start_date_str}", flush=True)
         if not week_start_date_str and hasattr(request, 'GET'):
             week_start_date_str = request.GET.get('week_start_date')
+            print(f"[SSE] GET.week_start_date={week_start_date_str}", flush=True)
         if not week_start_date_str:
             def err_stream():
                 yield f"event: error\n"
@@ -1964,10 +1968,12 @@ def api_stream_meal_plan_generation(request):
                 yield 'event: close\n\n'
             response = StreamingHttpResponse(err_stream(), content_type='text/event-stream')
             response['Cache-Control'] = 'no-cache, no-transform'
+            print("[SSE] Missing week_start_date; returning error stream", flush=True)
             return response
         try:
             week_start_date = datetime.strptime(week_start_date_str, '%Y-%m-%d').date()
             week_end_date = week_start_date + timedelta(days=6)
+            print(f"[SSE] Parsed week_start_date={week_start_date} week_end_date={week_end_date}", flush=True)
         except ValueError:
             def err_stream2():
                 yield f"event: error\n"
@@ -1975,6 +1981,7 @@ def api_stream_meal_plan_generation(request):
                 yield 'event: close\n\n'
             response = StreamingHttpResponse(err_stream2(), content_type='text/event-stream')
             response['Cache-Control'] = 'no-cache, no-transform'
+            print("[SSE] Invalid date format provided", flush=True)
             return response
 
         # Channel and keys
@@ -1990,6 +1997,7 @@ def api_stream_meal_plan_generation(request):
             week_end_date=week_end_date
         ).first()
         if existing_plan and MealPlanMeal.objects.filter(meal_plan=existing_plan).exists():
+            print(f"[SSE] Existing plan with meals found (plan_id={existing_plan.id}); short-circuiting with done", flush=True)
             def done_stream():
                 yield "event: progress\n"
                 yield f"data: {json.dumps({'pct': 100})}\n\n"
@@ -2001,6 +2009,7 @@ def api_stream_meal_plan_generation(request):
 
         # Prepare Redis pubsub
         conn = get_redis_connection()
+        print(f"[SSE] Redis connection acquired? {'yes' if conn else 'no'}", flush=True)
         if conn is None:
             def err_stream3():
                 yield f"event: error\n"
@@ -2008,17 +2017,24 @@ def api_stream_meal_plan_generation(request):
                 yield 'event: close\n\n'
             response = StreamingHttpResponse(err_stream3(), content_type='text/event-stream')
             response['Cache-Control'] = 'no-cache, no-transform'
+            print("[SSE] Redis unavailable; returning error stream", flush=True)
             return response
         pubsub = conn.pubsub()
         pubsub.subscribe(channel)
+        print(f"[SSE] Subscribed to channel={channel}", flush=True)
+        
 
         # Start job idempotently if not already running
-        if not redis_get(lock_key):
+        lock_val = redis_get(lock_key)
+        print(f"[SSE] Lock check {lock_key} -> {lock_val}", flush=True)
+        if not lock_val:
             try:
                 # set short lock to avoid races before Celery picks it up
-                redis_set(lock_key, f"meal_plan_generation_{user_id}_{week_start_date.strftime('%Y_%m_%d')}", 7200)
-                from .meal_plan_service import create_meal_plan_for_user
                 task_id = f"meal_plan_generation_{user_id}_{week_start_date.strftime('%Y_%m_%d') }"
+                lock_value_to_set = f"meal_plan_generation_{user_id}_{week_start_date.strftime('%Y_%m_%d')}"
+                redis_set(lock_key, lock_value_to_set, 7200)
+                print(f"[SSE] Set lock {lock_key} -> {lock_value_to_set}", flush=True)
+                from .meal_plan_service import create_meal_plan_for_user
                 create_meal_plan_for_user.apply_async(
                     args=[],
                     kwargs={
@@ -2026,29 +2042,36 @@ def api_stream_meal_plan_generation(request):
                         'start_of_week': week_start_date,
                         'end_of_week': week_start_date + timedelta(days=6),
                         'request_id': str(uuid.uuid4()),
-                        'user_prompt': request.query_params.get('user_prompt')
+                        'user_prompt': request.query_params.get('user_prompt') if hasattr(request, 'query_params') else None
                     },
                     task_id=task_id
                 )
+                print(f"[SSE] Dispatched Celery task_id={task_id} for user_id={user_id}", flush=True)
             except Exception:
                 # Best effort cleanup of premature lock
                 try:
                     redis_delete(lock_key)
+                    print(f"[SSE] Exception during task dispatch; cleaned lock {lock_key}", flush=True)
                 except Exception:
                     pass
                 raise
+        else:
+            print(f"[SSE] Job already running with lock value: {lock_val}", flush=True)
 
         def event_stream():
+            print("[SSE] event_stream() start", flush=True)
             try:
                 # Immediate heartbeat to open the stream promptly
                 yield ":keepalive\n\n"
                 # Optional initial progress snapshot if available
                 job_info = redis_get(job_key)
+                print(f"[SSE] Initial job_info for {job_key}: {job_info}", flush=True)
                 if isinstance(job_info, dict) and 'total' in job_info and 'added' in job_info:
                     total = max(job_info.get('total', 0), 1)
                     pct = int((job_info.get('added', 0) / total) * 100)
                     yield "event: progress\n"
                     yield f"data: {json.dumps({'pct': pct})}\n\n"
+                    print(f"[SSE] Sent initial progress pct={pct}", flush=True)
 
                 # Switch to non-blocking poll with periodic keepalive
                 last_heartbeat = time.time()
@@ -2060,6 +2083,7 @@ def api_stream_meal_plan_generation(request):
                             payload = json.loads(message.get('data'))
                         except Exception:
                             payload = None
+                        print(f"[SSE] PubSub message raw={message} parsed={payload}", flush=True)
                         if not isinstance(payload, dict):
                             continue
                         event = payload.get('event') or payload.get('type')  # support alternate naming
@@ -2071,29 +2095,42 @@ def api_stream_meal_plan_generation(request):
                             yield "data: {}\n\n"
                         else:
                             yield f"data: {json.dumps(data)}\n\n"
+                        if event == 'progress':
+                            try:
+                                pct_val = data.get('pct') if isinstance(data, dict) else None
+                            except Exception:
+                                pct_val = None
+                            print(f"[SSE] Emitted progress pct={pct_val}", flush=True)
+                        else:
+                            print(f"[SSE] Emitted event={event}", flush=True)
                         if event == 'done':
+                            print("[SSE] Received done event; breaking stream loop", flush=True)
                             break
                         last_heartbeat = now_ts
                     else:
                         if now_ts - last_heartbeat >= 20:
                             yield ":keepalive\n\n"
+                            print("[SSE] Sent keepalive", flush=True)
                             last_heartbeat = now_ts
             except GeneratorExit:
-                pass
+                print("[SSE] GeneratorExit in event_stream", flush=True)
             finally:
                 try:
                     pubsub.unsubscribe(channel)
+                    print(f"[SSE] Unsubscribed from channel={channel}", flush=True)
                 except Exception:
-                    pass
+                    print("[SSE] Error during pubsub.unsubscribe (ignored)", flush=True)
             yield 'event: close\n\n'
 
         response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
         response['Cache-Control'] = 'no-cache, no-transform'
         response['X-Accel-Buffering'] = 'no'
+        print("[SSE] Returning StreamingHttpResponse for SSE", flush=True)
         return response
 
     except Exception as e:
         logger.error(f"Error in api_stream_meal_plan_generation: {str(e)}")
+        print(f"[SSE] Exception in api_stream_meal_plan_generation: {e}", flush=True)
         def err_stream4():
             yield f"event: error\n"
             yield f"data: {json.dumps({'message': str(e)})}\n\n"
@@ -3833,6 +3870,21 @@ def api_stripe_webhook(request):
         session = event.data.object
         logger.info(f"Checkout session completed: {session.id}")
         
+        # Route Chef Service orders first by metadata
+        try:
+            md = getattr(session, 'metadata', {}) or {}
+        except Exception:
+            md = {}
+        if md.get('order_type') == 'service' and md.get('service_order_id'):
+            try:
+                # Delegate to chef_services webhook handler
+                from chef_services.webhooks import handle_checkout_session_completed
+                handle_checkout_session_completed(session)
+                logger.info(f"Delegated service order webhook for service_order_id={md.get('service_order_id')}")
+            except Exception as svc_err:
+                logger.error(f"Service order webhook handling failed: {svc_err}", exc_info=True)
+            return Response({"status": "success"})
+
         # Extract order details from metadata
         order_id = session.metadata.get('order_id')
         order_type = session.metadata.get('order_type', '')

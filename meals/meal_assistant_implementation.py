@@ -11,6 +11,10 @@ from django.conf.locale import LANG_INFO  # Add this import
 from utils.redis_client import get, set, delete
 from django.utils import timezone
 from openai import OpenAI
+try:
+    from groq import Groq  # Optional: used when GROQ_API_KEY is set
+except Exception:  # pragma: no cover
+    Groq = None
 from openai.types.responses import (
     # high‑level lifecycle events
     ResponseCreatedEvent,
@@ -201,8 +205,9 @@ class DjangoEmailBody(BaseModel):
 class DjangoTemplateEmailFormatter:
     """Django template-compatible enhanced email formatter"""
     
-    def __init__(self, openai_client):
+    def __init__(self, openai_client, groq_client=None):
         self.client = openai_client
+        self.groq = groq_client
         
     def format_text_for_email_body(self, raw_text: str) -> str:
         """
@@ -362,22 +367,47 @@ class DjangoTemplateEmailFormatter:
                 "Format date ranges like `Mon–Sun, Sep 8–14, 2025` using an en dash. "
                 "Ensure a blank line before the table, preserve Unicode (NFC), and never include commentary outside JSON."
             )
-            resp = self.client.responses.create(
-                model="gpt-5-mini",
-                input=[
-                    {"role": "developer", "content": prompt},
+            # Prefer Groq for structured JSON if configured
+            if getattr(self, 'groq', None):
+
+                messages = [
+                    {"role": "system", "content": prompt},
                     {"role": "user", "content": f"RAW:\n{raw_text}"},
-                ],
-                text={
-                    "format": {
+                ]
+                groq_resp = self.groq.chat.completions.create(
+                    model="openai/gpt-oss-120b",
+                    messages=messages,
+                    temperature=0.2,
+                    top_p=1,
+                    stream=False,
+                    response_format={
                         "type": "json_schema",
-                        "name": "chat_render",
-                        "schema": schema,
-                        "strict": True,
-                    }
-                },
-            )
-            shaped = _safe_load_and_validate(ChatRender, resp.output_text)
+                        "json_schema": {
+                            "name": "chat_render",
+                            "schema": schema,
+                        },
+                    },
+                )
+                content = groq_resp.choices[0].message.content or "{}"
+
+                shaped = _safe_load_and_validate(ChatRender, content)
+            else:
+                resp = self.client.responses.create(
+                    model="gpt-5-mini",
+                    input=[
+                        {"role": "developer", "content": prompt},
+                        {"role": "user", "content": f"RAW:\n{raw_text}"},
+                    ],
+                    text={
+                        "format": {
+                            "type": "json_schema",
+                            "name": "chat_render",
+                            "schema": schema,
+                            "strict": True,
+                        }
+                    },
+                )
+                shaped = _safe_load_and_validate(ChatRender, resp.output_text)
             return shaped.model_dump()
         except Exception:
             # Fallback to raw text as GFM
@@ -461,30 +491,60 @@ class DjangoTemplateEmailFormatter:
             # Clean the schema to remove OpenAI incompatible constructs
             schema = self._clean_schema_for_openai(DjangoEmailBody.model_json_schema())
             
-            response = self.client.responses.create(
-                model="gpt-5-mini",
-                input=[
-                    {"role": "developer", "content": "You are a precise Django template email formatter. Return ONLY structured JSON without commentary. Preserve all text exactly including measurements and placeholders."},
-                    {"role": "user", "content": prompt_content}
-                ],
-                text={
-                    "format": {
-                        'type': 'json_schema',
-                        'name': 'django_email_body',
-                        'schema': schema,
-                        'strict': True
+            if getattr(self, 'groq', None):
+
+                messages = [
+                    {
+                        "role": "system",
+                        "content": "You are a precise Django template email formatter. Return ONLY structured JSON without commentary. Preserve all text exactly including measurements and placeholders.",
+                    },
+                    {"role": "user", "content": prompt_content},
+                ]
+                groq_resp = self.groq.chat.completions.create(
+                    model="openai/gpt-oss-120b",
+                    messages=messages,
+                    temperature=0.2,
+                    top_p=1,
+                    stream=False,
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "django_email_body",
+                            "schema": schema,
+                        },
+                    },
+                )
+                content = groq_resp.choices[0].message.content or "{}"
+
+                django_body = _safe_load_and_validate(DjangoEmailBody, content)
+            else:
+                response = self.client.responses.create(
+                    model="gpt-5-mini",
+                    input=[
+                        {"role": "developer", "content": "You are a precise Django template email formatter. Return ONLY structured JSON without commentary. Preserve all text exactly including measurements and placeholders."},
+                        {"role": "user", "content": prompt_content}
+                    ],
+                    text={
+                        "format": {
+                            'type': 'json_schema',
+                            'name': 'django_email_body',
+                            'schema': schema,
+                            'strict': True
+                        }
                     }
-                }
-            )
-            
-            # Parse and validate the response
-            try:
-                django_body = _safe_load_and_validate(DjangoEmailBody, response.output_text)
-            except Exception as validation_error:
-                logger.error(f"Pydantic validation failed even after JSON cleaning: {str(validation_error)}")
-                logger.error(f"Cleaned JSON that failed: {repr(response.output_text[:500])}")
-                # Force fallback to create_fallback_django_body
-                raise Exception(f"JSON validation failed: {str(validation_error)}")
+                )
+                
+                # Parse and validate the response
+                try:
+                    django_body = _safe_load_and_validate(DjangoEmailBody, response.output_text)
+                except Exception as validation_error:
+                    logger.error(f"Pydantic validation failed even after JSON cleaning: {str(validation_error)}")
+                    try:
+                        logger.error(f"Cleaned JSON that failed: {repr((response.output_text if 'response' in locals() else content)[:500])}")
+                    except Exception:
+                        pass
+                    # Force fallback to create_fallback_django_body
+                    raise Exception(f"JSON validation failed: {str(validation_error)}")
             
             # 🔍 DIAGNOSTIC: Log what OpenAI produced for each section analysis
             logger.info(f"=== DJANGO TEMPLATE SECTIONS ANALYSIS ===")
@@ -1114,6 +1174,15 @@ class MealPlanningAssistant:
 
     def __init__(self, user_id: Optional[Union[int, str]] = None):
         self.client = OpenAI(api_key=settings.OPENAI_KEY)
+        # Optional Groq client for structured JSON and simple inference
+        self.groq = None
+        try:
+            groq_key = getattr(settings, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
+            if groq_key and Groq is not None:
+                self.groq = Groq(api_key=groq_key)
+
+        except Exception:
+            self.groq = None
         # Better detection of numeric user IDs (authenticated users)
         if user_id is not None:
             if isinstance(user_id, numbers.Number) or (isinstance(user_id, str) and user_id.isdigit()):
@@ -1131,8 +1200,8 @@ class MealPlanningAssistant:
         # Don't cache tools - load them fresh each time to pick up changes
         # self.auth_tools and self.guest_tools are loaded in _get_tools_for_user()
         
-        # Initialize Django Template Email Formatter
-        self._django_email_formatter = DjangoTemplateEmailFormatter(self.client)
+        # Initialize Django Template Email Formatter (prefers Groq when configured)
+        self._django_email_formatter = DjangoTemplateEmailFormatter(self.client, groq_client=self.groq)
         
         self.system_message = (
             "You are sautai's helpful meal‑planning assistant. "
@@ -1288,7 +1357,6 @@ class MealPlanningAssistant:
                 
                 # Extract any text response
                 response_text = self._extract(resp)
-                print(f"Response text: {response_text}")
                 
                 # If there's text content, add it to history
                 if response_text:
@@ -1299,16 +1367,13 @@ class MealPlanningAssistant:
                     print("No tool calls found, finishing response")
                     break
                 
-                print(f"Found {len(tool_calls_in_response)} tool calls to execute")
                 
                 # Execute all tool calls
                 for tool_call_item in tool_calls_in_response:
                     call_id = getattr(tool_call_item, 'call_id', None)
                     name = getattr(tool_call_item, 'name', None)
                     arguments = getattr(tool_call_item, 'arguments', '{}')
-                    
-                    print(f"Executing tool call: {name} with call_id: {call_id}")
-                    
+                                        
                     # Fix user_id in arguments if needed
                     fixed_args = self._fix_function_args(name, arguments)
                     if fixed_args != arguments:
@@ -1336,12 +1401,15 @@ class MealPlanningAssistant:
                         # Execute the tool call
                         from .tool_registration import handle_tool_call
                         result = handle_tool_call(tool_call_obj)
-                        print(f"Tool call result: {result}")
                         
                     except Exception as e:
-                        print(f"Error executing tool call {name}: {str(e)}")
-                        import traceback
-                        traceback.print_exc()
+                        #n8n traceback
+                        n8n_traceback = {
+                            'error': str(e),
+                            'source': 'tool_call',
+                            'traceback': traceback.format_exc()
+                        }
+                        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
                         result = {"status": "error", "message": str(e)}
                     
                     # Add function result to history
@@ -1353,11 +1421,16 @@ class MealPlanningAssistant:
                 
                 # Continue the loop with updated history to get final response
                 prev_resp_id = final_response_id
-                print(f"Continuing with updated history, previous_response_id={prev_resp_id}")
                 
             except Exception as e:
                 logger.error(f"Error in send_message loop: {str(e)}")
-                traceback.print_exc()
+                #n8n traceback
+                n8n_traceback = {
+                    'error': str(e),
+                    'source': 'send_message_loop',
+                    'traceback': traceback.format_exc()
+                }
+                requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
                 return {"status": "error", "message": f"An error occurred: {str(e)}"}
         
         # Get the final response text

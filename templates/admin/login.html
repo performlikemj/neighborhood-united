@@ -1,0 +1,14 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block content %}
+<div class="hu-login">
+  <div class="hu-hero">
+    <div class="hu-hero-title">Welcome back</div>
+    <div class="hu-hero-sub">Stewarding healthy meals and habits.</div>
+  </div>
+
+  {{ block.super }}
+</div>
+{% endblock %}
+

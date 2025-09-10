@@ -9,6 +9,10 @@ from celery import shared_task
 from django.db.models import Q
 from django.utils import timezone
 from openai import OpenAI
+try:
+    from groq import Groq  # optional Groq client
+except Exception:
+    Groq = None
 import uuid
 import time
 import traceback
@@ -23,6 +27,16 @@ from meals.pantry_management import get_expiring_pantry_items, compute_effective
 from openai import OpenAIError, BadRequestError
 
 logger = logging.getLogger(__name__)
+
+# Lazy Groq client factory
+def _get_groq_client():
+    try:
+        api_key = getattr(settings, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
+        if api_key and Groq is not None:
+            return Groq(api_key=api_key)
+    except Exception:
+        pass
+    return None
 
 def _household_coverage_ok(user: CustomUser, composed_dishes) -> bool:
     """
@@ -480,34 +494,53 @@ def perform_openai_sanity_check(meal, user):
         Meal description: {meal.description}  
         Meal dietary tags: {meal.dietary_preferences.all()} {meal.custom_dietary_preferences.all()}
         """
-        response = get_openai_client().responses.create(
-            model="gpt-5-mini",
-            input=[
-                {
-                    "role": "developer",
-                    "content": (
-                        # Stable meta-instruction
-                        "You are a dietary-compliance checker. "
-                        "Return ONLY the JSON object that passes the provided schema; no prose."
-                    )
+        groq_client = _get_groq_client()
+        if groq_client:
+            groq_resp = groq_client.chat.completions.create(
+                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                messages=[
+                    {"role": "system", "content": "You are a dietary-compliance checker. Return ONLY the JSON object that passes the provided schema; no prose."},
+                    {"role": "user", "content": checker_prompt},
+                ],
+                temperature=0.2,
+                top_p=1,
+                stream=False,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "sanity_check",
+                        "schema": SanitySchema.model_json_schema(),
+                    },
                 },
-                {
-                    "role": "user",
-                    "content": checker_prompt,
+            )
+            gpt_output = groq_resp.choices[0].message.content or "{}"
+        else:
+            response = get_openai_client().responses.create(
+                model="gpt-5-mini",
+                input=[
+                    {
+                        "role": "developer",
+                        "content": (
+                            # Stable meta-instruction
+                            "You are a dietary-compliance checker. "
+                            "Return ONLY the JSON object that passes the provided schema; no prose."
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": checker_prompt,
+                    }
+                ],
+                text={
+                    "format": {
+                        'type': 'json_schema',
+                        'name': 'sanity_check',
+                        'schema': SanitySchema.model_json_schema()
+                    }
                 }
-            ],
-            #store=True,
-            #metadata={'tag': 'sanity_check'},
-            text={
-                "format": {
-                    'type': 'json_schema',
-                    'name': 'sanity_check',
-                    'schema': SanitySchema.model_json_schema()
-                }
-            }
-        )
+            )
 
-        gpt_output = response.output_text
+            gpt_output = response.output_text
         allergen_check = json.loads(gpt_output).get('allergen_check', False)
         
         # Cache the result for each preference
@@ -749,24 +782,43 @@ def generate_meal_details(
                     "required": ["meal"],
                     "additionalProperties": False,
                 }
-                response = get_openai_client().responses.create(
-                    model="gpt-5-mini",
-                    input=[
-                        {"role": "developer", "content": static_rules + "\n\nOutput must include a 'composed_dishes' array that covers all household members: at minimum provide dishes for babies (<2 years) as baby-safe, vegans if present, and a general dish for unrestricted members. Reuse one dish to cover multiple groups when possible (e.g., a vegan-general dish). Each dish object must match the ComposedDish schema in MealData: name, dietary_tags, target_groups, optional notes and ingredients, and include is_chef_dish. The meal 'name' MUST reference at least the primary composed dish (e.g., include that dish’s name)."},
-                        {"role": "user", "content": base_prompt}
-                    ],
-                    #store=True,
-                    #metadata={'tag': 'meal_details'},
-                    text={
-                        "format": {
-                            'type': 'json_schema',
-                            'name': 'meal_details',
-                            'schema': meal_json_schema
+                groq_client = _get_groq_client()
+                if groq_client:
+                    groq_resp = groq_client.chat.completions.create(
+                        model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                        messages=[
+                            {"role": "system", "content": static_rules + "\n\nOutput must include a 'composed_dishes' array that covers all household members: at minimum provide dishes for babies (<2 years) as baby-safe, vegans if present, and a general dish for unrestricted members. Reuse one dish to cover multiple groups when possible (e.g., a vegan-general dish). Each dish object must match the ComposedDish schema in MealData: name, dietary_tags, target_groups, optional notes and ingredients, and include is_chef_dish. The meal 'name' MUST reference at least the primary composed dish (e.g., include that dish’s name)."},
+                            {"role": "user", "content": base_prompt},
+                        ],
+                        temperature=0.4,
+                        top_p=1,
+                        stream=False,
+                        response_format={
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": "meal_details",
+                                "schema": meal_json_schema,
+                            },
+                        },
+                    )
+                    gpt_output = groq_resp.choices[0].message.content or "{}"
+                else:
+                    response = get_openai_client().responses.create(
+                        model="gpt-5-mini",
+                        input=[
+                            {"role": "developer", "content": static_rules + "\n\nOutput must include a 'composed_dishes' array that covers all household members: at minimum provide dishes for babies (<2 years) as baby-safe, vegans if present, and a general dish for unrestricted members. Reuse one dish to cover multiple groups when possible (e.g., a vegan-general dish). Each dish object must match the ComposedDish schema in MealData: name, dietary_tags, target_groups, optional notes and ingredients, and include is_chef_dish. The meal 'name' MUST reference at least the primary composed dish (e.g., include that dish’s name)."},
+                            {"role": "user", "content": base_prompt}
+                        ],
+                        text={
+                            "format": {
+                                'type': 'json_schema',
+                                'name': 'meal_details',
+                                'schema': meal_json_schema
+                            }
                         }
-                    }
-                )
+                    )
 
-                gpt_output = response.output_text
+                    gpt_output = response.output_text
                 logger.info(f"[{request_id}] [DEBUG] GPT output: {gpt_output}")
                 meal_data = json.loads(gpt_output)
                 logger.info(f"[{request_id}] [DEBUG] Meal data: {meal_data}")
@@ -953,23 +1005,42 @@ def determine_usage_for_meal(
     )
 
     try:
-        response = get_openai_client().responses.create(
-            model="gpt-5-mini",
-            input=[
-                {"role": "developer", "content": system_msg},
-                {"role": "user", "content": user_msg}
-            ],
-            #store=True,
-            #metadata={'tag': 'meal_usage'},
-            text={
-                "format": {
-                    'type': 'json_schema',
-                    'name': 'meal_usage',
-                    'schema': UsageList.model_json_schema()
+        groq_client = _get_groq_client()
+        if groq_client:
+            groq_resp = groq_client.chat.completions.create(
+                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": user_msg},
+                ],
+                temperature=0.2,
+                top_p=1,
+                stream=False,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "meal_usage",
+                        "schema": UsageList.model_json_schema(),
+                    },
+                },
+            )
+            usage_json = groq_resp.choices[0].message.content or "{}"
+        else:
+            response = get_openai_client().responses.create(
+                model="gpt-5-mini",
+                input=[
+                    {"role": "developer", "content": system_msg},
+                    {"role": "user", "content": user_msg}
+                ],
+                text={
+                    "format": {
+                        'type': 'json_schema',
+                        'name': 'meal_usage',
+                        'schema': UsageList.model_json_schema()
+                    }
                 }
-            }
-        )
-        usage_json = response.output_text
+            )
+            usage_json = response.output_text
     except Exception as e:
         logger.error(f"Error calling GPT for usage (MealPlanMeal {meal_plan_meal_id}): {e}")
         return

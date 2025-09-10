@@ -18,6 +18,10 @@ from django.core.cache import cache
 from collections import defaultdict
 from pydantic import ValidationError
 from openai import OpenAI, OpenAIError
+try:
+    from groq import Groq  # optional Groq client
+except Exception:
+    Groq = None
 from meals.models import MealPlanMeal, MealPlan, MealPlanInstruction, Instruction, Meal
 from meals.pydantic_models import Instructions as InstructionsSchema
 from meals.serializers import MealPlanMealSerializer
@@ -32,6 +36,16 @@ import traceback
 from .celery_utils import handle_task_failure
 
 logger = logging.getLogger(__name__)
+
+# Lazy Groq client factory
+def _get_groq_client():
+    try:
+        api_key = getattr(settings, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
+        if api_key and Groq is not None:
+            return Groq(api_key=api_key)
+    except Exception:
+        pass
+    return None
 
 
 @shared_task
@@ -435,62 +449,75 @@ def generate_instructions(meal_plan_meal_ids, send_via_assistant: bool = False):
                 metadata_prompt_part += f"\\\\n- Estimated Nutrition: {macro_info_str}"
                 # --- End Metadata Prompt ---
 
-                response = get_openai_client().responses.create(
-                    model="gpt-5-mini",
-                    input=[
-                        {
-                            "role": "developer",
-                            "content":
-                            (
-                                f"## Mission\n"
-                                f"You are **Sous‑Chef**, a multilingual culinary expert who writes crystal‑clear, "
-                                "step‑by‑step cooking instructions.  You ALWAYS return a JSON object that "
-                                "validates against the provided `Instructions` schema.  No prose or markdown. "
-                                f"Write cooking instructions in **{user_preferred_language}**. "
-                                f" **Age Safety Note**: {age_note or 'None'}\n\n"
-                                f"## Data Available\n"
-                                f"- **Meal data**: ingredients, methods, times.\n"
-                                f"- **User context**: household ages, dietary needs, kitchen skill.\n"
-                                f"- **Expiring pantry items**: {expiring_items_str} (use when sensible to cut waste).\n"
-                                f"- **Metadata**: {metadata_prompt_part.strip()}\n\n"
-                                f"- **Multi-dish meals**: If the meal has `meal_dishes` (structured rows) or fallback `composed_dishes`, write complete instructions that cover each dish in the bundle, grouped per dish, ensuring every household member has a complete path to eat safely.\n\n"
-                                f"## Output Rules\n"
-                                f"1.  Return exactly one JSON object—nothing else—conforming to the `Instructions` "
-                                f"   schema below (Pydantic `extra='forbid'`).\n"
-                                f"2.  `steps` **must** be ordered; start numbering at **1**.\n"
-                                f"3.  `description` ≤ 2 concise sentences; write in {user_preferred_language}.\n"
-                                f"4.  `duration`: use value from meal data; if missing, write `'N/A'`.\n"
-                                f"5.  Max total tokens ≈ 350 to avoid cost spikes.\n"
-                                f"6.  Never repeat nutrition or video metadata inside `description`.\n"
-                                f"7.  If you cannot comply, return `null`.\n\n"
-                                f"### Instructions schema (immutable)\n"
-                                f"{InstructionsSchema.model_json_schema()}"
-                            )
-                        },
-                        {
-                            "role": "user",
-                            "content":
-                            (
-                                f"Generate the instructions now.\n\n"
-                                f"- **Meal**: {meal_data_json}\n"
-                                f"- **Household**: {user_context}\n"
-                                f"- **Substitutions**: {substitution_str.strip()}\n"
-                                f"- **Chef note**: {chef_note.strip()}\n"
-                            )
-                        }
-                    ],
-                    #store=True, # Consider if storing OpenAI requests is needed
-                    #metadata={'tag': 'daily_instructions', 'meal_plan_meal_id': meal_plan_meal.id},
-                    text={
-                        "format": {
-                        'type': 'json_schema',
-                        'name': 'get_instructions',
-                        'schema': InstructionsSchema.model_json_schema()
-                        }
-                    },
+                groq_client = _get_groq_client()
+                developer_content = (
+                    f"## Mission\n"
+                    f"You are **Sous‑Chef**, a multilingual culinary expert who writes crystal‑clear, "
+                    "step‑by‑step cooking instructions.  You ALWAYS return a JSON object that "
+                    "validates against the provided `Instructions` schema.  No prose or markdown. "
+                    f"Write cooking instructions in **{user_preferred_language}**. "
+                    f" **Age Safety Note**: {age_note or 'None'}\n\n"
+                    f"## Data Available\n"
+                    f"- **Meal data**: ingredients, methods, times.\n"
+                    f"- **User context**: household ages, dietary needs, kitchen skill.\n"
+                    f"- **Expiring pantry items**: {expiring_items_str} (use when sensible to cut waste).\n"
+                    f"- **Metadata**: {metadata_prompt_part.strip()}\n\n"
+                    f"- **Multi-dish meals**: If the meal has `meal_dishes` (structured rows) or fallback `composed_dishes`, write complete instructions that cover each dish in the bundle, grouped per dish, ensuring every household member has a complete path to eat safely.\n\n"
+                    f"## Output Rules\n"
+                    f"1.  Return exactly one JSON object—nothing else—conforming to the `Instructions` "
+                    f"   schema below (Pydantic `extra='forbid'`).\n"
+                    f"2.  `steps` **must** be ordered; start numbering at **1**.\n"
+                    f"3.  `description` ≤ 2 concise sentences; write in {user_preferred_language}.\n"
+                    f"4.  `duration`: use value from meal data; if missing, write `'N/A'`.\n"
+                    f"5.  Max total tokens ≈ 350 to avoid cost spikes.\n"
+                    f"6.  Never repeat nutrition or video metadata inside `description`.\n"
+                    f"7.  If you cannot comply, return `null`.\n\n"
+                    f"### Instructions schema (immutable)\n"
+                    f"{InstructionsSchema.model_json_schema()}"
                 )
+                user_content = (
+                    f"Generate the instructions now.\n\n"
+                    f"- **Meal**: {meal_data_json}\n"
+                    f"- **Household**: {user_context}\n"
+                    f"- **Substitutions**: {substitution_str.strip()}\n"
+                    f"- **Chef note**: {chef_note.strip()}\n"
+                )
+                if groq_client:
+                    groq_resp = groq_client.chat.completions.create(
+                        model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                        messages=[
+                            {"role": "system", "content": developer_content},
+                            {"role": "user", "content": user_content},
+                        ],
+                        temperature=0.2,
+                        top_p=1,
+                        stream=False,
+                        response_format={
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": "get_instructions",
+                                "schema": InstructionsSchema.model_json_schema(),
+                            },
+                        },
+                    )
+                    instructions_content = groq_resp.choices[0].message.content or "{}"
+                else:
+                    response = get_openai_client().responses.create(
+                        model="gpt-5-mini",
+                        input=[
+                            {"role": "developer", "content": developer_content},
+                            {"role": "user", "content": user_content},
+                        ],
+                        text={
+                            "format": {
+                                'type': 'json_schema',
+                                'name': 'get_instructions',
+                                'schema': InstructionsSchema.model_json_schema()
+                            }
+                        },
+                    )
 
-                instructions_content = response.output_text
+                    instructions_content = response.output_text
                 logger.info(f"Generated instructions for MealPlanMeal ID {meal_plan_meal.id}")
 
                 # Save the newly generated instruction (Using the imported Instruction model)
@@ -890,22 +917,49 @@ def generate_bulk_prep_instructions(meal_plan_id, send_via_assistant: bool = Tru
                 )
             }
         ]
-        # Generate the bulk prep instructions using OpenAI
-        response = get_openai_client().responses.create(
-            model="gpt-5-mini", # Or gpt-4-turbo if more complexity needed
-            input=messages,
-            text={
-                "format": {
-                'type': 'json_schema',
-                'name': 'bulk_prep_instructions',
-                'schema': BulkPrepInstructions.model_json_schema()
-                }
-            }
-        )
+        # Generate the bulk prep instructions using Groq if available, else OpenAI
+        groq_client = _get_groq_client()
+        generated_instructions_text = None
+        if groq_client:
 
-        # Check if the response was successful
-        if response and response.output_text:
-            generated_instructions_text = response.output_text
+            groq_messages = [
+                {"role": ("system" if m.get("role") == "developer" else m.get("role")), "content": m.get("content")}
+                for m in messages
+            ]
+            groq_resp = groq_client.chat.completions.create(
+                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                messages=groq_messages,
+                temperature=0.3,
+                top_p=1,
+                stream=False,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "bulk_prep_instructions",
+                        "schema": BulkPrepInstructions.model_json_schema(),
+                    },
+                },
+            )
+            generated_instructions_text = (groq_resp.choices[0].message.content or "").strip()
+
+        else:
+            response = get_openai_client().responses.create(
+                model="gpt-5-mini", # Or gpt-4-turbo if more complexity needed
+                input=messages,
+                text={
+                    "format": {
+                    'type': 'json_schema',
+                    'name': 'bulk_prep_instructions',
+                    'schema': BulkPrepInstructions.model_json_schema()
+                    }
+                }
+            )
+
+            # Check if the response was successful
+            if response and response.output_text:
+                generated_instructions_text = response.output_text
+
+        if generated_instructions_text:
             # Create a new MealPlanInstruction
             MealPlanInstruction.objects.update_or_create(
                 meal_plan=meal_plan,
@@ -1177,7 +1231,6 @@ def send_bulk_prep_instructions(meal_plan_id):
         # n8n traceback
         n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
         requests.post(n8n_traceback_url, json={"error": str(e), "source":"send_bulk_prep_instructions", "traceback": traceback.format_exc()})
-        traceback.print_exc()
         return {"status": "error", "reason": str(e)}
 
 def format_follow_up_instructions(daily_task: DailyTask, user_name: str):

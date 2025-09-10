@@ -11,6 +11,12 @@ from typing import Dict, List, Optional, Any, Literal
 from dataclasses import dataclass
 from pydantic import BaseModel, Field, ConfigDict
 from openai import OpenAI
+try:
+    from groq import Groq  # optional Groq client for inference
+except Exception:
+    Groq = None
+from django.conf import settings
+import os
 import re
 
 logger = logging.getLogger(__name__)
@@ -182,8 +188,17 @@ class EmailIntentAnalyzer:
         ]
     }
     
-    def __init__(self, openai_client: OpenAI):
+    def __init__(self, openai_client: OpenAI, groq_client: Optional[Any] = None):
         self.client = openai_client
+        # Prefer provided groq client; else lazily create from settings/env
+        if groq_client is not None:
+            self.groq = groq_client
+        else:
+            try:
+                api_key = getattr(settings, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
+                self.groq = Groq(api_key=api_key) if (api_key and Groq is not None) else None
+            except Exception:
+                self.groq = None
     
     def analyze_intent(self, email_content: str, user_context: Optional[Dict] = None) -> IntentAnalysisResult:
         """
@@ -251,7 +266,7 @@ class EmailIntentAnalyzer:
         return cleaned
     
     def _get_intent_from_openai(self, email_content: str, user_context: Optional[Dict] = None) -> EmailIntent:
-        """Get intent analysis from OpenAI Responses API"""
+        """Get intent analysis using Groq when available, else OpenAI Responses."""
         
         system_prompt = """You are an expert email intent analyzer for a meal planning assistant service.
 
@@ -296,24 +311,46 @@ Provide detailed intent analysis following the EmailIntent schema."""
             # Clean schema for OpenAI compatibility
             schema = self._clean_schema_for_openai(EmailIntent.model_json_schema())
             
-            response = self.client.responses.create(
-                model="gpt-5-mini",
-                input=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                stream=False,
-                text={
-                    "format": {
-                        'type': 'json_schema',
-                        'name': 'email_intent',
-                        'schema': schema
+            # Prefer Groq structured output if configured
+            if getattr(self, 'groq', None):
+                groq_resp = self.groq.chat.completions.create(
+                    model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=0.2,
+                    top_p=1,
+                    stream=False,
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "email_intent",
+                            "schema": schema,
+                        },
+                    },
+                )
+                content = groq_resp.choices[0].message.content or "{}"
+                intent = _safe_load_and_validate(EmailIntent, content)
+            else:
+                response = self.client.responses.create(
+                    model="gpt-5-mini",
+                    input=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    stream=False,
+                    text={
+                        "format": {
+                            'type': 'json_schema',
+                            'name': 'email_intent',
+                            'schema': schema
+                        }
                     }
-                }
-            )
-            
-            # Parse and validate the response
-            intent = _safe_load_and_validate(EmailIntent, response.output_text)
+                )
+                
+                # Parse and validate the response
+                intent = _safe_load_and_validate(EmailIntent, response.output_text)
             return intent
             
         except Exception as e:
@@ -518,4 +555,3 @@ if __name__ == "__main__":
         print(f"Confidence: {result.intent.confidence}")
         print(f"Predicted Tools: {result.intent.predicted_tools}")
         print(f"Processing Time: {result.processing_time:.2f}s")
-

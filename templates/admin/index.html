@@ -1,0 +1,79 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+{% load static %}
+{% load wellness_admin %}
+
+{% block content %}
+  {% get_admin_metrics as metrics %}
+
+  <div class="hu-dashboard">
+    <div class="hu-hero">
+      <div class="hu-hero-title">Wellness Operations Dashboard</div>
+      <div class="hu-hero-sub">Meal planning today, holistic health tomorrow.</div>
+    </div>
+
+    <div class="hu-cards">
+      <a class="hu-card" href="{% url 'admin:custom_auth_customuser_changelist' %}">
+        <div class="hu-card-kpi">{{ metrics.users_total }}</div>
+        <div class="hu-card-label">Users</div>
+      </a>
+      <a class="hu-card" href="{% url 'admin:meals_mealplan_changelist' %}?is_approved__exact=1">
+        <div class="hu-card-kpi">{{ metrics.meal_plans_active }}</div>
+        <div class="hu-card-label">Active Meal Plans</div>
+      </a>
+      <a class="hu-card" href="{% url 'admin:meals_mealplan_changelist' %}?has_changes__exact=1&is_approved__exact=0">
+        <div class="hu-card-kpi">{{ metrics.approvals_pending }}</div>
+        <div class="hu-card-label">Plan Approvals</div>
+      </a>
+      <a class="hu-card" href="{% url 'admin:meals_order_changelist' %}">
+        <div class="hu-card-kpi">{{ metrics.orders_today }}</div>
+        <div class="hu-card-label">Orders Today</div>
+      </a>
+      <a class="hu-card" href="{% url 'admin:chefs_chef_changelist' %}">
+        <div class="hu-card-kpi">{{ metrics.chefs_total }}</div>
+        <div class="hu-card-label">Chefs</div>
+      </a>
+      <a class="hu-card" href="{% url 'admin:reviews_review_changelist' %}">
+        <div class="hu-card-kpi">{{ metrics.reviews_week }}</div>
+        <div class="hu-card-label">New Reviews (7d)</div>
+      </a>
+    </div>
+
+    <div class="hu-quick">
+      <div class="hu-quick-title">Quick Actions</div>
+      <div class="hu-quick-links">
+        <a href="{% url 'admin:meals_mealplan_changelist' %}?has_changes__exact=1&is_approved__exact=0" class="hu-quick-link">Review Meal Plan Changes</a>
+        <a href="{% url 'admin:chefs_chefrequest_changelist' %}" class="hu-quick-link">Chef Requests</a>
+        <a href="{% url 'admin:meals_systemupdate_changelist' %}" class="hu-quick-link">Send System Update</a>
+        <a href="{% url 'admin:meals_order_changelist' %}" class="hu-quick-link">Orders</a>
+      </div>
+    </div>
+  </div>
+
+  {{ block.super }}
+
+  <div class="hu-app-list">
+    <h2>{% trans 'All Applications' %}</h2>
+    {% if app_list %}
+      <div class="app-grid">
+        {% for app in app_list %}
+          <div class="app-panel">
+            <h3>{{ app.name }}</h3>
+            <ul>
+              {% for model in app.models %}
+                <li>
+                  {% if model.admin_url %}<a href="{{ model.admin_url }}">{{ model.name }}</a>{% else %}{{ model.name }}{% endif %}
+                  {% if model.add_url %}<a class="addlink" href="{{ model.add_url }}">Add</a>{% endif %}
+                  {% if model.view_only %}<span class="view-only">View</span>{% endif %}
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p>{% trans 'You don’t have permission to view or edit anything.' %}</p>
+    {% endif %}
+  </div>
+{% endblock %}
+

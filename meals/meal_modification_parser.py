@@ -3,13 +3,27 @@ import textwrap
 import logging
 import os
 import requests
+import traceback
 from typing import List
 from openai import OpenAI
+try:
+    from groq import Groq  # optional Groq client
+except Exception:
+    Groq = None
 from django.conf import settings
 from meals.models import MealPlan, MealPlanMeal
 from meals.pydantic_models import MealPlanModificationRequest
 from shared.utils import get_openai_client
 logger = logging.getLogger(__name__)
+
+def _get_groq_client():
+    try:
+        api_key = getattr(settings, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
+        if api_key and Groq is not None:
+            return Groq(api_key=api_key)
+    except Exception:
+        pass
+    return None
 
 def parse_modification_request(
     raw_prompt: str,
@@ -70,21 +84,43 @@ def parse_modification_request(
         # Get the schema for the MealPlanModificationRequest
         schema = MealPlanModificationRequest.model_json_schema()
 
-        # 3. Call Responses API with Structured Outputs
+        # 3. Call LLM with Structured Outputs (prefer Groq if configured)
         try:
-            resp = get_openai_client().responses.create(
-                model=model,
-                input=messages,
-                text={
-                    "format": {
+            groq_client = _get_groq_client()
+            if groq_client:
+                groq_messages = [
+                    {"role": ("system" if m.get("role") == "developer" else m.get("role")), "content": m.get("content")}
+                    for m in messages
+                ]
+                groq_resp = groq_client.chat.completions.create(
+                    model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                    messages=groq_messages,
+                    temperature=0.2,
+                    top_p=1,
+                    stream=False,
+                    response_format={
                         "type": "json_schema",
-                        "name": "meal_plan_mod_request_v2",
-                        "schema": schema,
-                    }
-                },
-            )
+                        "json_schema": {
+                            "name": "meal_plan_mod_request_v2",
+                            "schema": schema,
+                        },
+                    },
+                )
+                raw_json = groq_resp.choices[0].message.content or "{}"
+            else:
+                resp = get_openai_client().responses.create(
+                    model=model,
+                    input=messages,
+                    text={
+                        "format": {
+                            "type": "json_schema",
+                            "name": "meal_plan_mod_request_v2",
+                            "schema": schema,
+                        }
+                    },
+                )
+                raw_json = resp.output_text
         except Exception as e:
-            import traceback
             # n8n traceback
             n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
             requests.post(n8n_traceback_url, json={"error": str(e), "source":"parse_modification_request", "traceback": traceback.format_exc()})
@@ -93,7 +129,7 @@ def parse_modification_request(
         # 4. Validate & return
         try:
             # Debug prints removed
-            parsed = MealPlanModificationRequest.model_validate_json(resp.output_text)
+            parsed = MealPlanModificationRequest.model_validate_json(raw_json)
             
             # Handle missing should_remove values by coercing to False
             for slot in parsed.slots:
@@ -101,14 +137,12 @@ def parse_modification_request(
                 
             return parsed
         except Exception as e:
-            import traceback
             # n8n traceback
             n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
             requests.post(n8n_traceback_url, json={"error": str(e), "source":"parse_modification_request", "traceback": traceback.format_exc()})
             raise
             
     except Exception as e:
-        import traceback
         # n8n traceback
         n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
         requests.post(n8n_traceback_url, json={"error": str(e), "source":"parse_modification_request", "traceback": traceback.format_exc()})

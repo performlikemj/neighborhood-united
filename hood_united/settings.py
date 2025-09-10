@@ -70,6 +70,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'chefs',
+    'chef_services',
     'meals',
     'events',
     'reviews',
@@ -348,9 +349,12 @@ LOGIN_REDIRECT_URL = 'custom_auth:profile'
 LOGIN_URL = 'custom_auth:login'
 
 
-# OpenAI API keys
-# OpenAI API keys
+# OpenAI / Groq API keys
+# OpenAI
 OPENAI_KEY = os.getenv('OPENAI_KEY')
+# Groq
+GROQ_API_KEY = os.getenv('GROQ_API_KEY')
+GROQ_MODEL = os.getenv('GROQ_MODEL', 'openai/gpt-oss-120b')
 SPOONACULAR_API_KEY = os.getenv('SPOONACULAR_API_KEY')
 
 # OpenAI prompt

@@ -30,6 +30,7 @@ urlpatterns = [
     path('customer_dashboard/', include('customer_dashboard.urls')),
     path('auth/', include('custom_auth.urls')),
     path('meals/', include('meals.urls')),
+    path('services/', include('chef_services.urls')),
     path('reviews/', include('reviews.urls')),
     path('events/', include('events.urls')),
     path('local_chefs/', include('local_chefs.urls')),
@@ -43,5 +44,4 @@ if getattr(settings, 'GAMIFICATION_ENABLED', False):
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
     # Static files are automatically served by Django's development server when DEBUG=True
-
 

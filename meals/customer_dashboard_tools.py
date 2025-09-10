@@ -246,7 +246,6 @@ def adjust_week_shift(user_id: int, week_shift_increment: int) -> Dict[str, Any]
     """
     try:
         user  = get_object_or_404(CustomUser, id=user_id)
-        print(f"[adjust_week_shift] user_id={user_id}, inc={week_shift_increment}, current_shift={user.week_shift}")
         role  = get_object_or_404(UserRole,   user=user)
         if role.current_role == "chef":
             return {"status": "error", "message": "Chefs may not use this tool."}
@@ -273,7 +272,6 @@ def adjust_week_shift(user_id: int, week_shift_increment: int) -> Dict[str, Any]
             # No plans yet → don't allow negative shifts
             min_shift_allowed = 0
 
-        print(f"[adjust_week_shift] min_shift_allowed={min_shift_allowed}")
 
         # Optional upper bound (e.g., 52 weeks into the future)
         MAX_FUTURE_WEEKS = 52
@@ -290,7 +288,6 @@ def adjust_week_shift(user_id: int, week_shift_increment: int) -> Dict[str, Any]
             user.week_shift = new_shift
             user.save()
 
-        print(f"[adjust_week_shift] raw_shift={raw_shift}, clamped_shift={new_shift} (saved={user.week_shift})")
 
         return {
             "status"      : "success",

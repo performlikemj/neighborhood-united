@@ -15,6 +15,7 @@ from .utils.order_utils import create_chef_meal_orders
 from django.utils import timezone
 import json
 from django.utils.safestring import mark_safe
+from django.contrib import admin as django_admin
 
 class ReviewInline(GenericTabularInline):
     model = Review
@@ -287,16 +288,12 @@ class SystemUpdateAdmin(admin.ModelAdmin):
         return super().changelist_view(request, extra_context)
 
     def send_update_view(self, request):
-        print(f"Sending update view with method: {request.method}")
-        print(f"POST data: {request.POST if request.method == 'POST' else 'No POST data'}")
         
         if request.method == 'POST':
             subject = request.POST.get('subject')
             message = request.POST.get('message')
             test_mode = request.POST.get('test_mode') == 'on'
-            
-            print(f"Received form data - Subject: {subject}, Test Mode: {test_mode}")
-            
+                        
             try:
                 # Create SystemUpdate record
                 system_update = SystemUpdate.objects.create(
@@ -319,7 +316,6 @@ class SystemUpdateAdmin(admin.ModelAdmin):
                     )
                     messages.success(request, "System update email has been queued for all users!")
             except Exception as e:
-                print(f"Error in send_update_view: {str(e)}")
                 messages.error(request, f"Error queueing email: {str(e)}")
                 if 'system_update' in locals():
                     system_update.delete()
@@ -461,3 +457,8 @@ admin.site.register(ChefMealReview, ChefMealReviewAdmin)
 admin.site.register(StripeConnectAccount, StripeConnectAccountAdmin)
 admin.site.register(PlatformFeeConfig, PlatformFeeConfigAdmin)
 admin.site.register(PaymentLog, PaymentLogAdmin)
+
+# Global admin site branding
+django_admin.site.site_header = "Hood United Admin"
+django_admin.site.site_title = "Hood United Admin"
+django_admin.site.index_title = "Wellness Operations Dashboard"

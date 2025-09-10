@@ -21,6 +21,10 @@ from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
 from openai import OpenAI, OpenAIError
+try:
+    from groq import Groq  # optional Groq client for inference
+except Exception:
+    Groq = None
 from custom_auth.models import CustomUser
 from meals.meal_generation import generate_and_create_meal, perform_openai_sanity_check
 from meals.models import Meal, MealPlan, MealPlanMeal, MealPlanInstruction, ChefMealEvent, Dish, Ingredient
@@ -32,8 +36,19 @@ from shared.utils import (generate_user_context, get_embedding, cosine_similarit
                           remove_meal_from_plan, get_openai_client)
 from django.db import transaction
 from pydantic import BaseModel, Field, ConfigDict
+from utils.groq_rate_limit import groq_call_with_retry
 
 logger = logging.getLogger(__name__)
+
+# Lazy Groq client factory
+def _get_groq_client():
+    try:
+        api_key = getattr(settings, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
+        if api_key and Groq is not None:
+            return Groq(api_key=api_key)
+    except Exception:
+        pass
+    return None
 
 class DietaryCompatibilityResponse(BaseModel):
     """Schema for OpenAI's response on dietary compatibility"""
@@ -171,22 +186,51 @@ def analyze_meal_compatibility(meal, dietary_preference):
             }
         ]
 
-        # Make API call
-        response = get_openai_client().responses.create(
-            model="gpt-5-mini",
-            input=input,
-            text={
-                "format": {
+        # Make API call (prefer Groq structured JSON)
+        groq_client = _get_groq_client()
+        if groq_client:
+            groq_messages = [
+                {"role": ("system" if m.get("role") == "developer" else m.get("role")), "content": m.get("content")}
+                for m in input
+            ]
+            raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
+            if raw_create:
+                raw_create = groq_client.chat.completions.with_raw_response.create
+            groq_resp = groq_call_with_retry(
+                raw_create_fn=raw_create,
+                create_fn=groq_client.chat.completions.create,
+                desc='meal_plan_service.analyze_meal_compatibility',
+                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                messages=groq_messages,
+                temperature=0.2,
+                top_p=1,
+                stream=False,
+                response_format={
                     "type": "json_schema",
-                    "name": "dietary_compatibility",
-                    "schema": DietaryCompatibilityResponse.model_json_schema(),
-                    "strict": True
+                    "json_schema": {
+                        "name": "dietary_compatibility",
+                        "schema": DietaryCompatibilityResponse.model_json_schema(),
+                    },
+                },
+            )
+            raw_json = groq_resp.choices[0].message.content or "{}"
+        else:
+            response = get_openai_client().responses.create(
+                model="gpt-5-mini",
+                input=input,
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "dietary_compatibility",
+                        "schema": DietaryCompatibilityResponse.model_json_schema(),
+                        "strict": True
+                    }
                 }
-            }
-        )
-        
+            )
+            raw_json = response.output_text
+
         # Parse response
-        result = json.loads(response.output_text)
+        result = json.loads(raw_json)
         return {
             "is_compatible": result.get("is_compatible", False),
             "confidence": result.get("confidence", 0.0),
@@ -520,19 +564,48 @@ def create_meal_plan_for_user(
                     )
                 }
             ]
-            call = get_openai_client().responses.create(
-                model="gpt-5-mini",
-                input=input,
-                text={
-                    "format": {
+            groq_client = _get_groq_client()
+            if groq_client:
+                groq_messages = [
+                    {"role": ("system" if m.get("role") == "developer" else m.get("role")), "content": m.get("content")}
+                    for m in input
+                ]
+                raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
+                if raw_create:
+                    raw_create = groq_client.chat.completions.with_raw_response.create
+                groq_resp = groq_call_with_retry(
+                    raw_create_fn=raw_create,
+                    create_fn=groq_client.chat.completions.create,
+                    desc='meal_plan_service.parse_prompt',
+                    model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                    messages=groq_messages,
+                    temperature=0.2,
+                    top_p=1,
+                    stream=False,
+                    response_format={
                         "type": "json_schema",
-                        "name": "meal_map",
-                        "schema": PromptMealMap.model_json_schema(),
-                        "strict": True
+                        "json_schema": {
+                            "name": "meal_map",
+                            "schema": PromptMealMap.model_json_schema(),
+                        },
+                    },
+                )
+                raw_json = groq_resp.choices[0].message.content or "{}"
+            else:
+                call = get_openai_client().responses.create(
+                    model="gpt-5-mini",
+                    input=input,
+                    text={
+                        "format": {
+                            "type": "json_schema",
+                            "name": "meal_map",
+                            "schema": PromptMealMap.model_json_schema(),
+                            "strict": True
+                        }
                     }
-                }
-            )
-            parsed = PromptMealMap.model_validate_json(call.output_text)
+                )
+                raw_json = call.output_text
+            parsed = PromptMealMap.model_validate_json(raw_json)
             allowed_map = {(s.day, s.meal_type.value): True for s in parsed.slots}
                 
         existing_meals = MealPlanMeal.objects.filter(meal_plan=meal_plan).select_related('meal')
@@ -589,8 +662,10 @@ def create_meal_plan_for_user(
             from utils.redis_client import set as redis_set
             total_slots = len(planning_days) * len(meal_types)
             progress_key = f"meal_plan_job:{user_id}:{start_of_week.strftime('%Y_%m_%d')}"
-            redis_set(progress_key, {"total": total_slots, "added": 0}, 3600)
-        except Exception:
+            ok = redis_set(progress_key, {"total": total_slots, "added": 0}, 3600)
+            print(f"[SSE-PROG] init job_key={progress_key} total={total_slots} set_ok={ok}", flush=True)
+        except Exception as e:
+            print(f"[SSE-PROG] init progress set failed: {e}", flush=True)
             progress_key = None
         added_count = 0
 
@@ -750,17 +825,19 @@ def create_meal_plan_for_user(
                                             "event": "meal_added",
                                             "data": {"meal_plan_meal": MealPlanMealSerializer(mpm).data}
                                         }
-                                        conn.publish(channel, json.dumps(payload))
+                                        r_pub = conn.publish(channel, json.dumps(payload))
+                                        print(f"[SSE-PUB] meal_added -> channel={channel} pub_res={r_pub}", flush=True)
                                         # Update and publish progress
                                         added_count += 1
                                         if progress_key:
                                             job_info = redis_get(progress_key) or {"total": total_slots, "added": 0}
                                             job_info["added"] = added_count
-                                            redis_set(progress_key, job_info, 3600)
+                                            ok = redis_set(progress_key, job_info, 3600)
                                             pct = int((added_count / max(total_slots, 1)) * 100)
-                                            conn.publish(channel, json.dumps({"event": "progress", "data": {"pct": pct}}))
-                            except Exception:
-                                pass
+                                            r_prog = conn.publish(channel, json.dumps({"event": "progress", "data": {"pct": pct}}))
+                                            print(f"[SSE-PROG] job_key={progress_key} added={job_info['added']} total={job_info.get('total')} set_ok={ok}; [SSE-PUB] progress pct={pct} pub_res={r_prog}", flush=True)
+                            except Exception as e:
+                                print(f"[SSE-PUB] publish meal_added/progress failed: {e}", flush=True)
                             
                             # If that meal used pantry items, keep track of it
                             if result.get('used_pantry_item'):
@@ -857,17 +934,19 @@ def create_meal_plan_for_user(
                                             "event": "meal_added",
                                             "data": {"meal_plan_meal": MealPlanMealSerializer(mpm).data}
                                         }
-                                        conn.publish(channel, json.dumps(payload))
+                                        r_pub = conn.publish(channel, json.dumps(payload))
+                                        print(f"[SSE-PUB] meal_added -> channel={channel} pub_res={r_pub}", flush=True)
                                         # Update and publish progress
                                         added_count += 1
                                         if progress_key:
                                             job_info = redis_get(progress_key) or {"total": total_slots, "added": 0}
                                             job_info["added"] = added_count
-                                            redis_set(progress_key, job_info, 3600)
+                                            ok = redis_set(progress_key, job_info, 3600)
                                             pct = int((added_count / max(total_slots, 1)) * 100)
-                                            conn.publish(channel, json.dumps({"event": "progress", "data": {"pct": pct}}))
-                                except Exception:
-                                    pass
+                                            r_prog = conn.publish(channel, json.dumps({"event": "progress", "data": {"pct": pct}}))
+                                            print(f"[SSE-PROG] job_key={progress_key} added={job_info['added']} total={job_info.get('total')} set_ok={ok}; [SSE-PUB] progress pct={pct} pub_res={r_prog}", flush=True)
+                                except Exception as e:
+                                    print(f"[SSE-PUB] publish meal_added/progress failed: {e}", flush=True)
                             except Exception as e:
                                 # n8n traceback
                                 n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
@@ -933,10 +1012,11 @@ def create_meal_plan_for_user(
         conn = get_redis_connection()
         if conn is not None:
             channel = f"meal_plan_stream:{user.id}:{start_of_week.strftime('%Y_%m_%d')}"
-            conn.publish(channel, json.dumps({"event": "progress", "data": {"pct": 100}}))
-            conn.publish(channel, json.dumps({"event": "done", "data": {}}))
-    except Exception:
-        pass
+            r1 = conn.publish(channel, json.dumps({"event": "progress", "data": {"pct": 100}}))
+            r2 = conn.publish(channel, json.dumps({"event": "done", "data": {}}))
+            print(f"[SSE-PUB] final progress=100 pub_res={r1}; done pub_res={r2} channel={channel}", flush=True)
+    except Exception as e:
+        print(f"[SSE-PUB] final publish failed: {e}", flush=True)
 
     return meal_plan
 
@@ -993,7 +1073,6 @@ def modify_existing_meal_plan(
 
     log_prefix = f"[{request_id}]"
     logger.info(f"{log_prefix} Modifying meal_plan {meal_plan_id} for {user.username}")
-    print(f"MOD_EXIST [{request_id}] Modifying meal_plan {meal_plan_id} for {user.username}", flush=True)
     # 1. Fetch & sanity‑check the meal plan
     try:
         with transaction.atomic():
@@ -1051,10 +1130,6 @@ def modify_existing_meal_plan(
 
                 for meal_type in day_meal_types:
                     log_ctx = f"{log_prefix} {day_name} {meal_type}"
-                    try:
-                        print(f"MOD_EXIST begin {day_name} {meal_type} meal_date={meal_date}", flush=True)
-                    except Exception:
-                        pass
 
                     # Remove current MealPlanMeal (if any) – we regenerate from scratch
                     mpm_to_delete = MealPlanMeal.objects.filter(
@@ -1064,7 +1139,6 @@ def modify_existing_meal_plan(
                         meal_type=meal_type
                     )
                     for mpm in mpm_to_delete:
-                        print(f"MOD_EXIST deleting meal_plan_meal_id={mpm.id}", flush=True)
                         mpm.delete()
 
                     # If meal should be removed, skip generation
@@ -1078,10 +1152,6 @@ def modify_existing_meal_plan(
 
                     while attempt < MAX_ATTEMPTS and not meal_added:
                         attempt += 1
-                        try:
-                            print(f"MOD_EXIST attempt {attempt} for {day_name} {meal_type}", flush=True)
-                        except Exception:
-                            pass
 
                         # Re‑use the existing helper that prefers pantry items / uniqueness
                         result = generate_and_create_meal(
@@ -1102,16 +1172,10 @@ def modify_existing_meal_plan(
                             existing_meal_embeddings.append(new_meal.meal_embedding)
                             meal_added = True
                             logger.info(f"{log_ctx} added '{new_meal.name}'")
-                            try:
-                                print(f"MOD_EXIST created meal id={getattr(new_meal, 'id', None)} name={getattr(new_meal, 'name', '')}", flush=True)
-                            except Exception:
-                                pass
+
                         else:
                             logger.warning(f"{log_ctx} {result['message']}")
-                            try:
-                                print(f"MOD_EXIST failure: {result}", flush=True)
-                            except Exception:
-                                pass
+
 
                     if not meal_added:
                         logger.error(f"{log_ctx} failed after {MAX_ATTEMPTS} attempts")
@@ -1250,20 +1314,49 @@ def analyze_and_replace_meals(user, meal_plan, meal_types, request_id=None):
         ]
         #store=True,
         #metadata={'tag': 'meal-plan-analysis'}
-        response = get_openai_client().responses.create(
-            model="gpt-5-mini",
-            input=input,
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": "meals_to_replace",
-                    "schema": MealsToReplaceSchema.model_json_schema(),
-                    "strict": True
-                }
-            }
-        )
+        groq_client = _get_groq_client()
+        if groq_client:
 
-        assistant_message = response.output_text
+            groq_messages = [
+                {"role": ("system" if m.get("role") == "developer" else m.get("role")), "content": m.get("content")}
+                for m in input
+            ]
+            raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
+            if raw_create:
+                raw_create = groq_client.chat.completions.with_raw_response.create
+            groq_resp = groq_call_with_retry(
+                raw_create_fn=raw_create,
+                create_fn=groq_client.chat.completions.create,
+                desc='meal_plan_service.analyze_and_replace_meals',
+                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                messages=groq_messages,
+                temperature=0.2,
+                top_p=1,
+                stream=False,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "meals_to_replace",
+                        "schema": MealsToReplaceSchema.model_json_schema(),
+                    },
+                },
+            )
+            assistant_message = groq_resp.choices[0].message.content or "{}"
+        else:
+            response = get_openai_client().responses.create(
+                model="gpt-5-mini",
+                input=input,
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "meals_to_replace",
+                        "schema": MealsToReplaceSchema.model_json_schema(),
+                        "strict": True
+                    }
+                }
+            )
+
+            assistant_message = response.output_text
 
         try:
             # Step 1: Deserialize the string into a Python dictionary
@@ -1763,26 +1856,61 @@ def guess_meal_ingredients_gpt(meal_name: str, meal_description: str) -> List[st
     ]
     
     try:
-        response = get_openai_client().responses.create(
-            model="gpt-5-mini",
-            input=prompt_messages,
-            text={
-                "format": {
+        groq_client = _get_groq_client()
+        if groq_client:
+            raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
+            if raw_create:
+                raw_create = groq_client.chat.completions.with_raw_response.create
+            groq_resp = groq_call_with_retry(
+                raw_create_fn=raw_create,
+                create_fn=groq_client.chat.completions.create,
+                desc='meal_plan_service.guess_meal_ingredients_gpt',
+                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                messages=[
+                    {"role": "system", "content": prompt_messages[0]["content"]},
+                    {"role": "user", "content": prompt_messages[1]["content"]},
+                ],
+                temperature=0.2,
+                top_p=1,
+                stream=False,
+                response_format={
                     "type": "json_schema",
-                    "name": "likely_ingredients",
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "likely_ingredients": {"type": "array", "items": {"type": "string"}}
+                    "json_schema": {
+                        "name": "likely_ingredients",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "likely_ingredients": {"type": "array", "items": {"type": "string"}}
+                            },
+                            "required": ["likely_ingredients"],
+                            "additionalProperties": False
                         },
-                        "required": ["likely_ingredients"],
-                        "additionalProperties": False
                     },
-                    "strict": True
+                },
+            )
+            raw = groq_resp.choices[0].message.content or "{}"
+        else:
+            response = get_openai_client().responses.create(
+                model="gpt-5-mini",
+                input=prompt_messages,
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "likely_ingredients",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "likely_ingredients": {"type": "array", "items": {"type": "string"}}
+                            },
+                            "required": ["likely_ingredients"],
+                            "additionalProperties": False
+                        },
+                        "strict": True
+                    }
                 }
-            }
-        )
-        data = json.loads(response.output_text)
+            )
+            raw = response.output_text
+        data = json.loads(raw)
         return data.get("likely_ingredients", [])
     except Exception as e:
         # n8n traceback
@@ -2011,35 +2139,64 @@ def check_meal_for_allergens_gpt(meal, user) -> Tuple[bool, List[str], Dict[str,
     ]
     
     try:
-        response = get_openai_client().responses.create(
-            model="gpt-5-mini",
-            input=prompt_messages,
-            text={
-                "format": {
+        groq_client = _get_groq_client()
+        schema = {
+            "type": "object",
+            "properties": {
+                "is_safe": {"type": "boolean"},
+                "flagged_ingredients": {"type": "array", "items": {"type": "string"}},
+                "substitutions": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    }
+                },
+                "reasoning": {"type": "string"}
+            },
+            "required": ["is_safe", "flagged_ingredients", "reasoning"],
+            "additionalProperties": False
+        }
+        if groq_client:
+            raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
+            if raw_create:
+                raw_create = groq_client.chat.completions.with_raw_response.create
+            groq_resp = groq_call_with_retry(
+                raw_create_fn=raw_create,
+                create_fn=groq_client.chat.completions.create,
+                desc='meal_plan_service.check_meal_for_allergens_gpt',
+                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                messages=[
+                    {"role": "system", "content": prompt_messages[0]["content"]},
+                    {"role": "user", "content": prompt_messages[1]["content"]},
+                ],
+                temperature=0.2,
+                top_p=1,
+                stream=False,
+                response_format={
                     "type": "json_schema",
-                    "name": "allergen_analysis",
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "is_safe": {"type": "boolean"},
-                            "flagged_ingredients": {"type": "array", "items": {"type": "string"}},
-                            "substitutions": {
-                                "type": "object",
-                                "additionalProperties": {
-                                    "type": "array",
-                                    "items": {"type": "string"}
-                                }
-                            },
-                            "reasoning": {"type": "string"}
-                        },
-                        "required": ["is_safe", "flagged_ingredients", "reasoning"],
-                        "additionalProperties": False
+                    "json_schema": {
+                        "name": "allergen_analysis",
+                        "schema": schema,
                     },
-                    "strict": True
+                },
+            )
+            raw = groq_resp.choices[0].message.content or "{}"
+        else:
+            response = get_openai_client().responses.create(
+                model="gpt-5-mini",
+                input=prompt_messages,
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "allergen_analysis",
+                        "schema": schema,
+                        "strict": True
+                    }
                 }
-            }
-        )
-        data = json.loads(response.output_text)
+            )
+            raw = response.output_text
+        data = json.loads(raw)
         is_safe = data.get("is_safe", False)
         gpt_flagged = data.get("flagged_ingredients", [])
         
@@ -2187,20 +2344,48 @@ def get_substitution_suggestions(flagged_ingredients, user_allergies, meal_name)
             }
         ]
         
-        response = get_openai_client().responses.create(
-            model="gpt-5-mini",
-            input=prompt_messages,
-            text={
-                "format": {
+        groq_client = _get_groq_client()
+        if groq_client:
+            raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
+            if raw_create:
+                raw_create = groq_client.chat.completions.with_raw_response.create
+            groq_resp = groq_call_with_retry(
+                raw_create_fn=raw_create,
+                create_fn=groq_client.chat.completions.create,
+                desc='meal_plan_service.get_substitution_suggestions',
+                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                messages=[
+                    {"role": "system", "content": prompt_messages[0]["content"]},
+                    {"role": "user", "content": prompt_messages[1]["content"]},
+                ],
+                temperature=0.2,
+                top_p=1,
+                stream=False,
+                response_format={
                     "type": "json_schema",
-                    "name": "ingredient_substitutions",
-                    "schema": IngredientSubstitutions.model_json_schema()
+                    "json_schema": {
+                        "name": "ingredient_substitutions",
+                        "schema": IngredientSubstitutions.model_json_schema(),
+                    },
+                },
+            )
+            raw = groq_resp.choices[0].message.content or "{}"
+        else:
+            response = get_openai_client().responses.create(
+                model="gpt-5-mini",
+                input=prompt_messages,
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "ingredient_substitutions",
+                        "schema": IngredientSubstitutions.model_json_schema()
+                    }
                 }
-            }
-        )
+            )
+            raw = response.output_text
         
         # Parse response and convert to a simple mapping
-        result = json.loads(response.output_text)
+        result = json.loads(raw)
         subs = {}
         for item in result.get("substitutions", []):
             ingredient = item.get("ingredient")
@@ -2534,21 +2719,49 @@ def apply_substitutions_to_meal(meal, substitutions, user):
             }
         ]
         
-        response = get_openai_client().responses.create(
-            model="gpt-5-mini",  # Using more capable model for recipe adaptation
-            input=prompt_messages,
-            text={
-                "format": {
+        groq_client = _get_groq_client()
+        if groq_client:
+            raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
+            if raw_create:
+                raw_create = groq_client.chat.completions.with_raw_response.create
+            groq_resp = groq_call_with_retry(
+                raw_create_fn=raw_create,
+                create_fn=groq_client.chat.completions.create,
+                desc='meal_plan_service.apply_substitutions_to_meal',
+                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                messages=[
+                    {"role": "system", "content": prompt_messages[0]["content"]},
+                    {"role": "user", "content": prompt_messages[1]["content"]},
+                ],
+                temperature=0.3,
+                top_p=1,
+                stream=False,
+                response_format={
                     "type": "json_schema",
-                    "name": "modified_meal",
-                    "schema": ModifiedMealSchema.model_json_schema(),
-                    "strict": True
+                    "json_schema": {
+                        "name": "modified_meal",
+                        "schema": ModifiedMealSchema.model_json_schema(),
+                    },
+                },
+            )
+            raw = groq_resp.choices[0].message.content or "{}"
+        else:
+            response = get_openai_client().responses.create(
+                model="gpt-5-mini",  # Using more capable model for recipe adaptation
+                input=prompt_messages,
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "modified_meal",
+                        "schema": ModifiedMealSchema.model_json_schema(),
+                        "strict": True
+                    }
                 }
-            }
-        )
+            )
+            raw = response.output_text
         
         try:
-            data = json.loads(response.output_text)
+            data = json.loads(raw)
         except json.JSONDecodeError as e:
             # n8n traceback
             n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
@@ -2798,10 +3011,6 @@ def apply_modifications(
         request_id = str(uuid.uuid4())
 
     logger.info("[%s] Parsing modification request for MealPlan %s", request_id, meal_plan.id)
-    try:
-        print(f"APPLY_MODS [{request_id}] meal_plan_id={meal_plan.id} raw_prompt={raw_prompt}", flush=True)
-    except Exception:
-        pass
     
     try:
         parsed_req = parse_modification_request(raw_prompt, meal_plan)
@@ -2816,7 +3025,6 @@ def apply_modifications(
                 for s in parsed_req.slots
             ]
             preview = str(slot_summ)
-            print(f"APPLY_MODS [{request_id}] parsed_slots={preview[:800]}", flush=True)
         except Exception:
             pass
     except Exception as e:
@@ -2832,10 +3040,6 @@ def apply_modifications(
             mpm.id: mpm
             for mpm in meals
         }
-        try:
-            print(f"APPLY_MODS [{request_id}] id_map_size={len(id_to_mpm)}", flush=True)
-        except Exception:
-            pass
     except Exception as e:
         # n8n traceback
         n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")

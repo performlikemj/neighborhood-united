@@ -364,7 +364,6 @@ def onboarding_request_password(guest_id: str) -> Dict[str, Any]:
     assistant is ready to trigger the secure password modal.
     """
     logger.info(f"ONBOARDING_REQUEST_PASSWORD: Called for guest_id={guest_id}")
-    print(f"ONBOARDING_REQUEST_PASSWORD: Called for guest_id={guest_id}")
     
     try:
         from custom_auth.models import OnboardingSession
@@ -378,7 +377,6 @@ def onboarding_request_password(guest_id: str) -> Dict[str, Any]:
         session.save()
         
         logger.info(f"ONBOARDING_REQUEST_PASSWORD: Marked session {session.id} as ready for password")
-        print(f"ONBOARDING_REQUEST_PASSWORD: Marked session {session.id} as ready for password")
         
         return {
             "status": "success", 
@@ -393,7 +391,6 @@ def onboarding_request_password(guest_id: str) -> Dict[str, Any]:
                 pass
         
         logger.error(f"Error in onboarding_request_password: {str(e)}")
-        print(f"ONBOARDING_REQUEST_PASSWORD ERROR: {str(e)}")
         return {"status": "error", "message": "Failed to mark ready for password"}
 
 
@@ -429,34 +426,28 @@ def onboarding_save_progress(
         data['household_members'] = household_members
     
     logger.info(f"ONBOARDING_SAVE_PROGRESS: Starting with guest_id={guest_id}, data={data}")
-    print(f"ONBOARDING_SAVE_PROGRESS: Starting with guest_id={guest_id}, data={data}")
     
     try:
         from custom_auth.models import OnboardingSession
 
         logger.info(f"ONBOARDING_SAVE_PROGRESS: Attempting to get or create OnboardingSession for guest_id={guest_id}")
-        print(f"ONBOARDING_SAVE_PROGRESS: Attempting to get or create OnboardingSession for guest_id={guest_id}")
         
         session, created = OnboardingSession.objects.get_or_create(guest_id=guest_id)
         
         logger.info(f"ONBOARDING_SAVE_PROGRESS: Session {'created' if created else 'found'}: {session.id}")
-        print(f"ONBOARDING_SAVE_PROGRESS: Session {'created' if created else 'found'}: {session.id}")
         
         if not session.data:
             session.data = {}
             
         logger.info(f"ONBOARDING_SAVE_PROGRESS: Existing session data: {session.data}")
-        print(f"ONBOARDING_SAVE_PROGRESS: Existing session data: {session.data}")
         
         session.data.update(data)
         
         logger.info(f"ONBOARDING_SAVE_PROGRESS: Updated session data: {session.data}")
-        print(f"ONBOARDING_SAVE_PROGRESS: Updated session data: {session.data}")
         
         session.save()
         
         logger.info(f"ONBOARDING_SAVE_PROGRESS: Session saved successfully")
-        print(f"ONBOARDING_SAVE_PROGRESS: Session saved successfully")
         
         return {"status": "success", "data": session.data}
     except Exception as e:
@@ -469,8 +460,6 @@ def onboarding_save_progress(
         
         logger.error(f"Error in onboarding_save_progress: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
-        print(f"ONBOARDING_SAVE_PROGRESS ERROR: {str(e)}")
-        print(f"ONBOARDING_SAVE_PROGRESS TRACEBACK: {traceback.format_exc()}")
         return {"status": "error", "message": "Failed to save progress"}
 
 

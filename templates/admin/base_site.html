@@ -1,0 +1,52 @@
+{% extends "admin/base.html" %}
+{% load static %}
+
+{% block title %}Hood United Admin | {% if subtitle %}{{ subtitle }} | {% endif %}Live better. Eat smarter.{% endblock %}
+
+{% block extrastyle %}{{ block.super }}
+<link rel="stylesheet" href="{% static 'admin/hoodunited.css' %}">
+{% endblock %}
+
+{% block branding %}
+  <div class="hu-branding">
+    <h1 class="hu-site-name"><a href="{% url 'admin:index' %}">Hood United Admin</a></h1>
+    <div class="hu-tagline">Live better. Eat smarter.</div>
+  </div>
+{% endblock %}
+
+{% block nav-global %}
+  <nav class="hu-topnav">
+    <div class="hu-topnav-inner">
+    <div class="hu-nav-left">
+      <a class="hu-tab{% if request.path == '/admin/' %} active{% endif %}" href="{% url 'admin:index' %}">Dashboard</a>
+      <a class="hu-tab{% if '/admin/meals/meal/' in request.path %} active{% endif %}" href="{% url 'admin:meals_meal_changelist' %}">Meals</a>
+      <a class="hu-tab{% if '/admin/meals/mealplan/' in request.path %} active{% endif %}" href="{% url 'admin:meals_mealplan_changelist' %}">Meal Plans</a>
+      <a class="hu-tab{% if '/admin/meals/order/' in request.path %} active{% endif %}" href="{% url 'admin:meals_order_changelist' %}">Orders</a>
+      <a class="hu-tab{% if '/admin/chefs/chef/' in request.path %} active{% endif %}" href="{% url 'admin:chefs_chef_changelist' %}">Chefs</a>
+      <a class="hu-tab{% if '/admin/custom_auth/customuser/' in request.path %} active{% endif %}" href="{% url 'admin:custom_auth_customuser_changelist' %}">Customers</a>
+      <a class="hu-tab{% if '/admin/reviews/review/' in request.path %} active{% endif %}" href="{% url 'admin:reviews_review_changelist' %}">Reviews</a>
+      <a class="hu-tab{% if '/admin/gamification/' in request.path %} active{% endif %}" href="{% url 'admin:gamification_userprofile_changelist' %}">Gamification</a>
+      <a class="hu-tab{% if '/admin/meals/systemupdate/' in request.path %} active{% endif %}" href="{% url 'admin:meals_systemupdate_changelist' %}">Ops</a>
+    </div>
+    <div class="hu-nav-right">
+      <form id="hu-search" class="hu-search" method="get" action="#">
+        <select id="hu-search-scope">
+          <option value="orders" {% if '/admin/meals/order/' in request.path %}selected{% endif %}>Orders</option>
+          <option value="meals" {% if '/admin/meals/meal/' in request.path %}selected{% endif %}>Meals</option>
+          <option value="mealplans" {% if '/admin/meals/mealplan/' in request.path %}selected{% endif %}>Meal Plans</option>
+          <option value="chefs" {% if '/admin/chefs/chef/' in request.path %}selected{% endif %}>Chefs</option>
+          <option value="customers" {% if '/admin/custom_auth/customuser/' in request.path %}selected{% endif %}>Customers</option>
+          <option value="reviews" {% if '/admin/reviews/review/' in request.path %}selected{% endif %}>Reviews</option>
+        </select>
+        <input id="hu-search-q" type="search" name="q" placeholder="Search…" />
+        <button type="submit">Search</button>
+      </form>
+    </div>
+    </div>
+  </nav>
+{% endblock %}
+
+{% block extrahead %}
+  {{ block.super }}
+  <script src="{% static 'admin/hoodunited.js' %}"></script>
+{% endblock %}

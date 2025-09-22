@@ -21,6 +21,7 @@ export default function Account(){
   const [loading, setLoading] = useState(false)
   const [pw, setPw] = useState('')
   const [pw2, setPw2] = useState('')
+  const [showDash, setShowDash] = useState(false)
 
   // Secure: only allow these actions without login
   const allowAnon = new Set(['activate','password_reset','process_now'])
@@ -29,15 +30,29 @@ export default function Account(){
   useEffect(()=>{
     // process_now (email processing) – no login required
     if (safeAction === 'process_now' && token){
-      setLoading(true); setMsg('Processing your message…'); setError('')
+      setLoading(true); setMsg('Processing your message…'); setError(''); setShowDash(false)
       ;(async ()=>{
         try{
-          // Mirror Streamlit behavior; backend may accept GET
-          const res = await api.get('/auth/api/process_now/', { params: { token } })
-          if (res?.data?.status === 'success') setMsg(res.data.message || 'Processed successfully.')
-          else setMsg(res?.data?.message || 'Your message was processed.')
-        }catch(e){ setError('Failed to process the message. Please try again later.') }
-        finally{ setLoading(false) }
+          const res = await api.post('/auth/api/process_now/', { token }, { skipUserId: true })
+          const payload = res?.data || {}
+          if (res?.status === 200){
+            if (payload?.status === 'success' || payload?.status === 'info'){
+              setMsg(payload?.message || 'Your message is being processed. You will receive an email shortly.')
+              if (payload?.show_dashboard_link === true) setShowDash(true)
+            } else {
+              setMsg(payload?.message || 'Request submitted.')
+            }
+          } else {
+            const err = payload?.message || 'Failed to process the message. Please try again later.'
+            setError(err)
+          }
+        }catch(e){
+          const data = e?.response?.data
+          const err = (data && (data.message || data.error)) || 'Failed to process the message. Please try again later.'
+          setError(err); setShowDash(false)
+        } finally {
+          setLoading(false)
+        }
       })()
     }
     // activate – verify email without login
@@ -127,6 +142,7 @@ export default function Account(){
           {msg && <div className="card" style={{marginTop:'.5rem'}}>{msg}</div>}
           {error && <div className="card" style={{marginTop:'.5rem', borderColor:'#d9534f'}}>{error}</div>}
           <div style={{marginTop:'.6rem'}}>
+            {showDash && <Link to="/meal-plans" className="btn btn-primary">View your meal plans</Link>}
             <Link to="/" className="btn btn-outline">Go Home</Link>
           </div>
         </div>
@@ -176,5 +192,3 @@ export default function Account(){
     </div>
   )
 }
-
-

@@ -20,6 +20,7 @@ import EmailAuth from './pages/EmailAuth.jsx'
 import HealthMetrics from './pages/HealthMetrics.jsx'
 import PublicChef from './pages/PublicChef.jsx'
 import ChefsDirectory from './pages/ChefsDirectory.jsx'
+import Onboarding from './pages/Onboarding.jsx'
 
 export default function App(){
   const [globalToasts, setGlobalToasts] = useState([]) // {id, text, tone, closing}
@@ -50,6 +51,7 @@ export default function App(){
           <Route path="/login" element={<Login />} />
           <Route path="/account" element={<Account />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/onboarding" element={<Onboarding />} />
           <Route path="/chat" element={<ProtectedRoute requiredRole="customer"><Chat /></ProtectedRoute>} />
           <Route path="/meal-plans" element={<ProtectedRoute requiredRole="customer"><MealPlans /></ProtectedRoute>} />
           <Route path="/meal_plans" element={<MealPlanApproval />} />

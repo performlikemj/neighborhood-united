@@ -28,6 +28,12 @@ export default function PublicChef(){
   const sentryRef = useRef(null)
   const [sticky, setSticky] = useState(false)
   const [servesMyArea, setServesMyArea] = useState(null)
+  // Waitlist state
+  const [waitlistCfg, setWaitlistCfg] = useState(null)
+  const [waitlist, setWaitlist] = useState(null)
+  const [waitlistLoading, setWaitlistLoading] = useState(false)
+  const [subscribing, setSubscribing] = useState(false)
+  const [unsubscribing, setUnsubscribing] = useState(false)
   
 
   const placeholderMealImage = useMemo(()=>{
@@ -58,27 +64,30 @@ export default function PublicChef(){
     }catch{ return [] }
   }
 
+  function toEventTimestamp(ev){
+    try{
+      const cutoff = ev?.order_cutoff_time ? Date.parse(ev.order_cutoff_time) : null
+      if (cutoff != null && !Number.isNaN(cutoff)) return cutoff
+      const date = ev?.event_date || ''
+      let time = ev?.event_time || '00:00'
+      if (typeof time === 'string' && time.length === 5) time = time + ':00'
+      const dt = Date.parse(`${date}T${time}`)
+      return Number.isNaN(dt) ? 0 : dt
+    }catch{ return 0 }
+  }
+
   function isUpcomingEvent(ev){
     try{
-      const now = new Date()
-      const todayISO = now.toISOString().slice(0,10)
-      const eventDate = String(ev?.event_date||'')
-      const cutoffRaw = ev?.order_cutoff_time
-      const cutoffMs = cutoffRaw ? Date.parse(cutoffRaw) : null
       const status = String(ev?.status||'').toLowerCase()
       const statusOk = !status || status === 'scheduled' || status === 'open'
-      const dateOk = eventDate >= todayISO
-      const cutoffOk = cutoffMs == null || cutoffMs > Date.now()
-      return Boolean(statusOk && dateOk && cutoffOk)
+      const ts = toEventTimestamp(ev)
+      return Boolean(statusOk && ts >= Date.now())
     }catch{ return false }
   }
 
   function belongsToChef(ev, profile){
     try{
       const chefId = profile?.id
-      console.log('ev', ev)
-      console.log('profile', profile)
-      console.log('chefId', chefId)
       const evChefId = ev?.chef?.id || ev?.chef_id || ev?.chef?.chef_id
       if (chefId && evChefId && Number(evChefId) === Number(chefId)) return true
       const evChefUsername = ev?.chef?.user?.username || ev?.chef?.username || ev?.chef_username
@@ -178,9 +187,7 @@ export default function PublicChef(){
       // Extra compatibility attempts for different parameter names
       try{
         const r = await api.get('/meals/api/chef-meal-events/', { skipUserId: true, params: { upcoming: 'true', chef: chefId, page_size: 50 } })
-        console.log('r', r)
         const list = toEventsArray(r.data)
-        console.log('list', list)
         if (list.length){ setEvents(list); return }
       }catch(e){ }
       try{
@@ -192,17 +199,35 @@ export default function PublicChef(){
         const r = await api.get('/meals/api/chef-meal-events/', { skipUserId: true, params: { page_size: 50 } })
         const all = toEventsArray(r.data)
         const mine = all.filter(ev => belongsToChef(ev, profile))
-        console.log('mine', mine)
         const upcoming = mine.filter(isUpcomingEvent)
         const chosen = upcoming.length > 0 ? upcoming : mine
         setEvents(chosen)
       }catch(e){ }
     }
 
+    async function fetchWaitlist(chefId){
+      try{
+        setWaitlistLoading(true)
+        const [cfg, st] = await Promise.all([
+          api.get('/chefs/api/waitlist/config/', { skipUserId: true }),
+          api.get(`/chefs/api/public/${encodeURIComponent(chefId)}/waitlist/status/`, { skipUserId: true })
+        ])
+        setWaitlistCfg(cfg?.data || null)
+        setWaitlist(st?.data || null)
+      }catch(e){
+        // If disabled or unavailable, keep cfg disabled and null status
+        setWaitlistCfg(prev => (prev && typeof prev==='object') ? { ...prev, enabled:false } : { enabled:false })
+        setWaitlist(null)
+      }finally{
+        setWaitlistLoading(false)
+      }
+    }
+
     ;(async ()=>{
       try{
         const profile = await fetchProfile()
         await fetchEvents(profile)
+        if (profile?.id){ await fetchWaitlist(profile.id) }
         // Kick off serves-my-area check if auth already available
         if (!authLoading && authUser && profile?.id){
           try{
@@ -216,6 +241,64 @@ export default function PublicChef(){
 
     return ()=>{ mounted = false }
   }, [username])
+
+  const upcomingEvents = useMemo(()=>{
+    const items = Array.isArray(events) ? events.slice() : []
+    return items.filter(isUpcomingEvent).sort((a,b)=> toEventTimestamp(a) - toEventTimestamp(b))
+  }, [events])
+
+  const showWaitlist = useMemo(()=>{
+    const enabled = Boolean(waitlistCfg?.enabled)
+    const none = (waitlist?.upcoming_events_count ?? upcomingEvents.length ?? 0) === 0
+    return enabled && none
+  }, [waitlistCfg, waitlist, upcomingEvents])
+
+  async function doSubscribe(){
+    try{
+      if (!authUser){
+        const next = `${window.location.pathname}${window.location.search}`
+        window.location.href = `/login?next=${encodeURIComponent(next)}`
+        return
+      }
+      if (!chef?.id) return
+      setSubscribing(true)
+      await api.post(`/chefs/api/public/${encodeURIComponent(chef.id)}/waitlist/subscribe`, {})
+      try{ window.dispatchEvent(new CustomEvent('global-toast', { detail: { text:'You’ll be notified for future openings.', tone:'success' } })) }catch{}
+      // refresh status
+      const st = await api.get(`/chefs/api/public/${encodeURIComponent(chef.id)}/waitlist/status/`, { skipUserId: true })
+      setWaitlist(st?.data || null)
+    } catch(e){
+      if (e?.response?.status === 401){
+        const next = `${window.location.pathname}${window.location.search}`
+        window.location.href = `/login?next=${encodeURIComponent(next)}`
+        return
+      }
+      try{ window.dispatchEvent(new CustomEvent('global-toast', { detail: { text:'Unable to subscribe right now.', tone:'error' } })) }catch{}
+    } finally { setSubscribing(false) }
+  }
+
+  async function doUnsubscribe(){
+    try{
+      if (!authUser){
+        const next = `${window.location.pathname}${window.location.search}`
+        window.location.href = `/login?next=${encodeURIComponent(next)}`
+        return
+      }
+      if (!chef?.id) return
+      setUnsubscribing(true)
+      await api.delete(`/chefs/api/public/${encodeURIComponent(chef.id)}/waitlist/unsubscribe`)
+      try{ window.dispatchEvent(new CustomEvent('global-toast', { detail: { text:'You will no longer receive notifications.', tone:'success' } })) }catch{}
+      const st = await api.get(`/chefs/api/public/${encodeURIComponent(chef.id)}/waitlist/status/`, { skipUserId: true })
+      setWaitlist(st?.data || null)
+    } catch(e){
+      if (e?.response?.status === 401){
+        const next = `${window.location.pathname}${window.location.search}`
+        window.location.href = `/login?next=${encodeURIComponent(next)}`
+        return
+      }
+      try{ window.dispatchEvent(new CustomEvent('global-toast', { detail: { text:'Unable to unsubscribe right now.', tone:'error' } })) }catch{}
+    } finally { setUnsubscribing(false) }
+  }
 
   const coverImage = useMemo(()=>{
     if (!chef) return null
@@ -380,36 +463,66 @@ export default function PublicChef(){
                   {servesMyArea ? 'Serves your area' : 'Outside your area'}
                 </span>
               </div>
-              {events.length===0 ? (
-                <div className="muted">No upcoming events posted.</div>
+              {waitlistLoading ? (
+                <div className="muted">Loading…</div>
               ) : (
-                <div className="grid">
-                  {events.map(ev => (
-                    <div key={ev.id} className="card meal-card" style={{padding:0, overflow:'hidden'}}>
-                      <div className="meal-row-inner">
-                        <div className="meal-thumb" style={{backgroundImage:`url(${placeholderMealImage})`}} aria-hidden />
-                        <div className="meal-main">
-                          <div style={{fontWeight:800}}>{ev.meal?.name || ev.meal_name || 'Meal'}</div>
-                          <div className="muted">{ev.event_date} {ev.event_time}</div>
-                        </div>
-                        <div className="meal-actions">
-                          <button className="btn btn-outline" onClick={()=> {
-                            const mealName = ev.meal?.name || 'this meal'
-                            const mealId = ev?.meal?.id || ev?.meal_id || ''
-                            const q = `Can you tell me more about ${mealName}?`
-                            const url = `/chat?chef=${encodeURIComponent(chef?.user?.username||'')}&topic=${encodeURIComponent(ev.meal?.name||'Meal')}&meal_id=${encodeURIComponent(mealId)}&q=${encodeURIComponent(q)}`
-                            window.open(url,'_self')
-                          }}>Ask about this meal</button>
-                          {authUser && servesMyArea ? (
-                            <button className="btn btn-primary" onClick={()=>{
-                              window.location.href = `/meal-plans?addFromChefEvent=${encodeURIComponent(ev.id)}`
-                            }}>Add to my plan</button>
-                          ) : null}
-                        </div>
+                showWaitlist ? (
+                  <div className="card" style={{background:'var(--surface-2)'}}>
+                    <h4 style={{marginTop:0}}>Get notified</h4>
+                    {!authUser ? (
+                      <div>
+                        <div className="muted" style={{marginBottom:'.5rem'}}>Sign in to get notified when this chef starts accepting orders.</div>
+                        <Link className="btn btn-primary" to={`/login?next=${encodeURIComponent(window.location.pathname+window.location.search)}`}>Sign in</Link>
                       </div>
+                    ) : (
+                      <div>
+                        {waitlist?.subscribed ? (
+                          <>
+                            <div className="muted" style={{marginBottom:'.5rem'}}>You’ll be notified when this chef opens orders.</div>
+                            <button className="btn btn-outline" disabled={unsubscribing} onClick={doUnsubscribe}>{unsubscribing? 'Unsubscribing…' : 'Unsubscribe'}</button>
+                          </>
+                        ) : (
+                          <>
+                            <div className="muted" style={{marginBottom:'.5rem'}}>No upcoming meals yet. Get notified when this chef starts accepting orders.</div>
+                            <button className="btn btn-primary" disabled={subscribing || waitlist?.can_subscribe===false} onClick={doSubscribe}>{subscribing? 'Subscribing…' : 'Notify me'}</button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  upcomingEvents.length===0 ? (
+                    <div className="muted">No upcoming events posted.</div>
+                  ) : (
+                    <div className="grid">
+                      {upcomingEvents.map(ev => (
+                        <div key={ev.id} className="card meal-card" style={{padding:0, overflow:'hidden'}}>
+                          <div className="meal-row-inner">
+                            <div className="meal-thumb" style={{backgroundImage:`url(${placeholderMealImage})`}} aria-hidden />
+                            <div className="meal-main">
+                              <div style={{fontWeight:800}}>{ev.meal?.name || ev.meal_name || 'Meal'}</div>
+                              <div className="muted">{ev.event_date} {ev.event_time}</div>
+                            </div>
+                            <div className="meal-actions">
+                              <button className="btn btn-outline" onClick={()=> {
+                                const mealName = ev.meal?.name || 'this meal'
+                                const mealId = ev?.meal?.id || ev?.meal_id || ''
+                                const q = `Can you tell me more about ${mealName}?`
+                                const url = `/chat?chef=${encodeURIComponent(chef?.user?.username||'')}&topic=${encodeURIComponent(ev.meal?.name||'Meal')}&meal_id=${encodeURIComponent(mealId)}&q=${encodeURIComponent(q)}`
+                                window.open(url,'_self')
+                              }}>Ask about this meal</button>
+                              {authUser && servesMyArea ? (
+                                <button className="btn btn-primary" onClick={()=>{
+                                  window.location.href = `/meal-plans?addFromChefEvent=${encodeURIComponent(ev.id)}`
+                                }}>Add to my plan</button>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  )
+                )
               )}
             </div>
           </div>
@@ -492,5 +605,3 @@ export default function PublicChef(){
     </div>
   )
 }
-
-

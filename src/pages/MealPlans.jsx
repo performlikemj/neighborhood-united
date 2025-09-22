@@ -7,6 +7,7 @@ import { codeFromCountryName } from '../utils/geo.js'
 import Listbox from '../components/Listbox.jsx'
 import { EventSourcePolyfill } from 'event-source-polyfill'
 import { useAuth } from '../context/AuthContext.jsx'
+import { shouldHighlightGenerateButton } from '../utils/planAttention.mjs'
 
 function startOfWeek(d){
   const x = new Date(d); const day = x.getDay() // 0 Sun
@@ -59,7 +60,15 @@ export default function MealPlans(){
   const esRef = useRef(null)
   const [streaming, setStreaming] = useState(false)
   const streamingRef = useRef(false)
+  const planStreamRef = useRef(null)
+  const planStreamTimeoutRef = useRef(null)
+  const planStreamingRef = useRef(false)
+  const planStreamHasSummaryRef = useRef(false)
+  const planStreamErrorCountRef = useRef(0)
+  const planStreamIdRef = useRef(null)
+  const [planStreaming, setPlanStreaming] = useState(false)
   const [progressPct, setProgressPct] = useState(0)
+  const hasRealProgressRef = useRef(false)
   const fallbackRef = useRef(null)
   const pollRef = useRef(null)
   const completeRef = useRef(null)
@@ -75,6 +84,17 @@ export default function MealPlans(){
   const [instacartHasChefMeals, setInstacartHasChefMeals] = useState(false)
   const [instacartError, setInstacartError] = useState(null)
   const [instacartTriedForPlan, setInstacartTriedForPlan] = useState(null) // mealPlanId used when we last attempted
+  const [instacartLoading, setInstacartLoading] = useState(false)
+
+  const instacartEligibility = useMemo(()=>{
+    try{
+      const rawCountry = user?.address?.country || ''
+      const country = normalizeCountryIso2(rawCountry)
+      const postal = String(user?.postal_code || user?.address?.postalcode || '').trim()
+      const eligible = (country === 'US' || country === 'CA') && Boolean(postal)
+      return { eligible, country, postal }
+    }catch{ return { eligible:false, country:'', postal:'' } }
+  }, [user?.address?.country, user?.postal_code, user?.address?.postalcode])
   // If an empty-slot panel is open and that slot becomes filled (SSE/poll), switch to edit view
   useEffect(()=>{
     if (!slotPanel) return
@@ -172,10 +192,265 @@ export default function MealPlans(){
     }, 3800)
   }
 
+  const stopPlanStream = (opts={})=>{
+    const { silent=false } = opts || {}
+    try{ planStreamRef.current && planStreamRef.current.close() }catch{}
+    planStreamRef.current = null
+    planStreamingRef.current = false
+    planStreamHasSummaryRef.current = false
+    planStreamErrorCountRef.current = 0
+    planStreamIdRef.current = null
+    if (planStreamTimeoutRef.current){
+      clearTimeout(planStreamTimeoutRef.current)
+      planStreamTimeoutRef.current = null
+    }
+    if (!silent) setPlanStreaming(false)
+  }
+
+  const applyPlanDetailPayload = (detail)=>{
+    if (!detail) return
+    const { meal_plan_meals, meals, ...rest } = detail
+    const nextMeals = Array.isArray(meals) ? meals : (Array.isArray(meal_plan_meals) ? meal_plan_meals : [])
+    setPlan(prev => ({ ...(prev || {}), ...rest, meals: nextMeals }))
+    const planId = detail.id || rest.id || null
+    if (planId) setMealPlanId(planId)
+    if (typeof detail.is_approved !== 'undefined'){
+      setIsApproved(detail.is_approved === null ? null : Boolean(detail.is_approved))
+    }
+    if (detail.meal_prep_preference){ setPrepPreference(detail.meal_prep_preference) }
+    if ('instacart_url' in detail){
+      setInstacartUrl(detail.instacart_url || null)
+    }
+    if ('instacart_error' in detail){ setInstacartError(detail.instacart_error || null) }
+    if (planId && (('instacart_url' in detail) || ('instacart_error' in detail))){
+      setInstacartTriedForPlan(planId)
+    }
+    if ('instacart_has_chef_meals' in detail){ setInstacartHasChefMeals(Boolean(detail.instacart_has_chef_meals)) }
+    if ('has_pending_orders' in detail){ setHasPendingOrders(Boolean(detail.has_pending_orders)) }
+    if ('expected_slots' in detail && typeof detail.expected_slots === 'number' && detail.expected_slots > 0){
+      expectedSlotsRef.current = detail.expected_slots
+    }
+  }
+
+  const reconcilePlanFromDetail = async (planId, opts={})=>{
+    const { silent=true, preserveOnMissing=true } = opts || {}
+    if (!planId) return
+    try{
+      const resp = await api.get(`/meals/api/meal_plans/${planId}/`)
+      const detail = resp?.data
+      if (detail){
+        applyPlanDetailPayload(detail)
+      } else if (!preserveOnMissing){
+        setPlan(null)
+        setMealPlanId(null)
+        setIsApproved(null)
+      }
+    }catch(e){
+      try{ log('plan-detail:error', { planId, status: e?.response?.status }) }catch{}
+      if (e?.response?.status === 401){
+        window.location.href = '/login'
+        return
+      }
+      if (!preserveOnMissing){
+        setPlan(null)
+        setMealPlanId(null)
+        setIsApproved(null)
+        setError('No plan found. Generate one.')
+      }
+    }finally{ if (!silent) setLoading(false) }
+  }
+
+  const startPlanStream = (planId, options={})=>{
+    const { initialPlan=null, silent=false } = options || {}
+    if (!planId) return
+
+    stopPlanStream({ silent:true })
+    planStreamIdRef.current = planId
+    planStreamingRef.current = true
+    planStreamHasSummaryRef.current = false
+    planStreamErrorCountRef.current = 0
+    setPlanStreaming(true)
+    setError(null)
+    setProgressPct(0)
+    hasRealProgressRef.current = false
+    expectedSlotsRef.current = 21
+    setInstacartUrl(null)
+    setInstacartError(null)
+    setInstacartHasChefMeals(false)
+    setInstacartTriedForPlan(null)
+
+    if (initialPlan){
+      const { meal_plan_meals: _initialPlanMeals, meals: _initialMeals, ...rest } = initialPlan
+      const basePlan = { ...rest, meals: [] }
+      setPlan(basePlan)
+      if (typeof initialPlan.is_approved !== 'undefined'){
+        setIsApproved(initialPlan.is_approved === null ? null : Boolean(initialPlan.is_approved))
+      }
+      if (initialPlan.meal_prep_preference){ setPrepPreference(initialPlan.meal_prep_preference) }
+      if ('instacart_url' in initialPlan){
+        setInstacartUrl(initialPlan.instacart_url || null)
+      }
+      if ('instacart_error' in initialPlan){ setInstacartError(initialPlan.instacart_error || null) }
+      if (('instacart_url' in initialPlan) || ('instacart_error' in initialPlan)){
+        setInstacartTriedForPlan(planId)
+      }
+      if ('instacart_has_chef_meals' in initialPlan){ setInstacartHasChefMeals(Boolean(initialPlan.instacart_has_chef_meals)) }
+      if ('has_pending_orders' in initialPlan){ setHasPendingOrders(Boolean(initialPlan.has_pending_orders)) }
+      if ('expected_slots' in initialPlan && typeof initialPlan.expected_slots === 'number' && initialPlan.expected_slots > 0){
+        expectedSlotsRef.current = initialPlan.expected_slots
+      }
+    } else {
+      setPlan({ id: planId, week_start_date: fmtYMD(weekStart), meals: [] })
+    }
+
+    setMealPlanId(planId)
+    if (!silent) setLoading(false)
+
+    const token = localStorage.getItem('accessToken')
+    const url = `/meals/api/meal_plans/${planId}/stream/`
+    let es
+    try{
+      es = token
+        ? new EventSourcePolyfill(url, { headers: { Authorization: `Bearer ${token}` }, withCredentials:false, heartbeatTimeout: 90000 })
+        : new EventSource(url)
+    }catch(openErr){
+      try{ log('plan-stream:failed-open', { planId }) }catch{}
+      stopPlanStream({ silent:true })
+      planStreamingRef.current = false
+      setPlanStreaming(false)
+      reconcilePlanFromDetail(planId, { silent:true, preserveOnMissing:true })
+      return
+    }
+
+    planStreamRef.current = es
+
+    const handleProgressPayload = (payload={})=>{
+      try{
+        if (typeof payload.total === 'number' && payload.total > 0){
+          expectedSlotsRef.current = payload.total
+        }
+        if (typeof payload.pct === 'number'){
+          setProgressPct(prev => Math.max(prev, payload.pct))
+        } else if (typeof payload.count === 'number' && expectedSlotsRef.current && expectedSlotsRef.current > 0){
+          const pct = Math.min(100, Math.round((payload.count / expectedSlotsRef.current) * 100))
+          setProgressPct(prev => Math.max(prev, pct))
+        }
+      }catch{}
+    }
+
+    const mergeMeal = (incoming)=>{
+      if (!incoming) return
+      const payload = incoming.meal_plan_meal || incoming
+      if (!payload) return
+      const mealId = payload.meal_plan_meal_id || payload.id
+      setPlan(prev => {
+        const current = prev || { id: planId, week_start_date: fmtYMD(weekStart), meals: [] }
+        const existing = Array.isArray(current.meals) ? [...current.meals] : (Array.isArray(current.meal_plan_meals) ? [...current.meal_plan_meals] : [])
+        const idx = mealId != null ? existing.findIndex(x => (x.meal_plan_meal_id || x.id) === mealId) : -1
+        if (idx >= 0){
+          existing[idx] = { ...existing[idx], ...payload }
+        } else {
+          existing.push(payload)
+        }
+        if (expectedSlotsRef.current && expectedSlotsRef.current > 0){
+          try{
+            const pct = Math.min(100, Math.round((existing.length / expectedSlotsRef.current) * 100))
+            setProgressPct(prev => Math.max(prev, pct))
+          }catch{}
+        }
+        return { ...current, meals: existing }
+      })
+    }
+
+    const applySummary = (summary)=>{
+      if (!summary || planStreamIdRef.current !== planId) return
+      planStreamHasSummaryRef.current = true
+      const { meal_plan_meals: _summaryPlanMeals, meals: _summaryMeals, ...rest } = summary
+      setPlan(prev => ({ ...(prev || {}), ...rest }))
+      const idFromSummary = summary.id || planId
+      if (idFromSummary) setMealPlanId(idFromSummary)
+      if (typeof summary.is_approved !== 'undefined'){
+        setIsApproved(summary.is_approved === null ? null : Boolean(summary.is_approved))
+      }
+      if (summary.meal_prep_preference){ setPrepPreference(summary.meal_prep_preference) }
+      if ('instacart_url' in summary){
+        setInstacartUrl(summary.instacart_url || null)
+      }
+      if ('instacart_error' in summary){ setInstacartError(summary.instacart_error || null) }
+      if (idFromSummary && (('instacart_url' in summary) || ('instacart_error' in summary))){
+        setInstacartTriedForPlan(idFromSummary)
+      }
+      if ('instacart_has_chef_meals' in summary){ setInstacartHasChefMeals(Boolean(summary.instacart_has_chef_meals)) }
+      if ('has_pending_orders' in summary){ setHasPendingOrders(Boolean(summary.has_pending_orders)) }
+      if ('expected_slots' in summary && typeof summary.expected_slots === 'number' && summary.expected_slots > 0){
+        expectedSlotsRef.current = summary.expected_slots
+      }
+      setPlanStreaming(true)
+      setLoading(false)
+    }
+
+    const finalizeStream = ()=>{
+      if (planStreamIdRef.current !== planId) return
+      stopPlanStream({ silent:true })
+      setPlanStreaming(false)
+      setProgressPct(prev => prev < 100 ? 100 : prev)
+      reconcilePlanFromDetail(planId, { silent:true, preserveOnMissing:true })
+    }
+
+    es.addEventListener('summary', event => {
+      try{ applySummary(JSON.parse(event.data || '{}')) }catch(err){ try{ log('plan-stream:summary-parse', { planId }) }catch{} }
+    })
+
+    es.addEventListener('meal', event => {
+      try{ mergeMeal(JSON.parse(event.data || '{}')) }catch(err){ try{ log('plan-stream:meal-parse', { planId }) }catch{} }
+    })
+
+    es.addEventListener('progress', event => {
+      try{ handleProgressPayload(JSON.parse(event.data || '{}')) }catch(err){ try{ log('plan-stream:progress-parse', { planId }) }catch{} }
+    })
+
+    es.addEventListener('done', finalizeStream)
+
+    es.addEventListener('message', event => {
+      try{
+        const payload = JSON.parse(event.data || '{}')
+        const type = payload?.type
+        if (type === 'summary'){
+          applySummary(payload.summary || payload.data || payload)
+        } else if (type === 'meal' || type === 'meal_added' || type === 'meal_plan_meal'){
+          mergeMeal(payload.meal || payload.meal_plan_meal || payload.data || payload)
+        } else if (type === 'progress'){
+          handleProgressPayload(payload)
+        } else if (type === 'done' || payload.done === true){
+          finalizeStream()
+        }
+      }catch(err){ try{ log('plan-stream:message-parse', { planId }) }catch{} }
+    })
+
+    es.onopen = ()=>{ try{ log('plan-stream:open', { planId }) }catch{} }
+
+    es.onerror = ()=>{
+      planStreamErrorCountRef.current += 1
+      try{ log('plan-stream:onerror', { planId, count: planStreamErrorCountRef.current }) }catch{}
+      if (planStreamErrorCountRef.current > 3){
+        finalizeStream()
+      }
+    }
+
+    if (planStreamTimeoutRef.current){ clearTimeout(planStreamTimeoutRef.current) }
+    planStreamTimeoutRef.current = setTimeout(()=>{
+      if (!planStreamHasSummaryRef.current && planStreamIdRef.current === planId){
+        try{ log('plan-stream:summary-timeout', { planId }) }catch{}
+        finalizeStream()
+      }
+    }, 15000)
+  }
+
   const fetchPlan = async (options={})=>{
     const { silent=false, preserveOnMissing=false } = options || {}
     if (!silent) { setLoading(true); setError(null) }
     try{
+      log('fetchPlan', { week: fmtYMD(weekStart), preserveOnMissing })
       const params = { week_start_date: fmtYMD(weekStart) }
       const resp = await api.get(`/meals/api/meal_plans/`, { params })
       const data = resp.data
@@ -192,38 +467,49 @@ export default function MealPlans(){
         normalized = data
       }
       if (normalized){
-        setPlan(normalized)
         const id = (normalized||{}).id
-        setMealPlanId(id||null)
-        
-        if (id){
-          try{
-            const details = await api.get(`/meals/api/meal_plans/${id}/`)
-            const appr = Boolean(details?.data?.is_approved)
-            setIsApproved(appr)
-            
-            if (details?.data?.meal_prep_preference){ setPrepPreference(details.data.meal_prep_preference) }
-          }catch{ setIsApproved(null) }
+        try{
+          const mealsCount = Array.isArray(normalized.meals) ? normalized.meals.length : (Array.isArray(normalized.meal_plan_meals) ? normalized.meal_plan_meals.length : 0)
+          log('plan', { id, week: normalized.week_start_date, mealsCount })
+        }catch{}
+
+        const shouldStream = Boolean(id) && !streamingRef.current
+        if (shouldStream){
+          if (!(planStreamingRef.current && planStreamIdRef.current === id)){
+            startPlanStream(id, { initialPlan: normalized, silent })
+          } else if (!silent) {
+            setLoading(false)
+          }
         } else {
-          setIsApproved(null)
+          setPlan(normalized)
+          setMealPlanId(id||null)
+          if (typeof normalized.is_approved !== 'undefined'){
+            setIsApproved(normalized.is_approved === null ? null : Boolean(normalized.is_approved))
+          } else {
+            setIsApproved(null)
+          }
+          if (normalized.meal_prep_preference){ setPrepPreference(normalized.meal_prep_preference) }
+          if (!silent) setLoading(false)
         }
       } else {
         // During streaming or when explicitly preserving, do not clear UI state on missing
-        if (!(preserveOnMissing || streamingRef.current)){
-          setError('No plan found. Generate one below.')
+        if (!(preserveOnMissing || streamingRef.current || planStreamingRef.current)){
+          setError('No plan found. Generate one.')
           setPlan(null)
           setIsApproved(null)
           setMealPlanId(null)
         }
+        log('no-plan', { week: fmtYMD(weekStart) })
       }
     }catch(e){
+      try{ log('fetchPlan:error', { status: e?.response?.status }) }catch{}
       const status = e?.response?.status
       if (status === 401){
         window.location.href = '/login'
       }
       // During streaming or when explicitly preserving, do not surface missing as fatal
-      if (!(preserveOnMissing || streamingRef.current)){
-        setError('No plan found. Generate one below.')
+      if (!(preserveOnMissing || streamingRef.current || planStreamingRef.current)){
+        setError('No plan found. Generate one.')
         setPlan(null)
         setIsApproved(null)
         setMealPlanId(null)
@@ -231,58 +517,56 @@ export default function MealPlans(){
     }finally{ if (!silent) setLoading(false) }
   }
 
-  // Auto-generate Instacart link for eligible users (US/CA with postal code) when a plan is loaded
+  // Reset Instacart state when eligibility or plan changes; generation is now user-triggered
   useEffect(()=>{
+    if (!instacartEligibility.eligible || !mealPlanId){
+      setInstacartUrl(null)
+      setInstacartHasChefMeals(false)
+      setInstacartError(null)
+      setInstacartTriedForPlan(null)
+    }
+  }, [mealPlanId, instacartEligibility.eligible])
+
+  const generateInstacartLink = async ()=>{
+    if (!mealPlanId || instacartLoading) return
+    if (!instacartEligibility.eligible){
+      setInstacartError('Instacart is currently available only in the United States and Canada.')
+      return
+    }
+    setInstacartLoading(true)
+    setInstacartTriedForPlan(mealPlanId)
     try{
-      const rawCountry = user?.address?.country || ''
-      const country = normalizeCountryIso2(rawCountry)
-      const postal = String(user?.postal_code || user?.address?.postalcode || '').trim()
-      const eligible = (country === 'US' || country === 'CA') && Boolean(postal)
-      
-      if (!eligible || !mealPlanId){
-        setInstacartUrl(null)
-        setInstacartHasChefMeals(false)
-        setInstacartError(null)
-        
-        return
-      }
-      if (instacartTriedForPlan === mealPlanId){
-        return
-      }
-      setInstacartTriedForPlan(mealPlanId)
-      ;(async ()=>{
-        try{
-          const resp = await api.post('/meals/api/generate-instacart-link/', { meal_plan_id: mealPlanId })
-          const data = resp?.data || {}
-          if (data.status !== 'success'){
-            const msg = String(data.message || '')
-            if (msg.includes('No eligible grocery items')){
-              setInstacartError('Your plan contains only chef-created meals, so there’s nothing to send to Instacart.')
-            } else {
-              setInstacartError('Could not generate Instacart link.')
-            }
-            setInstacartUrl(null)
-            setInstacartHasChefMeals(Boolean(data.has_chef_meals))
-            return
-          }
-          if (data.has_chef_meals){
-            setInstacartHasChefMeals(true)
-          } else {
-            setInstacartHasChefMeals(false)
-          }
-          if (data.instacart_url){
-            setInstacartUrl(String(data.instacart_url))
-            setInstacartError(null)
-          } else {
-            setInstacartUrl(null)
-          }
-        }catch(e){
+      const resp = await api.post('/meals/api/generate-instacart-link/', {
+        meal_plan_id: mealPlanId,
+        country: instacartEligibility.country,
+        postal_code: instacartEligibility.postal
+      })
+      const data = resp?.data || {}
+      if (data.status !== 'success'){
+        const msg = String(data.message || '')
+        if (msg.includes('No eligible grocery items')){
+          setInstacartError('Your plan contains only chef-created meals, so there’s nothing to send to Instacart.')
+        } else {
           setInstacartError('Could not generate Instacart link.')
-          setInstacartUrl(null)
         }
-      })()
-    }catch{}
-  }, [mealPlanId, user?.address?.country, user?.postal_code, user?.address?.postalcode])
+        setInstacartUrl(null)
+        setInstacartHasChefMeals(Boolean(data.has_chef_meals))
+        return
+      }
+      setInstacartHasChefMeals(Boolean(data.has_chef_meals))
+      if (data.instacart_url){
+        setInstacartUrl(String(data.instacart_url))
+        setInstacartError(null)
+      } else {
+        setInstacartUrl(null)
+      }
+    }catch(e){
+      setInstacartError('Could not generate Instacart link.')
+      setInstacartUrl(null)
+    }finally{
+      setInstacartLoading(false)
+    }
+  }
 
   // Lightweight poll to surface pending orders CTA
   useEffect(()=>{
@@ -392,10 +676,13 @@ export default function MealPlans(){
     }
   }
 
+  // Load plan silently on week changes; lazy-load chef meals only when Chefs tab is active
   useEffect(()=>{
-    
-    fetchPlan(); fetchChefMeals()
-  }, [weekStart])
+    fetchPlan({ silent:true })
+    if (tab === 'chefs'){
+      fetchChefMeals()
+    }
+  }, [weekStart, tab])
 
   const shiftWeek = (delta)=>{
     const d = new Date(weekStart); d.setDate(d.getDate()+delta*7); const next = startOfWeek(d); setWeekStart(next)
@@ -406,22 +693,26 @@ export default function MealPlans(){
     // Prevent generating a new plan if one already exists for the selected week
     if (mealPlanId && (plan?.week_start_date === fmtYMD(weekStart))){
       pushHeaderToast('A meal plan already exists for this week.', 'error')
+      try{ log('generate:blocked', { mealPlanId, week: fmtYMD(weekStart) }) }catch{}
       return
     }
     try{ esRef.current && esRef.current.close() }catch{}
+    stopPlanStream({ silent:true })
     setError(null)
     setStreaming(true)
     streamingRef.current = true
     setProgressPct(0)
+    try{ log('generate:start', { week: fmtYMD(weekStart) }) }catch{}
+    // Clear any stale plan id so UI doesn't think this week already has a plan
+    setMealPlanId(null)
     setPlan(prev => prev && prev.week_start_date === fmtYMD(weekStart) ? prev : ({ id:null, week_start_date: fmtYMD(weekStart), meals: [] }))
     // proactively refresh the token to avoid 401 during initial connect
     try{ await refreshAccessToken() }catch{}
     const token = localStorage.getItem('accessToken')
     const openSSE = () => {
-      const isDev = import.meta.env.DEV === true
-      const apiBase = isDev ? '' : (import.meta.env.VITE_API_BASE || '')
-      const url = `${apiBase}/meals/api/meal_plans/stream?week_start_date=${fmtYMD(weekStart)}`
-      
+      // Always use same-origin proxy for SSE to avoid CSP/CORS pitfalls
+      const url = `/meals/api/meal_plans/stream?week_start_date=${fmtYMD(weekStart)}`
+      try{ log('sse:connect', { path: '/meals/api/meal_plans/stream', week: fmtYMD(weekStart) }) }catch{}
       const es = token
         ? new EventSourcePolyfill(url, {
             headers: { Authorization: `Bearer ${token}` },
@@ -436,20 +727,21 @@ export default function MealPlans(){
     // simple fallback: do a one-off reconcile if nothing arrived soon
     try{ clearTimeout(fallbackRef.current) }catch{}
     // Soft reconcile after a delay without disrupting the in-progress client view
-    fallbackRef.current = setTimeout(()=>{ if (esRef.current) fetchPlan({ silent:true, preserveOnMissing:true }) }, 12000)
-    es.onopen = ()=> {}
-    es.onerror = ()=> {}
+    fallbackRef.current = setTimeout(()=>{ if (esRef.current){ try{ log('fallback:reconcile') }catch{}; fetchPlan({ silent:true, preserveOnMissing:true }) } }, 12000)
+    es.onopen = ()=> { try{ log('sse:open') }catch{} }
+    es.onerror = ()=> { try{ log('sse:onerror') }catch{} }
     esRef.current.addEventListener('progress', (e)=>{
-      try{ const { pct } = JSON.parse(e.data||'{}'); if (typeof pct === 'number') setProgressPct(pct) }catch{}
+      try{ const { pct } = JSON.parse(e.data||'{}'); if (typeof pct === 'number'){ hasRealProgressRef.current = true; setProgressPct(prev=> Math.max(prev, pct)) } }catch{}
     })
     esRef.current.addEventListener('progress_update', (e)=>{
-      try{ const { pct } = JSON.parse(e.data||'{}'); if (typeof pct === 'number') setProgressPct(pct) }catch{}
+      try{ const { pct } = JSON.parse(e.data||'{}'); if (typeof pct === 'number'){ hasRealProgressRef.current = true; setProgressPct(prev=> Math.max(prev, pct)) } }catch{}
     })
     esRef.current.addEventListener('meal_added', (e)=>{
       try{
         const payload = JSON.parse(e.data||'{}')
         const m = payload.meal_plan_meal || payload
         if (!m) return
+        try{ log('sse:meal_added') }catch{}
         setPlan(prev => {
           const current = prev || { id: mealPlanId, week_start_date: fmtYMD(weekStart), meals: [] }
           const list = Array.isArray(current.meals) ? [...current.meals] : (current.meal_plan_meals ? [...current.meal_plan_meals] : [])
@@ -457,6 +749,10 @@ export default function MealPlans(){
           const idx = list.findIndex(x => (x.meal_plan_meal_id||x.id) === mid)
           if (idx >= 0) list[idx] = { ...list[idx], ...m }
           else list.push(m)
+          try{
+            const pct = Math.min(100, Math.round((list.length/expectedSlotsRef.current)*100))
+            if (!hasRealProgressRef.current){ setProgressPct(prev => Math.max(prev, pct)) }
+          }catch{}
           return { ...current, meals: list }
         })
       }catch{}
@@ -466,6 +762,7 @@ export default function MealPlans(){
       try{
         const m = JSON.parse(e.data||'{}')
         if (!m) return
+        try{ log('sse:meal') }catch{}
         setPlan(prev => {
           const current = prev || { id: mealPlanId, week_start_date: fmtYMD(weekStart), meals: [] }
           const list = Array.isArray(current.meals) ? [...current.meals] : (current.meal_plan_meals ? [...current.meal_plan_meals] : [])
@@ -473,6 +770,10 @@ export default function MealPlans(){
           const idx = list.findIndex(x => (x.meal_plan_meal_id||x.id) === mid)
           if (idx >= 0) list[idx] = { ...list[idx], ...m }
           else list.push(m)
+          try{
+            const pct = Math.min(100, Math.round((list.length/expectedSlotsRef.current)*100))
+            if (!hasRealProgressRef.current){ setProgressPct(prev => Math.max(prev, pct)) }
+          }catch{}
           return { ...current, meals: list }
         })
       }catch{}
@@ -481,7 +782,11 @@ export default function MealPlans(){
       // default event; support {type, data}
       try{
         const msg = JSON.parse(e.data||'{}')
-        if (msg && msg.type === 'progress' && typeof msg.pct === 'number') setProgressPct(msg.pct)
+        try{ log('sse:message', msg?.type || 'unknown') }catch{}
+        if (msg && msg.type === 'progress' && typeof msg.pct === 'number'){
+          hasRealProgressRef.current = true
+          setProgressPct(prev => Math.max(prev, msg.pct))
+        }
         if (msg && msg.type === 'meal_added' && msg.meal_plan_meal){
           const m = msg.meal_plan_meal
           setPlan(prev => {
@@ -491,6 +796,10 @@ export default function MealPlans(){
             const idx = list.findIndex(x => (x.meal_plan_meal_id||x.id) === mid)
             if (idx >= 0) list[idx] = { ...list[idx], ...m }
             else list.push(m)
+            try{
+              const pct = Math.min(100, Math.round((list.length/expectedSlotsRef.current)*100))
+              if (!hasRealProgressRef.current){ setProgressPct(prev => Math.max(prev, pct)) }
+            }catch{}
             return { ...current, meals: list }
           })
         }
@@ -501,6 +810,7 @@ export default function MealPlans(){
           esRef.current = null
           try{ clearTimeout(fallbackRef.current) }catch{}
           try{ clearInterval(pollRef.current) }catch{}
+          try{ log('sse:done:message') }catch{}
           fetchPlan()
         }
       }catch{}
@@ -513,15 +823,13 @@ export default function MealPlans(){
       try{ clearTimeout(fallbackRef.current) }catch{}
       try{ clearInterval(pollRef.current) }catch{}
       try{ clearTimeout(generationTimeoutRef.current) }catch{}
+      try{ log('sse:done') }catch{}
       await fetchPlan()
     })
     esRef.current.addEventListener('error', async ()=>{
-      // Network/SSE hiccup: close the stream, keep streaming state true, and rely on polling
-      try{ es.close() }catch{}
-      esRef.current = null
+      // Transient network hiccup: do not close the stream.
+      // Allow native/polyfill reconnect; lightly reconcile in background.
       try{ clearTimeout(fallbackRef.current) }catch{}
-      // Do NOT clear pollRef or toggle streaming here; keep button disabled and progress visible
-      // Optionally nudge a silent reconcile without clearing UI if nothing arrives soon
       setTimeout(()=>{ if (streaming) fetchPlan({ silent:true, preserveOnMissing:true }) }, 3000)
     })
 
@@ -550,7 +858,8 @@ export default function MealPlans(){
             })
             // rough progress if backend isn't emitting pct
             const pct = Math.min(100, Math.round((merged.length/expectedSlotsRef.current)*100))
-            setProgressPct(pct)
+            setProgressPct(prev => Math.max(prev, pct))
+            try{ log('poll', { pct, meals: merged.length }) }catch{}
             return { ...current, id: normalized.id || current.id, meals: merged }
           })
         }
@@ -571,8 +880,33 @@ export default function MealPlans(){
   }
 
   // Cleanup SSE on unmount and when week changes
-  useEffect(()=>{ return ()=> { try{ esRef.current && esRef.current.close() }catch{} try{ clearTimeout(fallbackRef.current) }catch{} try{ clearInterval(pollRef.current) }catch{} try{ clearTimeout(completeRef.current) }catch{} try{ clearTimeout(generationTimeoutRef.current) }catch{} } }, [])
-  useEffect(()=>{ try{ esRef.current && esRef.current.close() }catch{} esRef.current=null; setStreaming(false); setProgressPct(0); try{ clearTimeout(fallbackRef.current) }catch{} try{ clearInterval(pollRef.current) }catch{} try{ clearTimeout(generationTimeoutRef.current) }catch{} }, [weekStart])
+  useEffect(()=>{
+    return ()=>{
+      try{ esRef.current && esRef.current.close() }catch{}
+      try{ clearTimeout(fallbackRef.current) }catch{}
+      try{ clearInterval(pollRef.current) }catch{}
+      try{ clearTimeout(completeRef.current) }catch{}
+      try{ clearTimeout(generationTimeoutRef.current) }catch{}
+      try{ planStreamRef.current && planStreamRef.current.close() }catch{}
+      planStreamRef.current = null
+      planStreamingRef.current = false
+      planStreamIdRef.current = null
+      planStreamHasSummaryRef.current = false
+      planStreamErrorCountRef.current = 0
+      if (planStreamTimeoutRef.current){ clearTimeout(planStreamTimeoutRef.current); planStreamTimeoutRef.current = null }
+    }
+  }, [])
+  useEffect(()=>{
+    try{ esRef.current && esRef.current.close() }catch{}
+    esRef.current = null
+    setStreaming(false)
+    setProgressPct(0)
+    try{ clearTimeout(fallbackRef.current) }catch{}
+    try{ clearInterval(pollRef.current) }catch{}
+    try{ clearTimeout(generationTimeoutRef.current) }catch{}
+    stopPlanStream({ silent:true })
+    setPlanStreaming(false)
+  }, [weekStart])
 
   // Fallback: if backend never emits a final "done" event but progress reaches 100%,
   // finalize the stream shortly after to unblock the UI.
@@ -595,9 +929,15 @@ export default function MealPlans(){
 
   // Keep a live ref of streaming state to avoid stale-closure decisions in async handlers
   useEffect(()=>{ streamingRef.current = streaming }, [streaming])
+  useEffect(()=>{ planStreamingRef.current = planStreaming }, [planStreaming])
 
   // Whether a plan already exists for the currently selected week
   const planExistsForWeek = Boolean(mealPlanId && plan && (plan.week_start_date === fmtYMD(weekStart)))
+  const highlightGenerate = useMemo(()=> shouldHighlightGenerateButton({
+    errorMessage: error,
+    isGenerating: streaming,
+    planExistsForWeek,
+  }), [error, streaming, planExistsForWeek])
 
   return (
     <div className="page-plans">
@@ -626,7 +966,7 @@ export default function MealPlans(){
             <button className="btn btn-outline" onClick={()=>shiftWeek(-1)}>← Prev Week</button>
             <button className="btn btn-outline" onClick={()=>shiftWeek(1)}>Next Week →</button>
             <button
-              className="btn btn-primary"
+              className={`btn btn-primary ${highlightGenerate ? 'btn-attention' : ''}`}
               onClick={generatePlan}
               disabled={streaming || planExistsForWeek}
               title={planExistsForWeek ? 'A meal plan already exists for this week. Change the week to generate a new one.' : 'Generate a new meal plan for this week'}
@@ -668,12 +1008,15 @@ export default function MealPlans(){
       </div>
         </div>
       </div>
-      {streaming && (
+      {(streaming || planStreaming) && (
         <div className="container" style={{paddingTop:0}}>
           <div className="progress-row" aria-live="polite">
-            <div className="progressbar" aria-label="Meal plan generation progress"><span style={{width: `${progressPct}%`}} /></div>
+            <div className="progressbar" aria-label="Meal plan progress"><span style={{width: `${progressPct}%`}} /></div>
             <div>{progressPct}%</div>
           </div>
+          {(!streaming && planStreaming) && (
+            <div className="muted" style={{marginTop:'.25rem'}}>Loading meal plan…</div>
+          )}
         </div>
       )}
 
@@ -715,13 +1058,19 @@ export default function MealPlans(){
             {(()=>{
               try{
                 const rawCountry = user?.address?.country || ''
-                const country = normalizeCountryIso2(rawCountry)
-                const postal = String(user?.postal_code || user?.address?.postalcode || '').trim()
-                const eligible = (country === 'US' || country === 'CA') && Boolean(postal)
-                if (!eligible || !instacartUrl || instacartError) return null
-                
+                if (!instacartEligibility.eligible) return null
+                if (instacartError){
+                  return null
+                }
+                if (instacartUrl){
+                  return (
+                    <InstacartButton url={instacartUrl} text="Get Ingredients" />
+                  )
+                }
                 return (
-                  <InstacartButton url={instacartUrl} text="Get Ingredients" />
+                  <button className="btn btn-outline" onClick={generateInstacartLink} disabled={instacartLoading}>
+                    {instacartLoading ? 'Generating…' : 'Generate Instacart list'}
+                  </button>
                 )
               }catch{ return null }
             })()}
@@ -775,7 +1124,15 @@ export default function MealPlans(){
                 </div>
               ) : (
                 <div style={{textAlign:'center'}}>
-                  <InstacartButton url={instacartUrl} text="Get Ingredients" />
+                  {instacartEligibility.eligible && instacartUrl ? (
+                    <InstacartButton url={instacartUrl} text="Get Ingredients" />
+                  ) : instacartEligibility.eligible ? (
+                    <button className="btn btn-outline" onClick={generateInstacartLink} disabled={instacartLoading}>
+                      {instacartLoading ? 'Generating…' : 'Generate Instacart list'}
+                    </button>
+                  ) : (
+                    <div className="muted" style={{fontSize:'.9rem'}}>Instacart is available only in the United States and Canada.</div>
+                  )}
                 </div>
               )}
             </div>
@@ -783,7 +1140,7 @@ export default function MealPlans(){
         }catch{ return null }
       })()}
 
-      {loading && <div className="card">Loading…</div>}
+      {loading && <div className="card">Meal Plan Loading…</div>}
       {!streaming && error && <div className="card" style={{borderColor:'#d9534f'}}>{error}</div>}
 
       {tab==='overview' && (
@@ -1176,7 +1533,6 @@ function Overview({ plan, weekStart, chefMeals, isApproved, mealPlanId, onChange
     }catch{}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plan, selectedSlot?.meal?.meal_plan_meal_id, selectedSlot?.meal?.id])
-  if (!plan) return <div className="card">No plan available for this week.</div>
   const meals = Array.isArray(plan?.meals) ? plan.meals : (plan?.meal_plan_meals || [])
   const grouped = groupByDay(meals || [])
   const dayOrder = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']

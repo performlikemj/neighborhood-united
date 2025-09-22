@@ -3,14 +3,14 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useTheme } from '../context/ThemeContext.jsx'
 
-function BurgerIcon({ open=false }){
+function PlateStackIcon(){
   const stroke = 'currentColor'
   return (
-    <svg width="22" height="18" viewBox="0 0 22 18" aria-hidden focusable="false">
-      <g stroke={stroke} strokeWidth="2" strokeLinecap="round">
-        <line className="line line1" x1="2" y1="3" x2="20" y2="3" />
-        <line className="line line2" x1="2" y1="9" x2="20" y2="9" />
-        <line className="line line3" x1="2" y1="15" x2="20" y2="15" />
+    <svg width="24" height="20" viewBox="0 0 24 20" aria-hidden focusable="false">
+      <g fill="none" stroke={stroke} strokeWidth="1.8">
+        <ellipse cx="12" cy="5" rx="8.5" ry="2.4" />
+        <ellipse cx="12" cy="10" rx="8.5" ry="2.4" />
+        <ellipse cx="12" cy="15" rx="8.5" ry="2.4" />
       </g>
     </svg>
   )
@@ -78,7 +78,7 @@ export default function NavBar(){
           title="Menu"
           type="button"
         >
-          <BurgerIcon open={menuOpen} />
+          <PlateStackIcon />
         </button>
 
         <div id="site-menu" className={"nav-links" + (menuOpen ? " open" : "") }>

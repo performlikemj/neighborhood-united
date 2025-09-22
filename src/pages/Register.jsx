@@ -13,7 +13,7 @@ export default function Register(){
     try{ return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }catch{ return 'UTC' }
   })()
 
-  const [form, setForm] = useState({ username:'', email:'', password:'', confirm:'', timezone: browserTz, measurement_system:'METRIC' })
+  const [form, setForm] = useState({ username:'', email:'', password:'', confirm:'', timezone: browserTz, measurement_system:'METRIC', auto_meal_plans_enabled: true })
   const [timezones, setTimezones] = useState(TIMEZONES_FALLBACK)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -45,6 +45,7 @@ export default function Register(){
           password: form.password,
           timezone: form.timezone,
           measurement_system: form.measurement_system,
+          auto_meal_plans_enabled: form.auto_meal_plans_enabled,
           preferred_language: 'en',
           allergies: [],
           custom_allergies: [],
@@ -67,6 +68,9 @@ export default function Register(){
     <div style={{maxWidth:520, margin:'1rem auto'}}>
       <h2>Create your account</h2>
       <div className="muted" style={{marginBottom:'.5rem'}}>We only need the basics to get started. You can add the rest in your profile later.</div>
+      <div className="muted" style={{marginBottom:'.75rem'}}>
+        Prefer a guided chat? <a href="/onboarding">Try the onboarding assistant</a>.
+      </div>
       {error && <div className="card" style={{borderColor:'#d9534f'}}>{error}</div>}
       <form onSubmit={submit}>
         <div className="label">Username</div>
@@ -92,6 +96,15 @@ export default function Register(){
             <span>{MEASUREMENT_LABEL.METRIC}</span>
           </label>
         </div>
+        <label className="radio" style={{display:'flex', alignItems:'center', gap:'.35rem', marginTop:'.5rem'}}>
+          <input
+            type="checkbox"
+            checked={Boolean(form.auto_meal_plans_enabled)}
+            onChange={(e)=> setForm({...form, auto_meal_plans_enabled: e.target.checked})}
+          />
+          <span>Automatically create weekly meal plans</span>
+        </label>
+        <div className="muted" style={{marginTop:'.25rem'}}>Turn off if you only want chef-created or manually planned meals.</div>
         <div style={{marginTop:'.75rem'}}>
           <button className="btn btn-primary" disabled={loading}>{loading?'Creating…':'Create Account'}</button>
           <Link to="/login" className="btn btn-outline" style={{marginLeft:'.5rem'}}>I have an account</Link>

@@ -113,6 +113,17 @@ a.btn{ text-decoration:none }
 .btn:active{ transform: translateY(1px) }
 .btn-primary{ color:white; background:var(--gradient-brand); box-shadow: var(--shadow-sm) }
 .btn-primary:hover{ filter:brightness(0.98) }
+.btn-primary.btn-attention{ position:relative; overflow:hidden; animation:btnAttentionGlow 2.4s ease-in-out infinite }
+.btn-primary.btn-attention::after{ content:""; position:absolute; inset:-1px; background:linear-gradient(120deg, rgba(255,255,255,0) 0%, rgba(255,255,255,.35) 45%, rgba(255,255,255,0) 80%); opacity:0; transform:translateX(-130%); animation:btnAttentionShimmer 2.4s linear infinite; pointer-events:none }
+@keyframes btnAttentionGlow{0%,100%{box-shadow:var(--shadow-sm),0 0 0 rgba(255,220,140,0)}50%{box-shadow:var(--shadow-sm),0 0 18px rgba(255,220,140,.45)}}
+@keyframes btnAttentionShimmer{0%{opacity:0;transform:translateX(-130%)}30%{opacity:.75}60%{opacity:0}100%{transform:translateX(130%)}}
+@media (prefers-reduced-motion: reduce){
+  .btn-primary.btn-attention{animation:none}
+  .btn-primary.btn-attention::after{animation:none}
+}
+[data-theme="light"] .btn-primary.btn-attention{ animation:btnAttentionGlowLight 2.4s ease-in-out infinite }
+[data-theme="light"] .btn-primary.btn-attention::after{ background:linear-gradient(120deg, rgba(255,255,255,0) 0%, rgba(143, 188, 143, .45) 45%, rgba(255,255,255,0) 80%) }
+@keyframes btnAttentionGlowLight{0%,100%{box-shadow:var(--shadow-sm),0 0 0 rgba(76,175,80,0)}50%{box-shadow:var(--shadow-sm),0 0 18px rgba(76,175,80,.5)}}
 .btn-outline{ background:transparent; border-color: color-mix(in oklab, var(--border) 70%, transparent); color:var(--text) }
 .btn-outline:hover{ background: color-mix(in oklab, var(--primary) 6%, var(--surface)); border-color: color-mix(in oklab, var(--primary) 30%, var(--border)) }
 .btn-danger{ background:#d9534f; color:white }
@@ -251,6 +262,12 @@ a.btn{ text-decoration:none }
 .approval-card{ margin:.5rem 0 1rem 0 }
 .approval-row{ display:flex; gap:1rem; align-items:center; justify-content:space-between; flex-wrap:wrap }
 .seg-control{ display:inline-flex; background:var(--surface); border:1px solid var(--border); border-radius:999px; padding:2px }
+.seg-control.seg-scroll{ display:flex; flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; max-width:100%; width:100%; justify-content:center; gap:2px }
+.seg-control.seg-scroll::-webkit-scrollbar{ display:none }
+.seg-control.seg-scroll .seg{ flex:0 0 auto }
+@media (max-width: 900px){
+  .seg-control.seg-scroll{ justify-content:flex-start }
+}
 .seg-control .seg{ background:transparent; border:0; padding:.4rem .7rem; border-radius:999px; font-weight:700; color:var(--text); cursor:pointer }
 .seg-control .seg.active{ background: var(--gradient-brand); color:#fff }
 .page-plans .plans-header{ display:flex; gap:1rem; align-items:center; justify-content:space-between; padding:1rem; margin-bottom:1rem; flex-wrap:wrap }
@@ -349,6 +366,59 @@ a.btn{ text-decoration:none }
   .role-toggle .seg{ flex:1; text-align:center }
 }
 
+.mode-option{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-start;
+  gap:.2rem;
+  padding:.75rem 1rem;
+  border-radius:var(--radius-lg);
+  border:1px solid color-mix(in oklab, var(--border) 86%, transparent);
+  background: color-mix(in oklab, var(--surface) 96%, transparent);
+  color:var(--text);
+  font-weight:600;
+  text-decoration:none;
+  cursor:pointer;
+  transition: background .18s ease, border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+.mode-option:hover{
+  background: color-mix(in oklab, var(--primary) 8%, var(--surface));
+  border-color: color-mix(in oklab, var(--primary) 20%, var(--border));
+  box-shadow: var(--shadow-xs);
+  transform: translateY(-1px);
+}
+.mode-option:focus{ outline:none; box-shadow:0 0 0 3px rgba(92,184,92,0.18) }
+.mode-option__title{ font-weight:700 }
+.mode-option__desc{ font-size:.88rem; color:var(--muted); font-weight:500 }
+.mode-option.active{
+  background: color-mix(in oklab, var(--primary) 14%, white);
+  border-color: color-mix(in oklab, var(--primary) 28%, var(--border));
+  box-shadow: var(--shadow-sm);
+}
+.mode-option.active .mode-option__title{ color:var(--primary-700) }
+.mode-option.active .mode-option__desc{ color: color-mix(in oklab, var(--primary-700) 20%, var(--muted)) }
+.mode-option:disabled,
+.mode-option.current{
+  opacity:.65;
+  cursor:default;
+  transform:none;
+  box-shadow:none;
+}
+.mode-option:disabled:hover,
+.mode-option.current:hover{
+  background: color-mix(in oklab, var(--surface) 96%, transparent);
+  border-color: color-mix(in oklab, var(--border) 86%, transparent);
+}
+.mode-option.secondary{
+  border-style:dashed;
+  border-color: color-mix(in oklab, var(--border) 78%, transparent);
+  background: transparent;
+}
+.mode-option.secondary:hover{
+  border-color: color-mix(in oklab, var(--primary) 18%, var(--border));
+  background: color-mix(in oklab, var(--primary) 5%, var(--surface));
+}
+
 /* Chat page */
 .page-chat .chat-header{ display:flex; align-items:flex-end; justify-content:space-between; gap:1rem; margin: .5rem 0 1rem }
 .page-chat .chat-header .sub{ margin-top:.2rem }
@@ -361,6 +431,33 @@ a.btn{ text-decoration:none }
 .page-chat .bubble.user{ background: var(--gradient-brand); color:#fff; border-color:transparent; border-bottom-right-radius: 4px }
 .page-chat .bubble.assistant{ background:var(--surface); color:var(--text); border-bottom-left-radius: 4px }
 .page-chat .bubble-content{ white-space:pre-wrap; word-wrap:anywhere }
+
+/* Markdown render for assistant replies */
+.md-root{ line-height:1.5; white-space: normal }
+.md-root p{ margin:.25rem 0 }
+.md-root ul, .md-root ol{ margin:.25rem 0 .25rem 1rem }
+.md-root li{ margin:.2rem 0 }
+.md-root code{ background: color-mix(in oklab, var(--primary) 6%, var(--surface)); border:1px solid var(--border); border-radius:6px; padding:.05rem .3rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace }
+.md-root pre{ background: color-mix(in oklab, var(--primary) 6%, var(--surface)); border:1px solid var(--border); border-radius:8px; padding:.6rem; overflow:auto }
+.md-root a{ color:var(--link) }
+
+/* Markdown tables */
+.md-table{ width:100%; border-collapse: collapse; margin:.25rem 0 }
+.md-table th, .md-table td{
+  border:1px solid var(--border);
+  padding:.55rem .7rem;
+  text-align:left;
+  vertical-align:top;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+.md-table thead th{ background:var(--surface-2) }
+.md-table tbody tr:nth-child(odd) td{ background: color-mix(in oklab, var(--bg2) 35%, transparent) }
+/* Keep Day column compact and unbroken */
+.md-table th:first-child, .md-table td:first-child{
+  white-space: nowrap;
+  width: 110px;
+}
 .page-chat .composer{ display:flex; gap:.5rem; align-items:flex-end; padding:.5rem; background:var(--surface); border:1px solid var(--border); border-radius: 14px }
 .page-chat .composer .textarea{ resize:none; min-height:44px; max-height:160px }
 .page-chat .composer-actions{ display:flex; gap:.5rem }
@@ -368,6 +465,25 @@ a.btn{ text-decoration:none }
 .page-chat .typing-row .dot{ width:6px; height:6px; border-radius:999px; background: color-mix(in oklab, var(--primary) 60%, white); animation: pulse 1.3s infinite ease-in-out }
 .page-chat .typing-row .dot:nth-child(2){ animation-delay: .15s }
 .page-chat .typing-row .dot:nth-child(3){ animation-delay: .3s }
+
+/* Tool chips (running tool call statuses) */
+.tool-row{ display:flex; flex-wrap:wrap; gap:.4rem; padding:.2rem .4rem }
+.tool-chip{ display:inline-flex; align-items:center; gap:.35rem; border:1px solid var(--border); border-radius:999px; padding:.2rem .55rem; font-weight:700; font-size:.85rem; background:var(--surface); color:var(--text) }
+.tool-chip .dot{ width:6px; height:6px; border-radius:50%; background: color-mix(in oklab, var(--primary) 60%, white) }
+.tool-chip.running{ border-color: color-mix(in oklab, var(--primary) 48%, var(--border)); background: color-mix(in oklab, var(--primary) 8%, var(--surface)); animation: toolPulse 2400ms ease-in-out infinite }
+.tool-chip.running .tool-label{ background: linear-gradient(90deg, color-mix(in oklab, var(--text) 86%, white) 0%, var(--primary-700) 50%, color-mix(in oklab, var(--text) 86%, white) 100%); background-size:200% 100%; -webkit-background-clip:text; background-clip:text; color:transparent; animation: shimmerX 1800ms linear infinite }
+.tool-chip.done{ border-color: var(--border); background:var(--surface) }
+.tool-chip.done .tool-label{ color: var(--text) }
+@keyframes shimmerX{ 0%{ background-position:-100% 0 } 100%{ background-position:200% 0 } }
+@keyframes toolPulse{ 0%{ transform: scale(1) } 50%{ transform: scale(1.03) } 100%{ transform: scale(1) } }
+@media (prefers-reduced-motion: reduce){ .tool-chip.running, .tool-chip.running .tool-label{ animation:none } }
+
+/* Debug request panel */
+/* (debug panel styles removed) */
+
+/* Simple modal */
+.modal-backdrop{ position:fixed; inset:0; background: rgba(0,0,0,0.38); display:flex; align-items:center; justify-content:center; z-index:100 }
+.modal-card{ background: var(--surface); color: var(--text); border:1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-md); padding: 1rem; width:min(520px, 92vw) }
 @keyframes pulse { 0%, 80%, 100%{ opacity:.3; transform:translateY(0) } 40%{ opacity:1; transform:translateY(-3px) } }
 
 /* Simple menu/dropdown */

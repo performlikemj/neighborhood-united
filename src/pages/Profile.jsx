@@ -52,7 +52,8 @@ export default function Profile(){
         custom_dietary_preferences: Array.isArray(data.custom_dietary_preferences) ? data.custom_dietary_preferences.join(', ') : (data.custom_dietary_preferences || ''),
         is_chef: Boolean(data?.is_chef),
         current_role: data?.current_role || 'customer',
-        measurement_system: data?.measurement_system || 'METRIC'
+        measurement_system: data?.measurement_system || 'METRIC',
+        auto_meal_plans_enabled: Boolean(data?.auto_meal_plans_enabled ?? true)
       }
       setForm(prev => ({ ...(prev||{}), ...normalized }))
       if (Array.isArray(data.household_members)){
@@ -226,6 +227,7 @@ export default function Profile(){
       email: form?.email || '',
       phone_number: form?.phone || '',
       measurement_system: form?.measurement_system || undefined,
+      auto_meal_plans_enabled: Boolean(form?.auto_meal_plans_enabled),
       dietary_preferences: ensureArray(form?.dietary_preferences),
       custom_dietary_preferences: normalizeCommaList(form?.custom_dietary_preferences),
       allergies: ensureArray(form?.allergies),
@@ -343,6 +345,17 @@ export default function Profile(){
               <input type="radio" name="measurement_system" checked={(form.measurement_system||'METRIC')==='METRIC'} onChange={()=> setForm({...form, measurement_system:'METRIC'})} />
               <span>{MEASUREMENT_LABEL.METRIC}</span>
             </label>
+          </div>
+          <label className="radio" style={{display:'flex', alignItems:'center', gap:'.35rem', marginTop:'.25rem'}}>
+            <input
+              type="checkbox"
+              checked={Boolean((form?.auto_meal_plans_enabled ?? true))}
+              onChange={(e)=> setForm({...form, auto_meal_plans_enabled: e.target.checked})}
+            />
+            <span>Automatically create weekly meal plans</span>
+          </label>
+          <div className="muted" style={{marginTop:'.25rem'}}>
+            When off, you won’t receive auto-generated plans. You can still create plans manually or use chef meals.
           </div>
           <div className="label">Dietary</div>
           <DietMultiSelect

@@ -131,10 +131,12 @@ export default function ChefDashboard(){
   // Dishes
   const [dishes, setDishes] = useState([])
   const [dishForm, setDishForm] = useState({ name:'', featured:false, ingredient_ids:[] })
+  const [dishFilter, setDishFilter] = useState('')
 
   // Meals
   const [meals, setMeals] = useState([])
   const [mealForm, setMealForm] = useState({ name:'', description:'', meal_type:'Dinner', price:'', start_date:'', dishes:[], dietary_preferences:[] })
+  const [mealSaving, setMealSaving] = useState(false)
 
   // Events
   const [events, setEvents] = useState([])
@@ -176,6 +178,54 @@ export default function ChefDashboard(){
       const resp = await api.get('/meals/api/ingredients/', { params: { chef_ingredients: 'true' } })
       setIngredients(toArray(resp.data))
     }catch{ setIngredients([]) } finally { setIngLoading(false) }
+  }
+
+  const toggleMealDish = (dishId)=>{
+    const id = String(dishId)
+    setMealForm(prev => {
+      const has = prev.dishes.includes(id)
+      const nextDishes = has ? prev.dishes.filter(x => x !== id) : [...prev.dishes, id]
+      return { ...prev, dishes: nextDishes }
+    })
+  }
+
+  const renderDishChecklist = (idPrefix = 'dish')=>{
+    if (!Array.isArray(dishes) || dishes.length === 0){
+      return <div className="muted">No dishes yet.</div>
+    }
+    const trimmed = dishFilter.trim().toLowerCase()
+    const filtered = trimmed ? dishes.filter(d => String(d.name || '').toLowerCase().includes(trimmed)) : dishes
+    return (
+      <div>
+        <input
+          type="search"
+          value={dishFilter}
+          onChange={e => setDishFilter(e.target.value)}
+          placeholder="Filter dishes…"
+          aria-label="Filter dishes"
+          className="input"
+          style={{marginTop:'.25rem', marginBottom:'.35rem'}}
+        />
+        <div className="dish-checklist" role="group" aria-label="Select dishes" style={{display:'flex', flexDirection:'column', gap:'.35rem', maxHeight:'220px', overflowY:'auto', paddingRight:'.25rem'}}>
+          {filtered.map(d => {
+            const dishId = String(d.id)
+            const inputId = `${idPrefix}-${dishId}`
+            return (
+              <label key={dishId} htmlFor={inputId} style={{display:'flex', alignItems:'center', gap:'.4rem'}}>
+                <input
+                  id={inputId}
+                  type="checkbox"
+                  checked={mealForm.dishes.includes(dishId)}
+                  onChange={()=> toggleMealDish(dishId)}
+                />
+                <span>{d.name}</span>
+              </label>
+            )
+          })}
+        </div>
+        {filtered.length === 0 && <div className="muted" style={{marginTop:'.35rem'}}>No dishes match your filter.</div>}
+      </div>
+    )
   }
 
   async function loadStripeStatus(){
@@ -423,13 +473,47 @@ export default function ChefDashboard(){
 
   const createMeal = async (e)=>{
     e.preventDefault()
+    if (mealSaving) return
+    setMealSaving(true)
+    const startedAt = Date.now()
+    const trimmedName = String(mealForm.name || '').trim()
+    const trimmedDescription = String(mealForm.description || '').trim()
+    const fieldErrors = []
+    if (!trimmedName) fieldErrors.push('Enter a meal name before saving.')
+    if (!trimmedDescription) fieldErrors.push('Add a brief description for your meal.')
+    const priceValue = Number(mealForm.price || 0)
+    if (!Number.isFinite(priceValue) || priceValue <= 0) fieldErrors.push('Set a meal price greater than zero.')
+    if (!Array.isArray(mealForm.dishes) || mealForm.dishes.length === 0) fieldErrors.push('Choose at least one dish to include.')
+    if (fieldErrors.length > 0){
+      try{ window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text: fieldErrors[0], tone:'error' } })) }catch{}
+      setMealSaving(false)
+      return
+    }
+    try{ window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text:'Creating meal…', tone:'info' } })) }catch{}
     try{
       const payload = { ...mealForm, price: Number(mealForm.price||0), start_date: mealForm.start_date || todayISO, dishes: (mealForm.dishes||[]).map(x=> Number(x)) }
       const resp = await api.post('/meals/api/chef/meals/', payload)
-      try{ window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: (resp?.data?.message || 'Meal created successfully'), tone:'success' } })) }catch{}
+      const message = resp?.data?.message || 'Meal created successfully'
+      try{ window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: message, tone:'success' } })) }catch{}
       setMealForm({ name:'', description:'', meal_type:'Dinner', price:'', start_date:'', dishes:[], dietary_preferences:[] })
-      loadMeals()
-    }catch(e){ console.error('createMeal failed', e); }
+      await loadMeals()
+    }catch(err){
+      console.error('createMeal failed', err)
+      try{
+        const { buildErrorMessage } = await import('../api')
+        const msg = buildErrorMessage(err?.response?.data, 'Failed to create meal', err?.response?.status)
+        window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text: msg, tone:'error' } }))
+      }catch{
+        const msg = err?.response?.data?.error || err?.response?.data?.detail || 'Failed to create meal'
+        try{ window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text: msg, tone:'error' } })) }catch{}
+      }
+    } finally {
+      const elapsed = Date.now() - startedAt
+      if (elapsed < 350){
+        await new Promise(resolve => setTimeout(resolve, 350 - elapsed))
+      }
+      setMealSaving(false)
+    }
   }
 
   const deleteMeal = async (id)=>{ try{ await api.delete(`/meals/api/chef/meals/${id}/`); loadMeals() }catch{} }
@@ -979,7 +1063,7 @@ export default function ChefDashboard(){
         <div className="grid grid-2">
           <div className="card">
             <h3>Quick create meal</h3>
-            <form onSubmit={createMeal}>
+            <form onSubmit={createMeal} aria-busy={mealSaving}>
               <div className="label">Name</div>
               <input className="input" value={mealForm.name} onChange={e=> setMealForm(f=>({ ...f, name:e.target.value }))} required />
               <div className="label">Description</div>
@@ -997,18 +1081,10 @@ export default function ChefDashboard(){
                 </div>
               </div>
               <div className="label" style={{marginTop:'.35rem'}}>Dishes</div>
-              <select
-                className="select"
-                multiple
-                value={mealForm.dishes}
-                onChange={e=> setMealForm(f=>({ ...f, dishes: Array.from(e.target.selectedOptions).map(o=> o.value) }))}
-                style={{minHeight:120}}
-              >
-                {dishes.map(d => <option key={d.id} value={String(d.id)}>{d.name}</option>)}
-              </select>
+              {renderDishChecklist('quick-dish')}
               <div style={{marginTop:'.6rem'}}>
                 {!payouts.is_active && <div className="muted" style={{marginBottom:'.25rem'}}>Complete payouts setup to create meals.</div>}
-                <button className="btn btn-primary" disabled={!payouts.is_active || !mealForm.name || !mealForm.description || !mealForm.price || (mealForm.dishes||[]).length===0}>Create</button>
+                <button className="btn btn-primary" disabled={!payouts.is_active || mealSaving || !mealForm.name || !mealForm.description || !mealForm.price || (mealForm.dishes||[]).length===0}>{mealSaving ? 'Saving…' : 'Create'}</button>
               </div>
             </form>
           </div>
@@ -1122,7 +1198,7 @@ export default function ChefDashboard(){
         <div className="grid grid-2">
           <div className="card">
             <h3>Create meal</h3>
-            <form onSubmit={createMeal}>
+            <form onSubmit={createMeal} aria-busy={mealSaving}>
               <div className="label">Name</div>
               <input className="input" value={mealForm.name} onChange={e=> setMealForm(f=>({ ...f, name:e.target.value }))} required />
               <div className="label">Description</div>
@@ -1140,11 +1216,9 @@ export default function ChefDashboard(){
                 </div>
               </div>
               <div className="label" style={{marginTop:'.35rem'}}>Dishes</div>
-              <select className="select" multiple value={mealForm.dishes} onChange={e=> setMealForm(f=>({ ...f, dishes: Array.from(e.target.selectedOptions).map(o=>o.value) }))} style={{minHeight:120}}>
-                {dishes.map(d => <option key={d.id} value={String(d.id)}>{d.name}</option>)}
-              </select>
+              {renderDishChecklist('meal-dish')}
               {!payouts.is_active && <div className="muted" style={{marginTop:'.35rem'}}>Complete payouts setup to create meals.</div>}
-              <div style={{marginTop:'.6rem'}}><button className="btn btn-primary" disabled={!payouts.is_active}>Create Meal</button></div>
+              <div style={{marginTop:'.6rem'}}><button className="btn btn-primary" disabled={!payouts.is_active || mealSaving}>{mealSaving ? 'Saving…' : 'Create Meal'}</button></div>
             </form>
           </div>
           <div className="card">

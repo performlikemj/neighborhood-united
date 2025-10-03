@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { api } from '../api'
+import { api, buildErrorMessage } from '../api'
+import { rememberServiceOrderId } from '../utils/serviceOrdersStorage.js'
 import { useAuth } from '../context/AuthContext.jsx'
 import { countryNameFromCode, codeFromCountryName } from '../utils/geo.js'
 import MapPanel from '../components/MapPanel.jsx'
@@ -16,12 +17,85 @@ function renderAreas(areas){
   return names.join(', ')
 }
 
+function toServiceOfferings(payload){
+  try{
+    if (!payload) return []
+    if (Array.isArray(payload)) return payload
+    if (Array.isArray(payload?.results)) return payload.results
+    if (Array.isArray(payload?.data?.results)) return payload.data.results
+    if (Array.isArray(payload?.details?.results)) return payload.details.results
+    if (Array.isArray(payload?.details)) return payload.details
+    if (Array.isArray(payload?.items)) return payload.items
+    return []
+  }catch{
+    return []
+  }
+}
+
+const EMPTY_BOOKING_FORM = {
+  householdSize: '',
+  serviceDate: '',
+  serviceStartTime: '',
+  durationMinutes: '',
+  specialRequests: '',
+  scheduleNotes: ''
+}
+
+const HALF_HOUR_TIMES = Array.from({ length: 48 }, (_, index) => {
+  const hours = String(Math.floor(index / 2)).padStart(2, '0')
+  const minutes = index % 2 === 0 ? '00' : '30'
+  return `${hours}:${minutes}`
+})
+
+function isHalfHourTime(value){
+  if (typeof value !== 'string') return false
+  return /^([01]\d|2[0-3]):(00|30)$/.test(value.trim())
+}
+
+function nextHalfHourTime(){
+  const now = new Date()
+  const totalMinutes = now.getHours() * 60 + now.getMinutes()
+  const next = Math.ceil((totalMinutes + 1) / 30) * 30
+  const wrapped = next % (24 * 60)
+  const hours = Math.floor(wrapped / 60)
+  const minutes = wrapped % 60
+  return `${String(hours).padStart(2, '0')}:${minutes === 0 ? '00' : '30'}`
+}
+
+function formatHalfHourLabel(time){
+  try{
+    if (!isHalfHourTime(time)) return time
+    const [h, m] = time.split(':')
+    let hours = Number(h)
+    const suffix = hours >= 12 ? 'PM' : 'AM'
+    hours = hours % 12
+    if (hours === 0) hours = 12
+    return `${hours}:${m} ${suffix}`
+  }catch{
+    return time
+  }
+}
+
+function getDefaultServiceTime(tier){
+  const preferred = tier?.default_start_time || tier?.start_time || tier?.service_time
+  if (typeof preferred === 'string'){
+    const normalized = preferred.slice(0,5)
+    if (isHalfHourTime(normalized)) return normalized
+  }
+  return nextHalfHourTime()
+}
+
 export default function PublicChef(){
   const { username } = useParams()
   const { user: authUser, loading: authLoading } = useAuth()
   const [loading, setLoading] = useState(true)
   const [chef, setChef] = useState(null)
   const [events, setEvents] = useState([])
+  const [serviceOfferings, setServiceOfferings] = useState([])
+  const [servicesLoading, setServicesLoading] = useState(false)
+  const [servicesError, setServicesError] = useState(null)
+  const [servicesOutOfArea, setServicesOutOfArea] = useState(false)
+  const [serviceViewerLocation, setServiceViewerLocation] = useState({ postal:'', country:'' })
   const [error, setError] = useState(null)
   const [lightboxIndex, setLightboxIndex] = useState(-1)
   const [mapOpen, setMapOpen] = useState(false)
@@ -34,12 +108,183 @@ export default function PublicChef(){
   const [waitlistLoading, setWaitlistLoading] = useState(false)
   const [subscribing, setSubscribing] = useState(false)
   const [unsubscribing, setUnsubscribing] = useState(false)
-  
+  const [bookingOffering, setBookingOffering] = useState(null)
+  const [bookingTier, setBookingTier] = useState(null)
+  const [bookingForm, setBookingForm] = useState({ ...EMPTY_BOOKING_FORM })
+  const [bookingSubmitting, setBookingSubmitting] = useState(false)
+  const [bookingError, setBookingError] = useState('')
+
 
   const placeholderMealImage = useMemo(()=>{
     const svg = `\n<svg xmlns='http://www.w3.org/2000/svg' width='640' height='480' viewBox='0 0 640 480'>\n  <defs>\n    <linearGradient id='g' x1='0' x2='1' y1='0' y2='1'>\n      <stop offset='0' stop-color='#eaf5ec'/>\n      <stop offset='1' stop-color='#d9efe0'/>\n    </linearGradient>\n  </defs>\n  <rect width='640' height='480' fill='url(#g)'/>\n  <g fill='#5cb85c'>\n    <circle cx='320' cy='240' r='70' fill='none' stroke='#5cb85c' stroke-width='8'/>\n    <rect x='292' y='220' width='56' height='40' rx='8'/>\n  </g>\n  <text x='50%' y='80%' dominant-baseline='middle' text-anchor='middle' font-family='Inter, Arial, sans-serif' font-size='28' fill='#5c6b5d'>Meal photo</text>\n</svg>`
     return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
   }, [])
+
+  const bookingOpen = useMemo(()=> Boolean(bookingOffering && bookingTier), [bookingOffering, bookingTier])
+  const bookingRecurringTier = useMemo(()=> Boolean(bookingTier?.is_recurring || bookingTier?.recurrence_interval), [bookingTier])
+  const bookingRequiresDateTime = useMemo(()=>{
+    if (!bookingOffering) return false
+    const type = String(bookingOffering?.service_type || '').toLowerCase()
+    if (type === 'home_chef') return true
+    if (type === 'weekly_prep'){
+      return !bookingRecurringTier
+    }
+    return false
+  }, [bookingOffering, bookingRecurringTier])
+  const bookingNeedsScheduleChoice = useMemo(()=>{
+    if (!bookingOffering) return false
+    const type = String(bookingOffering?.service_type || '').toLowerCase()
+    return type === 'weekly_prep' && bookingRecurringTier
+  }, [bookingOffering, bookingRecurringTier])
+
+  function resetBooking(){
+    setBookingOffering(null)
+    setBookingTier(null)
+    setBookingForm({ ...EMPTY_BOOKING_FORM })
+    setBookingError('')
+  }
+
+  function closeBooking(){
+    if (bookingSubmitting) return
+    resetBooking()
+  }
+
+  function startServiceBooking(offering, tier){
+    if (!offering || !tier) return
+    if (bookingOffering?.id === offering?.id && bookingTier?.id === tier?.id){
+      closeBooking()
+      return
+    }
+    if (!authUser){
+      if (typeof window !== 'undefined'){
+        const next = `${window.location.pathname}${window.location.search}`
+        window.location.href = `/login?next=${encodeURIComponent(next)}`
+      }
+      return
+    }
+    const min = Number(tier?.household_min)
+    const max = Number(tier?.household_max)
+    let defaultSize = Number.isFinite(min) && min > 0 ? min : 1
+    if (Number.isFinite(max) && max > 0 && defaultSize > max) defaultSize = max
+    const durationCandidate = Number(tier?.duration_minutes) > 0
+      ? Number(tier.duration_minutes)
+      : (Number(offering?.default_duration_minutes) > 0 ? Number(offering.default_duration_minutes) : '')
+    const defaultStartTime = getDefaultServiceTime(tier)
+    setBookingOffering(offering)
+    setBookingTier(tier)
+    setBookingForm({
+      householdSize: defaultSize ? String(defaultSize) : '',
+      serviceDate: '',
+      serviceStartTime: defaultStartTime,
+      durationMinutes: durationCandidate ? String(durationCandidate) : '',
+      specialRequests: '',
+      scheduleNotes: ''
+    })
+    setBookingError('')
+  }
+
+  function updateBookingField(field, value){
+    setBookingForm(prev => ({ ...prev, [field]: value }))
+  }
+
+  async function submitBooking(e){
+    if (e && typeof e.preventDefault === 'function') e.preventDefault()
+    if (!bookingOffering || !bookingTier || bookingSubmitting) return
+    setBookingError('')
+
+    let householdSize = Number(bookingForm.householdSize)
+    if (!Number.isFinite(householdSize)) householdSize = 0
+    householdSize = Math.floor(householdSize)
+    if (householdSize < 1){
+      setBookingError('Enter a household size of at least 1.')
+      return
+    }
+    const tierMin = Number(bookingTier?.household_min)
+    const tierMax = Number(bookingTier?.household_max)
+    if (Number.isFinite(tierMin) && householdSize < tierMin){
+      setBookingError(`This tier starts at ${tierMin} people.`)
+      return
+    }
+    if (Number.isFinite(tierMax) && tierMax > 0 && householdSize > tierMax){
+      setBookingError(`This tier supports up to ${tierMax} people.`)
+      return
+    }
+
+    const hasDate = Boolean(bookingForm.serviceDate)
+    const hasTime = Boolean(bookingForm.serviceStartTime)
+    const scheduleNotes = bookingForm.scheduleNotes.trim()
+
+    if (hasTime && !isHalfHourTime(bookingForm.serviceStartTime)){
+      setBookingError('Choose a start time on the half hour (for example, 12:00 or 12:30).')
+      return
+    }
+
+    if (bookingRequiresDateTime && (!hasDate || !hasTime)){
+      setBookingError('Select a service date and start time for this tier.')
+      return
+    }
+
+    if (bookingNeedsScheduleChoice && !scheduleNotes && (!hasDate || !hasTime)){
+      setBookingError('Add scheduling preferences or provide a date and start time.')
+      return
+    }
+
+    const payload = {
+      offering_id: bookingOffering.id,
+      household_size: householdSize
+    }
+    if (bookingTier?.id != null) payload.tier_id = bookingTier.id
+    if (hasDate) payload.service_date = bookingForm.serviceDate
+    if (hasTime) payload.service_start_time = bookingForm.serviceStartTime
+    const duration = Number(bookingForm.durationMinutes)
+    if (Number.isFinite(duration) && duration > 0) payload.duration_minutes = Math.round(duration)
+    const requests = bookingForm.specialRequests.trim()
+    if (requests) payload.special_requests = requests
+    if (scheduleNotes){
+      payload.schedule_preferences = { notes: scheduleNotes }
+    }
+
+    setBookingSubmitting(true)
+    try{
+      const orderResp = await api.post('/services/orders/', payload)
+      const orderData = orderResp?.data || {}
+      const orderId = orderData?.id || orderData?.order_id || orderData?.order?.id || orderData?.data?.id
+      if (!orderId){
+        throw new Error('Order created but missing id from response.')
+      }
+      rememberServiceOrderId(orderId)
+      const checkoutResp = await api.post(`/services/orders/${orderId}/checkout`, {})
+      const checkoutData = checkoutResp?.data || {}
+      const sessionUrl = checkoutData?.session_url || checkoutData?.url || checkoutData?.checkout_url
+      if (typeof window !== 'undefined' && checkoutData?.session_id){
+        try{ localStorage.setItem('lastServiceCheckoutSessionId', String(checkoutData.session_id)) }catch{}
+      }
+      if (typeof window !== 'undefined'){
+        try{ localStorage.setItem('lastServiceOrderId', String(orderId)) }catch{}
+      }
+      if (sessionUrl && typeof window !== 'undefined'){
+        window.location.href = sessionUrl
+      } else {
+        setBookingError('Order created but payment link was not returned. Visit your orders to complete payment.')
+        if (typeof window !== 'undefined'){
+          try{ window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: 'Order created. Complete payment from your orders list.', tone: 'info' } })) }catch{}
+        }
+      }
+    }catch(err){
+      let message = 'Unable to start checkout. Please try again.'
+      if (err?.response){
+        message = buildErrorMessage(err.response.data, message, err.response.status)
+      }else if (err?.message){
+        message = err.message
+      }
+      setBookingError(message)
+      if (typeof window !== 'undefined'){
+        try{ window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: message, tone: 'error' } })) }catch{}
+      }
+    }finally{
+      setBookingSubmitting(false)
+    }
+  }
 
   function toEventsArray(payload){
     try{
@@ -121,28 +366,30 @@ export default function PublicChef(){
     
 
     const fetchProfile = async ()=>{
-      // Try preferred by-username endpoint first
-      try{
-        const r1 = await api.get(`/chefs/api/public/by-username/${encodeURIComponent(username)}/`, { skipUserId: true })
-        if (!mounted) return
-        setChef(r1.data || null)
-        return r1.data
-      }catch(e){ /* fallthrough */ }
-
-      // Try lookup to ID
-      try{
-        const r2 = await api.get(`/chefs/api/lookup/by-username/${encodeURIComponent(username)}/`, { skipUserId: true })
-        const cid = r2?.data?.chef_id || r2?.data?.id
-        if (cid){
-          const r3 = await api.get(`/chefs/api/public/${cid}/`, { skipUserId: true })
+      const numericUsername = /^\d+$/.test(username || '')
+      console.log('[PublicChef] fetchProfile', username, numericUsername)
+      if (!numericUsername){
+        // Try preferred by-username endpoint first
+        try{
+          const r1 = await api.get(`/chefs/api/public/by-username/${encodeURIComponent(username)}/`, { skipUserId: true })
           if (!mounted) return
-          setChef(r3.data || null)
-          return r3.data
-        }
-      }catch(e){ /* fallthrough */ }
+          setChef(r1.data || null)
+          return r1.data
+        }catch(e){ /* fallthrough */ }
 
-      // Fallback: if numeric username, treat as id
-      if (/^\d+$/.test(username||'')){
+        // Try lookup to ID (non-numeric usernames only)
+        try{
+          const r2 = await api.get(`/chefs/api/lookup/by-username/${encodeURIComponent(username)}/`, { skipUserId: true })
+          const cid = r2?.data?.chef_id || r2?.data?.id
+          if (cid){
+            const r3 = await api.get(`/chefs/api/public/${cid}/`, { skipUserId: true })
+            if (!mounted) return
+            setChef(r3.data || null)
+            return r3.data
+          }
+        }catch(e){ /* fallthrough */ }
+      } else {
+        // Numeric usernames map directly to chef id
         try{
           const r4 = await api.get(`/chefs/api/public/${username}/`, { skipUserId: true })
           if (!mounted) return
@@ -252,6 +499,93 @@ export default function PublicChef(){
     const none = (waitlist?.upcoming_events_count ?? upcomingEvents.length ?? 0) === 0
     return enabled && none
   }, [waitlistCfg, waitlist, upcomingEvents])
+
+  const servicesAvailableInArea = useMemo(()=> Array.isArray(serviceOfferings) && serviceOfferings.length > 0, [serviceOfferings])
+
+  const servicesHasViewerLocation = useMemo(()=> Boolean(serviceViewerLocation?.postal), [serviceViewerLocation])
+
+  const servicesChipLabel = useMemo(()=>{
+    if (!servicesHasViewerLocation) return null
+    if (servicesAvailableInArea) return 'Available in your area'
+    if (servicesOutOfArea) return 'Outside your area'
+    return 'No services posted yet'
+  }, [servicesAvailableInArea, servicesHasViewerLocation, servicesOutOfArea])
+
+  useEffect(()=>{
+    let cancelled = false
+    if (!chef?.id){
+      setServiceOfferings([])
+      setServicesOutOfArea(false)
+      setServiceViewerLocation(prev => prev)
+      return undefined
+    }
+
+    const loadServices = async ()=>{
+      setServicesLoading(true)
+      setServicesError(null)
+      let viewerPostal = ''
+      let viewerCountry = ''
+      if (typeof window !== 'undefined'){
+        try{
+          const params = new URLSearchParams(window.location.search || '')
+          viewerPostal = params.get('postal_code') || params.get('postal') || ''
+          viewerCountry = params.get('country') || params.get('country_code') || ''
+        }catch{}
+      }
+      const authPostal = authUser?.address?.postalcode || authUser?.postal_code || ''
+      const authCountry = authUser?.address?.country || authUser?.address?.country_code || authUser?.country || ''
+      if (!viewerPostal) viewerPostal = authPostal || ''
+      if (!viewerCountry) viewerCountry = authCountry || ''
+      const normalizedCountry = viewerCountry ? String(viewerCountry).toUpperCase() : ''
+
+      const baseParams = { chef_id: chef.id, page_size: 50 }
+      const params = { ...baseParams }
+      if (viewerPostal){
+        params.postal_code = viewerPostal
+        if (normalizedCountry) params.country = normalizedCountry
+      }
+
+      try{
+        const resp = await api.get('/services/offerings/', { skipUserId: true, params })
+        if (cancelled) return
+        const filtered = toServiceOfferings(resp.data)
+        setServiceOfferings(filtered)
+        setServiceViewerLocation({ postal: viewerPostal || '', country: normalizedCountry || '' })
+
+        if (viewerPostal){
+          if (filtered.length === 0){
+            try{
+              const allResp = await api.get('/services/offerings/', { skipUserId: true, params: baseParams })
+              const unfiltered = toServiceOfferings(allResp.data)
+              if (!cancelled){
+                setServicesOutOfArea(unfiltered.length > 0)
+              }
+            }catch{
+              if (!cancelled) setServicesOutOfArea(false)
+            }
+          } else if (!cancelled){
+            setServicesOutOfArea(false)
+          }
+        } else if (!cancelled){
+          setServicesOutOfArea(false)
+        }
+      }catch(err){
+        if (!cancelled){
+          setServiceOfferings([])
+          setServicesError('Unable to load chef services right now.')
+          setServicesOutOfArea(false)
+          setServiceViewerLocation({ postal: viewerPostal || '', country: normalizedCountry || '' })
+        }
+      }finally{
+        if (!cancelled){
+          setServicesLoading(false)
+        }
+      }
+    }
+
+    loadServices()
+    return ()=>{ cancelled = true }
+  }, [chef?.id, authUser])
 
   async function doSubscribe(){
     try{
@@ -370,7 +704,6 @@ export default function PublicChef(){
     (async ()=>{
       try{
         const r = await api.get(`/chefs/api/public/${chef.id}/serves-my-area/`)
-        console.log('r', r)
         setServesMyArea(Boolean(r?.data?.serves))
       }catch(e){ setServesMyArea(false) }
     })()
@@ -524,12 +857,230 @@ export default function PublicChef(){
                   )
                 )
               )}
-            </div>
           </div>
+        </div>
 
-          {/* Signature dishes (multi-item carousel) */}
-          <div className="section sig-section">
-            <h3 className="sig-title">Signature Dishes</h3>
+        <div className="section" id="services">
+          <div className="card">
+            <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:'.5rem'}}>
+              <h3 style={{margin:0}}>Chef services</h3>
+              {servicesChipLabel && (
+                <span
+                  className={`chip ${servicesAvailableInArea ? '' : 'small'}`}
+                  style={{
+                    background: servicesAvailableInArea ? 'var(--gradient-brand)' : '#fff',
+                    color: servicesAvailableInArea ? '#fff' : 'var(--muted)',
+                    border: servicesAvailableInArea ? '0' : '1px solid var(--border)'
+                  }}
+                >
+                  {servicesChipLabel}
+                </span>
+              )}
+            </div>
+            {servicesLoading ? (
+              <div className="muted" style={{marginTop:'.5rem'}}>Loading services…</div>
+            ) : servicesError ? (
+              <div style={{marginTop:'.5rem', color:'#b00020'}}>{servicesError}</div>
+            ) : servicesAvailableInArea ? (
+              <div style={{display:'flex', flexDirection:'column', gap:'.75rem', marginTop:'.75rem'}}>
+                {serviceOfferings.map(offering => {
+                  const tierSummaries = Array.isArray(offering?.tier_summary)
+                    ? offering.tier_summary.filter(summary => typeof summary === 'string' ? summary.trim() : Boolean(summary)).map(summary => typeof summary === 'string' ? summary.trim() : String(summary))
+                    : []
+                  const tiers = Array.isArray(offering?.tiers)
+                    ? offering.tiers.filter(t => t && t.hidden !== true && t.soft_deleted !== true)
+                    : []
+                  return (
+                    <div key={offering.id || offering.title} style={{border:'1px solid var(--border)', borderRadius:'8px', padding:'.75rem', background:'var(--surface-2)'}}>
+                      <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'.5rem'}}>
+                        <div>
+                          <div style={{fontWeight:700}}>{offering.title || 'Service offering'}</div>
+                          <div className="muted" style={{fontSize:'.9rem'}}>{offering.service_type_label || offering.service_type || 'Service'}</div>
+                        </div>
+                        {offering.max_travel_miles ? (
+                          <span className="chip small" style={{background:'#fff', border:'1px solid var(--border)', color:'var(--muted)'}}>{offering.max_travel_miles} mi max</span>
+                        ) : null}
+                      </div>
+                      {offering.description && <div style={{marginTop:'.5rem'}}>{offering.description}</div>}
+                      {tierSummaries.length>0 && (
+                        <div style={{marginTop:'.5rem'}}>
+                          <div className="label" style={{marginTop:0}}>Tier overview</div>
+                          <ul style={{margin:'.3rem 0 0', paddingLeft:'1.1rem', display:'flex', flexDirection:'column', gap:'.25rem', fontSize:'.9rem'}}>
+                            {tierSummaries.map((summary, idx) => (
+                              <li key={idx}>{summary}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {tiers.length>0 && (
+                        <div style={{marginTop:'.75rem'}}>
+                          <div className="label" style={{marginTop:0}}>Tier details</div>
+                          <div style={{display:'flex', flexDirection:'column', gap:'.5rem'}}>
+                            {tiers.map((tier, idx) => {
+                              if (!tier) return null
+                              const isActiveTier = bookingOpen && bookingOffering?.id === offering.id && bookingTier?.id === tier.id
+                              const priceCents = tier.desired_unit_amount_cents ?? tier.unit_amount_cents ?? tier.price_cents
+                              const price = Number.isFinite(Number(priceCents)) ? (Number(priceCents)/100).toFixed(2) : null
+                              const currency = String(tier.currency || offering.currency || 'USD').toUpperCase()
+                              const isRecurring = Boolean(tier.is_recurring || tier.recurrence_interval)
+                              const householdMin = tier.household_min ?? tier.household_start ?? null
+                              const householdMax = tier.household_max ?? tier.household_end ?? null
+                              const recurrenceLabel = tier.recurrence_interval ? String(tier.recurrence_interval).replace(/_/g,' ') : ''
+                              const recurrenceText = isRecurring
+                                ? `Recurring service${recurrenceLabel ? ` · ${recurrenceLabel}` : ''}`
+                                : 'One-time service'
+                              return (
+                                <div key={tier.id || `${offering.id || offering.title}-tier-${idx}`} className="card" style={{padding:'.65rem', background:'rgba(0,0,0,.03)', border:'1px solid var(--border)'}}>
+                                  <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'.75rem', flexWrap:'wrap'}}>
+                                    <div>
+                                      <div style={{fontWeight:600}}>{tier.display_label || tier.name || 'Tier'}</div>
+                                      <div style={{display:'flex', gap:'.35rem', alignItems:'center', flexWrap:'wrap', marginTop:'.3rem'}}>
+                                        <span
+                                          className={`chip ${isRecurring ? 'tier-recurring-chip' : 'tier-once-chip'}`}
+                                          style={{
+                                            background: isRecurring ? 'rgba(40,180,80,.18)' : 'rgba(80,100,160,.18)',
+                                            color: isRecurring ? '#0f6b2f' : '#1b3a72',
+                                            fontWeight:600
+                                          }}
+                                        >
+                                          {recurrenceText}
+                                        </span>
+                                      </div>
+                                      <div className="muted" style={{fontSize:'.85rem'}}>
+                                        {householdMin != null ? `${householdMin}` : '?'}
+                                        {householdMax != null ? `-${householdMax}` : '+'} people
+                                      </div>
+                                      {price && (
+                                        <div className="muted" style={{fontSize:'.85rem'}}>
+                                          ${price} {currency}
+                                        </div>
+                                      )}
+                                      {tier.description && <div style={{marginTop:'.35rem'}}>{tier.description}</div>}
+                                    </div>
+                                    <div style={{display:'flex', flexDirection:'column', gap:'.3rem'}}>
+                                      <button
+                                        className="btn btn-primary btn-sm"
+                                        type="button"
+                                        onClick={()=> startServiceBooking(offering, tier)}
+                                        aria-expanded={isActiveTier}
+                                      >
+                                        Book this service tier
+                                      </button>
+                                    </div>
+                                  </div>
+                                  {isActiveTier && (
+                                    <form onSubmit={submitBooking} style={{marginTop:'.75rem', display:'flex', flexDirection:'column', gap:'.5rem'}}>
+                                      <div className="grid" style={{gridTemplateColumns:'repeat(auto-fit, minmax(180px,1fr))', gap:'.5rem'}}>
+                                        <div>
+                                          <div className="label">Household size</div>
+                                          <input
+                                            className="input"
+                                            type="number"
+                                            min={Math.max(1, Number(householdMin)||1)}
+                                            value={bookingForm.householdSize}
+                                            onChange={e=> updateBookingField('householdSize', e.target.value)}
+                                            required
+                                          />
+                                        </div>
+                                        <div>
+                                          <div className="label">Service date</div>
+                                          <input
+                                            className="input"
+                                            type="date"
+                                            value={bookingForm.serviceDate}
+                                            onChange={e=> updateBookingField('serviceDate', e.target.value)}
+                                            required={bookingRequiresDateTime}
+                                          />
+                                        </div>
+                                        <div>
+                                          <div className="label">Start time</div>
+                                          <select
+                                            className="select time-select"
+                                            name="serviceStartTime"
+                                            value={bookingForm.serviceStartTime || ''}
+                                            onChange={e=> updateBookingField('serviceStartTime', e.target.value)}
+                                            required={bookingRequiresDateTime}
+                                          >
+                                            {!bookingRequiresDateTime && (
+                                              <option value="">No preference</option>
+                                            )}
+                                            {HALF_HOUR_TIMES.map(time => (
+                                              <option key={time} value={time}>{formatHalfHourLabel(time)}</option>
+                                            ))}
+                                          </select>
+                                        </div>
+                                      </div>
+                                      <div>
+                                        <div className="label">Special requests</div>
+                                        <textarea
+                                          className="textarea"
+                                          rows={3}
+                                          value={bookingForm.specialRequests}
+                                          onChange={e=> updateBookingField('specialRequests', e.target.value)}
+                                          placeholder="Allergies, menu notes, access details…"
+                                        />
+                                      </div>
+                                      <div>
+                                        <div className="label">Scheduling preferences (optional)</div>
+                                        <textarea
+                                          className="textarea"
+                                          rows={2}
+                                          value={bookingForm.scheduleNotes}
+                                          onChange={e=> updateBookingField('scheduleNotes', e.target.value)}
+                                          placeholder="Preferred weekday or cadence for recurring services"
+                                        />
+                                      </div>
+                                      {bookingNeedsScheduleChoice && (
+                                        <div className="muted" style={{fontSize:'.85rem'}}>
+                                          Add your preferred recurring cadence here, or provide a specific date and start time above.
+                                        </div>
+                                      )}
+                                      {bookingError && (
+                                        <div role="alert" style={{color:'#b00020', fontSize:'.9rem'}}>{bookingError}</div>
+                                      )}
+                                      <div style={{display:'flex', gap:'.5rem', flexWrap:'wrap'}}>
+                                        <button className="btn btn-primary" type="submit" disabled={bookingSubmitting}>
+                                          {bookingSubmitting ? 'Starting checkout…' : 'Continue to payment'}
+                                        </button>
+                                        <button className="btn btn-outline" type="button" onClick={closeBooking} disabled={bookingSubmitting}>
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    </form>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            ) : servicesOutOfArea ? (
+              <div className="card" style={{background:'var(--surface-2)', marginTop:'.75rem'}}>
+                <h4 style={{marginTop:0}}>Not in range</h4>
+                <p className="muted" style={{marginBottom:'.35rem'}}>
+                  This chef's services aren't available in your area yet. Try updating your location or message the chef to see if they can travel further.
+                </p>
+                {servicesHasViewerLocation && serviceViewerLocation.postal && (
+                  <p className="muted" style={{fontSize:'.85rem', marginBottom:0}}>
+                    Based on {serviceViewerLocation.postal}{serviceViewerLocation.country ? ` · ${serviceViewerLocation.country}` : ''}.
+                  </p>
+                )}
+              </div>
+            ) : servicesHasViewerLocation ? (
+              <div className="muted" style={{marginTop:'.5rem'}}>This chef hasn't listed any services yet.</div>
+            ) : (
+              <div className="muted" style={{marginTop:'.5rem'}}>Add your location to check service availability.</div>
+            )}
+          </div>
+        </div>
+
+        {/* Signature dishes (multi-item carousel) */}
+        <div className="section sig-section">
+          <h3 className="sig-title">Signature Dishes</h3>
             {!chef.photos || chef.photos.length===0 ? (
               <div className="muted" style={{textAlign:'center'}}>No photos yet.</div>
             ) : (

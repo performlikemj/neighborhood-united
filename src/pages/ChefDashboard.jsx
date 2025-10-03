@@ -54,6 +54,134 @@ const INITIAL_TIER_FORM = {
 
 const SERVICES_ROOT = '/services'
 
+function parseServiceDate(dateStr = '', timeStr = ''){
+  if (!dateStr) return null
+  try{
+    let normalizedTime = timeStr
+    if (normalizedTime && normalizedTime.length === 5) normalizedTime += ':00'
+    const iso = `${dateStr}T${normalizedTime || '00:00:00'}`
+    const dt = new Date(iso)
+    if (Number.isNaN(dt.valueOf())) return null
+    return dt
+  }catch{
+    return null
+  }
+}
+
+function formatServiceSchedule(order = {}){
+  const dt = parseServiceDate(order.service_date, order.service_start_time)
+  if (dt){
+    try{
+      const dateFormatter = new Intl.DateTimeFormat(undefined, { month:'short', day:'numeric', year:'numeric' })
+      const timeFormatter = new Intl.DateTimeFormat(undefined, { hour:'numeric', minute:'2-digit' })
+      const dateLabel = dateFormatter.format(dt)
+      const timeLabel = order.service_start_time ? timeFormatter.format(dt) : null
+      return timeLabel ? `${dateLabel} · ${timeLabel}` : dateLabel
+    }catch{}
+  }
+  if (order.service_date){
+    return order.service_start_time ? `${order.service_date} · ${order.service_start_time}` : order.service_date
+  }
+  const prefs = order.schedule_preferences
+  if (prefs && typeof prefs === 'object'){
+    const note = prefs.notes || prefs.preferred_weekday || prefs.preferred_time || ''
+    if (note) return String(note)
+  }
+  return 'Schedule to be arranged'
+}
+
+function toCurrencyDisplay(amount, currency = 'USD'){
+  if (amount == null) return ''
+  let value = amount
+  if (typeof value === 'string'){
+    const numeric = Number(value)
+    if (!Number.isNaN(numeric)) value = numeric
+  }
+  if (typeof value === 'number' && !Number.isNaN(value)){
+    try{
+      return new Intl.NumberFormat(undefined, { style:'currency', currency: String(currency||'USD').toUpperCase(), maximumFractionDigits:2 }).format(value)
+    }catch{}
+    return `$${value.toFixed(2)}`
+  }
+  return String(amount)
+}
+
+function serviceStatusTone(status){
+  const normalized = String(status || '').toLowerCase()
+  if (['paid','completed','confirmed','active'].includes(normalized)){
+    return { label: normalized === 'paid' ? 'Paid' : normalized.charAt(0).toUpperCase()+normalized.slice(1), style: { background:'rgba(24,180,24,.15)', color:'#168516' } }
+  }
+  if (['awaiting_payment','pending','draft','open'].includes(normalized)){
+    return { label: normalized.replace('_',' '), style: { background:'rgba(60,100,200,.16)', color:'#1b3a72' } }
+  }
+  if (['cancelled','canceled','refund_pending','failed'].includes(normalized)){
+    return { label: normalized.charAt(0).toUpperCase()+normalized.slice(1).replace('_',' '), style: { background:'rgba(200,40,40,.18)', color:'#a11919' } }
+  }
+  return { label: status || 'Unknown', style: { background:'rgba(60,60,60,.12)', color:'#2f2f2f' } }
+}
+
+function extractTierLabel(order = {}){
+  const tier = order.tier || {}
+  return tier.display_label || order.tier_display_label || order.tier_label || order.tier_name || ''
+}
+
+function serviceCustomerName(order = {}, detail = null){
+  const customer = detail || order.customer_details || order.customer_profile || {}
+
+  const candidate = (...values)=>{
+    for (const value of values){
+      if (!value) continue
+      if (typeof value === 'string'){
+        const trimmed = value.trim()
+        if (trimmed) return trimmed
+      } else if (typeof value === 'number'){
+        return String(value)
+      } else if (Array.isArray(value)){
+        const joined = value.filter(Boolean).map(v=> String(v).trim()).filter(Boolean).join(' ')
+        if (joined) return joined
+      }
+    }
+    return ''
+  }
+
+  const fullName = candidate(
+    order.customer_display_name,
+    order.customer_name,
+    order.customer_full_name,
+    candidate(order.customer_first_name, order.customer_last_name),
+    customer.full_name,
+    customer.display_name,
+    candidate(customer.first_name, customer.last_name)
+  )
+
+  const secondary = candidate(
+    order.customer_username,
+    customer.username,
+    order.customer_email,
+    customer.email,
+    order.customer || order.customer_id || customer.id
+  )
+
+  if (fullName && secondary){
+    const lowered = fullName.toLowerCase()
+    const secondaryStr = String(secondary)
+    if (!lowered.includes(secondaryStr.toLowerCase())){
+      return `${fullName} (${secondaryStr})`
+    }
+    return fullName
+  }
+  if (fullName) return fullName
+  if (secondary){
+    return typeof secondary === 'number' ? `Customer #${secondary}` : String(secondary)
+  }
+  return 'Customer'
+}
+
+function serviceOfferingTitle(order = {}){
+  return order.offering_title || order.offering?.title || order.service_title || 'Service'
+}
+
+
 function flattenErrors(errors){
   if (!errors) return []
   if (typeof errors === 'string') return [errors]
@@ -145,6 +273,10 @@ export default function ChefDashboard(){
 
   // Orders
   const [orders, setOrders] = useState([])
+  const [serviceOrders, setServiceOrders] = useState([])
+  const [serviceOrdersLoading, setServiceOrdersLoading] = useState(false)
+  const [serviceCustomerDetails, setServiceCustomerDetails] = useState({})
+  const serviceCustomerPending = useRef(new Set())
 
   // Chef services
   const [serviceOfferings, setServiceOfferings] = useState([])
@@ -155,20 +287,26 @@ export default function ChefDashboard(){
   const [tierForm, setTierForm] = useState(()=>({ ...INITIAL_TIER_FORM }))
   const [tierSaving, setTierSaving] = useState(false)
   const [tierErrors, setTierErrors] = useState(null)
-  const [serviceOrderForm, setServiceOrderForm] = useState({ offeringId:'', household_size:'', tier_id:'', service_date:'', service_start_time:'', duration_minutes:'', address_id:'', special_requests:'', schedule_preferences:'' })
-  const [serviceOrderSaving, setServiceOrderSaving] = useState(false)
-  const [serviceOrder, setServiceOrder] = useState(null)
-  const [serviceOrderErrors, setServiceOrderErrors] = useState(null)
-  const [serviceOrderLoading, setServiceOrderLoading] = useState(false)
-  const [serviceCheckoutBusy, setServiceCheckoutBusy] = useState(false)
-  const [serviceCancelBusy, setServiceCancelBusy] = useState(false)
-
   const serviceErrorMessages = useMemo(()=> flattenErrors(serviceErrors), [serviceErrors])
   const tierErrorMessages = useMemo(()=> flattenErrors(tierErrors), [tierErrors])
-  const serviceOrderErrorMessages = useMemo(()=> flattenErrors(serviceOrderErrors), [serviceOrderErrors])
-  const serviceOrderSessionId = useMemo(()=> pickFirst(serviceOrder, ['stripe_session_id','stripe_checkout_session_id']), [serviceOrder])
-  const serviceOrderCheckoutUrl = useMemo(()=> pickFirst(serviceOrder, ['stripe_checkout_url','checkout_url','session_url']), [serviceOrder])
-  const selectedServiceOffering = useMemo(()=> serviceOfferings.find(o => String(o.id) === String(serviceOrderForm.offeringId)), [serviceOfferings, serviceOrderForm.offeringId])
+  const tierSummaryExamples = useMemo(()=>{
+    const summaries = []
+    if (!Array.isArray(serviceOfferings)) return summaries
+    for (const offering of serviceOfferings){
+      const tierSummaries = Array.isArray(offering?.tier_summary) ? offering.tier_summary : []
+      for (const summary of tierSummaries){
+        const text = typeof summary === 'string' ? summary.trim() : String(summary || '').trim()
+        if (!text) continue
+        if (summaries.length < 4 && !summaries.includes(text)){
+          summaries.push(text)
+        }
+        if (summaries.length >= 4){
+          return summaries
+        }
+      }
+    }
+    return summaries
+  }, [serviceOfferings])
 
   const todayISO = useMemo(()=> new Date().toISOString().slice(0,10), [])
 
@@ -328,6 +466,46 @@ export default function ChefDashboard(){
     try{ const resp = await api.get('/meals/api/chef-meal-orders/', { params: { as_chef: 'true' } }); setOrders(toArray(resp.data)) }catch{ setOrders([]) }
   }
 
+  const loadServiceOrders = async ()=>{
+    setServiceOrdersLoading(true)
+    try{
+      const resp = await api.get(`${SERVICES_ROOT}/my/orders/`)
+      console.log('[ChefDashboard] /services/my/orders response', resp?.data)
+      setServiceOrders(toArray(resp.data))
+    }catch{
+      setServiceOrders([])
+    }finally{
+      setServiceOrdersLoading(false)
+    }
+  }
+
+  useEffect(()=>{
+    if (!Array.isArray(serviceOrders) || serviceOrders.length === 0) return
+    const ids = Array.from(new Set(serviceOrders.map(o => o?.customer).filter(id => id != null)))
+    const missing = ids.filter(id => !(id in serviceCustomerDetails) && !serviceCustomerPending.current.has(id))
+    if (missing.length === 0) return
+    let cancelled = false
+    const fetchDetails = async ()=>{
+      await Promise.all(missing.map(async id => {
+        serviceCustomerPending.current.add(id)
+        try{
+          const resp = await api.get('/auth/api/user_details/', { params: { user_id: id }, skipUserId: true })
+          if (!cancelled){
+            setServiceCustomerDetails(prev => ({ ...prev, [id]: resp?.data || null }))
+          }
+        }catch{
+          if (!cancelled){
+            setServiceCustomerDetails(prev => ({ ...prev, [id]: null }))
+          }
+        }finally{
+          serviceCustomerPending.current.delete(id)
+        }
+      }))
+    }
+    fetchDetails()
+    return ()=>{ cancelled = true }
+  }, [serviceOrders, serviceCustomerDetails])
+
   const loadServiceOfferings = async ()=>{
     setServiceLoading(true)
     try{
@@ -343,7 +521,7 @@ export default function ChefDashboard(){
   const loadAll = async ()=>{
     setNotice(null)
     try{ await api.get('/auth/api/user_details/') }catch{}
-    const tasks = [loadChefProfile(), loadIngredients(), loadDishes(), loadMeals(), loadEvents(), loadOrders(), loadStripeStatus(), loadServiceOfferings()]
+    const tasks = [loadChefProfile(), loadIngredients(), loadDishes(), loadMeals(), loadEvents(), loadOrders(), loadServiceOrders(), loadStripeStatus(), loadServiceOfferings()]
     await Promise.all(tasks.map(p => p.catch(()=>undefined)))
   }
 
@@ -553,126 +731,6 @@ export default function ChefDashboard(){
   const toServiceTypeLabel = (value)=>{
     const found = SERVICE_TYPES.find(t => t.value === value)
     return found ? found.label : (value || '')
-  }
-
-  function pickFirst(obj, keys){
-    if (!obj || !Array.isArray(keys)) return null
-    for (const key of keys){
-      if (key == null) continue
-      if (Object.prototype.hasOwnProperty.call(obj, key) && obj[key]) return obj[key]
-    }
-    return null
-  }
-
-  const submitServiceOrder = async (e)=>{
-    e.preventDefault()
-    if (serviceOrderSaving) return
-    setServiceOrderSaving(true)
-    setServiceOrderErrors(null)
-    const toNumber = (val)=>{
-      if (val === '' || val == null) return null
-      const num = Number(val)
-      return Number.isFinite(num) ? num : null
-    }
-    const payload = {
-      offering_id: serviceOrderForm.offeringId ? Number(serviceOrderForm.offeringId) : null,
-      household_size: toNumber(serviceOrderForm.household_size),
-      tier_id: serviceOrderForm.tier_id ? Number(serviceOrderForm.tier_id) : undefined,
-      service_date: serviceOrderForm.service_date || null,
-      service_start_time: serviceOrderForm.service_start_time || null,
-      duration_minutes: toNumber(serviceOrderForm.duration_minutes),
-      address_id: toNumber(serviceOrderForm.address_id),
-      special_requests: serviceOrderForm.special_requests || ''
-    }
-    if (serviceOrderForm.schedule_preferences){
-      try{
-        payload.schedule_preferences = JSON.parse(serviceOrderForm.schedule_preferences)
-      }catch{
-        setServiceOrderErrors({ schedule_preferences: 'Invalid JSON' })
-        setServiceOrderSaving(false)
-        return
-      }
-    }
-    if (!payload.offering_id){
-      setServiceOrderErrors({ offering_id: 'Select an offering' })
-      setServiceOrderSaving(false)
-      return
-    }
-    if (!payload.household_size){
-      setServiceOrderErrors({ household_size: 'Enter household size' })
-      setServiceOrderSaving(false)
-      return
-    }
-    if (payload.tier_id == null) delete payload.tier_id
-    if (!payload.service_date) delete payload.service_date
-    if (!payload.service_start_time) delete payload.service_start_time
-    if (payload.duration_minutes == null) delete payload.duration_minutes
-    if (payload.address_id == null) delete payload.address_id
-    if (!payload.special_requests) delete payload.special_requests
-    if (payload.schedule_preferences == null) delete payload.schedule_preferences
-    try{
-      const resp = await api.post(`${SERVICES_ROOT}/orders/`, payload)
-      setServiceOrder(resp?.data || null)
-      try{ window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text:'Service order created', tone:'success' } })) }catch{}
-    }catch(err){
-      const data = err?.response?.data || null
-      setServiceOrderErrors(data || { detail:'Unable to create order' })
-    } finally {
-      setServiceOrderSaving(false)
-    }
-  }
-
-  const refreshServiceOrder = async ()=>{
-    if (!serviceOrder) return
-    const id = serviceOrder.id || serviceOrder.order_id
-    if (!id){ setServiceOrderErrors({ detail:'Order id missing' }); return }
-    setServiceOrderLoading(true)
-    setServiceOrderErrors(null)
-    try{
-      const resp = await api.get(`${SERVICES_ROOT}/orders/${id}/`)
-      setServiceOrder(resp?.data || null)
-    }catch(err){
-      const data = err?.response?.data || null
-      setServiceOrderErrors(data || { detail:'Unable to load order' })
-    } finally {
-      setServiceOrderLoading(false)
-    }
-  }
-
-  const startServiceCheckout = async ()=>{
-    if (!serviceOrder) return
-    const id = serviceOrder.id || serviceOrder.order_id
-    if (!id){ setServiceOrderErrors({ detail:'Order id missing' }); return }
-    setServiceCheckoutBusy(true)
-    setServiceOrderErrors(null)
-    try{
-      const resp = await api.post(`${SERVICES_ROOT}/orders/${id}/checkout`, {})
-      const directUrl = pickFirst(resp?.data || {}, ['session_url','checkout_url','stripe_session_url'])
-      if (directUrl){ window.location.href = directUrl; return }
-      setServiceOrderErrors(resp?.data || { detail:'No checkout URL returned' })
-    }catch(err){
-      const data = err?.response?.data || null
-      setServiceOrderErrors(data || { detail:'Unable to start checkout' })
-    } finally {
-      setServiceCheckoutBusy(false)
-    }
-  }
-
-  const cancelServiceOrder = async ()=>{
-    if (!serviceOrder) return
-    const id = serviceOrder.id || serviceOrder.order_id
-    if (!id){ setServiceOrderErrors({ detail:'Order id missing' }); return }
-    setServiceCancelBusy(true)
-    setServiceOrderErrors(null)
-    try{
-      await api.post(`${SERVICES_ROOT}/orders/${id}/cancel`, {})
-      await refreshServiceOrder()
-    }catch(err){
-      const data = err?.response?.data || null
-      setServiceOrderErrors(data || { detail:'Unable to cancel order' })
-    } finally {
-      setServiceCancelBusy(false)
-    }
   }
 
   const resetServiceForm = ()=>{
@@ -1279,6 +1337,30 @@ export default function ChefDashboard(){
             </form>
           </div>
           <div style={{display:'flex', flexDirection:'column', gap:'1rem'}}>
+            <div className="card" style={{background:'var(--surface-1)', padding:'1rem', display:'flex', flexDirection:'column', gap:'.6rem'}}>
+              <h3 style={{margin:'0'}}>Service tier basics</h3>
+              <p className="muted" style={{margin:0, fontSize:'.9rem'}}>
+                Service tiers bundle household size, price, and billing frequency so guests can spot the right fit.
+              </p>
+              {tierSummaryExamples.length > 0 ? (
+                <div>
+                  <div className="label" style={{marginTop:0}}>Examples from your offerings</div>
+                  <ul style={{margin:'.35rem 0 0', paddingLeft:'1.1rem', display:'flex', flexDirection:'column', gap:'.25rem', fontSize:'.9rem'}}>
+                    {tierSummaryExamples.map((summary, index) => (
+                      <li key={index}>{summary}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <div className="muted" style={{fontSize:'.85rem'}}>Add tiers to see quick examples of how pricing appears to guests.</div>
+              )}
+              <p className="muted" style={{margin:0, fontSize:'.85rem'}}>
+                Household range defines who each tier covers, and recurring options handle weekly or monthly plans.
+              </p>
+              <p className="muted" style={{margin:0, fontSize:'.85rem'}}>
+                Stripe sync runs automatically once you save a tier—check the status chips below if something looks off.
+              </p>
+            </div>
             <div className="card">
               <h3>Your services</h3>
               {serviceLoading ? (
@@ -1289,13 +1371,21 @@ export default function ChefDashboard(){
                 <div style={{display:'flex', flexDirection:'column', gap:'.75rem'}}>
                   {serviceOfferings.map(offering => {
                     const tiers = Array.isArray(offering.tiers) ? offering.tiers : []
+                    const tierSummaries = Array.isArray(offering?.tier_summary)
+                      ? offering.tier_summary.reduce((acc, summary) => {
+                          const text = typeof summary === 'string' ? summary.trim() : String(summary || '').trim()
+                          if (text) acc.push(text)
+                          return acc
+                        }, [])
+                      : []
                     const isEditingTier = tierForm.offeringId === offering.id
+                    const serviceTypeLabel = offering.service_type_label || toServiceTypeLabel(offering.service_type)
                     return (
                       <div key={offering.id} className="card" style={{padding:'.75rem'}}>
                       <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'.75rem', flexWrap:'wrap'}}>
                         <div>
                           <h4 style={{margin:'0 0 .25rem 0'}}>{offering.title || 'Untitled service'}</h4>
-                          <div className="muted" style={{marginBottom:'.25rem'}}>{toServiceTypeLabel(offering.service_type)}</div>
+                          <div className="muted" style={{marginBottom:'.25rem'}}>{serviceTypeLabel}</div>
                           <div className="muted" style={{fontSize:'.85rem'}}>
                             {offering.default_duration_minutes ? `${offering.default_duration_minutes} min · ` : ''}
                             {offering.max_travel_miles ? `${offering.max_travel_miles} mi radius` : 'Travel radius not set'}
@@ -1308,6 +1398,16 @@ export default function ChefDashboard(){
                       </div>
                       {offering.description && <div style={{marginTop:'.35rem'}}>{offering.description}</div>}
                       {offering.notes && <div className="muted" style={{marginTop:'.35rem'}}>{offering.notes}</div>}
+                      {tierSummaries.length > 0 && (
+                        <div style={{marginTop:'.65rem'}}>
+                          <div className="label" style={{marginTop:0}}>Tier overview</div>
+                          <ul style={{margin:'.3rem 0 0', paddingLeft:'1.1rem', display:'flex', flexDirection:'column', gap:'.25rem', fontSize:'.9rem'}}>
+                            {tierSummaries.map((summary, idx) => (
+                              <li key={idx}>{summary}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
                       <div style={{marginTop:'.75rem'}}>
                         <div className="label" style={{marginTop:0}}>Tiers</div>
                         {tiers.length===0 ? (
@@ -1316,7 +1416,23 @@ export default function ChefDashboard(){
                           <div style={{display:'flex', flexDirection:'column', gap:'.5rem'}}>
                             {tiers.map(tier => {
                               const priceDollars = tier.desired_unit_amount_cents != null ? (Number(tier.desired_unit_amount_cents)/100).toFixed(2) : '0.00'
-                              const syncError = tier.price_sync_error || tier.sync_error || tier.price_sync_message || tier.last_error || ''
+                              const syncError = tier.last_price_sync_error || tier.price_sync_error || tier.sync_error || tier.price_sync_message || tier.last_error || ''
+                              const rawStatus = String(tier.price_sync_status || tier.price_sync_state || '').toLowerCase()
+                              let syncLabel = 'Stripe sync pending'
+                              let syncChipStyle = { background: 'rgba(60,100,200,.15)', color: '#1b3a72' }
+                              if (['success', 'synced', 'complete', 'completed'].includes(rawStatus)){
+                                syncLabel = 'Stripe sync successful'
+                                syncChipStyle = { background: 'rgba(24,180,24,.15)', color: '#168516' }
+                              } else if (['error', 'failed', 'failure'].includes(rawStatus)){
+                                syncLabel = 'Stripe sync failed'
+                                syncChipStyle = { background: 'rgba(200,40,40,.15)', color: '#a11919' }
+                              } else if (['processing', 'pending', 'queued', 'running', 'updating'].includes(rawStatus) || !rawStatus){
+                                syncLabel = 'Stripe sync pending'
+                                syncChipStyle = { background: 'rgba(60,100,200,.15)', color: '#1b3a72' }
+                              } else {
+                                syncLabel = `Stripe sync ${rawStatus}`
+                                syncChipStyle = { background: 'rgba(60,100,200,.15)', color: '#1b3a72' }
+                              }
                               const syncAt = tier.price_synced_at ? new Date(tier.price_synced_at) : null
                               const syncText = syncAt && !Number.isNaN(syncAt.valueOf()) ? syncAt.toLocaleString() : (tier.price_synced_at || '')
                               return (
@@ -1331,11 +1447,11 @@ export default function ChefDashboard(){
                                         Range: {tier.household_min || 0}{tier.household_max ? `-${tier.household_max}` : '+'}
                                       </div>
                                       <div style={{marginTop:'.25rem'}}>
-                                        <span className="chip" style={{background: tier.price_sync_status === 'success' ? 'rgba(24,180,24,.15)' : tier.price_sync_status === 'error' ? 'rgba(200,40,40,.15)' : 'rgba(60,100,200,.15)', color: tier.price_sync_status === 'success' ? '#168516' : tier.price_sync_status === 'error' ? '#a11919' : '#1b3a72'}}>{tier.price_sync_status || 'pending'}</span>
+                                        <span className="chip" style={syncChipStyle}>{syncLabel}</span>
                                         {!tier.active && <span className="chip" style={{marginLeft:'.35rem'}}>Inactive</span>}
                                       </div>
                                       {syncError && <div style={{marginTop:'.25rem', color:'#a11919', fontSize:'.85rem'}}>{syncError}</div>}
-                                      {syncText && <div className="muted" style={{marginTop:'.25rem', fontSize:'.75rem'}}>Last sync: {syncText}</div>}
+                                      {syncText && <div className="muted" style={{marginTop:'.25rem', fontSize:'.75rem'}}>Last synced: {syncText}</div>}
                                     </div>
                                     <button className="btn btn-outline btn-sm" type="button" onClick={()=> startTierForm(offering, tier)}>Edit</button>
                                   </div>
@@ -1361,6 +1477,9 @@ export default function ChefDashboard(){
                               <input className="input" type="number" min="1" step="1" value={tierForm.household_max} onChange={e=> setTierForm(f=>({ ...f, household_max: e.target.value }))} placeholder="Unlimited" />
                             </div>
                           </div>
+                          <div className="muted" style={{marginTop:'.35rem', fontSize:'.85rem'}}>
+                            Household range defines how many people each tier covers.
+                          </div>
                           <div className="grid" style={{gridTemplateColumns:'1fr 1fr', gap:'.5rem'}}>
                             <div>
                               <div className="label">Currency</div>
@@ -1376,6 +1495,9 @@ export default function ChefDashboard(){
                               <input type="checkbox" checked={tierForm.is_recurring} onChange={e=> setTierForm(f=>({ ...f, is_recurring: e.target.checked }))} />
                               <span>Recurring</span>
                             </label>
+                          </div>
+                          <div className="muted" style={{marginTop:'.25rem', fontSize:'.85rem'}}>
+                            Recurring tiers automatically handle future invoices.
                           </div>
                           {tierForm.is_recurring && (
                             <div style={{marginTop:'.35rem'}}>
@@ -1394,6 +1516,9 @@ export default function ChefDashboard(){
                           </div>
                           <div className="label">Display label</div>
                           <input className="input" value={tierForm.display_label} onChange={e=> setTierForm(f=>({ ...f, display_label: e.target.value }))} placeholder="Optional label shown to customers" />
+                          <div className="muted" style={{marginTop:'.35rem', fontSize:'.85rem'}}>
+                            Stripe creates or updates prices after you save a tier.
+                          </div>
                           {tierErrorMessages.length>0 && (
                             <div style={{marginTop:'.5rem', color:'#b00020'}}>
                               <ul style={{margin:0, paddingLeft:'1rem'}}>
@@ -1411,84 +1536,6 @@ export default function ChefDashboard(){
                     </div>
                   )
                   })}
-                </div>
-              )}
-            </div>
-            <div className="card">
-              <h3>Service order tester</h3>
-              <form onSubmit={submitServiceOrder}>
-                <div className="label">Offering</div>
-                <select className="select" value={serviceOrderForm.offeringId} onChange={e=> setServiceOrderForm(f=>({ ...f, offeringId:e.target.value, tier_id:'' }))} required>
-                  <option value="">Select offering…</option>
-                  {serviceOfferings.map(o => <option key={o.id} value={String(o.id)}>{o.title || `Offering #${o.id}`}</option>)}
-                </select>
-                <div className="label">Household size</div>
-                <input className="input" type="number" min="1" step="1" value={serviceOrderForm.household_size} onChange={e=> setServiceOrderForm(f=>({ ...f, household_size: e.target.value }))} required />
-                <div className="label">Tier (optional)</div>
-                <select className="select" value={serviceOrderForm.tier_id} onChange={e=> setServiceOrderForm(f=>({ ...f, tier_id: e.target.value }))}>
-                  <option value="">Auto-select based on household size</option>
-                  {(selectedServiceOffering?.tiers || []).map(t => {
-                    const title = t.display_label || `Tier #${t.id}`
-                    return (
-                      <option key={t.id} value={String(t.id)}>{title}{t.active ? '' : ' (inactive)'}</option>
-                    )
-                  })}
-                </select>
-                <div className="grid" style={{gridTemplateColumns:'1fr 1fr', gap:'.5rem'}}>
-                  <div>
-                    <div className="label">Service date</div>
-                    <input className="input" type="date" value={serviceOrderForm.service_date} onChange={e=> setServiceOrderForm(f=>({ ...f, service_date:e.target.value }))} />
-                  </div>
-                  <div>
-                    <div className="label">Start time</div>
-                    <input className="input" type="time" value={serviceOrderForm.service_start_time} onChange={e=> setServiceOrderForm(f=>({ ...f, service_start_time:e.target.value }))} />
-                  </div>
-                </div>
-                <div className="grid" style={{gridTemplateColumns:'1fr 1fr', gap:'.5rem'}}>
-                  <div>
-                    <div className="label">Duration (minutes)</div>
-                    <input className="input" type="number" min="30" step="15" value={serviceOrderForm.duration_minutes} onChange={e=> setServiceOrderForm(f=>({ ...f, duration_minutes:e.target.value }))} />
-                  </div>
-                  <div>
-                    <div className="label">Address ID</div>
-                    <input className="input" type="number" min="1" step="1" value={serviceOrderForm.address_id} onChange={e=> setServiceOrderForm(f=>({ ...f, address_id:e.target.value }))} />
-                  </div>
-                </div>
-                <div className="label">Special requests</div>
-                <textarea className="textarea" rows={2} value={serviceOrderForm.special_requests} onChange={e=> setServiceOrderForm(f=>({ ...f, special_requests:e.target.value }))} />
-                <div className="label">Schedule preferences (JSON)</div>
-                <textarea className="textarea" rows={2} value={serviceOrderForm.schedule_preferences} onChange={e=> setServiceOrderForm(f=>({ ...f, schedule_preferences:e.target.value }))} placeholder='e.g. {"days":["Tue"]}' />
-                {serviceOrderErrorMessages.length>0 && (
-                  <div style={{marginTop:'.5rem', color:'#b00020'}}>
-                    <ul style={{margin:0, paddingLeft:'1rem'}}>
-                      {serviceOrderErrorMessages.map((msg, idx)=>(<li key={idx}>{msg}</li>))}
-                    </ul>
-                  </div>
-                )}
-                {!payouts.is_active && <div className="muted" style={{marginTop:'.5rem'}}>Complete payouts setup before testing service checkout.</div>}
-                <div style={{marginTop:'.75rem'}}>
-                  <button className="btn btn-primary" disabled={serviceOrderSaving || !payouts.is_active}>{serviceOrderSaving ? 'Creating…' : 'Create draft order'}</button>
-                </div>
-              </form>
-              {serviceOrder && (
-                <div style={{marginTop:'1rem'}}>
-                  <h4 style={{margin:'0 0 .35rem 0'}}>Latest order</h4>
-                  <div className="muted" style={{fontSize:'.85rem', marginBottom:'.35rem'}}>Order #{serviceOrder.id || serviceOrder.order_id}</div>
-                  <div><strong>Status:</strong> {serviceOrder.status || serviceOrder.state || 'unknown'}</div>
-                  <div className="muted" style={{fontSize:'.85rem', marginTop:'.25rem'}}>
-                    Household size: {serviceOrder.household_size || '—'}{serviceOrder.tier_id ? ` · Tier ${serviceOrder.tier_id}` : ''}
-                  </div>
-                  {serviceOrderSessionId && (
-                    <div style={{marginTop:'.35rem'}}><strong>Stripe session:</strong> {serviceOrderSessionId}</div>
-                  )}
-                  {serviceOrderCheckoutUrl && (
-                    <div className="muted" style={{marginTop:'.25rem', wordBreak:'break-all'}}>Checkout URL: {serviceOrderCheckoutUrl}</div>
-                  )}
-                  <div style={{marginTop:'.6rem', display:'flex', gap:'.5rem', flexWrap:'wrap'}}>
-                    <button className="btn btn-outline btn-sm" type="button" onClick={refreshServiceOrder} disabled={serviceOrderLoading}>{serviceOrderLoading ? 'Refreshing…' : 'Refresh status'}</button>
-                    <button className="btn btn-primary btn-sm" type="button" onClick={startServiceCheckout} disabled={serviceCheckoutBusy || !payouts.is_active}>{serviceCheckoutBusy ? 'Starting…' : 'Start checkout'}</button>
-                    <button className="btn btn-outline btn-sm" type="button" onClick={cancelServiceOrder} disabled={serviceCancelBusy}>{serviceCancelBusy ? 'Cancelling…' : 'Cancel order'}</button>
-                  </div>
                 </div>
               )}
             </div>
@@ -1605,17 +1652,76 @@ export default function ChefDashboard(){
       )}
 
       {tab==='orders' && (
-        <div className="card">
-          <h3>Orders</h3>
-          {orders.length===0 ? <div className="muted">No orders yet.</div> : (
-            <ul>
-              {orders.map(o => (
-                <li key={o.id || o.order_id}>
-                  <strong>{o.customer_username || o.customer_name || 'Customer'}</strong> — {o.status || 'pending'} — {o.total_value_for_chef ? `$${o.total_value_for_chef}` : ''}
-                </li>
-              ))}
-            </ul>
-          )}
+        <div style={{display:'flex', flexDirection:'column', gap:'1rem'}}>
+          <div className="card">
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'.75rem'}}>
+              <h3 style={{margin:0}}>Service orders</h3>
+              <span className="chip" style={{background:'var(--surface-2)', color:'var(--muted)', border:'1px solid color-mix(in oklab, var(--border) 70%, transparent)'}}>
+                {serviceOrdersLoading ? 'Loading…' : `${serviceOrders.length} ${serviceOrders.length===1?'order':'orders'}`}
+              </span>
+            </div>
+            {serviceOrdersLoading ? (
+              <div className="muted" style={{marginTop:'.75rem'}}>Fetching your service bookings…</div>
+            ) : serviceOrders.length === 0 ? (
+              <div className="muted" style={{marginTop:'.75rem'}}>No service orders yet. Share your profile to collect bookings.</div>
+            ) : (
+              <div style={{display:'flex', flexDirection:'column', gap:'.75rem', marginTop:'.75rem'}}>
+                {serviceOrders.map(order => {
+                  const statusMeta = serviceStatusTone(order.status)
+                  const tierLabel = extractTierLabel(order)
+                  const priceLabel = order.price_summary || order.total_display || toCurrencyDisplay(order.total_value_for_chef, order.currency || order.order_currency)
+                  const scheduleLabel = formatServiceSchedule(order)
+                  const recurring = order.is_subscription ? 'Recurring billing' : ''
+                  const detail = serviceCustomerDetails?.[order.customer] || serviceCustomerDetails?.[String(order.customer)] || null
+                  const displayName = serviceCustomerName(order, detail)
+                  const contactLine = detail?.email || order.customer_email || detail?.username || order.customer_username || ''
+                  return (
+                    <div key={order.id || order.order_id} className="card" style={{border:'1px solid var(--border)', borderRadius:'12px', padding:'.75rem', background:'var(--surface-2)'}}>
+                      <div style={{display:'flex', justifyContent:'space-between', flexWrap:'wrap', gap:'.5rem'}}>
+                        <div>
+                          <div style={{fontWeight:700}}>{displayName}</div>
+                          {contactLine && (
+                            <div className="muted" style={{fontSize:'.85rem'}}>{contactLine}</div>
+                          )}
+                          <div className="muted" style={{fontSize:'.9rem'}}>{serviceOfferingTitle(order)}{tierLabel ? ` · ${tierLabel}` : ''}</div>
+                        </div>
+                        <span className="chip small soft status-chip" style={statusMeta.style}>{statusMeta.label}</span>
+                      </div>
+                      <div className="muted" style={{marginTop:'.45rem', fontSize:'.9rem'}}>{scheduleLabel}</div>
+                      {(recurring || priceLabel) && (
+                        <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap', marginTop:'.5rem', fontSize:'.85rem'}}>
+                          {priceLabel && <span className="chip small soft" style={{background:'rgba(92,184,92,.12)', color:'#1f7a3d'}}>{priceLabel}</span>}
+                          {recurring && <span className="chip small soft" style={{background:'rgba(60,100,200,.12)', color:'#1b3a72'}}>{recurring}</span>}
+                        </div>
+                      )}
+                      {order.special_requests && (
+                        <div className="muted" style={{marginTop:'.5rem', fontSize:'.85rem'}}>
+                          <strong style={{fontWeight:600, color:'var(--text)'}}>Notes:</strong> {order.special_requests}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <h3>Meal orders</h3>
+            {orders.length===0 ? (
+              <div className="muted">No meal orders yet.</div>
+            ) : (
+              <ul style={{marginTop:'.5rem', display:'flex', flexDirection:'column', gap:'.4rem', paddingLeft:'1.05rem'}}>
+                {orders.map(o => (
+                  <li key={o.id || o.order_id}>
+                    <strong>{o.customer_username || o.customer_name || 'Customer'}</strong>
+                    <span className="muted"> — {o.status || 'pending'}</span>
+                    {o.total_value_for_chef ? <span className="muted"> — {toCurrencyDisplay(o.total_value_for_chef, o.currency || 'USD')}</span> : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
       )}
 

@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api, buildErrorMessage } from '../api'
 import { rememberServiceOrderId } from '../utils/serviceOrdersStorage.js'
 import { useAuth } from '../context/AuthContext.jsx'
@@ -97,7 +97,6 @@ export default function PublicChef(){
   const [servicesOutOfArea, setServicesOutOfArea] = useState(false)
   const [serviceViewerLocation, setServiceViewerLocation] = useState({ postal:'', country:'' })
   const [error, setError] = useState(null)
-  const [lightboxIndex, setLightboxIndex] = useState(-1)
   const [mapOpen, setMapOpen] = useState(false)
   const sentryRef = useRef(null)
   const [sticky, setSticky] = useState(false)
@@ -113,6 +112,21 @@ export default function PublicChef(){
   const [bookingForm, setBookingForm] = useState({ ...EMPTY_BOOKING_FORM })
   const [bookingSubmitting, setBookingSubmitting] = useState(false)
   const [bookingError, setBookingError] = useState('')
+  // Gallery infinite scroll
+  const [visiblePhotos, setVisiblePhotos] = useState(12)
+  const galleryRef = useRef(null)
+  const navigate = useNavigate()
+  const chefSlug = useMemo(()=>{
+    return String(chef?.user?.username || username || '').trim()
+  }, [chef?.user?.username, username])
+  const encodedChefSlug = useMemo(()=> encodeURIComponent(chefSlug || ''), [chefSlug])
+
+  const handleGalleryPhotoClick = useCallback((photo, index)=>{
+    if (!chefSlug) return
+    const photoToken = photo?.id != null ? photo.id : index
+    const photoParam = encodeURIComponent(String(photoToken))
+    navigate(`/c/${encodedChefSlug}/gallery?photo=${photoParam}`)
+  }, [navigate, chefSlug, encodedChefSlug])
 
 
   const placeholderMealImage = useMemo(()=>{
@@ -367,7 +381,6 @@ export default function PublicChef(){
 
     const fetchProfile = async ()=>{
       const numericUsername = /^\d+$/.test(username || '')
-      console.log('[PublicChef] fetchProfile', username, numericUsername)
       if (!numericUsername){
         // Try preferred by-username endpoint first
         try{
@@ -721,81 +734,156 @@ export default function PublicChef(){
     return mapped || raw.toUpperCase()
   }, [chef, authUser])
 
+  // Infinite scroll for gallery
+  useEffect(()=>{
+    const handleScroll = ()=>{
+      if (!galleryRef.current || !chef?.photos) return
+      const gallery = galleryRef.current
+      const scrollTop = window.scrollY || document.documentElement.scrollTop
+      const galleryTop = gallery.offsetTop
+      const galleryHeight = gallery.offsetHeight
+      const windowHeight = window.innerHeight
+      const scrollBottom = scrollTop + windowHeight
+      const galleryBottom = galleryTop + galleryHeight
+      
+      // Load more when user scrolls within 300px of gallery bottom
+      if (scrollBottom >= galleryBottom - 300 && visiblePhotos < chef.photos.length){
+        setVisiblePhotos(prev => Math.min(prev + 9, chef.photos.length))
+      }
+    }
+    
+    window.addEventListener('scroll', handleScroll)
+    return ()=> window.removeEventListener('scroll', handleScroll)
+  }, [chef?.photos, visiblePhotos])
+
+  // Reset visible photos when chef changes
+  useEffect(()=>{
+    setVisiblePhotos(12)
+  }, [chef?.id])
+
+  // Keyboard support for lightbox
   return (
-    <div className="page-public-chef">
-      {loading && <div className="muted">Loading…</div>}
+    <div className="page-public-chef-marketplace">
+      {loading && (
+        <div className="chef-marketplace-loading">
+          <div className="spinner" style={{width:40,height:40,borderWidth:4}}></div>
+          <div className="muted">Loading chef profile...</div>
+        </div>
+      )}
       {!loading && error && (
-        <div className="card" style={{borderColor:'#e66'}}>
-          <div style={{fontWeight:700}}>Not available</div>
-          <div className="muted">{error}</div>
-          <div style={{marginTop:'.5rem'}}><Link className="btn btn-outline" to="/chefs">See chefs</Link></div>
+        <div className="chef-marketplace-error">
+          <i className="fa-solid fa-triangle-exclamation" style={{fontSize:48,color:'#f0a000',marginBottom:'1rem'}}></i>
+          <h2>Chef Not Found</h2>
+          <p className="muted">{error}</p>
+          <Link className="btn btn-primary" to="/chefs">Browse All Chefs</Link>
         </div>
       )}
       {!loading && chef && (
-        <div>
+        <div className="chef-marketplace-layout">
           <div ref={sentryRef} aria-hidden />
-          <div className={`cover ${coverImage ? 'has-bg' : ''}`} style={coverImage ? { backgroundImage:`url(${coverImage})` } : undefined}>
-            <div className="cover-inner">
-              <div className="cover-center">
-                <h1 className={`title ${coverImage?'inv':''}`}>{chef?.user?.username || 'Chef'}</h1>
-                {(cityCountry || areaText) && (
-                  <div className={`loc-chip ${coverImage?'inv':''}`} aria-label="Location">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
-                      <path d="M12 22s7-5.686 7-11a7 7 0 10-14 0c0 5.314 7 11 7 11z" stroke="currentColor" strokeWidth="1.6"/>
-                      <circle cx="12" cy="11" r="2.6" stroke="currentColor" strokeWidth="1.6"/>
-                    </svg>
-                    <span>
-                      {cityCountry ? <strong>{cityCountry}</strong> : null}
-                      {cityCountry && areaText ? ' ' : ''}
-                      {areaText ? <span className={coverImage? 'inv' : 'muted'}>(serves {areaText})</span> : null}
-                    </span>
-                  </div>
-                )}
-                <button className="btn btn-outline" onClick={()=> setMapOpen(true)}>View on Map</button>
+          
+          {/* Hero Section - Compelling Storefront */}
+          <div className="chef-hero" style={coverImage ? { backgroundImage:`linear-gradient(rgba(0,0,0,0.4), rgba(0,0,0,0.6)), url(${coverImage})` } : undefined}>
+            <div className="chef-hero-content">
+              {chef.profile_pic_url && (
+                <img src={chef.profile_pic_url} alt={chef?.user?.username||'Chef'} className="chef-hero-avatar" />
+              )}
+              <h1 className="chef-hero-title">{chef?.user?.username || 'Chef'}</h1>
+              <p className="chef-hero-tagline">{chef?.bio || 'Your personal chef for delicious, home-cooked meals'}</p>
+              
+              {(cityCountry || areaText) && (
+                <div className="chef-hero-location">
+                  <i className="fa-solid fa-location-dot"></i>
+                  <span>
+                    {cityCountry && <strong>{cityCountry}</strong>}
+                    {cityCountry && areaText && <span className="muted"> · Serves {areaText}</span>}
+                  </span>
+                </div>
+              )}
+
+              <div className="chef-hero-actions">
+                <a href="#services" className="btn btn-primary btn-lg">
+                  <i className="fa-solid fa-concierge-bell" style={{marginRight:'.5rem'}}></i>
+                  Book Chef Services
+                </a>
+                <Link 
+                  to={`/c/${encodedChefSlug}/gallery`} 
+                  className="btn btn-outline btn-lg" 
+                  style={{background:'rgba(255,255,255,0.15)',borderColor:'rgba(255,255,255,0.4)',color:'#fff'}}
+                >
+                  <i className="fa-solid fa-images" style={{marginRight:'.5rem'}}></i>
+                  View Gallery {chef.photos && chef.photos.length > 0 && `(${chef.photos.length})`}
+                </Link>
+                <a href="#meals" className="btn btn-outline btn-lg" style={{background:'rgba(255,255,255,0.15)',borderColor:'rgba(255,255,255,0.4)',color:'#fff'}}>
+                  <i className="fa-solid fa-utensils" style={{marginRight:'.5rem'}}></i>
+                  See Weekly Menu
+                </a>
+                <button 
+                  className="btn btn-outline btn-lg" 
+                  style={{background:'rgba(255,255,255,0.15)',borderColor:'rgba(255,255,255,0.4)',color:'#fff'}}
+                  onClick={()=> setMapOpen(true)}
+                >
+                  <i className="fa-solid fa-map" style={{marginRight:'.5rem'}}></i>
+                  View Map
+                </button>
               </div>
+
+              {chef?.review_summary && (
+                <div className="chef-hero-reviews">
+                  <i className="fa-solid fa-star" style={{color:'#fbbf24'}}></i>
+                  <span>{chef.review_summary}</span>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Overlapping profile card */}
-          <div className="profile-card card">
-            <div className="profile-card-inner">
-              <div className="avatar-wrap">
-                {chef.profile_pic_url && <img className="avatar-xl" src={chef.profile_pic_url} alt={chef?.user?.username||'Chef'} />}
-              </div>
-              <div className="profile-main">
-                <h2 style={{margin:'0 0 .25rem 0'}}>{chef?.user?.username || 'Chef'}</h2>
-                {chef?.review_summary && <div className="muted" style={{marginBottom:'.35rem'}}>{chef.review_summary}</div>}
-                <div className="actions">
-                  <a className="btn btn-primary" href="#upcoming">See upcoming meals</a>
-                  <Link className="btn btn-outline" to="/meal-plans">Go to my meal plans</Link>
-                  <Link className="btn btn-outline" to="/chefs">Back to chefs</Link>
-                  <button className="btn btn-outline" onClick={()=>{ try{ navigator.clipboard.writeText(window.location.href); window.dispatchEvent(new CustomEvent('global-toast',{ detail:{ text:'Profile link copied', tone:'success' } })) }catch{} }}>Share</button>
+          {/* Main Content Container */}
+          <div className="chef-marketplace-container">
+            
+            {/* About Chef Section */}
+            {(chef.experience || chef.bio) && (
+              <div className="chef-about-section">
+                <div className="chef-about-grid">
+                  {chef.experience && (
+                    <div className="chef-about-card">
+                      <div className="chef-about-icon">
+                        <i className="fa-solid fa-award"></i>
+                      </div>
+                      <h3>Experience</h3>
+                      <p>{chef.experience}</p>
+                    </div>
+                  )}
+                  {chef.bio && (
+                    <div className="chef-about-card">
+                      <div className="chef-about-icon">
+                        <i className="fa-solid fa-circle-info"></i>
+                      </div>
+                      <h3>About</h3>
+                      <p>{chef.bio}</p>
+                    </div>
+                  )}
                 </div>
               </div>
-            </div>
-          </div>
+            )}
 
-          {(chef.experience || chef.bio) && (
-            <div className="grid grid-2 section">
-              <div className="card">
-                <h3>Experience</h3>
-                <div>{chef.experience || '—'}</div>
+          {/* Upcoming Meals - Weekly Menu */}
+          <div className="chef-section" id="meals">
+            <div className="chef-section-header">
+              <div>
+                <h2 className="chef-section-title">
+                  <i className="fa-solid fa-calendar-week"></i>
+                  Weekly Menu
+                </h2>
+                <p className="chef-section-subtitle">Pre-order delicious meals for pickup or delivery</p>
               </div>
-              <div className="card">
-                <h3>About</h3>
-                <div>{chef.bio || '—'}</div>
-              </div>
+              {servesMyArea != null && (
+                <div className={`chef-availability-badge ${servesMyArea ? 'available' : 'unavailable'}`}>
+                  <i className={`fa-solid fa-${servesMyArea ? 'circle-check' : 'circle-xmark'}`}></i>
+                  {servesMyArea ? 'Available in your area' : 'Outside service area'}
+                </div>
+              )}
             </div>
-          )}
-
-          <div className="grid grid-2 section">
-            <div className="card" id="upcoming">
-              <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:'.5rem'}}>
-                <h3 style={{margin:0}}>Upcoming meals</h3>
-                <span className={`chip ${servesMyArea?'':'small'}`} style={{background: servesMyArea? 'var(--gradient-brand)' : '#fff', color: servesMyArea? '#fff' : 'var(--muted)', border: servesMyArea? '0' : '1px solid var(--border)'}}>
-                  {servesMyArea ? 'Serves your area' : 'Outside your area'}
-                </span>
-              </div>
+            <div className="chef-meals-container">
               {waitlistLoading ? (
                 <div className="muted">Loading…</div>
               ) : (
@@ -857,26 +945,27 @@ export default function PublicChef(){
                   )
                 )
               )}
+            </div>
           </div>
-        </div>
 
-        <div className="section" id="services">
-          <div className="card">
-            <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:'.5rem'}}>
-              <h3 style={{margin:0}}>Chef services</h3>
+          {/* Chef Services Section */}
+          <div className="chef-section" id="services">
+            <div className="chef-section-header">
+              <div>
+                <h2 className="chef-section-title">
+                  <i className="fa-solid fa-concierge-bell"></i>
+                  Chef Services
+                </h2>
+                <p className="chef-section-subtitle">Book personalized cooking services for your home or events</p>
+              </div>
               {servicesChipLabel && (
-                <span
-                  className={`chip ${servicesAvailableInArea ? '' : 'small'}`}
-                  style={{
-                    background: servicesAvailableInArea ? 'var(--gradient-brand)' : '#fff',
-                    color: servicesAvailableInArea ? '#fff' : 'var(--muted)',
-                    border: servicesAvailableInArea ? '0' : '1px solid var(--border)'
-                  }}
-                >
+                <div className={`chef-availability-badge ${servicesAvailableInArea ? 'available' : 'unavailable'}`}>
+                  <i className={`fa-solid fa-${servicesAvailableInArea ? 'circle-check' : 'circle-xmark'}`}></i>
                   {servicesChipLabel}
-                </span>
+                </div>
               )}
             </div>
+            <div className="chef-services-container">
             {servicesLoading ? (
               <div className="muted" style={{marginTop:'.5rem'}}>Loading services…</div>
             ) : servicesError ? (
@@ -1075,75 +1164,87 @@ export default function PublicChef(){
             ) : (
               <div className="muted" style={{marginTop:'.5rem'}}>Add your location to check service availability.</div>
             )}
+            </div>
           </div>
-        </div>
 
-        {/* Signature dishes (multi-item carousel) */}
-        <div className="section sig-section">
-          <h3 className="sig-title">Signature Dishes</h3>
+          {/* Signature Dishes Section - Instagram Style Grid */}
+          <div className="chef-section">
+            <div className="chef-section-header">
+              <div>
+                <h2 className="chef-section-title">
+                  <i className="fa-solid fa-images"></i>
+                  Chef's Gallery
+                </h2>
+                <p className="chef-section-subtitle">Browse {chef?.user?.username}'s culinary creations</p>
+              </div>
+              {chef.photos && chef.photos.length > 0 && (
+                <div className="chef-gallery-count">
+                  <i className="fa-solid fa-camera"></i>
+                  <span>{chef.photos.length} {chef.photos.length === 1 ? 'photo' : 'photos'}</span>
+                </div>
+              )}
+            </div>
             {!chef.photos || chef.photos.length===0 ? (
-              <div className="muted" style={{textAlign:'center'}}>No photos yet.</div>
+              <div className="chef-gallery-empty">
+                <i className="fa-solid fa-images" style={{fontSize:48,opacity:0.3,marginBottom:'1rem'}}></i>
+                <p className="muted">No photos yet</p>
+              </div>
             ) : (
-              <div className="sig-carousel">
-                <MultiCarousel
-                  ariaLabel="Signature dishes"
-                  autoPlay={true}
-                  intervalMs={4200}
-                  loop={true}
-                  items={chef.photos.map((p, idx) => (
-                    <figure
-                      key={p.id || idx}
-                      className="sig-tile"
-                      onClick={()=> setLightboxIndex(idx)}
+              <div ref={galleryRef}>
+                <div className="chef-gallery-grid">
+                  {chef.photos.slice(0, visiblePhotos).map((photo, idx) => (
+                    <div
+                      key={photo.id || idx}
+                      className="chef-gallery-item"
+                      onClick={() => handleGalleryPhotoClick(photo, idx)}
                       role="button"
                       tabIndex={0}
-                      onKeyDown={(e)=>{ if (e.key==='Enter') setLightboxIndex(idx) }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleGalleryPhotoClick(photo, idx) }}
+                      aria-label={photo.title || `Photo ${idx + 1}`}
                     >
-                      <div className="sig-img">
-                        <img src={p.image_url} alt={p.title||'Photo'} loading="lazy" decoding="async" />
-                        {p.title && (
-                          <div className="sig-overlay"><span className="title">{p.title}</span></div>
-                        )}
+                      <div className="chef-gallery-image">
+                        <img 
+                          src={photo.image_url} 
+                          alt={photo.title || 'Dish photo'} 
+                          loading="lazy" 
+                          decoding="async"
+                        />
+                        <div className="chef-gallery-overlay">
+                          <i className="fa-solid fa-expand"></i>
+                          {photo.title && (
+                            <span className="chef-gallery-title">{photo.title}</span>
+                          )}
+                        </div>
                       </div>
-                    </figure>
+                    </div>
                   ))}
-                />
+                </div>
+                {visiblePhotos < chef.photos.length && (
+                  <div className="chef-gallery-loading">
+                    <div className="spinner" style={{width:24,height:24,borderWidth:3}}></div>
+                    <span>Loading more photos...</span>
+                  </div>
+                )}
+                {chef.photos.length > 12 && (
+                  <div style={{display:'flex',justifyContent:'center',marginTop:'1.5rem'}}>
+                    <Link 
+                      to={`/c/${encodedChefSlug}/gallery`} 
+                      className="btn btn-primary btn-lg"
+                    >
+                      <i className="fa-solid fa-images" style={{marginRight:'.5rem'}}></i>
+                      View Full Gallery ({chef.photos.length} photos)
+                    </Link>
+                  </div>
+                )}
               </div>
             )}
           </div>
 
-          {lightboxIndex>=0 && (
-            <div className="lightbox" role="dialog" aria-modal="true" onClick={()=> setLightboxIndex(-1)}>
-              <div className="lightbox-inner" onClick={(e)=> e.stopPropagation()}>
-                <img src={chef.photos[lightboxIndex]?.image_url} alt={chef.photos[lightboxIndex]?.title||'Photo'} />
-                <div className="lightbox-caption">
-                  <div className="title">{chef.photos[lightboxIndex]?.title || 'Untitled'}</div>
-                  {chef.photos[lightboxIndex]?.caption && <div className="sub">{chef.photos[lightboxIndex].caption}</div>}
-                </div>
-                <button className="icon-btn close" aria-label="Close" onClick={()=> setLightboxIndex(-1)}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
-                </button>
-                {Array.isArray(chef.photos) && chef.photos.length>1 && (
-                  <>
-                    <button
-                      className="prev"
-                      aria-label="Previous photo"
-                      onClick={(e)=>{ e.stopPropagation(); setLightboxIndex(i=> (i-1+chef.photos.length)%chef.photos.length) }}
-                    >
-                      ‹
-                    </button>
-                    <button
-                      className="next"
-                      aria-label="Next photo"
-                      onClick={(e)=>{ e.stopPropagation(); setLightboxIndex(i=> (i+1)%chef.photos.length) }}
-                    >
-                      ›
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          )}
+          {/* Close marketplace container */}
+          </div>
+
+          {/* Lightbox and Map are outside marketplace container */}
+
           <MapPanel
             open={mapOpen}
             onClose={()=> setMapOpen(false)}

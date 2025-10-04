@@ -1193,7 +1193,7 @@ export default function MealPlans(){
   )
 }
 
-function OrdersTab({ onNotify, verifyingOrderId, setVerifyingOrderId, onPollRequest }){
+export function OrdersTab({ onNotify, verifyingOrderId, setVerifyingOrderId, onPollRequest }){
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [orders, setOrders] = useState([])

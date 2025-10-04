@@ -91,7 +91,7 @@ export default function NavBar(){
           {isAuthed && (
             (()=>{
               const items = []
-              if (!inChef){ items.push({ to:'/chat', label:'Chat' }); items.push({ to:'/health', label:'Health' }) }
+              if (!inChef){ items.push({ to:'/orders', label:'Orders' }); items.push({ to:'/chat', label:'Chat' }); items.push({ to:'/health', label:'Health' }) }
               items.push({ to:'/chefs', label:'Chefs' })
               items.push({ to:'/profile', label:'Profile' })
               if (items.length === 0) return null

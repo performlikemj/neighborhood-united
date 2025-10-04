@@ -266,7 +266,7 @@ export default function Profile(){
     if (country) fd.append('country', country)
     if (chefForm.profile_pic) fd.append('profile_pic', chefForm.profile_pic)
     try{
-      const resp = await api.post('/chefs/api/chefs/submit-chef-request/', fd, { headers:{'Content-Type':'multipart/form-data'} })
+      const resp = await api.post('/chefs/api/submit-chef-request/', fd, { headers:{'Content-Type':'multipart/form-data'} })
       if (resp.status===200 || resp.status===201){
         setApplyMsg('Application submitted. We will notify you when approved.')
         const u = await api.get('/auth/api/user_details/'); setUser(u.data)
@@ -495,7 +495,7 @@ export default function Profile(){
                     fd.append('bio', chefForm.bio)
                     fd.append('serving_areas', chefForm.serving_areas)
                     if (chefForm.profile_pic) fd.append('profile_pic', chefForm.profile_pic)
-                    const resp = await api.post('/chefs/api/chefs/submit-chef-request/', fd, { headers:{'Content-Type':'multipart/form-data'} })
+                    const resp = await api.post('/chefs/api/submit-chef-request/', fd, { headers:{'Content-Type':'multipart/form-data'} })
                     if (resp.status===200 || resp.status===201){
                       setApplyMsg('Application submitted. We will notify you when approved.')
                     } else {

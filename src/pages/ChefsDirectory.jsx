@@ -5,17 +5,15 @@ import { useAuth } from '../context/AuthContext.jsx'
 import { countryNameFromCode } from '../utils/geo.js'
 
 function renderAreas(areas){
-  if (!Array.isArray(areas) || areas.length === 0) return ''
-  const names = areas
+  if (!Array.isArray(areas) || areas.length === 0) return []
+  return areas
     .map(p => (p?.postal_code || p?.postalcode || p?.code || p?.name || ''))
     .filter(Boolean)
-  return names.join(', ')
 }
 
-function formatAreasDisplay(areas){
+function renderAreasString(areas){
   const codes = renderAreas(areas)
-  if (!codes) return ''
-  return `(serves ${codes})`
+  return codes.join(', ')
 }
 
 function extractCityCountry(chef, authUser){
@@ -57,11 +55,11 @@ export default function ChefsDirectory(){
     return chefs.filter(c => {
       const name = c?.user?.username?.toLowerCase?.() || ''
       const areas = renderAreas(c?.serving_postalcodes)
-      const matchQ = !q || name.includes(q) || areas.toLowerCase().includes(q)
+      const areasStr = areas.join(', ').toLowerCase()
+      const matchQ = !q || name.includes(q) || areasStr.includes(q)
       if (!matchQ) return false
       if (onlyServesMe && mePostal){
-        const tokens = areas.split(/\s*,\s*/)
-        return tokens.includes(mePostal)
+        return areas.includes(mePostal)
       }
       return true
     })
@@ -100,48 +98,194 @@ export default function ChefsDirectory(){
   }, [])
 
   return (
-    <div>
-      <h2>Chefs</h2>
-      <div className="card" style={{display:'flex', gap:'.5rem', alignItems:'center'}}>
-        <input className="input" placeholder="Search by name or area…" value={query} onChange={e=> setQuery(e.target.value)} />
-        {mePostal && (
-          <label style={{display:'inline-flex', alignItems:'center', gap:'.35rem'}}>
-            <input type="checkbox" checked={onlyServesMe} onChange={e=> setOnlyServesMe(e.target.checked)} />
-            <span>Serves my area ({mePostal})</span>
-          </label>
+    <div className="page-chefs-directory">
+      {/* Hero Section */}
+      <div className="chefs-hero">
+        <div className="chefs-hero-content">
+          <h1 className="chefs-hero-title">
+            <i className="fa-solid fa-hat-chef" style={{marginRight: '0.5rem'}}></i>
+            Find Your Chef
+          </h1>
+          <p className="chefs-hero-subtitle">
+            Connect with talented chefs in your area for personalized meal experiences
+          </p>
+        </div>
+      </div>
+
+      {/* Search & Filters */}
+      <div className="chefs-search-bar">
+        <div className="chefs-search-content">
+          <div className="search-input-wrapper">
+            <i className="fa-solid fa-search search-icon"></i>
+            <input 
+              className="search-input" 
+              placeholder="Search by chef name or service area…" 
+              value={query} 
+              onChange={e=> setQuery(e.target.value)} 
+            />
+            {query && (
+              <button 
+                className="search-clear"
+                onClick={() => setQuery('')}
+                aria-label="Clear search"
+              >
+                <i className="fa-solid fa-times"></i>
+              </button>
+            )}
+          </div>
+          {mePostal && (
+            <label className="filter-checkbox">
+              <input 
+                type="checkbox" 
+                checked={onlyServesMe} 
+                onChange={e=> setOnlyServesMe(e.target.checked)} 
+              />
+              <span className="checkbox-label">
+                <i className="fa-solid fa-location-dot"></i>
+                Serves my area ({mePostal})
+              </span>
+            </label>
+          )}
+        </div>
+        {(query || onlyServesMe) && (
+          <div className="chefs-results-summary">
+            <span className="results-count">
+              {filtered.length} {filtered.length === 1 ? 'chef' : 'chefs'} found
+            </span>
+            {(query || onlyServesMe) && (
+              <button 
+                className="clear-all-btn"
+                onClick={() => {
+                  setQuery('')
+                  setOnlyServesMe(false)
+                }}
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
         )}
       </div>
 
-      {loading && <div className="muted">Loading…</div>}
-      {!loading && error && <div className="card" style={{borderColor:'#e66'}}>{error}</div>}
-      {!loading && !error && (
-        <div className="grid grid-3">
-          {filtered.map(c => (
-            <Link key={c.id} to={`/c/${encodeURIComponent(c?.user?.username || c.id)}`} className="card" style={{textDecoration:'none'}}>
-              <div style={{display:'flex', alignItems:'center', gap:'.6rem'}}>
-                {c.profile_pic_url && <img src={c.profile_pic_url} alt={c?.user?.username||'Chef'} style={{height:48, width:48, borderRadius:'999px', objectFit:'cover', border:'1px solid var(--border)'}} />}
-                <div>
-                  <div style={{fontWeight:800, color:'inherit'}}>{c?.user?.username || 'Chef'}</div>
-                  <div className="muted" style={{fontSize:'.9rem'}}>
-                    {(()=>{
-                      const loc = extractCityCountry({
-                        ...c,
-                        user: { ...(c?.user||{}), address: (userDetailsById?.[c?.user?.id]?.address || c?.user?.address) }
-                      }, user)
-                      
-                      const areas = formatAreasDisplay(c.serving_postalcodes)
-                      if (loc && areas) return <><span>{loc} </span><span>{areas}</span></>
-                      if (loc) return loc
-                      const codes = renderAreas(c.serving_postalcodes)
-                      return codes ? `Serves ${codes}` : '—'
-                    })()}
+      {/* Content */}
+      <div className="chefs-container">
+        {loading && (
+          <div className="chefs-loading">
+            <div className="spinner" style={{width: 40, height: 40, borderWidth: 4}}></div>
+            <p>Finding chefs...</p>
+          </div>
+        )}
+        
+        {!loading && error && (
+          <div className="chefs-error">
+            <i className="fa-solid fa-triangle-exclamation"></i>
+            <h3>Unable to load chefs</h3>
+            <p>{error}</p>
+          </div>
+        )}
+        
+        {!loading && !error && filtered.length === 0 && (
+          <div className="chefs-empty">
+            <i className="fa-solid fa-search"></i>
+            <h3>No chefs found</h3>
+            <p className="muted">
+              {query || onlyServesMe 
+                ? 'Try adjusting your search or filters' 
+                : 'No chefs are currently available'}
+            </p>
+            {(query || onlyServesMe) && (
+              <button 
+                className="btn btn-primary"
+                onClick={() => {
+                  setQuery('')
+                  setOnlyServesMe(false)
+                }}
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
+        )}
+        
+        {!loading && !error && filtered.length > 0 && (
+          <div className="chefs-grid">
+            {filtered.map(c => {
+              const chefUser = {
+                ...c,
+                user: { ...(c?.user||{}), address: (userDetailsById?.[c?.user?.id]?.address || c?.user?.address) }
+              }
+              const location = extractCityCountry(chefUser, user)
+              const serviceAreas = renderAreas(c.serving_postalcodes)
+              const photoCount = c?.photos?.length || 0
+              const bio = c?.bio || ''
+              
+              return (
+                <Link 
+                  key={c.id} 
+                  to={`/c/${encodeURIComponent(c?.user?.username || c.id)}`} 
+                  className="chef-card"
+                >
+                  <div className="chef-card-header">
+                    <div className="chef-avatar-wrapper">
+                      {c.profile_pic_url ? (
+                        <img 
+                          src={c.profile_pic_url} 
+                          alt={c?.user?.username||'Chef'} 
+                          className="chef-avatar"
+                        />
+                      ) : (
+                        <div className="chef-avatar-placeholder">
+                          <i className="fa-solid fa-user"></i>
+                        </div>
+                      )}
+                    </div>
+                    <div className="chef-card-info">
+                      <h3 className="chef-name">{c?.user?.username || 'Chef'}</h3>
+                      {location && (
+                        <div className="chef-location">
+                          <i className="fa-solid fa-location-dot"></i>
+                          <span>{location}</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </div>
-            </Link>
-          ))}
-        </div>
-      )}
+                  
+                  {bio && (
+                    <p className="chef-bio">{bio}</p>
+                  )}
+                  
+                  <div className="chef-card-footer">
+                    {serviceAreas.length > 0 && (
+                      <div className="chef-service-areas">
+                        <i className="fa-solid fa-map-pin"></i>
+                        <div className="service-area-tags">
+                          {serviceAreas.slice(0, 3).map((area, idx) => (
+                            <span key={idx} className="service-area-tag">{area}</span>
+                          ))}
+                          {serviceAreas.length > 3 && (
+                            <span className="service-area-tag more">+{serviceAreas.length - 3}</span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {photoCount > 0 && (
+                      <div className="chef-stat">
+                        <i className="fa-solid fa-images"></i>
+                        <span>{photoCount} {photoCount === 1 ? 'photo' : 'photos'}</span>
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="chef-card-action">
+                    <span>View Profile</span>
+                    <i className="fa-solid fa-arrow-right"></i>
+                  </div>
+                </Link>
+              )
+            })}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

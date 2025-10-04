@@ -58,3 +58,36 @@ test('PublicChef labels whether a service tier is recurring', () => {
     'Expected a prominent visual badge indicating recurring vs. one-time tier.'
   )
 })
+
+test('PublicChef renders start time as a half-hour dropdown', () => {
+  const source = loadSource()
+  assert.match(
+    source,
+    /<select[^>]*serviceStartTime/,
+    'Expected a select element for choosing service start time.'
+  )
+  assert.match(
+    source,
+    /<option[^>]*value=\{time\}/,
+    'Start time select should map option values to the half-hour list.'
+  )
+})
+
+test('PublicChef routes gallery clicks to the dedicated gallery page', () => {
+  const source = loadSource()
+  assert.match(
+    source,
+    /useNavigate\(/,
+    'Expected PublicChef to use the router navigate hook for gallery routing.'
+  )
+  assert.match(
+    source,
+    /navigate\(.*\/c\/\$\{[^}]+\}\/gallery\?photo=\$\{[^}]+\}/,
+    'Expected PublicChef to navigate to the chef gallery page with a selected photo parameter.'
+  )
+})
+
+test('PublicChef logs serializer payload from the id-based fetch', () => {
+  const source = loadSource()
+  assert.ok(source.includes("[PublicChef] serializer /chefs/"), 'Expected PublicChef to log the serializer output for the ID-based fetch.')
+})

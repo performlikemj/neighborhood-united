@@ -10,6 +10,7 @@ import Chat from './pages/Chat.jsx'
 import MealPlans from './pages/MealPlans.jsx'
 import Profile from './pages/Profile.jsx'
 import ChefDashboard from './pages/ChefDashboard.jsx'
+import CustomerOrders from './pages/CustomerOrders.jsx'
 import NotFound from './pages/NotFound.jsx'
 import AccessDenied from './pages/AccessDenied.jsx'
 import VerifyEmail from './pages/VerifyEmail.jsx'
@@ -19,6 +20,7 @@ import EmailAuth from './pages/EmailAuth.jsx'
 // History removed
 import HealthMetrics from './pages/HealthMetrics.jsx'
 import PublicChef from './pages/PublicChef.jsx'
+import ChefGallery from './pages/ChefGallery.jsx'
 import ChefsDirectory from './pages/ChefsDirectory.jsx'
 import Onboarding from './pages/Onboarding.jsx'
 
@@ -45,32 +47,38 @@ export default function App(){
   return (
     <div>
       <NavBar />
-      <div className="container">
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/account" element={<Account />} />
-          <Route path="/register" element={<Register />} />
-          <Route path="/onboarding" element={<Onboarding />} />
-          <Route path="/chat" element={<ProtectedRoute requiredRole="customer"><Chat /></ProtectedRoute>} />
-          <Route path="/meal-plans" element={<ProtectedRoute requiredRole="customer"><MealPlans /></ProtectedRoute>} />
-          <Route path="/meal_plans" element={<MealPlanApproval />} />
-          <Route path="/email_auth" element={<EmailAuth />} />
-          <Route path="/assistant" element={<EmailAuth />} />
-          <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
-          <Route path="/chefs/dashboard" element={<ProtectedRoute requiredRole="chef"><ChefDashboard /></ProtectedRoute>} />
-          <Route path="/verify-email" element={<ProtectedRoute><VerifyEmail /></ProtectedRoute>} />
-          <Route path="/c/:username" element={<PublicChef />} />
-          <Route path="/chefs" element={<ChefsDirectory />} />
-          {/* History route removed */}
-          <Route path="/health" element={<ProtectedRoute requiredRole="customer"><HealthMetrics /></ProtectedRoute>} />
-          <Route path="/403" element={<AccessDenied />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-        <div className="footer">
-          <p>Cook with care. Share with joy. — <a href="https://www.buymeacoffee.com/sautai" target="_blank">Support sautai</a></p>
-        </div>
-      </div>
+      <Routes>
+        <Route path="/chefs/dashboard" element={<ProtectedRoute requiredRole="chef"><ChefDashboard /></ProtectedRoute>} />
+        <Route path="*" element={
+          <div className="container">
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/account" element={<Account />} />
+              <Route path="/register" element={<Register />} />
+              <Route path="/onboarding" element={<Onboarding />} />
+              <Route path="/chat" element={<ProtectedRoute requiredRole="customer"><Chat /></ProtectedRoute>} />
+              <Route path="/meal-plans" element={<ProtectedRoute requiredRole="customer"><MealPlans /></ProtectedRoute>} />
+              <Route path="/orders" element={<ProtectedRoute requiredRole="customer"><CustomerOrders /></ProtectedRoute>} />
+              <Route path="/meal_plans" element={<MealPlanApproval />} />
+              <Route path="/email_auth" element={<EmailAuth />} />
+              <Route path="/assistant" element={<EmailAuth />} />
+              <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
+              <Route path="/verify-email" element={<ProtectedRoute><VerifyEmail /></ProtectedRoute>} />
+              <Route path="/c/:username" element={<PublicChef />} />
+              <Route path="/c/:username/gallery" element={<ChefGallery />} />
+              <Route path="/chefs" element={<ChefsDirectory />} />
+              {/* History route removed */}
+              <Route path="/health" element={<ProtectedRoute requiredRole="customer"><HealthMetrics /></ProtectedRoute>} />
+              <Route path="/403" element={<AccessDenied />} />
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+            <div className="footer">
+              <p>Cook with care. Share with joy. — <a href="https://www.buymeacoffee.com/sautai" target="_blank">Support sautai</a></p>
+            </div>
+          </div>
+        } />
+      </Routes>
       <GlobalToastOverlay toasts={globalToasts} />
     </div>
   )

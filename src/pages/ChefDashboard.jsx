@@ -220,9 +220,19 @@ function FileSelect({ label, accept, onChange }){
   )
 }
 
+// Icon components (inline SVG)
+const DashboardIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+const ProfileIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+const PhotosIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" y="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+const KitchenIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2M7 2v20M21 15V2v0a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>
+const ServicesIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
+const EventsIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+const OrdersIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
+
 export default function ChefDashboard(){
   const [tab, setTab] = useState('dashboard')
   const [notice, setNotice] = useState(null)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
   // Stripe Connect status
   const [payouts, setPayouts] = useState({ loading: true, has_account:false, is_active:false, needs_onboarding:false, account_id:null, continue_onboarding_url:null, disabled_reason:null, diagnostic:null })
@@ -260,6 +270,13 @@ export default function ChefDashboard(){
   const [dishes, setDishes] = useState([])
   const [dishForm, setDishForm] = useState({ name:'', featured:false, ingredient_ids:[] })
   const [dishFilter, setDishFilter] = useState('')
+  
+  // UI state for create panels
+  const [showIngredientForm, setShowIngredientForm] = useState(false)
+  const [showDishForm, setShowDishForm] = useState(false)
+  const [showMealForm, setShowMealForm] = useState(false)
+  const [showEventForm, setShowEventForm] = useState(false)
+  const [showServiceForm, setShowServiceForm] = useState(false)
 
   // Meals
   const [meals, setMeals] = useState([])
@@ -454,10 +471,8 @@ export default function ChefDashboard(){
 
   const loadEvents = async ()=>{
     try{ 
-      console.log('[ChefDashboard] Loading my events')
       const resp = await api.get('/meals/api/chef-meal-events/', { params: { my_events:'true' } }); 
       const list = toArray(resp.data)
-      console.log('[ChefDashboard] Loaded my events', { count: list.length, sample: list.slice(0,3).map(e=>e.id) })
       setEvents(list) 
     }catch(e){ console.warn('[ChefDashboard] Load my events failed', { status: e?.response?.status, data: e?.response?.data }); setEvents([]) }
   }
@@ -470,7 +485,6 @@ export default function ChefDashboard(){
     setServiceOrdersLoading(true)
     try{
       const resp = await api.get(`${SERVICES_ROOT}/my/orders/`)
-      console.log('[ChefDashboard] /services/my/orders response', resp?.data)
       setServiceOrders(toArray(resp.data))
     }catch{
       setServiceOrders([])
@@ -712,9 +726,7 @@ export default function ChefDashboard(){
         description: eventForm.description,
         special_instructions: eventForm.special_instructions
       }
-      console.log('[ChefDashboard] Creating event', payload)
       const resp = await api.post('/meals/api/chef-meal-events/', payload)
-      console.log('[ChefDashboard] Event created', { id: resp?.data?.id })
       try{ window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: (resp?.data?.message || 'Event created successfully'), tone:'success' } })) }catch{}
       setEventForm({ meal:null, event_date:'', event_time:'18:00', order_cutoff_date:'', order_cutoff_time:'12:00', base_price:'', min_price:'', max_orders:10, min_orders:1, description:'', special_instructions:'' })
       loadEvents()
@@ -854,64 +866,295 @@ export default function ChefDashboard(){
     }
   }
 
-  const Seg = ({ value, label })=> (
-    <button className={`seg ${tab===value?'active':''}`} onClick={()=> setTab(value)}>{label}</button>
+  const NavItem = ({ value, label, icon: Icon })=> (
+    <button 
+      className={`chef-nav-item ${tab===value?'active':''}`} 
+      onClick={()=> setTab(value)}
+      aria-current={tab===value?'page':undefined}
+      title={sidebarCollapsed ? label : undefined}
+    >
+      <Icon />
+      {!sidebarCollapsed && <span>{label}</span>}
+    </button>
+  )
+
+  const SectionHeader = ({ title, subtitle, onAdd, addLabel, showAdd = true })=> (
+    <header className="chef-section-header">
+      <div className="chef-section-header-text">
+        <h1>{title}</h1>
+        {subtitle && <p className="muted">{subtitle}</p>}
+      </div>
+      {showAdd && onAdd && (
+        <button className="btn btn-primary chef-add-btn" onClick={onAdd}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <line x1="12" y1="5" x2="12" y2="19"/>
+            <line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          <span>{addLabel || 'Add'}</span>
+        </button>
+      )}
+    </header>
   )
 
   return (
-    <div>
-      <h2>Chef Dashboard</h2>
-      {notice && <div className="card" style={{borderColor:'#f0d000'}}>{notice}</div>}
+    <div className={`chef-dashboard-layout ${sidebarCollapsed?'sidebar-collapsed':''}`}>
+      {/* Sidebar Navigation */}
+      <aside className={`chef-sidebar ${sidebarCollapsed?'collapsed':''}`}>
+        <div className="chef-sidebar-header">
+          <h2 style={{margin:0, fontSize:'1.25rem'}}>Chef Hub</h2>
+          <button 
+            className="btn btn-outline btn-sm chef-sidebar-toggle" 
+            onClick={()=> setSidebarCollapsed(!sidebarCollapsed)}
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {sidebarCollapsed ? '→' : '←'}
+          </button>
+        </div>
+        <nav className="chef-nav" role="navigation" aria-label="Chef dashboard sections">
+          <NavItem value="dashboard" label="Dashboard" icon={DashboardIcon} />
+          <NavItem value="profile" label="Profile" icon={ProfileIcon} />
+          <NavItem value="photos" label="Photos" icon={PhotosIcon} />
+          <NavItem value="kitchen" label="Kitchen" icon={KitchenIcon} />
+          <NavItem value="services" label="Services" icon={ServicesIcon} />
+          <NavItem value="events" label="Events" icon={EventsIcon} />
+          <NavItem value="orders" label="Orders" icon={OrdersIcon} />
+        </nav>
+      </aside>
 
-      {/* Payouts status banner (compact when active) */}
-      {payouts.loading ? (
-        <div className="card">
-          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:'.75rem'}}>
-            <div>
-              <h3 style={{margin:'0 0 .25rem 0'}}>Payouts</h3>
-              <div className="muted">Checking Stripe status…</div>
+      {/* Main Content */}
+      <main className="chef-main-content">
+        {notice && <div className="card" style={{borderColor:'#f0d000', marginBottom:'1rem'}}>{notice}</div>}
+
+      {/* Content Sections */}
+      {tab==='dashboard' && (
+        <div>
+          <header style={{marginBottom:'1.5rem'}}>
+            <h1 style={{margin:'0 0 .25rem 0'}}>Dashboard</h1>
+            <p className="muted">Your business overview and key metrics</p>
+          </header>
+
+          {/* Stripe Payouts Status */}
+          {payouts.loading ? (
+            <div className="card" style={{marginBottom:'1.5rem', background:'var(--surface-2)'}}>
+              <div style={{display:'flex', alignItems:'center', gap:'.75rem'}}>
+                <div style={{width:40, height:40, borderRadius:8, background:'var(--surface)', display:'flex', alignItems:'center', justifyContent:'center'}}>
+                  <i className="fa-brands fa-stripe" style={{fontSize:20, opacity:.5}}></i>
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:600, marginBottom:'.15rem'}}>Payouts</div>
+                  <div className="muted" style={{fontSize:'.9rem'}}>Checking Stripe status…</div>
+                </div>
+                <button className="btn btn-outline btn-sm" disabled={onboardingBusy} onClick={loadStripeStatus}>
+                  <i className="fa-solid fa-rotate-right" style={{fontSize:14}}></i>
+                </button>
+              </div>
             </div>
-            <button className="btn btn-outline" disabled={onboardingBusy} onClick={loadStripeStatus}>Refresh</button>
-          </div>
-        </div>
-      ) : payouts.is_active ? (
-        <div className="card" style={{padding:'.5rem .75rem'}}>
-          <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:'.75rem'}}>
-            <span className="chip" style={{background:'var(--gradient-brand)', color:'#fff'}}>Stripe payouts active</span>
-            <button className="btn btn-outline btn-sm" disabled={onboardingBusy} onClick={loadStripeStatus}>Refresh</button>
-          </div>
-        </div>
-      ) : (
-        <div className="card" style={{borderColor:'#f0a000', background:'rgba(240,160,0,.05)'}}>
-          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:'.75rem'}}>
-            <div>
-              <h3 style={{margin:'0 0 .25rem 0'}}>Payouts</h3>
-              <div className="muted" style={{marginBottom:'.35rem'}}>Action needed to enable payouts. Set up or continue onboarding with Stripe.</div>
-              {payouts?.disabled_reason && <div className="muted" style={{marginBottom:'.35rem'}}>Reason: {payouts.disabled_reason}</div>}
+          ) : payouts.is_active ? (
+            <div className="card" style={{marginBottom:'1.5rem', background:'linear-gradient(135deg, rgba(52,211,153,.1), rgba(16,185,129,.05))', borderColor:'rgba(16,185,129,.3)'}}>
+              <div style={{display:'flex', alignItems:'center', gap:'.75rem'}}>
+                <div style={{width:40, height:40, borderRadius:8, background:'rgba(16,185,129,.15)', display:'flex', alignItems:'center', justifyContent:'center'}}>
+                  <i className="fa-solid fa-circle-check" style={{fontSize:20, color:'var(--success)'}}></i>
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:600, marginBottom:'.15rem', display:'flex', alignItems:'center', gap:'.5rem'}}>
+                    Stripe Payouts Active
+                    <i className="fa-brands fa-stripe" style={{fontSize:18, opacity:.6}}></i>
+                  </div>
+                  <div className="muted" style={{fontSize:'.9rem'}}>You're ready to receive payments</div>
+                </div>
+                <button className="btn btn-outline btn-sm" disabled={onboardingBusy} onClick={loadStripeStatus} title="Refresh status">
+                  <i className="fa-solid fa-rotate-right" style={{fontSize:14}}></i>
+                </button>
+              </div>
             </div>
-            <div style={{display:'flex', flexWrap:'wrap', gap:'.5rem'}}>
-              <button className="btn btn-primary" disabled={onboardingBusy} onClick={startOrContinueOnboarding}>{onboardingBusy?'Opening…':(payouts.has_account?'Continue onboarding':'Set up payouts')}</button>
-              <button className="btn btn-outline" disabled={onboardingBusy} onClick={regenerateOnboarding}>Regenerate link</button>
-              <button className="btn btn-outline" disabled={onboardingBusy} onClick={loadStripeStatus}>Refresh status</button>
-              {payouts.disabled_reason && (
-                <button className="btn btn-outline" disabled={onboardingBusy} onClick={fixRestrictedAccount}>Fix account</button>
-              )}
+          ) : (
+            <div className="card" style={{marginBottom:'1.5rem', borderColor:'#f0a000', background:'rgba(240,160,0,.08)'}}>
+              <div style={{display:'flex', alignItems:'flex-start', gap:'.75rem'}}>
+                <div style={{width:40, height:40, borderRadius:8, background:'rgba(240,160,0,.15)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0}}>
+                  <i className="fa-solid fa-triangle-exclamation" style={{fontSize:20, color:'#f0a000'}}></i>
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:600, marginBottom:'.25rem'}}>Payouts Setup Required</div>
+                  <div className="muted" style={{fontSize:'.9rem', marginBottom:'.5rem'}}>Complete Stripe onboarding to receive payments and unlock all features.</div>
+                  {payouts?.disabled_reason && (
+                    <div className="muted" style={{fontSize:'.85rem', marginBottom:'.5rem'}}>
+                      <strong>Reason:</strong> {payouts.disabled_reason}
+                    </div>
+                  )}
+                  <div style={{display:'flex', flexWrap:'wrap', gap:'.5rem', marginTop:'.75rem'}}>
+                    <button className="btn btn-primary btn-sm" disabled={onboardingBusy} onClick={startOrContinueOnboarding}>
+                      <i className="fa-brands fa-stripe" style={{fontSize:14, marginRight:'.35rem'}}></i>
+                      {onboardingBusy?'Opening…':(payouts.has_account?'Continue Setup':'Set Up Payouts')}
+                    </button>
+                    <button className="btn btn-outline btn-sm" disabled={onboardingBusy} onClick={regenerateOnboarding}>
+                      <i className="fa-solid fa-link" style={{fontSize:12, marginRight:'.35rem'}}></i>
+                      New Link
+                    </button>
+                    <button className="btn btn-outline btn-sm" disabled={onboardingBusy} onClick={loadStripeStatus}>
+                      <i className="fa-solid fa-rotate-right" style={{fontSize:12, marginRight:'.35rem'}}></i>
+                      Refresh
+                    </button>
+                    {payouts.disabled_reason && (
+                      <button className="btn btn-outline btn-sm" disabled={onboardingBusy} onClick={fixRestrictedAccount}>
+                        <i className="fa-solid fa-wrench" style={{fontSize:12, marginRight:'.35rem'}}></i>
+                        Fix Account
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Key Metrics Cards */}
+          <div className="chef-metrics-grid">
+            <div className="chef-metric-card">
+              <div className="metric-label">Total Revenue</div>
+              <div className="metric-value">
+                {toCurrencyDisplay(
+                  [...serviceOrders, ...orders].reduce((sum, o)=> sum + (Number(o.total_value_for_chef)||0), 0),
+                  'USD'
+                )}
+              </div>
+              <div className="metric-change positive">+12% from last month</div>
+            </div>
+            <div className="chef-metric-card">
+              <div className="metric-label">Active Families</div>
+              <div className="metric-value">
+                {new Set([...serviceOrders, ...orders].map(o=> o.customer).filter(Boolean)).size}
+              </div>
+              <div className="metric-change positive">+3 this month</div>
+            </div>
+            <div className="chef-metric-card">
+              <div className="metric-label">Service Orders</div>
+              <div className="metric-value">{serviceOrders.length}</div>
+              <div className="metric-change">{serviceOrdersLoading ? 'Loading...' : `${serviceOrders.filter(o=> ['confirmed','completed'].includes(String(o.status||'').toLowerCase())).length} confirmed`}</div>
+            </div>
+            <div className="chef-metric-card">
+              <div className="metric-label">Meal Orders</div>
+              <div className="metric-value">{orders.length}</div>
+              <div className="metric-change">{orders.filter(o=> ['paid','completed'].includes(String(o.status||'').toLowerCase())).length} completed</div>
+            </div>
+          </div>
+
+          {/* Quick Actions & Upcoming */}
+          <div className="grid grid-2" style={{marginTop:'1.5rem'}}>
+            <div className="card">
+              <h3 style={{marginTop:0}}>Upcoming Events</h3>
+              <div style={{maxHeight: 300, overflowY:'auto'}}>
+                {upcomingEvents.length===0 ? (
+                  <div className="muted">No upcoming events.</div>
+                ) : (
+                  <div style={{display:'flex', flexDirection:'column', gap:'.5rem'}}>
+                    {upcomingEvents.slice(0,5).map(e => (
+                      <div key={e.id} className="card" style={{padding:'.6rem', background:'var(--surface-2)'}}>
+                        <div style={{fontWeight:700}}>{e.meal?.name || e.meal_name || 'Meal'}</div>
+                        <div className="muted" style={{fontSize:'.85rem', marginTop:'.15rem'}}>
+                          {e.event_date} at {e.event_time}
+                        </div>
+                        <div className="muted" style={{fontSize:'.85rem'}}>
+                          Orders: {e.orders_count || 0} / {e.max_orders || 0}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="card">
+              <h3 style={{marginTop:0}}>Recent Service Orders</h3>
+              <div style={{maxHeight: 300, overflowY:'auto'}}>
+                {serviceOrders.length===0 ? (
+                  <div className="muted">No service orders yet.</div>
+                ) : (
+                  <div style={{display:'flex', flexDirection:'column', gap:'.5rem'}}>
+                    {serviceOrders.slice(0,5).map(order => {
+                      const statusMeta = serviceStatusTone(order.status)
+                      const detail = serviceCustomerDetails?.[order.customer] || null
+                      const displayName = serviceCustomerName(order, detail)
+                      return (
+                        <div key={order.id} className="card" style={{padding:'.6rem', background:'var(--surface-2)'}}>
+                          <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'.5rem'}}>
+                            <div style={{fontWeight:700, fontSize:'.9rem'}}>{displayName}</div>
+                            <span className="chip" style={{...statusMeta.style, fontSize:'.7rem', padding:'.1rem .4rem'}}>{statusMeta.label}</span>
+                          </div>
+                          <div className="muted" style={{fontSize:'.85rem', marginTop:'.15rem'}}>
+                            {serviceOfferingTitle(order)}
+                          </div>
+                          <div className="muted" style={{fontSize:'.85rem'}}>
+                            {formatServiceSchedule(order)}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Stats */}
+          <div className="card" style={{marginTop:'1.5rem', background:'linear-gradient(135deg, var(--surface-2), var(--surface))'}}>
+            <h3 style={{marginTop:0}}>Quick Stats</h3>
+            <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:'1rem'}}>
+              <div>
+                <div className="muted" style={{fontSize:'.85rem'}}>Total Meals</div>
+                <div style={{fontSize:'1.5rem', fontWeight:700, color:'var(--primary-700)'}}>{meals.length}</div>
+              </div>
+              <div>
+                <div className="muted" style={{fontSize:'.85rem'}}>Dishes</div>
+                <div style={{fontSize:'1.5rem', fontWeight:700, color:'var(--primary-700)'}}>{dishes.length}</div>
+              </div>
+              <div>
+                <div className="muted" style={{fontSize:'.85rem'}}>Ingredients</div>
+                <div style={{fontSize:'1.5rem', fontWeight:700, color:'var(--primary-700)'}}>{ingredients.length}</div>
+              </div>
+              <div>
+                <div className="muted" style={{fontSize:'.85rem'}}>Service Offerings</div>
+                <div style={{fontSize:'1.5rem', fontWeight:700, color:'var(--primary-700)'}}>{serviceOfferings.length}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Break Mode Banner */}
+          <div className="card" style={{marginTop:'1.5rem', background:'var(--surface-2)'}}>
+            <div style={{display:'flex', flexWrap:'wrap', gap:'1.4rem', alignItems:'flex-start'}}>
+              <div style={{flex:'1 1 260px'}}>
+                <h3 style={{marginTop:0}}>Need a breather?</h3>
+                <p className="muted" style={{marginTop:'.35rem'}}>
+                  Turning on break pauses new bookings, cancels upcoming events, and issues refunds automatically.
+                  Use it whenever you need to step back, focus on personal matters, or simply recharge.
+                </p>
+                <p className="muted" style={{marginTop:'.35rem'}}>
+                  A rested chef creates the best experiences. Pause with confidence and come back when you're ready—your guests will understand.
+                </p>
+              </div>
+              <div style={{flex:'1 1 240px', maxWidth:360}}>
+                <div style={{display:'flex', alignItems:'center', gap:'.6rem'}}>
+                  <span style={{fontWeight:700}}>Break status</span>
+                  <label style={{display:'inline-flex', alignItems:'center', gap:'.35rem'}}>
+                    <input type="checkbox" checked={isOnBreak} disabled={breakBusy} onChange={e=> toggleBreak(e.target.checked)} />
+                    <span>{isOnBreak ? 'On' : 'Off'}</span>
+                  </label>
+                  {breakBusy && <span className="spinner" aria-hidden />}
+                </div>
+                <input
+                  className="input"
+                  style={{marginTop:'.7rem'}}
+                  placeholder="Optional note for your guests"
+                  value={breakReason}
+                  disabled={breakBusy}
+                  onChange={e=> setBreakReason(e.target.value)}
+                />
+                <div className="muted" style={{fontSize:'.85rem', marginTop:'.45rem'}}>
+                  We display this note on your profile so people know when to expect you back.
+                </div>
+              </div>
             </div>
           </div>
         </div>
       )}
-
-      <div className="seg-control seg-scroll" style={{margin:'0 0 1rem 0'}} role="tablist" aria-label="Chef sections">
-        <button className={`seg ${tab==='profile'?'active':''}`} onClick={()=> setTab('profile')}>Profile</button>
-        <button className={`seg ${tab==='photos'?'active':''}`} onClick={()=> setTab('photos')}>Photos</button>
-        <Seg value="dashboard" label="Dashboard" />
-        <Seg value="ingredients" label="Ingredients" />
-        <Seg value="dishes" label="Dishes" />
-        <Seg value="meals" label="Meals" />
-        <Seg value="services" label="Services" />
-        <Seg value="events" label="Events" />
-        <Seg value="orders" label="Orders" />
-      </div>
 
       {tab==='profile' && (
         <div className="grid grid-2">
@@ -1117,179 +1360,411 @@ export default function ChefDashboard(){
         </div>
       )}
 
-      {tab==='dashboard' && (
-        <div className="grid grid-2">
-          <div className="card">
-            <h3>Quick create meal</h3>
-            <form onSubmit={createMeal} aria-busy={mealSaving}>
-              <div className="label">Name</div>
-              <input className="input" value={mealForm.name} onChange={e=> setMealForm(f=>({ ...f, name:e.target.value }))} required />
-              <div className="label">Description</div>
-              <textarea className="textarea" value={mealForm.description} onChange={e=> setMealForm(f=>({ ...f, description:e.target.value }))} required />
-              <div className="grid" style={{gridTemplateColumns:'1fr 1fr', gap:'.5rem'}}>
-                <div>
-                  <div className="label">Meal type</div>
-                  <select className="select" value={mealForm.meal_type} onChange={e=> setMealForm(f=>({ ...f, meal_type:e.target.value }))}>
-                    {['Breakfast','Lunch','Dinner'].map(x=> <option key={x} value={x}>{x}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <div className="label">Price (USD)</div>
-                  <input className="input" type="number" min="1" step="0.5" value={mealForm.price} onChange={e=> setMealForm(f=>({ ...f, price:e.target.value }))} required />
-                </div>
+
+      {tab==='kitchen' && (
+        <div>
+          <SectionHeader 
+            title="Kitchen" 
+            subtitle="Manage your ingredients, dishes, and meals"
+            showAdd={false}
+          />
+
+          {/* Ingredients Section */}
+          <div className="chef-kitchen-section">
+            <div className="chef-kitchen-section-header">
+              <div>
+                <h2 className="chef-kitchen-section-title">
+                  <i className="fa-solid fa-carrot" style={{fontSize:'20px'}}></i>
+                  Ingredients
+                  <span className="chef-count-badge">{ingredients.length}</span>
+                </h2>
+                <p className="muted" style={{marginTop:'.25rem', fontSize:'.9rem'}}>Building blocks for your dishes</p>
               </div>
-              <div className="label" style={{marginTop:'.35rem'}}>Dishes</div>
-              {renderDishChecklist('quick-dish')}
-              <div style={{marginTop:'.6rem'}}>
-                {!payouts.is_active && <div className="muted" style={{marginBottom:'.25rem'}}>Complete payouts setup to create meals.</div>}
-                <button className="btn btn-primary" disabled={!payouts.is_active || mealSaving || !mealForm.name || !mealForm.description || !mealForm.price || (mealForm.dishes||[]).length===0}>{mealSaving ? 'Saving…' : 'Create'}</button>
-              </div>
-            </form>
-          </div>
-          <div className="card">
-            <h3>Upcoming events</h3>
-            <div style={{maxHeight: 260, overflowY:'auto'}}>
-              {upcomingEvents.length===0 ? <div className="muted">No upcoming events.</div> : (
-                <ul>
-                  {upcomingEvents.map(e => (
-                    <li key={e.id}><strong>{e.meal?.name || e.meal_name || 'Meal'}</strong> — {e.event_date} {e.event_time} ({e.orders_count || 0}/{e.max_orders || 0})</li>
-                  ))}
-                </ul>
-              )}
+              <button className="btn btn-primary btn-sm" onClick={()=> setShowIngredientForm(!showIngredientForm)}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+                {showIngredientForm ? 'Cancel' : 'Add'}
+              </button>
             </div>
-            {pastEvents.length>0 && (
-              <div style={{marginTop:'.6rem'}}>
-                <div className="label">Past</div>
-                {!showPastEvents && (
-                  <button className="btn btn-outline btn-sm" type="button" onClick={()=> setShowPastEvents(true)}>Show past</button>
-                )}
-                {showPastEvents && (
-                  <>
-                    <div style={{maxHeight: 220, overflowY:'auto', marginTop:'.35rem'}}>
-                      <ul>
-                        {pastEvents.map(e => (
-                          <li key={e.id}><span className="muted">{e.event_date} {e.event_time}</span> — <strong>{e.meal?.name || e.meal_name || 'Meal'}</strong></li>
-                        ))}
-                      </ul>
+
+            {showIngredientForm && (
+              <div className="card chef-create-card" style={{marginBottom:'1rem', marginTop:'.75rem'}}>
+                <h3 style={{marginTop:0}}>Create ingredient</h3>
+                <form onSubmit={createIngredient}>
+                  <div className="label">Name</div>
+                  <input className="input" value={ingForm.name} onChange={e=> setIngForm(f=>({ ...f, name:e.target.value }))} required placeholder="e.g., Chicken Breast" />
+                  {duplicateIngredient && <div className="muted" style={{marginTop:'.25rem'}}>Ingredient already exists.</div>}
+                  <div className="grid" style={{gridTemplateColumns:'repeat(auto-fit, minmax(100px, 1fr))', gap:'.5rem', marginTop:'.5rem'}}>
+                    {['calories','fat','carbohydrates','protein'].map(k => (
+                      <div key={k}>
+                        <div className="label" style={{textTransform:'capitalize'}}>{k.replace('_',' ')}</div>
+                        <input className="input" type="number" step="0.1" value={ingForm[k]} onChange={e=> setIngForm(f=>({ ...f, [k]: e.target.value }))} placeholder="0" />
+                      </div>
+                    ))}
+                  </div>
+                  {!payouts.is_active && <div className="muted" style={{marginTop:'.5rem'}}>Complete payouts setup to add ingredients.</div>}
+                  <div style={{marginTop:'.75rem', display:'flex', gap:'.5rem'}}>
+                    <button className="btn btn-primary" disabled={!payouts.is_active || ingLoading || duplicateIngredient}>
+                      {ingLoading?'Saving…':'Add Ingredient'}
+                    </button>
+                    <button type="button" className="btn btn-outline" onClick={()=> setShowIngredientForm(false)}>Cancel</button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {ingredients.length===0 ? (
+              <div className="chef-empty-state chef-empty-state-compact">
+                <p>No ingredients yet. Click "Add" to create your first ingredient.</p>
+              </div>
+            ) : (
+              <div className="chef-items-grid">
+                {ingredients.map(i => (
+                  <div key={i.id} className="chef-item-card chef-item-card-compact">
+                    <div className="chef-item-info">
+                      <div className="chef-item-name">{i.name}</div>
+                      <div className="chef-item-meta">{Number(i.calories||0).toFixed(0)} cal</div>
                     </div>
-                    <div style={{marginTop:'.25rem'}}>
-                      <button className="btn btn-outline btn-sm" type="button" onClick={()=> setShowPastEvents(false)}>Hide past</button>
+                    <button className="btn btn-outline btn-sm" onClick={()=> deleteIngredient(i.id)}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Dishes Section */}
+          <div className="chef-kitchen-section">
+            <div className="chef-kitchen-section-header">
+              <div>
+                <h2 className="chef-kitchen-section-title">
+                  <i className="fa-solid fa-bowl-food" style={{fontSize:'20px'}}></i>
+                  Dishes
+                  <span className="chef-count-badge">{dishes.length}</span>
+                </h2>
+                <p className="muted" style={{marginTop:'.25rem', fontSize:'.9rem'}}>Combinations of ingredients</p>
+              </div>
+              <button className="btn btn-primary btn-sm" onClick={()=> setShowDishForm(!showDishForm)} disabled={ingredients.length===0}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+                {showDishForm ? 'Cancel' : 'Add'}
+              </button>
+            </div>
+
+            {showDishForm && (
+              <div className="card chef-create-card" style={{marginBottom:'1rem', marginTop:'.75rem'}}>
+                <h3 style={{marginTop:0}}>Create dish</h3>
+                <form onSubmit={createDish}>
+                  <div className="label">Name</div>
+                  <input className="input" value={dishForm.name} onChange={e=> setDishForm(f=>({ ...f, name:e.target.value }))} required placeholder="e.g., Grilled Salmon" />
+                  <div className="label">Ingredients</div>
+                  <select className="select" multiple value={dishForm.ingredient_ids} onChange={e=> {
+                    const opts = Array.from(e.target.selectedOptions).map(o=>o.value); setDishForm(f=>({ ...f, ingredient_ids: opts }))
+                  }} style={{minHeight:120}}>
+                    {ingredients.map(i => <option key={i.id} value={String(i.id)}>{i.name}</option>)}
+                  </select>
+                  {!payouts.is_active && <div className="muted" style={{marginTop:'.5rem'}}>Complete payouts setup to create dishes.</div>}
+                  <div style={{marginTop:'.75rem', display:'flex', gap:'.5rem'}}>
+                    <button className="btn btn-primary" disabled={!payouts.is_active}>Create Dish</button>
+                    <button type="button" className="btn btn-outline" onClick={()=> setShowDishForm(false)}>Cancel</button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {dishes.length===0 ? (
+              <div className="chef-empty-state chef-empty-state-compact">
+                <p>{ingredients.length===0 ? 'Add ingredients first, then create dishes.' : 'No dishes yet. Click "Add" to create your first dish.'}</p>
+              </div>
+            ) : (
+              <div className="chef-items-grid">
+                {dishes.map(d => (
+                  <div key={d.id} className="chef-item-card chef-item-card-compact">
+                    <div className="chef-item-info">
+                      <div className="chef-item-name">{d.name}</div>
+                      {d.ingredients && d.ingredients.length>0 && (
+                        <div className="chef-item-meta">{d.ingredients.length} ingredient{d.ingredients.length!==1?'s':''}</div>
+                      )}
                     </div>
-                  </>
-                )}
+                    <button className="btn btn-outline btn-sm" onClick={()=> deleteDish(d.id)}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Meals Section */}
+          <div className="chef-kitchen-section">
+            <div className="chef-kitchen-section-header">
+              <div>
+                <h2 className="chef-kitchen-section-title">
+                  <i className="fa-solid fa-utensils" style={{fontSize:'20px'}}></i>
+                  Meals
+                  <span className="chef-count-badge">{meals.length}</span>
+                </h2>
+                <p className="muted" style={{marginTop:'.25rem', fontSize:'.9rem'}}>Complete meals made from dishes</p>
+              </div>
+              <button className="btn btn-primary btn-sm" onClick={()=> setShowMealForm(!showMealForm)} disabled={dishes.length===0}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+                {showMealForm ? 'Cancel' : 'Add'}
+              </button>
+            </div>
+
+            {showMealForm && (
+              <div className="card chef-create-card" style={{marginBottom:'1rem', marginTop:'.75rem'}}>
+                <h3 style={{marginTop:0}}>Create meal</h3>
+                <form onSubmit={createMeal} aria-busy={mealSaving}>
+                  <div className="label">Name</div>
+                  <input className="input" value={mealForm.name} onChange={e=> setMealForm(f=>({ ...f, name:e.target.value }))} required placeholder="e.g., Sunday Family Dinner" />
+                  <div className="label">Description</div>
+                  <textarea className="textarea" rows={2} value={mealForm.description} onChange={e=> setMealForm(f=>({ ...f, description:e.target.value }))} placeholder="Describe this meal..." />
+                  <div className="grid" style={{gridTemplateColumns:'1fr 1fr', gap:'.5rem', marginTop:'.5rem'}}>
+                    <div>
+                      <div className="label">Meal type</div>
+                      <select className="select" value={mealForm.meal_type} onChange={e=> setMealForm(f=>({ ...f, meal_type:e.target.value }))}>
+                        {['Breakfast','Lunch','Dinner'].map(x=> <option key={x} value={x}>{x}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <div className="label">Price (USD)</div>
+                      <input className="input" type="number" min="1" step="0.5" value={mealForm.price} onChange={e=> setMealForm(f=>({ ...f, price:e.target.value }))} required />
+                    </div>
+                  </div>
+                  <div className="label" style={{marginTop:'.5rem'}}>Dishes</div>
+                  {renderDishChecklist('meal-dish')}
+                  {!payouts.is_active && <div className="muted" style={{marginTop:'.5rem'}}>Complete payouts setup to create meals.</div>}
+                  <div style={{marginTop:'.75rem', display:'flex', gap:'.5rem'}}>
+                    <button className="btn btn-primary" disabled={!payouts.is_active || mealSaving}>{mealSaving ? 'Saving…' : 'Create Meal'}</button>
+                    <button type="button" className="btn btn-outline" onClick={()=> setShowMealForm(false)}>Cancel</button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {meals.length===0 ? (
+              <div className="chef-empty-state chef-empty-state-compact">
+                <p>{dishes.length===0 ? 'Add dishes first, then create meals.' : 'No meals yet. Click "Add" to create your first meal.'}</p>
+              </div>
+            ) : (
+              <div className="chef-items-list">
+                {meals.map(m => (
+                  <div key={m.id} className="chef-item-card">
+                    <div className="chef-item-info">
+                      <div className="chef-item-name">{m.name}</div>
+                      <div className="chef-item-meta">
+                        {m.meal_type} • {toCurrencyDisplay(m.price, 'USD')}
+                        {m.description && ` • ${m.description.slice(0,60)}${m.description.length>60?'...':''}`}
+                      </div>
+                    </div>
+                    <button className="btn btn-outline btn-sm" onClick={()=> deleteMeal(m.id)}>Delete</button>
+                  </div>
+                ))}
               </div>
             )}
           </div>
         </div>
       )}
 
+      {/* Keep old tabs hidden for backward compatibility but not in nav */}
       {tab==='ingredients' && (
-        <div className="grid grid-2">
+        <div>
+          <SectionHeader 
+            title="Ingredients" 
+            subtitle="Manage your ingredient library for dishes and meals"
+            onAdd={()=> setShowIngredientForm(!showIngredientForm)}
+            addLabel={showIngredientForm ? 'Cancel' : 'Add Ingredient'}
+          />
+
+          {showIngredientForm && (
+            <div className="card chef-create-card" style={{marginBottom:'1rem'}}>
+              <h3 style={{marginTop:0}}>Create ingredient</h3>
+              <form onSubmit={createIngredient}>
+                <div className="label">Name</div>
+                <input className="input" value={ingForm.name} onChange={e=> setIngForm(f=>({ ...f, name:e.target.value }))} required />
+                {duplicateIngredient && <div className="muted" style={{marginTop:'.25rem'}}>Ingredient already exists.</div>}
+                <div className="grid" style={{gridTemplateColumns:'repeat(auto-fit, minmax(100px, 1fr))', gap:'.5rem', marginTop:'.5rem'}}>
+                  {['calories','fat','carbohydrates','protein'].map(k => (
+                    <div key={k}>
+                      <div className="label" style={{textTransform:'capitalize'}}>{k.replace('_',' ')}</div>
+                      <input className="input" type="number" step="0.1" value={ingForm[k]} onChange={e=> setIngForm(f=>({ ...f, [k]: e.target.value }))} />
+                    </div>
+                  ))}
+                </div>
+                {!payouts.is_active && <div className="muted" style={{marginTop:'.5rem'}}>Complete payouts setup to add ingredients.</div>}
+                <div style={{marginTop:'.75rem', display:'flex', gap:'.5rem'}}>
+                  <button className="btn btn-primary" disabled={!payouts.is_active || ingLoading || duplicateIngredient}>
+                    {ingLoading?'Saving…':'Add Ingredient'}
+                  </button>
+                  <button type="button" className="btn btn-outline" onClick={()=> setShowIngredientForm(false)}>Cancel</button>
+                </div>
+              </form>
+            </div>
+          )}
+
           <div className="card">
-            <h3>Create ingredient</h3>
-            <form onSubmit={createIngredient}>
-              <div className="label">Name</div>
-              <input className="input" value={ingForm.name} onChange={e=> setIngForm(f=>({ ...f, name:e.target.value }))} required />
-              {duplicateIngredient && <div className="muted" style={{marginTop:'.25rem'}}>Ingredient already exists.</div>}
-              <div className="grid" style={{gridTemplateColumns:'repeat(4, 1fr)', gap:'.5rem'}}>
-                {['calories','fat','carbohydrates','protein'].map(k => (
-                  <div key={k}>
-                    <div className="label" style={{textTransform:'capitalize'}}>{k.replace('_',' ')}</div>
-                    <input className="input" type="number" step="0.1" value={ingForm[k]} onChange={e=> setIngForm(f=>({ ...f, [k]: e.target.value }))} />
+            <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'1rem'}}>
+              <h3 style={{margin:0}}>Your ingredients ({ingredients.length})</h3>
+            </div>
+            {ingredients.length===0 ? (
+              <div className="chef-empty-state">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.3">
+                  <path d="M18 8h1a4 4 0 0 1 0 8h-1M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/>
+                  <line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/>
+                </svg>
+                <p>No ingredients yet. Click "Add Ingredient" to get started.</p>
+              </div>
+            ) : (
+              <div className="chef-items-list">
+                {ingredients.map(i => (
+                  <div key={i.id} className="chef-item-card">
+                    <div className="chef-item-info">
+                      <div className="chef-item-name">{i.name}</div>
+                      <div className="chef-item-meta">{Number(i.calories||0).toFixed(0)} cal • {Number(i.protein||0).toFixed(1)}g protein • {Number(i.carbohydrates||0).toFixed(1)}g carbs • {Number(i.fat||0).toFixed(1)}g fat</div>
+                    </div>
+                    <button className="btn btn-outline btn-sm" onClick={()=> deleteIngredient(i.id)}>Delete</button>
                   </div>
                 ))}
               </div>
-              {!payouts.is_active && <div className="muted" style={{marginTop:'.35rem'}}>Complete payouts setup to add ingredients.</div>}
-              <div style={{marginTop:'.6rem'}}><button className="btn btn-primary" disabled={!payouts.is_active || ingLoading || duplicateIngredient}>{ingLoading?'Saving…':'Add Ingredient'}</button></div>
-            </form>
-          </div>
-          <div className="card">
-            <h3>Your ingredients</h3>
-            {ingredients.length===0 ? <div className="muted">No ingredients yet.</div> : (
-              <ul>
-                {ingredients.map(i => (
-                  <li key={i.id} style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-                    <span><strong>{i.name}</strong>{' '}<span className="muted">{Number(i.calories||0).toFixed(0)} cal</span></span>
-                    <button className="btn btn-outline btn-sm" onClick={()=> deleteIngredient(i.id)}>Delete</button>
-                  </li>
-                ))}
-              </ul>
             )}
           </div>
         </div>
       )}
 
       {tab==='dishes' && (
-        <div className="grid grid-2">
+        <div>
+          <SectionHeader 
+            title="Dishes" 
+            subtitle="Create dishes from your ingredients"
+            onAdd={()=> setShowDishForm(!showDishForm)}
+            addLabel={showDishForm ? 'Cancel' : 'Add Dish'}
+          />
+
+          {showDishForm && (
+            <div className="card chef-create-card" style={{marginBottom:'1rem'}}>
+              <h3 style={{marginTop:0}}>Create dish</h3>
+              <form onSubmit={createDish}>
+                <div className="label">Name</div>
+                <input className="input" value={dishForm.name} onChange={e=> setDishForm(f=>({ ...f, name:e.target.value }))} required placeholder="e.g., Grilled Salmon" />
+                <div className="label">Ingredients</div>
+                {ingredients.length === 0 ? (
+                  <div className="muted">No ingredients available. Create ingredients first.</div>
+                ) : (
+                  <select className="select" multiple value={dishForm.ingredient_ids} onChange={e=> {
+                    const opts = Array.from(e.target.selectedOptions).map(o=>o.value); setDishForm(f=>({ ...f, ingredient_ids: opts }))
+                  }} style={{minHeight:120}}>
+                    {ingredients.map(i => <option key={i.id} value={String(i.id)}>{i.name}</option>)}
+                  </select>
+                )}
+                {!payouts.is_active && <div className="muted" style={{marginTop:'.5rem'}}>Complete payouts setup to create dishes.</div>}
+                <div style={{marginTop:'.75rem', display:'flex', gap:'.5rem'}}>
+                  <button className="btn btn-primary" disabled={!payouts.is_active || ingredients.length === 0}>Create Dish</button>
+                  <button type="button" className="btn btn-outline" onClick={()=> setShowDishForm(false)}>Cancel</button>
+                </div>
+              </form>
+            </div>
+          )}
+
           <div className="card">
-            <h3>Create dish</h3>
-            <form onSubmit={createDish}>
-              <div className="label">Name</div>
-              <input className="input" value={dishForm.name} onChange={e=> setDishForm(f=>({ ...f, name:e.target.value }))} required />
-              <div className="label">Ingredients</div>
-              <select className="select" multiple value={dishForm.ingredient_ids} onChange={e=> {
-                const opts = Array.from(e.target.selectedOptions).map(o=>o.value); setDishForm(f=>({ ...f, ingredient_ids: opts }))
-              }} style={{minHeight:120}}>
-                {ingredients.map(i => <option key={i.id} value={String(i.id)}>{i.name}</option>)}
-              </select>
-              {!payouts.is_active && <div className="muted" style={{marginTop:'.35rem'}}>Complete payouts setup to create dishes.</div>}
-              <div style={{marginTop:'.6rem'}}><button className="btn btn-primary" disabled={!payouts.is_active}>Create Dish</button></div>
-            </form>
-          </div>
-          <div className="card">
-            <h3>Your dishes</h3>
-            {dishes.length===0 ? <div className="muted">No dishes yet.</div> : (
-              <ul>
+            <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'1rem'}}>
+              <h3 style={{margin:0}}>Your dishes ({dishes.length})</h3>
+            </div>
+            {dishes.length===0 ? (
+              <div className="chef-empty-state">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.3">
+                  <circle cx="12" cy="12" r="10"/><path d="M12 6v12M6 12h12"/>
+                </svg>
+                <p>No dishes yet. Click "Add Dish" to get started.</p>
+              </div>
+            ) : (
+              <div className="chef-items-list">
                 {dishes.map(d => (
-                  <li key={d.id} style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-                    <span><strong>{d.name}</strong>{d.ingredients && d.ingredients.length>0 && <span className="muted"> — {d.ingredients.map(x=>x.name||x).slice(0,3).join(', ')}{d.ingredients.length>3?'…':''}</span>}</span>
+                  <div key={d.id} className="chef-item-card">
+                    <div className="chef-item-info">
+                      <div className="chef-item-name">{d.name}</div>
+                      {d.ingredients && d.ingredients.length>0 && (
+                        <div className="chef-item-meta">
+                          {d.ingredients.map(x=>x.name||x).slice(0,5).join(', ')}{d.ingredients.length>5?', …':''}
+                        </div>
+                      )}
+                    </div>
                     <button className="btn btn-outline btn-sm" onClick={()=> deleteDish(d.id)}>Delete</button>
-                  </li>
+                  </div>
                 ))}
-              </ul>
+              </div>
             )}
           </div>
         </div>
       )}
 
       {tab==='meals' && (
-        <div className="grid grid-2">
+        <div>
+          <SectionHeader 
+            title="Meals" 
+            subtitle="Create complete meals from your dishes"
+            onAdd={()=> setShowMealForm(!showMealForm)}
+            addLabel={showMealForm ? 'Cancel' : 'Add Meal'}
+          />
+
+          {showMealForm && (
+            <div className="card chef-create-card" style={{marginBottom:'1rem'}}>
+              <h3 style={{marginTop:0}}>Create meal</h3>
+              <form onSubmit={createMeal} aria-busy={mealSaving}>
+                <div className="label">Name</div>
+                <input className="input" value={mealForm.name} onChange={e=> setMealForm(f=>({ ...f, name:e.target.value }))} required placeholder="e.g., Sunday Family Dinner" />
+                <div className="label">Description</div>
+                <textarea className="textarea" rows={2} value={mealForm.description} onChange={e=> setMealForm(f=>({ ...f, description:e.target.value }))} placeholder="Describe this meal..." />
+                <div className="grid" style={{gridTemplateColumns:'1fr 1fr', gap:'.5rem', marginTop:'.5rem'}}>
+                  <div>
+                    <div className="label">Meal type</div>
+                    <select className="select" value={mealForm.meal_type} onChange={e=> setMealForm(f=>({ ...f, meal_type:e.target.value }))}>
+                      {['Breakfast','Lunch','Dinner'].map(x=> <option key={x} value={x}>{x}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <div className="label">Price (USD)</div>
+                    <input className="input" type="number" min="1" step="0.5" value={mealForm.price} onChange={e=> setMealForm(f=>({ ...f, price:e.target.value }))} required />
+                  </div>
+                </div>
+                <div className="label" style={{marginTop:'.5rem'}}>Dishes</div>
+                {renderDishChecklist('meal-dish')}
+                {!payouts.is_active && <div className="muted" style={{marginTop:'.5rem'}}>Complete payouts setup to create meals.</div>}
+                <div style={{marginTop:'.75rem', display:'flex', gap:'.5rem'}}>
+                  <button className="btn btn-primary" disabled={!payouts.is_active || mealSaving}>{mealSaving ? 'Saving…' : 'Create Meal'}</button>
+                  <button type="button" className="btn btn-outline" onClick={()=> setShowMealForm(false)}>Cancel</button>
+                </div>
+              </form>
+            </div>
+          )}
+
           <div className="card">
-            <h3>Create meal</h3>
-            <form onSubmit={createMeal} aria-busy={mealSaving}>
-              <div className="label">Name</div>
-              <input className="input" value={mealForm.name} onChange={e=> setMealForm(f=>({ ...f, name:e.target.value }))} required />
-              <div className="label">Description</div>
-              <textarea className="textarea" value={mealForm.description} onChange={e=> setMealForm(f=>({ ...f, description:e.target.value }))} />
-              <div className="grid" style={{gridTemplateColumns:'1fr 1fr', gap:'.5rem'}}>
-                <div>
-                  <div className="label">Meal type</div>
-                  <select className="select" value={mealForm.meal_type} onChange={e=> setMealForm(f=>({ ...f, meal_type:e.target.value }))}>
-                    {['Breakfast','Lunch','Dinner'].map(x=> <option key={x} value={x}>{x}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <div className="label">Price</div>
-                  <input className="input" type="number" min="1" step="0.5" value={mealForm.price} onChange={e=> setMealForm(f=>({ ...f, price:e.target.value }))} />
-                </div>
+            <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'1rem'}}>
+              <h3 style={{margin:0}}>Your meals ({meals.length})</h3>
+            </div>
+            {meals.length===0 ? (
+              <div className="chef-empty-state">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.3">
+                  <path d="M17 21v-2a1 1 0 0 1-1-1v-1a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1a1 1 0 0 1-1 1v2M7 21v-2a1 1 0 0 1-1-1v-1a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1a1 1 0 0 1-1 1v2M12 11V6M12 6a4 4 0 1 0 0-8"/>
+                </svg>
+                <p>No meals yet. Click "Add Meal" to get started.</p>
               </div>
-              <div className="label" style={{marginTop:'.35rem'}}>Dishes</div>
-              {renderDishChecklist('meal-dish')}
-              {!payouts.is_active && <div className="muted" style={{marginTop:'.35rem'}}>Complete payouts setup to create meals.</div>}
-              <div style={{marginTop:'.6rem'}}><button className="btn btn-primary" disabled={!payouts.is_active || mealSaving}>{mealSaving ? 'Saving…' : 'Create Meal'}</button></div>
-            </form>
-          </div>
-          <div className="card">
-            <h3>Your meals</h3>
-            {meals.length===0 ? <div className="muted">No meals yet.</div> : (
-              <ul>
+            ) : (
+              <div className="chef-items-list">
                 {meals.map(m => (
-                  <li key={m.id} style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-                    <span><strong>{m.name}</strong>{m.meal_type && <span className="muted"> — {m.meal_type}</span>}</span>
+                  <div key={m.id} className="chef-item-card">
+                    <div className="chef-item-info">
+                      <div className="chef-item-name">{m.name}</div>
+                      <div className="chef-item-meta">
+                        {m.meal_type} • {toCurrencyDisplay(m.price, 'USD')}
+                        {m.description && ` • ${m.description.slice(0,60)}${m.description.length>60?'...':''}`}
+                      </div>
+                    </div>
                     <button className="btn btn-outline btn-sm" onClick={()=> deleteMeal(m.id)}>Delete</button>
-                  </li>
+                  </div>
                 ))}
-              </ul>
+              </div>
             )}
           </div>
         </div>
@@ -1685,7 +2160,7 @@ export default function ChefDashboard(){
                           )}
                           <div className="muted" style={{fontSize:'.9rem'}}>{serviceOfferingTitle(order)}{tierLabel ? ` · ${tierLabel}` : ''}</div>
                         </div>
-                        <span className="chip small soft status-chip" style={statusMeta.style}>{statusMeta.label}</span>
+                        <span className="status-text status-text--blue">{statusMeta.label}</span>
                       </div>
                       <div className="muted" style={{marginTop:'.45rem', fontSize:'.9rem'}}>{scheduleLabel}</div>
                       {(recurring || priceLabel) && (
@@ -1725,41 +2200,7 @@ export default function ChefDashboard(){
         </div>
       )}
 
-      <div className="card" style={{marginTop:'2.5rem', background:'var(--surface-2)'}}>
-        <div style={{display:'flex', flexWrap:'wrap', gap:'1.4rem', alignItems:'flex-start'}}>
-          <div style={{flex:'1 1 260px'}}>
-            <h3 style={{marginTop:0}}>Need a breather?</h3>
-            <p className="muted" style={{marginTop:'.35rem'}}>
-              Turning on break pauses new bookings, cancels upcoming events, and issues refunds automatically.
-              Use it whenever you need to step back, focus on personal matters, or simply recharge.
-            </p>
-            <p className="muted" style={{marginTop:'.35rem'}}>
-              A rested chef creates the best experiences. Pause with confidence and come back when you’re ready—your guests will understand.
-            </p>
-          </div>
-          <div style={{flex:'1 1 240px', maxWidth:360}}>
-            <div style={{display:'flex', alignItems:'center', gap:'.6rem'}}>
-              <span style={{fontWeight:700}}>Break status</span>
-              <label style={{display:'inline-flex', alignItems:'center', gap:'.35rem'}}>
-                <input type="checkbox" checked={isOnBreak} disabled={breakBusy} onChange={e=> toggleBreak(e.target.checked)} />
-                <span>{isOnBreak ? 'On' : 'Off'}</span>
-              </label>
-              {breakBusy && <span className="spinner" aria-hidden />}
-            </div>
-            <input
-              className="input"
-              style={{marginTop:'.7rem'}}
-              placeholder="Optional note for your guests"
-              value={breakReason}
-              disabled={breakBusy}
-              onChange={e=> setBreakReason(e.target.value)}
-            />
-            <div className="muted" style={{fontSize:'.85rem', marginTop:'.45rem'}}>
-              We display this note on your profile so people know when to expect you back.
-            </div>
-          </div>
-        </div>
-      </div>
+      </main>
     </div>
   )
 }

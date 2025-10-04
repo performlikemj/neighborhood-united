@@ -91,7 +91,7 @@ export default function Home(){
                        if (country) fd.append('country', country)
                      }catch{}
                     if (chefForm.profile_pic) fd.append('profile_pic', chefForm.profile_pic)
-                    const resp = await api.post('/chefs/api/chefs/submit-chef-request/', fd, { headers:{'Content-Type':'multipart/form-data'} })
+                    const resp = await api.post('/chefs/api/submit-chef-request/', fd, { headers:{'Content-Type':'multipart/form-data'} })
                     if (resp.status===200 || resp.status===201){
                       setApplyMsg('Application submitted. We will notify you when approved.')
                     } else {

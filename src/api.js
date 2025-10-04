@@ -135,14 +135,19 @@ api.interceptors.request.use(async (config) => {
 api.interceptors.response.use(
   (res)=>res,
   async (error) => {
+    let status = error?.response?.status
     try{
-      const status = error?.response?.status
       const payload = error?.response?.data
-      const msg = buildErrorMessage(payload, 'An unexpected error occurred. Please try again.', status)
+      let msg
+      if (typeof status === 'number' && status >= 500){
+        msg = "We're having trouble processing your request. Please try again soon."
+      } else {
+        msg = buildErrorMessage(payload, 'An unexpected error occurred. Please try again.', status)
+      }
       window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: msg, tone:'error' } }))
     }catch{}
     const original = error.config || {}
-    const status = error?.response?.status
+    status = error?.response?.status
     const isRefreshCall = (original.url || '').includes(REFRESH_URL)
 
     if (status === 401 && !original._retry && !isRefreshCall){
@@ -153,6 +158,9 @@ api.interceptors.response.use(
         original.headers.Authorization = `Bearer ${newAccess}`
         return api(original)
       }catch(e){
+        try{
+          window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: 'Session expired. Please log in again.', tone: 'error' } }))
+        }catch{}
         clearTokens()
         window.location.href = '/login'
         return Promise.reject(e)
@@ -180,6 +188,9 @@ function firstString(val){
 
 export function buildErrorMessage(data, fallback='An unexpected error occurred. Please try again.', status){
   try{
+    if (typeof status === 'number' && status >= 500){
+      return "We're having trouble processing your request. Please try again soon."
+    }
     // Only surface explicit string values from 'message' or 'error'.
     const safeFallback = typeof fallback === 'string' && fallback.trim() ? fallback : 'An unexpected error occurred. Please try again.'
     let core = ''

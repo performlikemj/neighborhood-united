@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import tempfile
+from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Iterable, List, Optional, Sequence
 
@@ -45,46 +46,34 @@ class BatchProcessingError(Exception):
     """Raised when applying a batch response fails and requires fallback."""
 
 
-class BatchComposedDish(BaseModel):
+class ChatCompletionMessage(BaseModel):
+    role: str
+    content: str
     model_config = ConfigDict(extra="ignore")
 
-    name: str
-    dietary_tags: List[str] = Field(default_factory=list)
-    target_groups: List[str] = Field(default_factory=list)
-    notes: Optional[str] = None
-    ingredients: Optional[List[str]] = Field(default_factory=list)
-    is_chef_dish: bool = False
 
-
-class BatchMealSlot(BaseModel):
+class ChatCompletionChoice(BaseModel):
+    index: int
+    message: ChatCompletionMessage
     model_config = ConfigDict(extra="ignore")
 
-    day: str
-    meal_type: str
-    name: str
-    description: str
-    dietary_preferences: List[str] = Field(default_factory=list)
-    used_pantry_items: List[str] = Field(default_factory=list)
-    composed_dishes: List[BatchComposedDish] = Field(default_factory=list)
 
-
-class BatchPlan(BaseModel):
+class ChatCompletionBody(BaseModel):
+    choices: List[ChatCompletionChoice] = Field(default_factory=list)
     model_config = ConfigDict(extra="ignore")
-
-    meals: List[BatchMealSlot]
-
-
-class BatchPlanBody(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    plan: BatchPlan
 
 
 class GroqBatchResponse(BaseModel):
+    status_code: int
+    body: ChatCompletionBody
     model_config = ConfigDict(extra="ignore")
 
-    status_code: int
-    body: BatchPlanBody
+
+@dataclass
+class ParsedSlot:
+    day: str
+    meal_type: str
+    notes: Optional[str] = None
 
 
 def _get_groq_client():
@@ -134,13 +123,17 @@ def submit_weekly_batch(
         return None
 
     try:
-        with tempfile.NamedTemporaryFile("w+b", delete=False) as temp_file:
-            temp_file.write(payload.encode("utf-8"))
+        with tempfile.NamedTemporaryFile("w+b", suffix=".jsonl", delete=False) as temp_file:
+            data = payload if payload.endswith("\n") else f"{payload}\n"
+            temp_file.write(data.encode("utf-8"))
             temp_file.flush()
             temp_path = temp_file.name
 
         with open(temp_path, "rb") as fh:
-            file_resp = groq_client.files.create(file=fh, purpose="batch")
+            file_resp = groq_client.files.create(
+                file=("meal_plan_batch.jsonl", fh),
+                purpose="batch",
+            )
         input_file_id = getattr(file_resp, "id", None)
         if not input_file_id:
             raise RuntimeError("Groq files.create response missing id")
@@ -360,10 +353,12 @@ def _apply_batch_results(job: MealPlanBatchJob, lines: Sequence[str]) -> None:
             continue
 
         try:
+            plan_dict, parsed_slots = _extract_plan_from_response(groq_response)
             _apply_plan_for_user(
                 job=job,
                 request_obj=request_obj,
-                plan=groq_response.body.plan,
+                plan_dict=plan_dict,
+                slots=parsed_slots,
             )
         except BatchProcessingError as exc:
             logger.warning(
@@ -385,12 +380,14 @@ def _apply_plan_for_user(
     *,
     job: MealPlanBatchJob,
     request_obj: MealPlanBatchRequest,
-    plan: BatchPlan,
+    plan_dict: dict,
+    slots: List[ParsedSlot],
 ) -> None:
     user = request_obj.user
     week_start = job.week_start_date
     week_end = job.week_end_date
     request_id = f"batch-{job.id}-{request_obj.custom_id}"
+    user_prompt = plan_dict.get("user_prompt") if isinstance(plan_dict, dict) else None
 
     with transaction.atomic():
         meal_plan, _ = MealPlan.objects.select_for_update().get_or_create(
@@ -407,12 +404,13 @@ def _apply_plan_for_user(
         MealPlanMeal.objects.filter(meal_plan=meal_plan).delete()
 
         slots_applied = 0
-        for slot in plan.meals:
+        for slot in slots:
             _apply_slot_to_plan(
                 user=user,
                 meal_plan=meal_plan,
                 slot=slot,
                 request_id=request_id,
+                user_prompt=user_prompt,
             )
             slots_applied += 1
 
@@ -426,8 +424,9 @@ def _apply_slot_to_plan(
     *,
     user: CustomUser,
     meal_plan: MealPlan,
-    slot: BatchMealSlot,
+    slot: ParsedSlot,
     request_id: str,
+    user_prompt: Optional[str],
 ) -> None:
     day_index = DAY_NAME_TO_INDEX.get(slot.day.lower())
     if day_index is None:
@@ -442,7 +441,7 @@ def _apply_slot_to_plan(
     if meal_type not in valid_types:
         raise BatchProcessingError(f"invalid_meal_type:{slot.meal_type}")
 
-    meal = _ensure_meal_from_slot(user=user, meal_type=meal_type, slot=slot)
+    meal = _ensure_meal_from_slot(user=user, meal_type=meal_type, slot=slot, user_prompt=user_prompt)
 
     if not _run_sanity_checks(user=user, meal=meal, request_id=request_id):
         raise BatchProcessingError("sanity_check_failed")
@@ -460,31 +459,37 @@ def _apply_slot_to_plan(
     _update_pantry_usage(user=user, meal_plan_meal=meal_plan_meal, slot=slot, request_id=request_id)
 
 
-def _ensure_meal_from_slot(*, user: CustomUser, meal_type: str, slot: BatchMealSlot) -> Meal:
-    meal = Meal.objects.filter(creator=user, name=slot.name).first()
-    composed_payload = [dish.model_dump() for dish in slot.composed_dishes]
+def _derive_meal_name(slot: ParsedSlot) -> str:
+    note = (slot.notes or "").strip()
+    if note:
+        first_sentence = note.split('.')[0].strip()
+        if first_sentence:
+            return first_sentence[:100]
+    return f"{slot.day} {slot.meal_type} Idea"
+
+
+def _ensure_meal_from_slot(*, user: CustomUser, meal_type: str, slot: ParsedSlot, user_prompt: Optional[str]) -> Meal:
+    note = (slot.notes or "").strip()
+    name = _derive_meal_name(slot)
+
+    meal = Meal.objects.filter(creator=user, name=name).first()
+
+    description_parts = [note] if note else []
+    if user_prompt:
+        description_parts.append(f"Batch user prompt: {user_prompt}")
+    description = "\n\n".join(description_parts) or name
 
     if meal is None:
         meal = Meal.objects.create(
-            name=slot.name,
-            description=slot.description,
+            name=name,
+            description=description,
             meal_type=meal_type,
             creator=user,
-            composed_dishes=composed_payload or None,
         )
     else:
-        meal.description = slot.description
+        meal.description = description
         meal.meal_type = meal_type
-        meal.composed_dishes = composed_payload or meal.composed_dishes
-        meal.save(update_fields=["description", "meal_type", "composed_dishes"])
-
-    if slot.dietary_preferences:
-        meal.dietary_preferences.clear()
-        for pref_name in slot.dietary_preferences:
-            if not pref_name:
-                continue
-            pref, _ = DietaryPreference.objects.get_or_create(name=pref_name)
-            meal.dietary_preferences.add(pref)
+        meal.save(update_fields=["description", "meal_type"])
 
     return meal
 
@@ -503,49 +508,11 @@ def _update_pantry_usage(
     *,
     user: CustomUser,
     meal_plan_meal: MealPlanMeal,
-    slot: BatchMealSlot,
+    slot: ParsedSlot,
     request_id: str,
 ) -> None:
-    if not slot.used_pantry_items:
-        return
-
-    for item_name in slot.used_pantry_items:
-        pantry_item = PantryItem.objects.filter(user=user, item_name__iexact=item_name).first()
-        if pantry_item is None:
-            logger.warning(
-                "[%s] Pantry item '%s' not found for user %s",
-                request_id,
-                item_name,
-                user.id,
-            )
-            continue
-
-        bridging, _ = MealPlanMealPantryUsage.objects.get_or_create(
-            meal_plan_meal=meal_plan_meal,
-            pantry_item=pantry_item,
-            defaults={
-                "quantity_used": 0,
-                "usage_unit": pantry_item.weight_unit,
-            },
-        )
-
-        usage_data = [
-            {
-                "item_name": pantry_item.item_name,
-                "item_type": pantry_item.item_type,
-                "quantity_used": float(bridging.quantity_used or 0),
-                "usage_unit": bridging.usage_unit,
-            }
-        ]
-
-        determine_usage_for_meal.delay(
-            meal_plan_meal_id=meal_plan_meal.id,
-            meal_name=meal_plan_meal.meal.name,
-            meal_description=meal_plan_meal.meal.description,
-            used_pantry_info=usage_data,
-            serving_size=user.household_member_count,
-            request_id=request_id,
-        )
+    # Batch results do not currently include pantry usage data
+    return
 
 
 def _finalize_meal_plan(*, user: CustomUser, meal_plan: MealPlan, request_id: str) -> None:
@@ -557,6 +524,43 @@ def _finalize_meal_plan(*, user: CustomUser, meal_plan: MealPlan, request_id: st
     meal_plan.is_approved = True
     meal_plan.has_changes = False
     meal_plan.save(update_fields=["is_approved", "has_changes"])
+
+
+def _extract_plan_from_response(groq_response: GroqBatchResponse) -> tuple[dict, List[ParsedSlot]]:
+    if not groq_response.body.choices:
+        raise BatchProcessingError("no_choices")
+
+    content = groq_response.body.choices[0].message.content
+    if not content:
+        raise BatchProcessingError("empty_content")
+
+    try:
+        plan_dict = json.loads(content)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise BatchProcessingError(f"invalid_json:{exc}") from exc
+
+    if not isinstance(plan_dict, dict):
+        raise BatchProcessingError("plan_not_dict")
+
+    slots_data = plan_dict.get("slots")
+    if not isinstance(slots_data, list):
+        raise BatchProcessingError("slots_missing")
+
+    parsed_slots: List[ParsedSlot] = []
+    for item in slots_data:
+        if not isinstance(item, dict):
+            continue
+        day = item.get("day")
+        meal_type = item.get("meal_type")
+        if not isinstance(day, str) or not isinstance(meal_type, str):
+            continue
+        notes = item.get("notes") if isinstance(item.get("notes"), str) else None
+        parsed_slots.append(ParsedSlot(day=day, meal_type=meal_type, notes=notes))
+
+    if not parsed_slots:
+        raise BatchProcessingError("no_valid_slots")
+
+    return plan_dict, parsed_slots
 
 
 def _record_batch_metrics(job: MealPlanBatchJob, event: str) -> None:

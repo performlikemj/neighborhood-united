@@ -1,6 +1,8 @@
 import pytest
 import json
+import copy
 from unittest.mock import Mock, patch, MagicMock
+from pydantic import ValidationError
 from django.test import TestCase
 from django.utils import timezone
 from datetime import date, timedelta
@@ -267,6 +269,18 @@ class TestMealGenerationRefactor(TestCase):
             MealOutputSchema.model_validate_json(invalid_json)
             
         print("✅ Test 3c PASSED: Pydantic validation correctly rejects invalid JSON")
+
+    def test_pydantic_validation_rejects_unknown_dietary_preference(self):
+        """Ensure MealOutputSchema rejects dietary tags outside the canonical enum."""
+        invalid_payload = copy.deepcopy(self.mock_gpt_response)
+        invalid_payload["meal"]["dietary_preferences"] = ["AlienDiet"]
+
+        invalid_json = json.dumps(invalid_payload)
+
+        with self.assertRaises(ValidationError):
+            MealOutputSchema.model_validate_json(invalid_json)
+
+        print("✅ Test 3d PASSED: Pydantic validation rejects unknown dietary preference tags")
 
     @patch('meals.meal_generation.get_openai_client')
     @patch('meals.meal_generation.get_expiring_pantry_items')

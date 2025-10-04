@@ -1,3 +1,4 @@
+import logging
 import stripe
 from django.conf import settings
 from django.db import transaction
@@ -10,6 +11,9 @@ from meals.utils.stripe_utils import (
     StripeAccountError,
 )
 from .models import ChefServiceOrder
+
+
+logger = logging.getLogger(__name__)
 
 
 def create_service_checkout_session(service_order_id, customer_email=None):
@@ -54,25 +58,12 @@ def create_service_checkout_session(service_order_id, customer_email=None):
     platform_fee_cents = calculate_platform_fee_cents(amount_cents)
     platform_fee_percent = get_platform_fee_percentage()
 
-    payment_intent_data = {
-        'transfer_data': {'destination': destination_account_id},
-        'on_behalf_of': destination_account_id,
-        'metadata': {
-            'service_order_id': str(order.id),
-            'chef_id': str(order.chef_id),
-            'order_type': 'service',
-        },
-    }
-    if platform_fee_cents:
-        payment_intent_data['application_fee_amount'] = platform_fee_cents
-
     session_kwargs = dict(
         customer_email=customer_email,
         payment_method_types=['card'],
         mode=mode,
         line_items=line_items,
         metadata=metadata,
-        payment_intent_data=payment_intent_data,
         **return_urls,
     )
 
@@ -87,23 +78,62 @@ def create_service_checkout_session(service_order_id, customer_email=None):
         if platform_fee_percent > 0:
             subscription_data['application_fee_percent'] = float(platform_fee_percent)
         session_kwargs['subscription_data'] = subscription_data
+    else:
+        payment_intent_data = {
+            'transfer_data': {'destination': destination_account_id},
+            'on_behalf_of': destination_account_id,
+            'metadata': {
+                'service_order_id': str(order.id),
+                'chef_id': str(order.chef_id),
+                'order_type': 'service',
+            },
+        }
+        if platform_fee_cents:
+            payment_intent_data['application_fee_amount'] = platform_fee_cents
+        session_kwargs['payment_intent_data'] = payment_intent_data
 
     # Provide an idempotency key to guard against retries
     idempotency_key = f"service_checkout_{order.id}"
+
+    log_payload = {
+        "order_id": order.id,
+        "mode": mode,
+        "stripe_price_id": order.tier.stripe_price_id,
+        "platform_fee_cents": platform_fee_cents,
+        "customer_email": customer_email,
+    }
+    logger.info("Creating service checkout session", extra=log_payload)
 
     session = stripe.checkout.Session.create(
         idempotency_key=idempotency_key,
         **session_kwargs,
     )
+    session_id = session.id
+    session_url = getattr(session, 'url', None)
+    if not session_url:
+        warn_payload = {"order_id": order.id, "session_id": session_id}
+        logger.warning("Stripe session missing url; attempting retrieval", extra=warn_payload)
+        try:
+            refreshed = stripe.checkout.Session.retrieve(session_id)
+            session_url = getattr(refreshed, 'url', None)
+        except Exception:
+            session_url = None
+
+    done_payload = {
+        "order_id": order.id,
+        "session_id": session_id,
+        "session_url_present": bool(session_url),
+    }
+    logger.info("Service checkout session created", extra=done_payload)
 
     try:
         with transaction.atomic():
             order = ChefServiceOrder.objects.select_for_update().get(id=order.id)
-            order.stripe_session_id = session.id
+            order.stripe_session_id = session_id
             order.status = 'awaiting_payment'
             order.save(update_fields=['stripe_session_id', 'status'])
     except Exception:
         # Non-fatal; webhook will still process
         pass
 
-    return True, {"session_id": session.id, "session_url": session.url}
+    return True, {"session_id": session_id, "session_url": session_url}

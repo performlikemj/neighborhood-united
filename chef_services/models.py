@@ -16,7 +16,7 @@ class ChefServiceOffering(models.Model):
     active = models.BooleanField(default=True)
 
     default_duration_minutes = models.PositiveIntegerField(null=True, blank=True)
-    max_travel_miles = models.PositiveIntegerField(null=True, blank=True)
+    max_travel_miles = models.PositiveIntegerField(null=True, blank=True, default=1)
     notes = models.TextField(null=True, blank=True)
     stripe_product_id = models.CharField(max_length=200, null=True, blank=True)
 
@@ -34,6 +34,13 @@ class ChefServiceOffering(models.Model):
 
 
 class ChefServicePriceTier(models.Model):
+    """Represents a Stripe-backed price option for a service offering.
+
+    Each tier covers a household size range, stores the amount billed in Stripe
+    cents, and records whether the booking recurs. The associated ``stripe_price_id``
+    links this tier directly to the synced Stripe Price so updates can be
+    propagated to Checkout sessions.
+    """
     RECURRENCE_CHOICES = [
         ("week", "Per Week"),
     ]
@@ -44,6 +51,7 @@ class ChefServicePriceTier(models.Model):
 
     currency = models.CharField(max_length=10, default="usd")
     desired_unit_amount_cents = models.PositiveIntegerField()
+    # ``stripe_price_id`` binds the tier to the live Stripe Price used for checkout
     stripe_price_id = models.CharField(max_length=200, blank=True, null=True, help_text="Linked Stripe Price ID")
 
     PRICE_SYNC_STATUS_CHOICES = [

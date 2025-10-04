@@ -7,6 +7,9 @@ class PostalCode(models.Model):
     code = models.CharField(max_length=15)  # Normalized format (uppercase, no special chars)
     display_code = models.CharField(max_length=20, blank=True, null=True)  # Original format for display
     country = CountryField(default='US')  # Default to US, but can be changed
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    geocoded_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = ('code', 'country')  # Ensure uniqueness per country

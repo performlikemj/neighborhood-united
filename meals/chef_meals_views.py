@@ -766,11 +766,31 @@ def stripe_webhook(request):
     try:
         if event.type == 'checkout.session.completed':
             session = event.data.object
-            
+            metadata = getattr(session, 'metadata', {}) or {}
+
+            if metadata.get('order_type') == 'service' and metadata.get('service_order_id'):
+                try:
+                    from chef_services.webhooks import handle_checkout_session_completed
+                    handle_checkout_session_completed(session)
+                    logger.info(
+                        "Processed service order checkout via webhook",
+                        extra={
+                            "service_order_id": metadata.get('service_order_id'),
+                            "session_id": getattr(session, 'id', None),
+                        },
+                    )
+                    return Response({"status": "success"})
+                except Exception as svc_err:
+                    logger.error(
+                        f"Service order webhook handling failed: {svc_err}",
+                        exc_info=True,
+                    )
+                    return Response({"error": str(svc_err)}, status=400)
+
             # Handle chef meal payments via parent Order
-            if session.metadata.get('order_type') == 'chef_meal':
+            if metadata.get('order_type') == 'chef_meal':
                 from meals.models import Order
-                parent_order_id = session.metadata.get('order_id')
+                parent_order_id = metadata.get('order_id')
                 logger.info(f"Processing payment confirmation for Order {parent_order_id}")
                 try:
                     # Use transaction to make the order/payment update atomic
@@ -841,8 +861,8 @@ def stripe_webhook(request):
                     return Response({"error": str(e)}, status=400)
             
             # Handle regular meal plan payments
-            elif session.metadata.get('order_type') in ['meal_plan', 'standard', None]:  # Handle all order types
-                order_id = session.metadata.get('order_id')
+            elif metadata.get('order_type') in ['meal_plan', 'standard', None]:  # Handle all order types
+                order_id = metadata.get('order_id')
                 logger.info(f"Processing payment confirmation for meal plan order {order_id}")
                 try:
                     # Get the order
@@ -911,7 +931,7 @@ def stripe_webhook(request):
             payment_intent = event.data.object
             
             # Check if we have any orders with this payment intent
-            chef_meal_orders = ChefMealOrder.objects.filter(payment_intent_id=payment_intent.id)
+            chef_meal_orders = ChefMealOrder.objects.filter(stripe_payment_intent_id=payment_intent.id)
             
             if chef_meal_orders.exists():
                 for order in chef_meal_orders:

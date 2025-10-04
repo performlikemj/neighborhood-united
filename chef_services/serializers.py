@@ -1,5 +1,63 @@
+from decimal import Decimal
+
 from rest_framework import serializers
+
 from .models import ChefServiceOffering, ChefServicePriceTier, ChefServiceOrder
+
+
+_CURRENCY_SYMBOLS = {
+    "usd": "$",
+    "cad": "CA$",
+    "eur": "€",
+    "gbp": "£",
+    "jpy": "¥",
+}
+
+
+def _format_amount(amount_cents, currency_code):
+    if amount_cents is None:
+        return "Price TBD"
+
+    amount = (Decimal(amount_cents) / Decimal(100)).quantize(Decimal("0.01"))
+    if amount == amount.to_integral():
+        amount_text = f"{int(amount):,}"
+    else:
+        amount_text = f"{amount:,.2f}".rstrip("0").rstrip(".")
+
+    currency_lower = (currency_code or "").lower()
+    symbol = _CURRENCY_SYMBOLS.get(currency_lower)
+    if symbol:
+        return f"{symbol}{amount_text}"
+    return f"{currency_code.upper() if currency_code else 'CURRENCY'} {amount_text}"
+
+
+def _format_household_label(tier):
+    if tier.display_label:
+        return tier.display_label
+
+    if tier.household_max is None:
+        return f"{tier.household_min}+ people"
+    if tier.household_min == tier.household_max:
+        return f"{tier.household_min} people"
+    return f"{tier.household_min}-{tier.household_max} people"
+
+
+def _format_recurrence(tier):
+    if not tier.is_recurring:
+        return "one-time"
+
+    interval_map = {
+        "week": "weekly",
+        "month": "monthly",
+    }
+    interval = interval_map.get(tier.recurrence_interval or "", tier.recurrence_interval or "recurring")
+    return f"recurring {interval}"
+
+
+def build_tier_summary(tier):
+    price_text = _format_amount(tier.desired_unit_amount_cents, tier.currency)
+    recurrence_text = _format_recurrence(tier)
+    return f"{_format_household_label(tier)}: {price_text}, {recurrence_text}"
 
 
 class ChefServicePriceTierSerializer(serializers.ModelSerializer):
@@ -21,15 +79,31 @@ class ChefServicePriceTierSerializer(serializers.ModelSerializer):
 
 class ChefServiceOfferingSerializer(serializers.ModelSerializer):
     tiers = ChefServicePriceTierSerializer(many=True, read_only=True)
+    service_type_label = serializers.CharField(source='get_service_type_display', read_only=True)
+    tier_summary = serializers.SerializerMethodField()
 
     class Meta:
         model = ChefServiceOffering
         fields = [
             'id', 'chef', 'service_type', 'title', 'description', 'active',
             'default_duration_minutes', 'max_travel_miles', 'notes',
-            'created_at', 'updated_at', 'tiers'
+            'created_at', 'updated_at', 'tiers', 'service_type_label', 'tier_summary'
         ]
-        read_only_fields = ['chef', 'created_at', 'updated_at', 'tiers']
+        read_only_fields = ['chef', 'created_at', 'updated_at', 'tiers', 'service_type_label', 'tier_summary']
+
+    def get_tier_summary(self, obj):
+        tiers = getattr(obj, 'tiers', None)
+        if tiers is None:
+            return []
+        tier_qs = tiers.all() if hasattr(tiers, 'all') else tiers
+        if hasattr(tier_qs, 'order_by'):
+            iterable = tier_qs.order_by('household_min', 'household_max', 'id')
+        else:
+            iterable = sorted(
+                tier_qs,
+                key=lambda t: (t.household_min, t.household_max or 10**9, t.id or 0),
+            )
+        return [build_tier_summary(tier) for tier in iterable if tier.active]
 
 
 class ChefServiceOrderSerializer(serializers.ModelSerializer):
@@ -62,12 +136,28 @@ class PublicChefServicePriceTierSerializer(serializers.ModelSerializer):
 
 class PublicChefServiceOfferingSerializer(serializers.ModelSerializer):
     tiers = PublicChefServicePriceTierSerializer(many=True, read_only=True)
+    service_type_label = serializers.CharField(source='get_service_type_display', read_only=True)
+    tier_summary = serializers.SerializerMethodField()
 
     class Meta:
         model = ChefServiceOffering
         fields = [
             'id', 'chef', 'service_type', 'title', 'description', 'active',
             'default_duration_minutes', 'max_travel_miles', 'notes',
-            'created_at', 'updated_at', 'tiers'
+            'created_at', 'updated_at', 'tiers', 'service_type_label', 'tier_summary'
         ]
-        read_only_fields = ['chef', 'created_at', 'updated_at', 'tiers']
+        read_only_fields = ['chef', 'created_at', 'updated_at', 'tiers', 'service_type_label', 'tier_summary']
+
+    def get_tier_summary(self, obj):
+        tiers = getattr(obj, 'tiers', None)
+        if tiers is None:
+            return []
+        tier_qs = tiers.all() if hasattr(tiers, 'all') else tiers
+        if hasattr(tier_qs, 'order_by'):
+            iterable = tier_qs.order_by('household_min', 'household_max', 'id')
+        else:
+            iterable = sorted(
+                tier_qs,
+                key=lambda t: (t.household_min, t.household_max or 10**9, t.id or 0),
+            )
+        return [build_tier_summary(tier) for tier in iterable if tier.active]

@@ -63,7 +63,14 @@ def get_stripe_return_urls(success_path="", cancel_path=""):
     if not streamlit_url:
         # Fallback if STREAMLIT_URL is not set
         streamlit_url = "http://localhost:8501"
-        
+
+    # Allow configuration of the default frontend path (e.g., /orders)
+    default_path = os.getenv("STRIPE_CHECKOUT_RETURN_PATH", "orders")
+    if not success_path:
+        success_path = default_path
+    if not cancel_path:
+        cancel_path = default_path
+
     # If success_path starts with /api/, it's a backend endpoint (doesn't need streamlit_url prefix)
     if success_path.startswith("/api/"):
         base_url = os.getenv("BACKEND_URL", streamlit_url)  # Use BACKEND_URL if defined

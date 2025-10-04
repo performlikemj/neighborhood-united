@@ -1,9 +1,11 @@
 from django.contrib import admin
 from django.contrib.contenttypes.admin import GenericTabularInline
+from django.db.models import Count, Q
 from .models import (
     MealPlan, MealPlanMeal, Dish, Ingredient, Order, Cart, MealType, Meal, OrderMeal, 
     ShoppingList, Instruction, MealPlanInstruction, PantryItem, MealPlanMealPantryUsage, SystemUpdate,
-    ChefMealEvent, ChefMealOrder, ChefMealReview, StripeConnectAccount, PlatformFeeConfig, PaymentLog
+    ChefMealEvent, ChefMealOrder, ChefMealReview, StripeConnectAccount, PlatformFeeConfig, PaymentLog,
+    MealPlanBatchJob, MealPlanBatchRequest
 )
 from reviews.models import Review
 from django.template.response import TemplateResponse
@@ -16,6 +18,40 @@ from django.utils import timezone
 import json
 from django.utils.safestring import mark_safe
 from django.contrib import admin as django_admin
+
+
+def _get_batch_metrics():
+    try:
+        aggregate = MealPlanBatchJob.objects.aggregate(
+            total_jobs=Count('id', distinct=True),
+            completed_jobs=Count('id', filter=Q(status=MealPlanBatchJob.STATUS_COMPLETED), distinct=True),
+            failed_jobs=Count('id', filter=Q(status=MealPlanBatchJob.STATUS_FAILED), distinct=True),
+            expired_jobs=Count('id', filter=Q(status=MealPlanBatchJob.STATUS_EXPIRED), distinct=True),
+        )
+        request_counts = MealPlanBatchRequest.objects.aggregate(
+            total=Count('id'),
+            completed=Count('id', filter=Q(status=MealPlanBatchRequest.STATUS_COMPLETED)),
+            failed=Count('id', filter=Q(status=MealPlanBatchRequest.STATUS_FAILED)),
+            fallback=Count('id', filter=Q(status=MealPlanBatchRequest.STATUS_FALLBACK)),
+            pending=Count('id', filter=Q(status=MealPlanBatchRequest.STATUS_PENDING)),
+        )
+        success_rate = 0
+        if request_counts['total']:
+            success_rate = round((request_counts['completed'] / request_counts['total']) * 100, 2)
+        return {
+            'total_jobs': aggregate['total_jobs'] or 0,
+            'completed_jobs': aggregate['completed_jobs'] or 0,
+            'failed_jobs': aggregate['failed_jobs'] or 0,
+            'expired_jobs': aggregate['expired_jobs'] or 0,
+            'total_requests': request_counts['total'] or 0,
+            'completed_requests': request_counts['completed'] or 0,
+            'failed_requests': request_counts['failed'] or 0,
+            'fallback_requests': request_counts['fallback'] or 0,
+            'pending_requests': request_counts['pending'] or 0,
+            'success_rate': success_rate,
+        }
+    except Exception:  # pragma: no cover - dashboard should degrade gracefully
+        return None
 
 class ReviewInline(GenericTabularInline):
     model = Review
@@ -436,6 +472,83 @@ class PaymentLogAdmin(admin.ModelAdmin):
         })
     )
 
+
+class MealPlanBatchRequestInline(admin.TabularInline):
+    model = MealPlanBatchRequest
+    extra = 0
+    can_delete = False
+    readonly_fields = ('user', 'custom_id', 'status', 'completed_at', 'response_preview', 'error')
+    fields = ('user', 'status', 'completed_at', 'custom_id', 'response_preview', 'error')
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def response_preview(self, obj):
+        if not obj.response_payload:
+            return ""
+        try:
+            pretty = json.dumps(obj.response_payload, indent=2)
+            return mark_safe(f"<details><summary>View</summary><pre>{pretty[:4000]}</pre></details>")
+        except (TypeError, ValueError):
+            return obj.response_payload
+    response_preview.short_description = "Response"
+
+
+class MealPlanBatchJobAdmin(admin.ModelAdmin):
+    change_list_template = "admin/meals/mealplanbatchjob/change_list.html"
+    list_display = (
+        'week_start_date', 'status', 'total_requests', 'completed_requests',
+        'fallback_requests', 'failed_requests', 'created_at', 'updated_at'
+    )
+    list_filter = ('status', 'week_start_date')
+    search_fields = ('batch_id', 'input_file_id', 'output_file_id')
+    readonly_fields = (
+        'created_at', 'updated_at', 'batch_id', 'input_file_id', 'output_file_id',
+        'error_file_id', 'failure_reason', 'completion_window', 'status'
+    )
+    inlines = [MealPlanBatchRequestInline]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        """Allow superusers to delete jobs so stale requests can be cleared."""
+        if not super().has_delete_permission(request, obj):
+            return False
+        return True
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.annotate(
+            total_requests_count=Count('requests', distinct=True),
+            completed_requests_count=Count('requests', filter=Q(requests__status=MealPlanBatchRequest.STATUS_COMPLETED), distinct=True),
+            failed_requests_count=Count('requests', filter=Q(requests__status=MealPlanBatchRequest.STATUS_FAILED), distinct=True),
+            fallback_requests_count=Count('requests', filter=Q(requests__status=MealPlanBatchRequest.STATUS_FALLBACK), distinct=True),
+        )
+
+    def total_requests(self, obj):
+        return getattr(obj, 'total_requests_count', 0) or 0
+    total_requests.short_description = "Total"
+
+    def completed_requests(self, obj):
+        return getattr(obj, 'completed_requests_count', 0) or 0
+    completed_requests.short_description = "Completed"
+
+    def failed_requests(self, obj):
+        return getattr(obj, 'failed_requests_count', 0) or 0
+    failed_requests.short_description = "Failed"
+
+    def fallback_requests(self, obj):
+        return getattr(obj, 'fallback_requests_count', 0) or 0
+    fallback_requests.short_description = "Fallback"
+
+    def changelist_view(self, request, extra_context=None):
+        response = super().changelist_view(request, extra_context=extra_context)
+        batch_metrics = _get_batch_metrics()
+        if batch_metrics and hasattr(response, 'context_data') and response.context_data is not None:
+            response.context_data['batch_metrics'] = batch_metrics
+        return response
+
 admin.site.register(MealPlan, MealPlanAdmin)
 admin.site.register(Dish, DishAdmin)
 admin.site.register(Ingredient, IngredientAdmin)
@@ -457,8 +570,23 @@ admin.site.register(ChefMealReview, ChefMealReviewAdmin)
 admin.site.register(StripeConnectAccount, StripeConnectAccountAdmin)
 admin.site.register(PlatformFeeConfig, PlatformFeeConfigAdmin)
 admin.site.register(PaymentLog, PaymentLogAdmin)
+admin.site.register(MealPlanBatchJob, MealPlanBatchJobAdmin)
 
 # Global admin site branding
 django_admin.site.site_header = "Hood United Admin"
 django_admin.site.site_title = "Hood United Admin"
 django_admin.site.index_title = "Wellness Operations Dashboard"
+django_admin.site.index_template = "admin/dashboard.html"
+
+
+
+_original_each_context = django_admin.site.each_context
+
+
+def _augmented_each_context(request):
+    context = _original_each_context(request)
+    context['batch_metrics'] = _get_batch_metrics()
+    return context
+
+
+django_admin.site.each_context = _augmented_each_context

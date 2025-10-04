@@ -34,9 +34,17 @@ app.conf.beat_schedule = {
         'task': 'meals.meal_embedding.update_embeddings',
         'schedule': crontab(hour=0, minute=0),  # Runs every day at midnight
     },
-    'create-meal-plan-every-hour': {
-        'task': 'meals.meal_plan_service.create_meal_plan_for_all_users',
-        'schedule': crontab(minute=0),  # Runs every hour
+    # Weekly Groq batch submission kicks off early Friday so results are
+    # ready for Saturday publishing.
+    'submit-weekly-meal-plan-batch': {
+        'task': 'meals.tasks.submit_weekly_meal_plan_batch',
+        'schedule': crontab(day_of_week='fri', hour=0, minute=5),
+    },
+    # Poll in-flight batches twice an hour to ingest completed results or
+    # trigger synchronous fallback when needed.
+    'poll-incomplete-meal-plan-batches': {
+        'task': 'meals.tasks.poll_incomplete_meal_plan_batches',
+        'schedule': crontab(minute='*/30'),
     },
     # Removed: meal plan reminders are no longer sent
 
@@ -73,10 +81,10 @@ app.conf.beat_schedule = {
         'args': (),
     },
     # Heartbeat every minute to confirm Beat is running
-    'celery-beat-heartbeat': {
-        'task': 'meals.tasks.celery_beat_heartbeat',
-        'schedule': crontab(),  # every minute
-    },
+    # 'celery-beat-heartbeat': {
+    #     'task': 'meals.tasks.celery_beat_heartbeat',
+    #     'schedule': crontab(),  # every minute
+    # },
     'sync-service-tier-prices': {
         'task': 'chef_services.tasks.sync_pending_service_tiers',
         'schedule': crontab(minute='*/5'),  # every 5 minutes

@@ -1,5 +1,5 @@
 # meals/pydantic_models.py
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict, model_validator, field_validator
 from typing import List, Optional, Dict, Any, ClassVar
 from enum import Enum
 
@@ -168,10 +168,12 @@ class Instructions(BaseModel):
     steps: List[InstructionStep]
 
 class MealData(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
     name: str
     description: str
-    dietary_preferences: List[str] = Field(..., description="One or more dietary preference tags.")
+    dietary_preferences: List[DietaryPreference] = Field(
+        ..., description="One or more dietary preference tags drawn from the canonical set."
+    )
     meal_type: Optional[str] = Field(..., description="Type of meal (e.g., 'Breakfast', 'Lunch', 'Dinner')")
     is_chef_meal: bool = Field(
         ...,
@@ -189,6 +191,27 @@ class MealData(BaseModel):
         ...,
         description="List of the user's expiring pantry items (in string form) actually used in this meal."
     )
+
+    @field_validator("dietary_preferences", mode="before")
+    def ensure_enum_preferences(cls, value):
+        """Coerce incoming strings to the DietaryPreference enum and reject unknown labels."""
+        if isinstance(value, list):
+            coerced = []
+            for item in value:
+                if isinstance(item, DietaryPreference):
+                    coerced.append(item)
+                    continue
+                if isinstance(item, str):
+                    try:
+                        coerced.append(DietaryPreference(item))
+                    except ValueError as exc:
+                        raise ValueError(f"Unknown dietary preference: {item}") from exc
+                    continue
+                raise TypeError(
+                    "dietary_preferences must be a list of strings or DietaryPreference enum values"
+                )
+            return coerced
+        raise TypeError("dietary_preferences must be provided as a list")
 
 class MealOutputSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -277,7 +300,7 @@ class RelevantSchema(BaseModel):
 
 
 class DietaryPreferencesSchema(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", use_enum_values=True)
     dietary_preferences: List[DietaryPreference] = Field(
         ..., 
         description="List of dietary preferences applicable to the meal."
@@ -286,6 +309,26 @@ class DietaryPreferencesSchema(BaseModel):
     example : ClassVar[Dict[str, Any]] = {
             "dietary_preferences": ["Vegan", "Gluten-Free"]
         }
+
+    @field_validator("dietary_preferences", mode="before")
+    def ensure_enum_preferences(cls, value):
+        if isinstance(value, list):
+            coerced = []
+            for item in value:
+                if isinstance(item, DietaryPreference):
+                    coerced.append(item)
+                    continue
+                if isinstance(item, str):
+                    try:
+                        coerced.append(DietaryPreference(item))
+                    except ValueError as exc:
+                        raise ValueError(f"Unknown dietary preference: {item}") from exc
+                    continue
+                raise TypeError(
+                    "dietary_preferences must be a list of strings or DietaryPreference enum values"
+                )
+            return coerced
+        raise TypeError("dietary_preferences must be provided as a list")
 
 class DietaryPreferenceDetail(BaseModel):
     model_config = ConfigDict(extra="forbid")

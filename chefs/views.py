@@ -14,7 +14,10 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework import status
-from .serializers import ChefPublicSerializer, ChefMeUpdateSerializer, ChefPhotoSerializer
+from .serializers import (
+    ChefPublicSerializer, ChefMeUpdateSerializer, ChefPhotoSerializer,
+    GalleryPhotoSerializer, GalleryStatsSerializer
+)
 from .models import ChefWaitlistConfig, ChefWaitlistSubscription, ChefAvailabilityState
 from django.utils import timezone
 from django.db.models import F, Q
@@ -351,7 +354,8 @@ def me_upload_photo(request):
     if 'user_id' in request.query_params or 'user_id' in request.data:
         pass
 
-    form = ChefPhotoForm(request.POST, request.FILES)
+    # Pass chef to form so it can filter dish/meal choices
+    form = ChefPhotoForm(request.POST, request.FILES, chef=chef)
     if not form.is_valid():
         return Response(form.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -360,7 +364,9 @@ def me_upload_photo(request):
     if photo.is_featured:
         ChefPhoto.objects.filter(chef=chef, is_featured=True).update(is_featured=False)
     photo.save()
-    return Response(ChefPhotoSerializer(photo, context={'request': request}).data, status=status.HTTP_201_CREATED)
+    
+    # Return enhanced serializer with all new fields
+    return Response(GalleryPhotoSerializer(photo, context={'request': request}).data, status=status.HTTP_201_CREATED)
 
 
 @api_view(['DELETE'])
@@ -741,3 +747,235 @@ def waitlist_unsubscribe(request, chef_id):
     if updated == 0:
         return Response(status=status.HTTP_404_NOT_FOUND)
     return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ============================================================================
+# CHEF GALLERY ENDPOINTS - Public API for chef photo galleries
+# ============================================================================
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def chef_gallery_photos(request, username):
+    """
+    Get paginated list of photos for a chef's gallery.
+    Supports filtering by tags, category, dish_id, meal_id and ordering.
+    
+    Query params:
+    - page: page number (default: 1)
+    - page_size: items per page (default: 12, max: 50)
+    - tags: comma-separated tags to filter by
+    - category: filter by category (appetizer, main, dessert, etc.)
+    - dish_id: filter by specific dish
+    - meal_id: filter by specific meal
+    - ordering: sort order (default: -created_at)
+    """
+    # Get chef by username
+    try:
+        chef = Chef.objects.select_related('user').get(user__username__iexact=username)
+    except Chef.DoesNotExist:
+        return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    # Verify chef is approved
+    try:
+        user_role = UserRole.objects.get(user=chef.user)
+        if not user_role.is_chef:
+            return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
+    except UserRole.DoesNotExist:
+        return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    # Start with base queryset - only public photos
+    queryset = ChefPhoto.objects.filter(
+        chef=chef,
+        is_public=True
+    ).select_related('dish', 'meal')
+    
+    # Apply filters
+    tags_param = request.query_params.get('tags')
+    if tags_param:
+        # Filter photos that contain any of the specified tags
+        tags_list = [tag.strip() for tag in tags_param.split(',') if tag.strip()]
+        if tags_list:
+            # Use JSONField contains lookup
+            from django.db.models import Q
+            tag_queries = Q()
+            for tag in tags_list:
+                tag_queries |= Q(tags__contains=[tag])
+            queryset = queryset.filter(tag_queries)
+    
+    category = request.query_params.get('category')
+    if category:
+        queryset = queryset.filter(category=category)
+    
+    dish_id = request.query_params.get('dish_id')
+    if dish_id:
+        try:
+            queryset = queryset.filter(dish_id=int(dish_id))
+        except (ValueError, TypeError):
+            pass
+    
+    meal_id = request.query_params.get('meal_id')
+    if meal_id:
+        try:
+            queryset = queryset.filter(meal_id=int(meal_id))
+        except (ValueError, TypeError):
+            pass
+    
+    # Apply ordering
+    ordering = request.query_params.get('ordering', '-created_at')
+    valid_orderings = ['-created_at', 'created_at', '-updated_at', 'updated_at', 'title', '-title']
+    if ordering in valid_orderings:
+        queryset = queryset.order_by(ordering)
+    else:
+        queryset = queryset.order_by('-created_at')
+    
+    # Ensure consistent ordering for pagination
+    if 'id' not in ordering and '-id' not in ordering:
+        queryset = queryset.order_by(ordering, '-id')
+    
+    # Paginate
+    from rest_framework.pagination import PageNumberPagination
+    paginator = PageNumberPagination()
+    
+    # Get page_size from query params with validation
+    page_size = request.query_params.get('page_size', '12')
+    try:
+        paginator.page_size = max(1, min(50, int(page_size)))
+    except (ValueError, TypeError):
+        paginator.page_size = 12
+    
+    page = paginator.paginate_queryset(queryset, request)
+    serializer = GalleryPhotoSerializer(page or queryset, many=True, context={'request': request})
+    
+    if page is not None:
+        return paginator.get_paginated_response(serializer.data)
+    return Response(serializer.data)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def chef_gallery_stats(request, username):
+    """
+    Get statistics for a chef's gallery including total photos,
+    category breakdown, popular tags, and date range.
+    """
+    # Get chef by username
+    try:
+        chef = Chef.objects.select_related('user').get(user__username__iexact=username)
+    except Chef.DoesNotExist:
+        return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    # Verify chef is approved
+    try:
+        user_role = UserRole.objects.get(user=chef.user)
+        if not user_role.is_chef:
+            return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
+    except UserRole.DoesNotExist:
+        return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    # Get public photos only
+    photos = ChefPhoto.objects.filter(chef=chef, is_public=True)
+    
+    # Total count
+    total_photos = photos.count()
+    
+    # Category breakdown
+    from django.db.models import Count
+    category_counts = {}
+    category_data = photos.values('category').annotate(count=Count('id'))
+    for item in category_data:
+        cat = item['category'] or 'other'
+        category_counts[cat] = item['count']
+    
+    # Tags aggregation
+    from collections import Counter
+    all_tags = []
+    for photo in photos.exclude(tags__isnull=True).exclude(tags=[]):
+        if isinstance(photo.tags, list):
+            all_tags.extend(photo.tags)
+    
+    tag_counter = Counter(all_tags)
+    # Get top 20 tags
+    top_tags = [
+        {'name': tag, 'count': count}
+        for tag, count in tag_counter.most_common(20)
+    ]
+    
+    # Date range
+    date_range = {}
+    if total_photos > 0:
+        first_photo = photos.order_by('created_at').first()
+        latest_photo = photos.order_by('-created_at').first()
+        if first_photo and latest_photo:
+            date_range = {
+                'first_photo': first_photo.created_at.isoformat(),
+                'latest_photo': latest_photo.created_at.isoformat(),
+            }
+    
+    stats_data = {
+        'total_photos': total_photos,
+        'categories': category_counts,
+        'tags': top_tags,
+        'date_range': date_range,
+    }
+    
+    serializer = GalleryStatsSerializer(stats_data)
+    return Response(serializer.data)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def chef_gallery_photo_detail(request, username, photo_id):
+    """
+    Get detailed information about a specific photo in a chef's gallery.
+    Optional endpoint for photo detail view with navigation.
+    """
+    # Get chef by username
+    try:
+        chef = Chef.objects.select_related('user').get(user__username__iexact=username)
+    except Chef.DoesNotExist:
+        return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    # Verify chef is approved
+    try:
+        user_role = UserRole.objects.get(user=chef.user)
+        if not user_role.is_chef:
+            return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
+    except UserRole.DoesNotExist:
+        return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    # Get the photo
+    try:
+        photo = ChefPhoto.objects.select_related('dish', 'meal').get(
+            id=photo_id,
+            chef=chef,
+            is_public=True
+        )
+    except ChefPhoto.DoesNotExist:
+        return Response({'detail': 'Photo not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    # Serialize the photo
+    serializer = GalleryPhotoSerializer(photo, context={'request': request})
+    data = serializer.data
+    
+    # Add navigation (previous/next photo IDs)
+    # Get previous photo (older)
+    previous_photo = ChefPhoto.objects.filter(
+        chef=chef,
+        is_public=True,
+        created_at__lt=photo.created_at
+    ).order_by('-created_at').first()
+    
+    # Get next photo (newer)
+    next_photo = ChefPhoto.objects.filter(
+        chef=chef,
+        is_public=True,
+        created_at__gt=photo.created_at
+    ).order_by('created_at').first()
+    
+    data['navigation'] = {
+        'previous_photo_id': previous_photo.id if previous_photo else None,
+        'next_photo_id': next_photo.id if next_photo else None,
+    }
+    
+    return Response(data)

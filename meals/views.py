@@ -397,9 +397,7 @@ def get_ingredient_info(id, apiKey=settings.SPOONACULAR_API_KEY):
 @user_passes_test(is_chef, login_url='custom_auth:login')
 def api_create_ingredient(request):
     if request.method == 'POST':
-        print(request.POST)
         chef = request.user.chef
-        print(chef)
         name = request.POST.get('name')
         spoonacular_id = request.POST.get('spoonacular_id')
         if chef.ingredients.filter(spoonacular_id=spoonacular_id).exists():
@@ -514,7 +512,6 @@ def get_alternative_meals(request):
     # Apply dietary preference filter only if it's not None
     meals = postal_query.filter(id__in=Meal.dietary_objects.for_user(request.user))
 
-    print(meals)
 
     # Return the meals as JSON
     if meals.exists():
@@ -538,8 +535,6 @@ def submit_meal_plan_updates(request):
         # Load the JSON data from the request
         data = json.loads(request.body)
         updated_meals = data.get('mealPlan')
-        print(updated_meals)
-        print(type(updated_meals))
 
         # Assuming each meal in updated_meals includes a 'meal_plan_id'
         if not updated_meals:
@@ -1174,7 +1169,6 @@ def api_pantry_items(request):
             serializer.save(user=request.user) 
             return Response(serializer.data, status=201)
         else:
-            print(f"Serializer Errors: {serializer.errors}")  # Log the errors
             return Response(serializer.errors, status=400)
     
 @api_view(['GET', 'PUT', 'PATCH', 'DELETE'])
@@ -1210,7 +1204,6 @@ def api_pantry_item_detail(request, pk):
             serializer.save()
             return Response(serializer.data, status=200)
         else:
-            print(f"Serializer Errors: {serializer.errors}")
             return Response(serializer.errors, status=400)
 
     elif request.method == 'DELETE':
@@ -1262,9 +1255,6 @@ def api_update_meals_with_prompt(request):
         meal_dates = request.data.get('meal_dates', [])
         prompt = request.data.get('prompt', '').strip()
         logger.info(f"Received meal_plan_meal_ids: {meal_plan_meal_ids}, dates: {meal_dates}, prompt: {prompt}")
-        print(f"Meal Plan Meal IDs: {meal_plan_meal_ids}")
-        print(f"Meal Dates: {meal_dates}")
-        print(f"Prompt: {prompt}")
         if not meal_plan_meal_ids or not meal_dates:
             logger.warning("Missing required data: meal_plan_meal_ids or meal_dates")
             return Response({
@@ -1294,7 +1284,6 @@ def api_update_meals_with_prompt(request):
                     past_date_pairs.append((meal_id, meal_date))
                     continue  # Skip past dates
                 id_date_pairs.append((meal_id, meal_date))
-                print(f"Added valid date pair: meal_id={meal_id}, date={date_str}")
                 logger.info(f"Added valid date pair: meal_id={meal_id}, date={date_str}")
         except ValueError as e:
             logger.error(f"Date parsing error: {e}")
@@ -1934,7 +1923,6 @@ def api_generate_meal_plan(request):
 
         # Generate deterministic task ID to prevent duplicate tasks
         task_id = f"meal_plan_generation_{request.user.id}_{week_start_date.strftime('%Y_%m_%d')}"
-        print(f"🔍 DEBUG: Generated task_id: {task_id}")
         
         # Use Redis marker key to prevent duplicate requests for this user/week combination
         lock_key = f"meal_plan_generation_lock_{request.user.id}_{week_start_date.strftime('%Y_%m_%d')}"
@@ -2052,11 +2040,9 @@ def api_stream_meal_plan_generation(request):
     from .models import MealPlan, MealPlanMeal
     
     try:
-        print("[SSE] Enter api_stream_meal_plan_generation", flush=True)
         # Troubleshooting headers
         try:
             accept = request.META.get('HTTP_ACCEPT')
-            print(f"[SSE] HTTP_ACCEPT={accept}", flush=True)
             
         except Exception:
             pass
@@ -2065,10 +2051,8 @@ def api_stream_meal_plan_generation(request):
         week_start_date_str = None
         if hasattr(request, 'query_params') and request.query_params is not None:
             week_start_date_str = request.query_params.get('week_start_date')
-            print(f"[SSE] query_params.week_start_date={week_start_date_str}", flush=True)
         if not week_start_date_str and hasattr(request, 'GET'):
             week_start_date_str = request.GET.get('week_start_date')
-            print(f"[SSE] GET.week_start_date={week_start_date_str}", flush=True)
         if not week_start_date_str:
             def err_stream():
                 yield f"event: error\n"
@@ -2076,12 +2060,10 @@ def api_stream_meal_plan_generation(request):
                 yield 'event: close\n\n'
             response = StreamingHttpResponse(err_stream(), content_type='text/event-stream')
             response['Cache-Control'] = 'no-cache, no-transform'
-            print("[SSE] Missing week_start_date; returning error stream", flush=True)
             return response
         try:
             week_start_date = datetime.strptime(week_start_date_str, '%Y-%m-%d').date()
             week_end_date = week_start_date + timedelta(days=6)
-            print(f"[SSE] Parsed week_start_date={week_start_date} week_end_date={week_end_date}", flush=True)
         except ValueError:
             def err_stream2():
                 yield f"event: error\n"
@@ -2089,7 +2071,6 @@ def api_stream_meal_plan_generation(request):
                 yield 'event: close\n\n'
             response = StreamingHttpResponse(err_stream2(), content_type='text/event-stream')
             response['Cache-Control'] = 'no-cache, no-transform'
-            print("[SSE] Invalid date format provided", flush=True)
             return response
 
         # Channel and keys
@@ -2105,7 +2086,6 @@ def api_stream_meal_plan_generation(request):
             week_end_date=week_end_date
         ).first()
         if existing_plan and MealPlanMeal.objects.filter(meal_plan=existing_plan).exists():
-            print(f"[SSE] Existing plan with meals found (plan_id={existing_plan.id}); short-circuiting with done", flush=True)
             def done_stream():
                 yield "event: progress\n"
                 yield f"data: {json.dumps({'pct': 100})}\n\n"
@@ -2117,7 +2097,6 @@ def api_stream_meal_plan_generation(request):
 
         # Prepare Redis pubsub
         conn = get_redis_connection()
-        print(f"[SSE] Redis connection acquired? {'yes' if conn else 'no'}", flush=True)
         if conn is None:
             def err_stream3():
                 yield f"event: error\n"
@@ -2125,23 +2104,19 @@ def api_stream_meal_plan_generation(request):
                 yield 'event: close\n\n'
             response = StreamingHttpResponse(err_stream3(), content_type='text/event-stream')
             response['Cache-Control'] = 'no-cache, no-transform'
-            print("[SSE] Redis unavailable; returning error stream", flush=True)
             return response
         pubsub = conn.pubsub()
         pubsub.subscribe(channel)
-        print(f"[SSE] Subscribed to channel={channel}", flush=True)
         
 
         # Start job idempotently if not already running
         lock_val = redis_get(lock_key)
-        print(f"[SSE] Lock check {lock_key} -> {lock_val}", flush=True)
         if not lock_val:
             try:
                 # set short lock to avoid races before Celery picks it up
                 task_id = f"meal_plan_generation_{user_id}_{week_start_date.strftime('%Y_%m_%d') }"
                 lock_value_to_set = f"meal_plan_generation_{user_id}_{week_start_date.strftime('%Y_%m_%d')}"
                 redis_set(lock_key, lock_value_to_set, 7200)
-                print(f"[SSE] Set lock {lock_key} -> {lock_value_to_set}", flush=True)
                 from .meal_plan_service import create_meal_plan_for_user
                 create_meal_plan_for_user.apply_async(
                     args=[],
@@ -2154,32 +2129,27 @@ def api_stream_meal_plan_generation(request):
                     },
                     task_id=task_id
                 )
-                print(f"[SSE] Dispatched Celery task_id={task_id} for user_id={user_id}", flush=True)
             except Exception:
                 # Best effort cleanup of premature lock
                 try:
                     redis_delete(lock_key)
-                    print(f"[SSE] Exception during task dispatch; cleaned lock {lock_key}", flush=True)
                 except Exception:
                     pass
                 raise
         else:
-            print(f"[SSE] Job already running with lock value: {lock_val}", flush=True)
+            logger.info(f"[SSE] Job already running with lock value: {lock_val}")
 
         def event_stream():
-            print("[SSE] event_stream() start", flush=True)
             try:
                 # Immediate heartbeat to open the stream promptly
                 yield ":keepalive\n\n"
                 # Optional initial progress snapshot if available
                 job_info = redis_get(job_key)
-                print(f"[SSE] Initial job_info for {job_key}: {job_info}", flush=True)
                 if isinstance(job_info, dict) and 'total' in job_info and 'added' in job_info:
                     total = max(job_info.get('total', 0), 1)
                     pct = int((job_info.get('added', 0) / total) * 100)
                     yield "event: progress\n"
                     yield f"data: {json.dumps({'pct': pct})}\n\n"
-                    print(f"[SSE] Sent initial progress pct={pct}", flush=True)
 
                 # Switch to non-blocking poll with periodic keepalive
                 last_heartbeat = time.time()
@@ -2191,7 +2161,6 @@ def api_stream_meal_plan_generation(request):
                             payload = json.loads(message.get('data'))
                         except Exception:
                             payload = None
-                        print(f"[SSE] PubSub message raw={message} parsed={payload}", flush=True)
                         if not isinstance(payload, dict):
                             continue
                         event = payload.get('event') or payload.get('type')  # support alternate naming
@@ -2208,37 +2177,39 @@ def api_stream_meal_plan_generation(request):
                                 pct_val = data.get('pct') if isinstance(data, dict) else None
                             except Exception:
                                 pct_val = None
-                            print(f"[SSE] Emitted progress pct={pct_val}", flush=True)
                         else:
-                            print(f"[SSE] Emitted event={event}", flush=True)
+                            logger.info(f"[SSE] Emitted event={event}", flush=True)
                         if event == 'done':
-                            print("[SSE] Received done event; breaking stream loop", flush=True)
+                            logger.info("[SSE] Received done event; breaking stream loop", flush=True)
                             break
                         last_heartbeat = now_ts
                     else:
                         if now_ts - last_heartbeat >= 20:
                             yield ":keepalive\n\n"
-                            print("[SSE] Sent keepalive", flush=True)
                             last_heartbeat = now_ts
             except GeneratorExit:
-                print("[SSE] GeneratorExit in event_stream", flush=True)
+                #n8n traceback
+                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                requests.post(n8n_traceback_url, json={"error": str(e), "source":"api_stream_meal_plan_generation", "traceback": traceback.format_exc()})
             finally:
                 try:
                     pubsub.unsubscribe(channel)
-                    print(f"[SSE] Unsubscribed from channel={channel}", flush=True)
                 except Exception:
-                    print("[SSE] Error during pubsub.unsubscribe (ignored)", flush=True)
+                    #n8n traceback
+                    n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                    requests.post(n8n_traceback_url, json={"error": str(e), "source":"api_stream_meal_plan_generation", "traceback": traceback.format_exc()})
             yield 'event: close\n\n'
 
         response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
         response['Cache-Control'] = 'no-cache, no-transform'
         response['X-Accel-Buffering'] = 'no'
-        print("[SSE] Returning StreamingHttpResponse for SSE", flush=True)
         return response
 
     except Exception as e:
         logger.error(f"Error in api_stream_meal_plan_generation: {str(e)}")
-        print(f"[SSE] Exception in api_stream_meal_plan_generation: {e}", flush=True)
+        #n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"api_stream_meal_plan_generation", "traceback": traceback.format_exc()})
         def err_stream4():
             yield f"event: error\n"
             yield f"data: {json.dumps({'message': str(e)})}\n\n"
@@ -2294,6 +2265,9 @@ def api_cleanup_meal_plan_locks(request):
             "message": f"Invalid input: {str(e)}"
         }, status=400)
     except Exception as e:
+        #n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"api_cleanup_meal_plan_locks", "traceback": traceback.format_exc()})
         logger.error(f"Error in manual lock cleanup: {str(e)}")
         return Response({
             "status": "error",
@@ -2360,6 +2334,9 @@ def api_meal_plan_status(request, task_id):
             })
     
     except Exception as e:
+        #n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"api_meal_plan_status", "traceback": traceback.format_exc()})
         logger.error(f"Error checking task status {task_id}: {str(e)}")
         return Response({
             "status": "error",
@@ -3300,17 +3277,14 @@ def api_stripe_account_status(request):
 def api_create_stripe_account_link(request):
     """Create a Stripe account link for onboarding or updating"""
     from custom_auth.models import CustomUser
-    print(f"Creating Stripe account link for user {request.data.get('user_id')}")
     try:
         user_id = request.data.get('user_id')
     except Exception as e:
         logger.error(f"Error getting user ID: {str(e)}")
-        print(f"Error getting user ID: {str(e)}")
         return Response(
             {"error": "Failed to get user ID"},
             status=500
         )
-    print(f"User ID for Stripe account link: {user_id}")
     user = CustomUser.objects.get(id=user_id)
             
     logger.info(f"API create Stripe account link requested by user {user.id}")
@@ -3430,7 +3404,6 @@ def api_create_stripe_account_link(request):
             return_url=f"{base_url}/meal-plans",
             type="account_onboarding",
         )
-        print(f"Account link: {account_link}")
         # Return data directly to Streamlit frontend
         return Response({
             "url": account_link.url,
@@ -3455,7 +3428,6 @@ def api_process_chef_meal_payment(request, order_id):
         with transaction.atomic():
             # Get the regular Order object (locked for update)
             order = Order.objects.select_for_update().get(id=order_id, customer=request.user)
-            print(f"Order: {order}")
             # Short-circuit if already paid
             if order.is_paid:
                 return standardize_stripe_response(
@@ -3840,10 +3812,14 @@ def api_process_meal_payment(request, order_id):
         except requests.exceptions.RequestException as webhook_error:
             # Log error but don't fail the payment process
             logger.error(f"Error triggering n8n webhook for order {order_id} email: {webhook_error}", exc_info=True)
-            print(f"[ERROR] Failed to trigger n8n webhook email: {webhook_error}")
+            #n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"api_process_meal_payment", "traceback": traceback.format_exc()})
         except Exception as general_error: # Catch any other unexpected errors
-             logger.error(f"Unexpected error during n8n trigger for order {order_id} email: {general_error}", exc_info=True)
-             print(f"[ERROR] Unexpected error triggering n8n email: {general_error}")
+            #n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": str(e), "source":"api_process_meal_payment", "traceback": traceback.format_exc()})
+            logger.error(f"Unexpected error during n8n trigger for order {order_id} email: {general_error}", exc_info=True)
         # --- End: Trigger n8n Webhook --- 
 
         # Return the original response to Streamlit
@@ -3878,7 +3854,7 @@ def api_order_payment_status(request, order_id):
             "session_status": None,
             "session_url": None,
         }
-        # Prefer a provided session_id/payment_intent_id (e.g., from Stripe success redirect) when present
+        # Prefer a provided session_id/stripe_payment_intent_id  (e.g., from Stripe success redirect) when present
         provided_session_id = request.query_params.get('session_id') or request.GET.get('session_id')
         provided_pi_id = request.query_params.get('payment_intent_id') or request.GET.get('payment_intent_id')
         session_id_to_check = provided_session_id or order.stripe_session_id
@@ -3919,7 +3895,7 @@ def api_order_payment_status(request, order_id):
                     for item in chef_items:
                         try:
                             # Save payment intent from session
-                            item.payment_intent_id = getattr(session, 'payment_intent', None)
+                            item.stripe_payment_intent_id  = getattr(session, 'payment_intent', None)
                             item.mark_as_paid()
                         except Exception:
                             item.status = 'confirmed'
@@ -3937,7 +3913,7 @@ def api_order_payment_status(request, order_id):
                             status='succeeded',
                             details={
                                 'session_id': session.id,
-                                'payment_intent_id': getattr(session, 'payment_intent', None),
+                                'stripe_payment_intent_id ': getattr(session, 'payment_intent', None),
                                 'finalized_via': 'status_endpoint'
                             }
                         )
@@ -4000,7 +3976,7 @@ def api_order_payment_status(request, order_id):
                         chef_items = ChefMealOrder.objects.filter(order=order, status__in=['placed']).select_related('meal_event')
                         for item in chef_items:
                             try:
-                                item.payment_intent_id = pi.id
+                                item.stripe_payment_intent_id  = pi.id
                                 item.mark_as_paid()
                             except Exception:
                                 item.status = 'confirmed'
@@ -4154,8 +4130,8 @@ def api_stripe_webhook(request):
                         chef_order.mark_as_paid()
                         
                         # Update payment details
-                        chef_order.payment_intent_id = session.payment_intent
-                        chef_order.save(update_fields=['payment_intent_id'])
+                        chef_order.stripe_payment_intent_id  = session.payment_intent
+                        chef_order.save(update_fields=['stripe_payment_intent_id '])
                         
                         logger.info(f"Updated ChefMealOrder {chef_order.id} to confirmed status and updated meal counts")
                         
@@ -4171,7 +4147,7 @@ def api_stripe_webhook(request):
                                 status='succeeded',
                                 details={
                                     'session_id': session.id,
-                                    'payment_intent_id': session.payment_intent,
+                                    'stripe_payment_intent_id ': session.payment_intent,
                                     'created_in_success_redirect': True
                                 }
                             )
@@ -4190,7 +4166,7 @@ def api_stripe_webhook(request):
         
         # Check if this is for a chef meal order
         try:
-            chef_meal_order = ChefMealOrder.objects.get(payment_intent_id=payment_intent.id)
+            chef_meal_order = ChefMealOrder.objects.get(stripe_payment_intent_id =payment_intent.id)
             logger.info(f"Found chef meal order {chef_meal_order.id} for payment {payment_intent.id}")
             
             # Use mark_as_paid to update order status and pricing
@@ -4286,10 +4262,7 @@ def api_pantry_item_from_audio(request):
         # Process the audio file to extract pantry item information
         # The OpenAI API expects a file-like object opened in binary mode
         pantry_item_info = process_audio_for_pantry_item(uploaded_file)
-        
-        # Log what we got from the processing
-        print(f"Extracted info: {pantry_item_info}")
-        
+                
         # Create a new pantry item using the extracted information
         serializer = PantryItemSerializer(data={
             'item_name': pantry_item_info['item_name'],
@@ -4312,7 +4285,6 @@ def api_pantry_item_from_audio(request):
             }, status=status.HTTP_201_CREATED)
         else:
             # Return validation errors
-            print(f"Serializer errors: {serializer.errors}")
             return Response({
                 'error': 'Could not create pantry item with extracted information',
                 'details': serializer.errors,
@@ -4392,7 +4364,6 @@ def api_replace_meal_plan_meal(request):
 
         # --- End Print ---
         special_requests = request.data.get('special_requests', '')
-        print(f'all params: {request.data}')
         # Validate required parameters
         if not meal_plan_meal_id:
             logger.warning("Missing required parameter: meal_plan_meal_id")
@@ -5313,7 +5284,7 @@ def payment_success(request):
                     for chef_order in chef_meal_orders:
                         if chef_order.status == 'placed':
                             chef_order.status = STATUS_CONFIRMED
-                            chef_order.payment_intent_id = session.payment_intent
+                            chef_order.stripe_payment_intent_id  = session.payment_intent
                             chef_order.save()
                             logger.info(f"Updated ChefMealOrder {chef_order.id} to confirmed status")
                             
@@ -5329,7 +5300,7 @@ def payment_success(request):
                                     status='succeeded',
                                     details={
                                         'session_id': session.id,
-                                        'payment_intent_id': session.payment_intent,
+                                        'stripe_payment_intent_id ': session.payment_intent,
                                         'created_in_success_redirect': True
                                     }
                                 )

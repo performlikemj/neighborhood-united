@@ -154,7 +154,6 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
     from django.shortcuts import get_object_or_404
     from meals.models import Order, ChefMealOrder
     from custom_auth.models import CustomUser
-    print("[generate_payment_link] START user_id=", user_id, "order_id=", order_id)
     logger = logging.getLogger(__name__)
     stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -162,8 +161,7 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
         # 1) Fetch user & order ------------------------------------------------
         user  = get_object_or_404(CustomUser, id=user_id)
         order = get_object_or_404(Order, id=order_id, customer=user)
-        print(f"[generate_payment_link] Retrieved user {user.id} ({user.email}), "
-              f"order {order.id} (is_paid={order.is_paid})")
+
 
         if order.is_paid:
             return {"status": "error",
@@ -174,7 +172,6 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
             order=order
         ).select_related('meal_event', 'meal_event__meal')
         
-        print(f"[generate_payment_link] Found {chef_meal_orders.count()} ChefMealOrder rows")
         if not chef_meal_orders.exists():
             return {"status": "error",
                     "message": "No chef meal events found for this order."}
@@ -185,10 +182,6 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
         total_amount_cents = 0
 
         for cmo in chef_meal_orders:
-            print(f"[generate_payment_link] Processing ChefMealOrder {cmo.id}: "
-                  f"meal={cmo.meal_event.meal.id}-{cmo.meal_event.meal.name}, "
-                  f"event={cmo.meal_event.id}, "
-                  f"meal_plan_meal={cmo.meal_plan_meal.id if cmo.meal_plan_meal else 'None'}")
             
             meal = cmo.meal_event.meal
             meal_event = cmo.meal_event
@@ -196,23 +189,18 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
 
             # Skip already‑paid MealPlanMeal instances
             if meal_plan_meal and getattr(meal_plan_meal, "already_paid", False):
-                print(f"[generate_payment_link] Skipping meal_plan_meal {meal_plan_meal.id} "
-                      "because already_paid=True")
                 continue
 
             # Use quantity from ChefMealOrder
             quantity = cmo.quantity
-            print(f"[generate_payment_link] Using quantity={quantity}")
 
             price = meal_event.current_price
             if not price or price <= 0:
-                print(f"[generate_payment_link] Skipping item due to invalid price={price}")
                 continue  # ignore invalid prices
 
             price_decimal = price if isinstance(price, Decimal) else Decimal(str(price))
             unit_amount = int(price_decimal * 100)
             if unit_amount <= 0 or quantity <= 0:
-                print(f"[generate_payment_link] Skipping due to invalid unit_amount={unit_amount} or quantity={quantity}")
                 continue
 
             current_chef = meal_event.chef
@@ -237,10 +225,6 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
                 },
                 "quantity": quantity,
             })
-            print(f"[generate_payment_link] Added line_item – name={meal.name}, "
-                  f"unit_amount={unit_amount}, qty={quantity}")
-
-        print(f"[generate_payment_link] Built {len(line_items)} total line_items")
         if not line_items:
             return {"status": "error",
                     "message": "No items requiring payment found in this order."}
@@ -258,9 +242,6 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
         # 4) Create Stripe Checkout session -----------------------------------
         return_urls = get_stripe_return_urls(success_path="", cancel_path="")
         idempotency_key = f"order_{order.id}_{int(time.time())}"
-        print("[generate_payment_link] Creating Stripe checkout session…")
-        print(f"[generate_payment_link] return_urls={return_urls}, "
-              f"idempotency_key={idempotency_key}")
 
         session = stripe.checkout.Session.create(
             customer_email=user.email,
@@ -286,13 +267,10 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
                 **({"application_fee_amount": platform_fee_cents} if platform_fee_cents else {}),
             },
         )
-        print(f"[generate_payment_link] Stripe session created: id={session.id}, "
-              f"url={session.url}")
 
         # 5) Persist session ID and respond -----------------------------------
         order.stripe_session_id = session.id
         order.save(update_fields=["stripe_session_id"])
-        print(f"[generate_payment_link] Saved stripe_session_id to order {order.id}")
 
         api_key = settings.OPENAI_KEY
         client = OpenAI(api_key=api_key)
@@ -375,11 +353,11 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
         })
 
     except stripe.error.StripeError as se:
-        print(f"[generate_payment_link] StripeError occurred: {se}")
+        # n8n traceback
+        requests.post(n8n_traceback_url, json={"error": str(se), "source":"generate_payment_link", "traceback": traceback.format_exc()})
         logger.error(f"Stripe error (order {order_id}): {se}", exc_info=True)
         return {"status": "error", "message": f"Stripe error: {se}"}
     except Exception as e:
-        print(f"[generate_payment_link] General exception occurred: {e}")
         # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
         requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_payment_link", "traceback": traceback.format_exc()})
         return {"status": "error", "message": f"Failed to generate payment link"}

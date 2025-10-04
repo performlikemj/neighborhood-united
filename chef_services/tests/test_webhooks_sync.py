@@ -9,10 +9,13 @@ from chefs.models import Chef
 from chef_services.models import ChefServiceOffering, ChefServicePriceTier, ChefServiceOrder
 from chef_services.tasks import sync_pending_service_tiers
 from chef_services.webhooks import handle_checkout_session_completed
+from django.urls import reverse
+from rest_framework.test import APIClient
 
 
 class ChefServicesWebhooksSyncTests(TestCase):
     def setUp(self):
+        self.client = APIClient()
         self.user = CustomUser.objects.create_user(username="u1", email="u1@example.com", password="pass")
         self.chef_user = CustomUser.objects.create_user(username="chef", email="chef@example.com", password="pass")
         self.chef = Chef.objects.create(user=self.chef_user)
@@ -74,3 +77,38 @@ class ChefServicesWebhooksSyncTests(TestCase):
         self.assertEqual(order.status, 'confirmed')
         self.assertEqual(order.stripe_subscription_id, 'sub_123')
 
+    @patch('meals.chef_meals_views.stripe.Webhook.construct_event')
+    @patch('chef_services.webhooks.stripe.checkout.Session.retrieve')
+    def test_meals_webhook_endpoint_handles_service_order(self, mock_retrieve, mock_construct):
+        self.tier.stripe_price_id = 'price_123'
+        self.tier.save(update_fields=['stripe_price_id'])
+
+        order = ChefServiceOrder.objects.create(
+            customer=self.user,
+            chef=self.chef,
+            offering=self.off,
+            tier=self.tier,
+            household_size=2,
+            service_date=timezone.now().date(),
+            service_start_time=timezone.now().time(),
+            status='awaiting_payment',
+        )
+
+        mock_retrieve.return_value = SimpleNamespace(
+            id='cs_123',
+            mode='subscription',
+            line_items=SimpleNamespace(data=[SimpleNamespace(price=SimpleNamespace(id='price_123'))])
+        )
+
+        session = SimpleNamespace(
+            id='cs_123',
+            metadata={'order_type': 'service', 'service_order_id': str(order.id), 'tier_id': str(self.tier.id)},
+            subscription='sub_123',
+        )
+        mock_construct.return_value = SimpleNamespace(type='checkout.session.completed', data=SimpleNamespace(object=session))
+
+        response = self.client.post(reverse('meals:api_stripe_webhook'), data='{}', content_type='application/json')
+        self.assertEqual(response.status_code, 200, response.content)
+
+        order.refresh_from_db()
+        self.assertEqual(order.status, 'confirmed')

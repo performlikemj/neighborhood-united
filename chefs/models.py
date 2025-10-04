@@ -65,19 +65,73 @@ class ChefRequest(models.Model):
 
 class ChefPhoto(models.Model):
     """Gallery photo uploaded by an approved chef to showcase their food."""
+    CATEGORY_CHOICES = [
+        ('appetizer', 'Appetizer'),
+        ('main', 'Main Course'),
+        ('dessert', 'Dessert'),
+        ('beverage', 'Beverage'),
+        ('side', 'Side Dish'),
+        ('other', 'Other'),
+    ]
+    
     chef = models.ForeignKey('Chef', on_delete=models.CASCADE, related_name='photos')
     image = models.ImageField(upload_to='chefs/photos/')
-    title = models.CharField(max_length=200, blank=True)
+    thumbnail = models.ImageField(upload_to='chefs/photos/thumbnails/', blank=True, null=True)
+    
+    # Text fields
+    title = models.CharField(max_length=255, blank=True)
     caption = models.TextField(blank=True)
+    description = models.TextField(blank=True)
+    
+    # Relationships
+    dish = models.ForeignKey('meals.Dish', on_delete=models.SET_NULL, null=True, blank=True, related_name='photos')
+    meal = models.ForeignKey('meals.Meal', on_delete=models.SET_NULL, null=True, blank=True, related_name='photos')
+    
+    # Organization
+    tags = models.JSONField(default=list, blank=True)
+    category = models.CharField(max_length=50, choices=CATEGORY_CHOICES, blank=True, null=True)
+    
+    # Metadata
+    width = models.IntegerField(blank=True, null=True)
+    height = models.IntegerField(blank=True, null=True)
+    file_size = models.IntegerField(blank=True, null=True)
+    
+    # Features
     is_featured = models.BooleanField(default=False)
+    is_public = models.BooleanField(default=True)
+    
+    # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['-is_featured', '-created_at']
+        indexes = [
+            models.Index(fields=['chef', '-created_at']),
+            models.Index(fields=['chef', 'category']),
+            models.Index(fields=['chef', 'is_public']),
+        ]
 
     def __str__(self):
         base = self.title or 'Chef Photo'
         return f"{base} (chef_id={self.chef_id})"
+    
+    def save(self, *args, **kwargs):
+        """Extract image dimensions and file size on save."""
+        if self.image and hasattr(self.image, 'file'):
+            try:
+                from PIL import Image
+                image = Image.open(self.image.file)
+                self.width, self.height = image.size
+                
+                # Get file size
+                self.image.file.seek(0, 2)  # Seek to end
+                self.file_size = self.image.file.tell()
+                self.image.file.seek(0)  # Reset to beginning
+            except Exception:
+                pass  # Silently fail if we can't extract metadata
+        
+        super().save(*args, **kwargs)
 
 
 class ChefDefaultBanner(models.Model):

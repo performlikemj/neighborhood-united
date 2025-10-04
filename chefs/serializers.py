@@ -4,6 +4,7 @@ from django.contrib.auth import get_user_model
 from local_chefs.models import PostalCode
 from custom_auth.serializers import CustomUserSerializer
 from custom_auth.models import Address
+from meals.models import Dish, Meal
 
 
 class ChefRequestSerializer(serializers.ModelSerializer):
@@ -108,3 +109,63 @@ class ChefMeUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Chef
         fields = ['experience', 'bio', 'profile_pic', 'banner_image', 'is_on_break']
+
+
+# Gallery-specific serializers for the new public gallery endpoints
+
+
+class DishMinimalSerializer(serializers.ModelSerializer):
+    """Minimal dish info for gallery photos."""
+    class Meta:
+        model = Dish
+        fields = ['id', 'name']
+
+
+class MealMinimalSerializer(serializers.ModelSerializer):
+    """Minimal meal info for gallery photos."""
+    class Meta:
+        model = Meal
+        fields = ['id', 'name', 'description']
+
+
+class GalleryPhotoSerializer(serializers.ModelSerializer):
+    """Enhanced serializer for public gallery display with all metadata."""
+    image_url = serializers.SerializerMethodField()
+    thumbnail_url = serializers.SerializerMethodField()
+    dish = DishMinimalSerializer(read_only=True)
+    meal = MealMinimalSerializer(read_only=True)
+    
+    class Meta:
+        model = ChefPhoto
+        fields = [
+            'id', 'image_url', 'thumbnail_url', 'title', 'caption', 
+            'description', 'tags', 'category', 'created_at', 'updated_at',
+            'dish', 'meal', 'width', 'height', 'file_size', 'is_featured'
+        ]
+        read_only_fields = ['id', 'image_url', 'thumbnail_url', 'created_at', 'updated_at']
+    
+    def get_image_url(self, obj):
+        if not obj.image or not getattr(obj.image, 'name', None):
+            return None
+        request = self.context.get('request')
+        url = obj.image.url
+        return request.build_absolute_uri(url) if request is not None else url
+    
+    def get_thumbnail_url(self, obj):
+        # Return thumbnail if available, otherwise return main image
+        if obj.thumbnail and getattr(obj.thumbnail, 'name', None):
+            request = self.context.get('request')
+            url = obj.thumbnail.url
+            return request.build_absolute_uri(url) if request is not None else url
+        # Fallback to main image
+        return self.get_image_url(obj)
+
+
+class GalleryStatsSerializer(serializers.Serializer):
+    """Serializer for gallery statistics."""
+    total_photos = serializers.IntegerField()
+    categories = serializers.DictField(child=serializers.IntegerField())
+    tags = serializers.ListField(
+        child=serializers.DictField(child=serializers.CharField())
+    )
+    date_range = serializers.DictField()

@@ -675,9 +675,7 @@ def create_meal_plan_for_user(
             total_slots = len(planning_days) * len(meal_types)
             progress_key = f"meal_plan_job:{user_id}:{start_of_week.strftime('%Y_%m_%d')}"
             ok = redis_set(progress_key, {"total": total_slots, "added": 0}, 3600)
-            print(f"[SSE-PROG] init job_key={progress_key} total={total_slots} set_ok={ok}", flush=True)
         except Exception as e:
-            print(f"[SSE-PROG] init progress set failed: {e}", flush=True)
             progress_key = None
         added_count = 0
 
@@ -838,7 +836,6 @@ def create_meal_plan_for_user(
                                             "data": {"meal_plan_meal": MealPlanMealSerializer(mpm).data}
                                         }
                                         r_pub = conn.publish(channel, json.dumps(payload))
-                                        print(f"[SSE-PUB] meal_added -> channel={channel} pub_res={r_pub}", flush=True)
                                         # Update and publish progress
                                         added_count += 1
                                         if progress_key:
@@ -847,9 +844,10 @@ def create_meal_plan_for_user(
                                             ok = redis_set(progress_key, job_info, 3600)
                                             pct = int((added_count / max(total_slots, 1)) * 100)
                                             r_prog = conn.publish(channel, json.dumps({"event": "progress", "data": {"pct": pct}}))
-                                            print(f"[SSE-PROG] job_key={progress_key} added={job_info['added']} total={job_info.get('total')} set_ok={ok}; [SSE-PUB] progress pct={pct} pub_res={r_prog}", flush=True)
                             except Exception as e:
-                                print(f"[SSE-PUB] publish meal_added/progress failed: {e}", flush=True)
+                                # n8n traceback
+                                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                                requests.post(n8n_traceback_url, json={"error": str(e), "source":"create_meal_plan_for_user", "traceback": traceback.format_exc()})
                             
                             # If that meal used pantry items, keep track of it
                             if result.get('used_pantry_item'):
@@ -947,7 +945,6 @@ def create_meal_plan_for_user(
                                             "data": {"meal_plan_meal": MealPlanMealSerializer(mpm).data}
                                         }
                                         r_pub = conn.publish(channel, json.dumps(payload))
-                                        print(f"[SSE-PUB] meal_added -> channel={channel} pub_res={r_pub}", flush=True)
                                         # Update and publish progress
                                         added_count += 1
                                         if progress_key:
@@ -956,9 +953,10 @@ def create_meal_plan_for_user(
                                             ok = redis_set(progress_key, job_info, 3600)
                                             pct = int((added_count / max(total_slots, 1)) * 100)
                                             r_prog = conn.publish(channel, json.dumps({"event": "progress", "data": {"pct": pct}}))
-                                            print(f"[SSE-PROG] job_key={progress_key} added={job_info['added']} total={job_info.get('total')} set_ok={ok}; [SSE-PUB] progress pct={pct} pub_res={r_prog}", flush=True)
                                 except Exception as e:
-                                    print(f"[SSE-PUB] publish meal_added/progress failed: {e}", flush=True)
+                                    # n8n traceback
+                                    n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+                                    requests.post(n8n_traceback_url, json={"error": str(e), "source":"create_meal_plan_for_user", "traceback": traceback.format_exc()})
                             except Exception as e:
                                 # n8n traceback
                                 n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
@@ -1026,9 +1024,10 @@ def create_meal_plan_for_user(
             channel = f"meal_plan_stream:{user.id}:{start_of_week.strftime('%Y_%m_%d')}"
             r1 = conn.publish(channel, json.dumps({"event": "progress", "data": {"pct": 100}}))
             r2 = conn.publish(channel, json.dumps({"event": "done", "data": {}}))
-            print(f"[SSE-PUB] final progress=100 pub_res={r1}; done pub_res={r2} channel={channel}", flush=True)
     except Exception as e:
-        print(f"[SSE-PUB] final publish failed: {e}", flush=True)
+        # n8n traceback
+        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+        requests.post(n8n_traceback_url, json={"error": str(e), "source":"create_meal_plan_for_user", "traceback": traceback.format_exc()})
 
     return meal_plan
 

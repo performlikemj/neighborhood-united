@@ -28,6 +28,8 @@ from django.core.cache import cache
 import os
 from typing import Any, Dict, Optional
 import traceback
+from meals.services import meal_plan_batch_service
+from meals.models import MealPlanBatchJob
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -225,7 +227,7 @@ def process_chef_meal_price_adjustments():
     )
     
     logger.info(f"Processing price adjustments for {completed_events.count()} completed chef meal events")
-    
+
     total_processed = 0
     total_refunded = Decimal('0.00')
     
@@ -913,11 +915,49 @@ def cleanup_old_meal_plans_and_meals(dry_run: bool = False):
     }
 
 
+def _next_week_range_from_today(today=None):
+    """Return the (start, end) dates for the upcoming week starting Monday."""
+    if today is None:
+        today = timezone.localdate()
+    days_until_monday = (7 - today.weekday()) % 7
+    if days_until_monday == 0:
+        days_until_monday = 7
+    week_start = today + timedelta(days=days_until_monday)
+    week_end = week_start + timedelta(days=6)
+    return week_start, week_end
 
 
+@shared_task(bind=True, ignore_result=True)
+@handle_task_failure
+def submit_weekly_meal_plan_batch(self, request_id=None):
+    """Submit a Groq batch for all auto-enabled users for the upcoming week."""
+    week_start, week_end = _next_week_range_from_today()
+    job = meal_plan_batch_service.submit_weekly_batch(
+        week_start=week_start,
+        week_end=week_end,
+        request_id=request_id or f"batch-{week_start.isoformat()}",
+    )
+    if job:
+        logger.info("Submitted meal plan batch job %s for week %s-%s", job.id, week_start, week_end)
+    else:
+        logger.info("Meal plan batch submission fell back to synchronous generation")
 
 
-
-
-
-
+@shared_task(bind=True, ignore_result=True)
+def poll_incomplete_meal_plan_batches(self):
+    """Poll Groq for any meal plan batch jobs that are still in flight."""
+    pending_statuses = [
+        MealPlanBatchJob.STATUS_SUBMITTED,
+        MealPlanBatchJob.STATUS_IN_PROGRESS,
+    ]
+    job_ids = list(
+        MealPlanBatchJob.objects.filter(status__in=pending_statuses).values_list("id", flat=True)
+    )
+    if not job_ids:
+        logger.debug("No meal plan batch jobs require polling")
+        return
+    for job_id in job_ids:
+        try:
+            meal_plan_batch_service.process_batch_job(job_id)
+        except Exception as exc:
+            logger.exception("Failed to process meal plan batch job %s: %s", job_id, exc)

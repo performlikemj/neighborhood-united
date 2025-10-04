@@ -1,0 +1,58 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<h1>{% trans "Site administration" %}</h1>
+
+{% if batch_metrics %}
+  <div class="batch-metrics">
+    <h2>Groq Batch Overview</h2>
+    <div class="metrics-grid">
+      <div class="metric-card"><span class="metric-label">Total Jobs</span><span class="metric-value">{{ batch_metrics.total_jobs|default:0 }}</span></div>
+      <div class="metric-card"><span class="metric-label">Completed</span><span class="metric-value">{{ batch_metrics.completed_jobs|default:0 }}</span></div>
+      <div class="metric-card"><span class="metric-label">Failed</span><span class="metric-value">{{ batch_metrics.failed_jobs|default:0 }}</span></div>
+      <div class="metric-card"><span class="metric-label">Expired</span><span class="metric-value">{{ batch_metrics.expired_jobs|default:0 }}</span></div>
+      <div class="metric-card"><span class="metric-label">Requests Completed</span><span class="metric-value">{{ batch_metrics.completed_requests|default:0 }}</span></div>
+      <div class="metric-card"><span class="metric-label">Fallbacks</span><span class="metric-value">{{ batch_metrics.fallback_requests|default:0 }}</span></div>
+      <div class="metric-card"><span class="metric-label">Failures</span><span class="metric-value">{{ batch_metrics.failed_requests|default:0 }}</span></div>
+      <div class="metric-card"><span class="metric-label">Pending</span><span class="metric-value">{{ batch_metrics.pending_requests|default:0 }}</span></div>
+      <div class="metric-card"><span class="metric-label">Success Rate</span><span class="metric-value">{{ batch_metrics.success_rate|default:0 }}%</span></div>
+    </div>
+  </div>
+{% endif %}
+
+{% include "admin/app_list.html" with app_list=app_list show_changelinks=True %}
+{% endblock %}
+
+{% block extrastyle %}
+  {{ block.super }}
+  <style>
+    .batch-metrics { margin-bottom: 24px; }
+    .batch-metrics h2 { margin-bottom: 12px; }
+    .metrics-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    }
+    .metric-card {
+      padding: 12px;
+      border: 1px solid var(--border-color, #d0d0d0);
+      border-radius: 8px;
+      background: var(--body-bg, #fff);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+    }
+    .metric-label {
+      display: block;
+      font-size: 0.85rem;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+    }
+    .metric-value {
+      font-size: 1.4rem;
+      font-weight: 600;
+      color: #1f2933;
+    }
+  </style>
+{% endblock %}

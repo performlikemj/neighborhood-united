@@ -8,6 +8,7 @@ from django.conf import settings
 from datetime import date, timedelta, timezone as py_tz
 from zoneinfo import ZoneInfo
 from django.utils import timezone
+from typing import Optional
 from custom_auth.models import CustomUser, Address
 from django.contrib.contenttypes.fields import GenericRelation
 from django.core.validators import MinValueValidator, MaxValueValidator, RegexValidator
@@ -1383,3 +1384,122 @@ class MealAllergenSafety(models.Model):
 
     def __str__(self):
         return f"Allergen check: {self.meal.name} for {self.user.username} - {'Safe' if self.is_safe else 'Unsafe'}"
+
+
+class MealPlanBatchJob(models.Model):
+    """Tracks Groq batch submissions for weekly meal plan generation."""
+
+    STATUS_PENDING = "pending"
+    STATUS_SUBMITTED = "submitted"
+    STATUS_IN_PROGRESS = "in_progress"
+    STATUS_COMPLETED = "completed"
+    STATUS_FAILED = "failed"
+    STATUS_EXPIRED = "expired"
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_SUBMITTED, "Submitted"),
+        (STATUS_IN_PROGRESS, "In Progress"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_FAILED, "Failed"),
+        (STATUS_EXPIRED, "Expired"),
+    ]
+
+    week_start_date = models.DateField()
+    week_end_date = models.DateField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    completion_window = models.CharField(max_length=8, default="24h")
+    batch_id = models.CharField(max_length=100, blank=True, null=True)
+    input_file_id = models.CharField(max_length=100, blank=True, null=True)
+    output_file_id = models.CharField(max_length=100, blank=True, null=True)
+    error_file_id = models.CharField(max_length=100, blank=True, null=True)
+    failure_reason = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-week_start_date", "-created_at"]
+
+    def __str__(self):
+        return f"MealPlanBatchJob({self.week_start_date}–{self.week_end_date}, status={self.status})"
+
+    def register_members(self, entries):
+        """Create or update request rows for the provided user/custom_id tuples."""
+        for user_id, custom_id in entries:
+            MealPlanBatchRequest.objects.update_or_create(
+                job=self,
+                user_id=user_id,
+                defaults={
+                    "custom_id": custom_id,
+                    "status": MealPlanBatchRequest.STATUS_PENDING,
+                    "response_payload": None,
+                    "error": "",
+                },
+            )
+
+    def mark_request_completed(self, *, custom_id: str, response_payload: Optional[dict] = None):
+        request = self.requests.get(custom_id=custom_id)
+        request.status = MealPlanBatchRequest.STATUS_COMPLETED
+        request.response_payload = response_payload or {}
+        request.completed_at = timezone.now()
+        request.save(update_fields=["status", "response_payload", "completed_at"])
+
+    def mark_request_failed(self, *, custom_id: str, error_message: str):
+        request = self.requests.get(custom_id=custom_id)
+        request.status = MealPlanBatchRequest.STATUS_FAILED
+        request.error = error_message
+        request.completed_at = timezone.now()
+        request.save(update_fields=["status", "error", "completed_at"])
+
+    def mark_failed(self, reason: str):
+        self.status = self.STATUS_FAILED
+        self.failure_reason = reason
+        self.save(update_fields=["status", "failure_reason", "updated_at"])
+
+    def mark_expired(self, reason: Optional[str] = None):
+        self.status = self.STATUS_EXPIRED
+        if reason:
+            self.failure_reason = reason
+        self.save(update_fields=["status", "failure_reason", "updated_at"])
+
+    def pending_user_ids(self):
+        return list(
+            self.requests.filter(status=MealPlanBatchRequest.STATUS_PENDING).values_list("user_id", flat=True)
+        )
+
+    def users_requiring_fallback(self):
+        if self.status in {self.STATUS_FAILED, self.STATUS_EXPIRED}:
+            return list(self.requests.values_list("user_id", flat=True))
+        return list(
+            self.requests.exclude(status=MealPlanBatchRequest.STATUS_COMPLETED).values_list("user_id", flat=True)
+        )
+
+
+class MealPlanBatchRequest(models.Model):
+    """Represents an individual request inside a Groq batch job."""
+
+    STATUS_PENDING = "pending"
+    STATUS_COMPLETED = "completed"
+    STATUS_FAILED = "failed"
+    STATUS_FALLBACK = "fallback_scheduled"
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_FAILED, "Failed"),
+        (STATUS_FALLBACK, "Fallback Scheduled"),
+    ]
+
+    job = models.ForeignKey(MealPlanBatchJob, on_delete=models.CASCADE, related_name="requests")
+    user = models.ForeignKey('custom_auth.CustomUser', on_delete=models.CASCADE)
+    custom_id = models.CharField(max_length=150, unique=True)
+    status = models.CharField(max_length=25, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    response_payload = models.JSONField(blank=True, null=True)
+    error = models.TextField(blank=True, null=True)
+    completed_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        unique_together = ("job", "user")
+
+    def __str__(self):
+        return f"BatchRequest(user={self.user_id}, status={self.status})"

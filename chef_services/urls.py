@@ -9,6 +9,7 @@ urlpatterns = [
     path('offerings/<int:offering_id>/tiers/', views.add_tier, name='service_offering_add_tier'),
     path('tiers/<int:tier_id>/', views.update_tier, name='service_tier_update'),
     path('my/offerings/', views.my_offerings, name='service_my_offerings'),
+    path('my/orders/', views.my_orders, name='service_my_orders'),
 
     # Orders
     path('orders/', views.create_order, name='service_create_order'),
@@ -16,4 +17,3 @@ urlpatterns = [
     path('orders/<int:order_id>/checkout', views.checkout_order, name='service_checkout_order'),
     path('orders/<int:order_id>/cancel', views.cancel_order, name='service_cancel_order'),
 ]
-

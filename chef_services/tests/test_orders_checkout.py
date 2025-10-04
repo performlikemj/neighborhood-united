@@ -111,3 +111,96 @@ class ChefServicesOrdersCheckoutTests(TestCase):
         data = resp.json()
         self.assertTrue(data.get('success'))
         self.assertEqual(data.get('session_id'), 'cs_123')
+
+    @patch('chef_services.payments.stripe.checkout.Session.create', return_value=SimpleNamespace(id='cs_sub', url='https://session/sub'))
+    def test_subscription_checkout_omits_payment_intent_data(self, mock_create):
+        self.tier.is_recurring = True
+        self.tier.recurrence_interval = 'week'
+        self.tier.save(update_fields=['is_recurring', 'recurrence_interval'])
+
+        order_payload = {
+            "offering_id": self.off.id,
+            "tier_id": self.tier.id,
+            "household_size": 2,
+            "service_date": timezone.now().date().isoformat(),
+            "service_start_time": "12:00:00",
+            "address_id": self.addr.id,
+        }
+        order_resp = self.client.post(reverse('service_create_order'), order_payload, format='json')
+        self.assertEqual(order_resp.status_code, 201, order_resp.content)
+        order_id = order_resp.json()['id']
+
+        checkout_resp = self.client.post(reverse('service_checkout_order', args=[order_id]), {}, format='json')
+        self.assertEqual(checkout_resp.status_code, 200, checkout_resp.content)
+
+        _, kwargs = mock_create.call_args
+        self.assertEqual(kwargs.get('mode'), 'subscription')
+        self.assertIn('subscription_data', kwargs)
+        self.assertNotIn('payment_intent_data', kwargs)
+
+    @patch('chef_services.payments.stripe.checkout.Session.retrieve', return_value=SimpleNamespace(id='cs_456', url='https://retrieved/session'))
+    @patch('chef_services.payments.stripe.checkout.Session.create', return_value=SimpleNamespace(id='cs_456', url=None))
+    def test_checkout_fetches_session_url_when_missing(self, mock_create, mock_retrieve):
+        order_payload = {
+            "offering_id": self.off.id,
+            "household_size": 2,
+            "service_date": timezone.now().date().isoformat(),
+            "service_start_time": "10:00:00",
+            "address_id": self.addr.id,
+        }
+        order_resp = self.client.post(reverse('service_create_order'), order_payload, format='json')
+        self.assertEqual(order_resp.status_code, 201, order_resp.content)
+        order_id = order_resp.json()['id']
+
+        resp = self.client.post(reverse('service_checkout_order', args=[order_id]), {}, format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        payload = resp.json()
+        self.assertTrue(payload.get('success'))
+        self.assertEqual(payload.get('session_url'), 'https://retrieved/session')
+        mock_create.assert_called_once()
+        mock_retrieve.assert_called_once_with('cs_456')
+
+    def test_chef_can_list_their_orders(self):
+        order = ChefServiceOrder.objects.create(
+            customer=self.user,
+            chef=self.chef,
+            offering=self.off,
+            tier=self.tier,
+            household_size=2,
+            service_date=timezone.now().date(),
+            service_start_time=timezone.now().time(),
+        )
+
+        # Authenticate as chef
+        self.client.force_authenticate(user=self.chef_user)
+        resp = self.client.get(reverse('service_my_orders'))
+        self.assertEqual(resp.status_code, 200, resp.content)
+        payload = resp.json()
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(payload[0]['id'], order.id)
+        self.assertEqual(payload[0]['customer'], self.user.id)
+
+    def test_non_chef_cannot_list_orders(self):
+        self.client.force_authenticate(user=self.user)
+        resp = self.client.get(reverse('service_my_orders'))
+        self.assertEqual(resp.status_code, 403)
+
+    def test_confirmed_order_checkout_returns_success_without_session(self):
+        order = ChefServiceOrder.objects.create(
+            customer=self.user,
+            chef=self.chef,
+            offering=self.off,
+            tier=self.tier,
+            household_size=2,
+            service_date=timezone.now().date(),
+            service_start_time=timezone.now().time(),
+            status='confirmed',
+        )
+
+        url = reverse('service_checkout_order', args=[order.id])
+        resp = self.client.post(url, {}, format='json')
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertTrue(data.get('success'))
+        self.assertTrue(data.get('already_paid'))
+        self.assertEqual(data.get('status'), 'confirmed')

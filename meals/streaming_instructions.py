@@ -42,7 +42,10 @@ def generate_streaming_instructions(
         user_id: The ID of the authenticated user
         meal_plan_id: The ID of the meal plan
         mode: Either "daily" (per-meal instructions) or "bulk" (prep instructions for the whole plan)
-        meal_plan_meal_ids: Optional list of specific meal IDs to generate instructions for (daily mode only)
+        meal_plan_meal_ids: Optional list of IDs for which to generate instructions in daily mode.
+            Accepts either MealPlanMeal IDs (preferred) or Meal IDs. If Meal IDs are provided,
+            they will be mapped to the corresponding MealPlanMeal entries in the specified
+            meal plan owned by the user.
         
     Returns:
         A dictionary containing the complete instructions
@@ -69,20 +72,55 @@ def generate_streaming_instructions(
         }
             
     else:  # Default to "daily" mode
-        # If specific meal plan meal IDs are provided, use them
+        # If specific meal plan meal IDs are provided, resolve and use them
         if meal_plan_meal_ids:
-            # Verify all requested meals belong to the authenticated user's plan
-            for meal_id in meal_plan_meal_ids:
-                if not MealPlanMeal.objects.filter(
-                    id=meal_id, meal_plan_id=meal_plan_id, meal_plan__user_id=user_id
-                ).exists():
-                    raise PermissionDenied(f"You don't have permission to access meal {meal_id}")
-                
-            # Get the specified meal plan meals
-            meal_plan_meals = MealPlanMeal.objects.filter(id__in=meal_plan_meal_ids)
+            base_qs = MealPlanMeal.objects.filter(
+                meal_plan_id=meal_plan_id,
+                meal_plan__user_id=user_id
+            )
+
+            # Normalize and de-duplicate incoming IDs
+            try:
+                requested_ids = list({int(i) for i in meal_plan_meal_ids})
+            except Exception:
+                # Fall back without casting if inputs are already ints or non-castable
+                requested_ids = list({i for i in meal_plan_meal_ids})
+
+            # First, match as MealPlanMeal IDs
+            direct_mpm_ids = list(
+                base_qs.filter(id__in=requested_ids).values_list('id', flat=True)
+            )
+
+            # Remaining IDs which did not match as MealPlanMeal IDs are treated as Meal IDs
+            remaining_ids = [i for i in requested_ids if i not in set(direct_mpm_ids)]
+
+            mpm_ids_from_meal = []
+            if remaining_ids:
+                # Map Meal IDs -> MealPlanMeal IDs within this user's plan
+                mpm_ids_from_meal = list(
+                    base_qs.filter(meal_id__in=remaining_ids).values_list('id', flat=True)
+                )
+
+                # Determine which Meal IDs were actually present in the plan
+                meals_found = set(
+                    base_qs.filter(meal_id__in=remaining_ids).values_list('meal_id', flat=True)
+                )
+                invalid_ids = [i for i in remaining_ids if i not in meals_found]
+            else:
+                invalid_ids = []
+
+            if invalid_ids:
+                raise PermissionDenied(
+                    f"You don't have permission to access meal(s) {', '.join(str(i) for i in invalid_ids)}"
+                )
+
+            resolved_mpm_ids = list({*direct_mpm_ids, *mpm_ids_from_meal})
+
+            # Get the specified meal plan meals after resolution
+            meal_plan_meals = base_qs.filter(id__in=resolved_mpm_ids)
             instructions = _generate_daily_instructions(meal_plan_meals)
             return {
-                "type": "text", 
+                "type": "text",
                 "content": instructions,
                 "instruction_type": "daily",
                 "status": "success"

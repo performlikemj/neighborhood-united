@@ -170,6 +170,18 @@ def check_item_for_allergies_gpt(item_name: str, user) -> bool:
             )
             raw = response.output_text
         data = json.loads(raw)
+        if isinstance(data, list):
+            candidate = next((item for item in data if isinstance(item, dict)), None)
+            if candidate is None and data:
+                first = data[0]
+                if isinstance(first, str):
+                    try:
+                        inner = json.loads(first)
+                        if isinstance(inner, dict):
+                            candidate = inner
+                    except Exception:
+                        pass
+            data = candidate or {}
         return data.get("safe_check", False)
 
     except Exception as e:

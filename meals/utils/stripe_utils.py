@@ -1,9 +1,27 @@
 import os
 import urllib.parse
+from decimal import Decimal, ROUND_HALF_UP
+
+import stripe
+from django.conf import settings
 from django.http import JsonResponse
-from rest_framework.response import Response
 from django.shortcuts import redirect
 from django.contrib import messages
+from rest_framework.response import Response
+
+from meals.models import PlatformFeeConfig, StripeConnectAccount
+
+
+class StripeAccountError(Exception):
+    """Base error for Stripe account availability issues."""
+
+
+class StripeAccountNotFound(StripeAccountError):
+    """Raised when a chef has not connected a Stripe account."""
+
+
+class StripeAccountNotReady(StripeAccountError):
+    """Raised when the connected Stripe account cannot process charges."""
 
 def standardize_stripe_response(success, message, redirect_url=None, data=None, status_code=200):
     """
@@ -82,3 +100,45 @@ def get_stripe_return_urls(success_path="", cancel_path=""):
         "success_url": success_url,
         "cancel_url": cancel_url
     }
+
+
+def get_platform_fee_percentage():
+    """Return the active platform fee percentage as a Decimal."""
+    return Decimal(str(PlatformFeeConfig.get_active_fee()))
+
+
+def calculate_platform_fee_cents(amount_cents):
+    """Calculate the platform fee for a charge amount (in cents)."""
+    fee_pct = get_platform_fee_percentage()
+    if amount_cents <= 0 or fee_pct <= 0:
+        return 0
+    fee = (Decimal(amount_cents) * fee_pct / Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return int(fee)
+
+
+def get_active_stripe_account(chef):
+    """Ensure the chef has an active Stripe account ready to accept charges."""
+    try:
+        account_record = StripeConnectAccount.objects.get(chef=chef)
+    except StripeConnectAccount.DoesNotExist as exc:
+        raise StripeAccountNotFound("Chef payments are not available yet. Please check back soon.") from exc
+
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+    account = stripe.Account.retrieve(account_record.stripe_account_id)
+
+    is_ready = bool(
+        getattr(account, "charges_enabled", False)
+        and getattr(account, "details_submitted", False)
+        and getattr(account, "payouts_enabled", False)
+    )
+
+    if account_record.is_active != is_ready:
+        account_record.is_active = is_ready
+        account_record.save(update_fields=["is_active"])
+
+    if not is_ready:
+        raise StripeAccountNotReady(
+            "This chef's payout account requires additional verification before payments can be processed."
+        )
+
+    return account_record.stripe_account_id, account

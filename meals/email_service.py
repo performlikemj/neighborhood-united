@@ -331,6 +331,18 @@ def generate_shopping_list(meal_plan_id):
 
     try:
         shopping_list_dict = json.loads(shopping_list)
+        if isinstance(shopping_list_dict, list):
+            candidate = next((item for item in shopping_list_dict if isinstance(item, dict)), None)
+            if candidate is None and shopping_list_dict:
+                first = shopping_list_dict[0]
+                if isinstance(first, str):
+                    try:
+                        inner = json.loads(first)
+                        if isinstance(inner, dict):
+                            candidate = inner
+                    except Exception:
+                        pass
+            shopping_list_dict = candidate or {}
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse shopping list as JSON: {e}")
         # n8n traceback

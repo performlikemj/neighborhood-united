@@ -64,7 +64,20 @@ def normalize_lines(lines: list[str]) -> dict:
                 },
             )
             content = groq_resp.choices[0].message.content or "{}"
-            return json.loads(content)
+            parsed = json.loads(content)
+            if isinstance(parsed, list):
+                candidate = next((item for item in parsed if isinstance(item, dict)), None)
+                if candidate is None and parsed:
+                    first = parsed[0]
+                    if isinstance(first, str):
+                        try:
+                            inner = json.loads(first)
+                            if isinstance(inner, dict):
+                                candidate = inner
+                        except Exception:
+                            pass
+                parsed = candidate or {}
+            return parsed
     except Exception as _groq_err:
         logger.debug(f"normalize_lines: Groq path failed or unavailable: {_groq_err}")
 
@@ -81,7 +94,20 @@ def normalize_lines(lines: list[str]) -> dict:
         }
     )
     # OpenAI responses returns JSON‑text; convert to dict
-    return json.loads(r.output_text)
+    parsed = json.loads(r.output_text)
+    if isinstance(parsed, list):
+        candidate = next((item for item in parsed if isinstance(item, dict)), None)
+        if candidate is None and parsed:
+            first = parsed[0]
+            if isinstance(first, str):
+                try:
+                    inner = json.loads(first)
+                    if isinstance(inner, dict):
+                        candidate = inner
+                except Exception:
+                    pass
+        parsed = candidate or {}
+    return parsed
 
 
 # Don't initialize the API key at module level to avoid issues if settings aren't loaded yet

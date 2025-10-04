@@ -35,6 +35,7 @@ urlpatterns = [
     path('api/submit_meal_plan/', views.submit_meal_plan_updates, name='submit_meal_plan_updates'),
     path('api/meal_plans/', views.api_get_meal_plans, name='api_get_meal_plans'),
     path('api/meal_plans/<int:meal_plan_id>/', views.api_get_meal_plan_by_id, name='api_get_meal_plan_by_id'),
+    path('api/meal_plans/<int:meal_plan_id>/stream/', views.api_stream_meal_plan_detail, name='api_stream_meal_plan_detail'),
     path('api/generate_cooking_instructions/', views.api_generate_cooking_instructions, name='api_generate_cooking_instructions'),
     path('api/fetch_instructions/', views.api_fetch_instructions, name='api_fetch_instructions'),
     path('api/approve_meal_plan/', views.api_approve_meal_plan, name='api_approve_meal_plan'),

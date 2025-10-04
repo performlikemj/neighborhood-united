@@ -2172,19 +2172,20 @@ class MealPlanningAssistant:
                     print(f"FIX_ARGS before func={function_name} args={args}", flush=True)
             except Exception:
                 pass
-            
+            modified = False
+
             # If the function has a user_id parameter and it's not the current user
             if "user_id" in args:
                 if args["user_id"] != self.user_id:
                     args["user_id"] = self.user_id
-                    return json.dumps(args)
-            
+                    modified = True
+
             # Fix guest_id for onboarding tools (common issue where AI confuses username with guest_id)
             onboarding_funcs = ['onboarding_save_progress', 'onboarding_request_password', 'guest_register_user']
             if function_name in onboarding_funcs and "guest_id" in args:
                 if args["guest_id"] != self.user_id:
                     args["guest_id"] = self.user_id
-                    return json.dumps(args)
+                    modified = True
             
             # Special case for chef-meal related functions
             chef_meal_funcs = ['replace_meal_plan_meal', 'place_chef_meal_event_order', 'generate_payment_link']
@@ -2217,6 +2218,8 @@ class MealPlanningAssistant:
                     print(f"FIX_ARGS after func={function_name} args={args}", flush=True)
             except Exception:
                 pass
+            if modified:
+                return json.dumps(args)
             return args_str
         except Exception as e:
             # n8n traceback
@@ -2298,7 +2301,7 @@ class MealPlanningAssistant:
                 continue
 
             if item.get("type") == "function_call":
-                cid = item.get("id")
+                cid = item.get("call_id") or item.get("id")
                 has_output = any(
                     o.get("type") == "function_call_output"
                     and o.get("call_id") == cid
@@ -2308,7 +2311,7 @@ class MealPlanningAssistant:
                     cleaned.append(item)
                 else:
                     # keep for exactly one turn before discarding
-                    if cid not in self._pending_calls:
+                    if cid and cid not in self._pending_calls:
                         pending_next[cid] = item
                     cleaned.append(item)
                 continue

@@ -5,6 +5,12 @@ from django.db.models import F
 import stripe
 from django.conf import settings
 
+from meals.utils.stripe_utils import (
+    calculate_platform_fee_cents,
+    get_active_stripe_account,
+    StripeAccountError,
+)
+
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 def create_order(user, event: ChefMealEvent, qty: int, idem_key: str):
@@ -35,18 +41,32 @@ def create_order(user, event: ChefMealEvent, qty: int, idem_key: str):
         ).exists():
             raise ValueError("Active order already exists")
         
-        # Create payment intent with manual capture
-        intent = stripe.PaymentIntent.create(
-            amount=int(event.current_price * qty * 100),  # cents
-            currency='usd',
-            capture_method='manual',
-            metadata={
-                'meal_event': event.id, 
+        try:
+            destination_account_id, _ = get_active_stripe_account(event.chef)
+        except StripeAccountError as exc:
+            raise ValueError(str(exc))
+
+        amount_cents = int(event.current_price * qty * 100)
+        platform_fee_cents = calculate_platform_fee_cents(amount_cents)
+
+        intent_kwargs = {
+            'amount': amount_cents,
+            'currency': 'usd',
+            'capture_method': 'manual',
+            'metadata': {
+                'meal_event': event.id,
                 'customer': user.id,
-                'quantity': qty
+                'quantity': qty,
             },
-            idempotency_key=idem_key
-        )
+            'transfer_data': {'destination': destination_account_id},
+            'on_behalf_of': destination_account_id,
+            'idempotency_key': idem_key,
+        }
+        if platform_fee_cents:
+            intent_kwargs['application_fee_amount'] = platform_fee_cents
+
+        # Create payment intent with manual capture
+        intent = stripe.PaymentIntent.create(**intent_kwargs)
         
         # Create the order
         from meals.models import Order, OrderMeal

@@ -541,7 +541,21 @@ def perform_openai_sanity_check(meal, user):
             )
 
             gpt_output = response.output_text
-        allergen_check = json.loads(gpt_output).get('allergen_check', False)
+        # Robustly parse and access JSON fields
+        _parsed = json.loads(gpt_output)
+        if isinstance(_parsed, list):
+            _candidate = next((item for item in _parsed if isinstance(item, dict)), None)
+            if _candidate is None and _parsed:
+                _first = _parsed[0]
+                if isinstance(_first, str):
+                    try:
+                        _inner = json.loads(_first)
+                        if isinstance(_inner, dict):
+                            _candidate = _inner
+                    except Exception:
+                        pass
+            _parsed = _candidate or {}
+        allergen_check = _parsed.get('allergen_check', False)
         
         # Cache the result for each preference
         if allergen_check:
@@ -821,6 +835,18 @@ def generate_meal_details(
                     gpt_output = response.output_text
                 logger.info(f"[{request_id}] [DEBUG] GPT output: {gpt_output}")
                 meal_data = json.loads(gpt_output)
+                if isinstance(meal_data, list):
+                    candidate = next((item for item in meal_data if isinstance(item, dict)), None)
+                    if candidate is None and meal_data:
+                        first = meal_data[0]
+                        if isinstance(first, str):
+                            try:
+                                inner = json.loads(first)
+                                if isinstance(inner, dict):
+                                    candidate = inner
+                            except Exception:
+                                pass
+                    meal_data = candidate or {}
                 logger.info(f"[{request_id}] [DEBUG] Meal data: {meal_data}")
                 meal_dict = meal_data.get('meal', {})
                 meal_name = meal_dict.get('name')

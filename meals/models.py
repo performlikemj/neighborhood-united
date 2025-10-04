@@ -388,6 +388,18 @@ class Meal(models.Model):
         try:
             # Parse the JSON string
             parsed_response = json.loads(response_content)
+            if isinstance(parsed_response, list):
+                candidate = next((item for item in parsed_response if isinstance(item, dict)), None)
+                if candidate is None and parsed_response:
+                    first = parsed_response[0]
+                    if isinstance(first, str):
+                        try:
+                            inner = json.loads(first)
+                            if isinstance(inner, dict):
+                                candidate = inner
+                        except Exception:
+                            pass
+                parsed_response = candidate or {}
             # Extract the dietary preferences list
             dietary_prefs = parsed_response.get('dietary_preferences', [])
             if not isinstance(dietary_prefs, list):

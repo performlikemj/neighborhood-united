@@ -437,6 +437,18 @@ def check_meal_compatibility(user_id: int, meal_id: int) -> dict:
 
         # Parse JSON then load into the Pydantic model so we can use attribute access
         result_data = json.loads(response.output_text)
+        if isinstance(result_data, list):
+            candidate = next((item for item in result_data if isinstance(item, dict)), None)
+            if candidate is None and result_data:
+                first = result_data[0]
+                if isinstance(first, str):
+                    try:
+                        inner = json.loads(first)
+                        if isinstance(inner, dict):
+                            candidate = inner
+                    except Exception:
+                        pass
+            result_data = candidate or {}
 
         try:
             result = MealCompatibility(**result_data)

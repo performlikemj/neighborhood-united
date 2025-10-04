@@ -41,9 +41,9 @@ from django.views.decorators.http import require_http_methods
 from django.db.models import Q, F, Sum, Avg, Count, Max
 from django.core.paginator import Paginator
 from django.utils import timezone
-from rest_framework.decorators import api_view, permission_classes, action
+from rest_framework.decorators import api_view, permission_classes, renderer_classes, action
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework import status, viewsets
+from rest_framework import status, viewsets, renderers
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.views import APIView
 import stripe
@@ -54,7 +54,14 @@ from utils.redis_client import get, set, delete
 from django.db import transaction
 import uuid
 from .audio_utils import process_audio_for_pantry_item
-from .utils.stripe_utils import standardize_stripe_response, handle_stripe_error, get_stripe_return_urls
+from .utils.stripe_utils import (
+    standardize_stripe_response,
+    handle_stripe_error,
+    get_stripe_return_urls,
+    get_active_stripe_account,
+    calculate_platform_fee_cents,
+    StripeAccountError,
+)
 from .utils.order_utils import create_chef_meal_orders
 import django.db.utils
 from django.template.loader import render_to_string
@@ -70,6 +77,15 @@ from django.http import HttpResponseForbidden
 
 
 logger = logging.getLogger(__name__)
+
+
+class EventStreamRenderer(renderers.BaseRenderer):
+    media_type = 'text/event-stream'
+    format = 'event-stream'
+    charset = None
+
+    def render(self, data, accepted_media_type=None, renderer_context=None):
+        return data
 
 OPENAI_API_KEY = settings.OPENAI_KEY
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -724,7 +740,99 @@ def api_get_meal_plan_by_id(request, meal_plan_id):
     except Exception as e:
         traceback.print_exc()
         return Response({"error": str(e)}, status=500)
-            
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+@renderer_classes([EventStreamRenderer, renderers.JSONRenderer])
+def api_stream_meal_plan_detail(request, meal_plan_id):
+    """Stream an existing meal plan incrementally via Server-Sent Events."""
+
+    import json
+    from django.core.serializers.json import DjangoJSONEncoder
+    from django.http import StreamingHttpResponse
+    from django.db.models import Prefetch, F
+    from django.utils import timezone
+
+    try:
+        user = request.user
+        meal_plan = MealPlan.objects.select_related('user', 'order').get(id=meal_plan_id, user=user)
+    except MealPlan.DoesNotExist:
+        return Response({"error": "Meal plan not found."}, status=404)
+    except Exception as e:  # pragma: no cover - defensive logging
+        logger.exception("Unexpected error locating meal plan during streaming", exc_info=e)
+        return Response({"error": str(e)}, status=500)
+
+    from meals.models import MealPlanMeal, ChefMealEvent
+    from meals.serializers import MealPlanMealSerializer, MealPlanSummarySerializer
+
+    now = timezone.now()
+    upcoming_events_qs = ChefMealEvent.objects.filter(
+        event_date__gte=now.date(),
+        status__in=['scheduled', 'open'],
+        order_cutoff_time__gt=now,
+        orders_count__lt=F('max_orders')
+    ).order_by('event_date', 'event_time')
+
+    meals_qs = (
+        MealPlanMeal.objects
+        .filter(meal_plan=meal_plan)
+        .select_related('meal', 'meal__chef', 'meal_plan', 'meal_plan__user')
+        .prefetch_related(
+            'meal__dietary_preferences',
+            'meal__custom_dietary_preferences',
+            'meal__dishes',
+            'meal__meal_dishes',
+            Prefetch('meal__events', queryset=upcoming_events_qs, to_attr='prefetched_upcoming_events')
+        )
+        .order_by('day', 'meal_type', 'id')
+    )
+
+    total_meals = meals_qs.count()
+
+    def dump(payload):
+        return json.dumps(payload, cls=DjangoJSONEncoder)
+
+    def event_stream():
+        sent_done = False
+        try:
+            yield ":keepalive\n\n"
+
+            summary = MealPlanSummarySerializer(meal_plan, context={'request': request}).data
+            yield "event: summary\n"
+            yield f"data: {dump(summary)}\n\n"
+
+            yield "event: progress\n"
+            yield f"data: {dump({'count': 0, 'total': total_meals, 'pct': 0 if total_meals else 100})}\n\n"
+
+            for idx, meal_plan_meal in enumerate(meals_qs, start=1):
+                meal_payload = MealPlanMealSerializer(meal_plan_meal, context={'request': request}).data
+                yield "event: meal\n"
+                yield f"data: {dump(meal_payload)}\n\n"
+
+                if total_meals:
+                    pct = int((idx / total_meals) * 100)
+                else:
+                    pct = 100
+                yield "event: progress\n"
+                yield f"data: {dump({'count': idx, 'total': total_meals, 'pct': pct})}\n\n"
+
+            yield "event: done\n\n"
+            sent_done = True
+        except Exception as exc:  # pragma: no cover - streaming safety
+            logger.exception("Error while streaming meal plan detail", exc_info=exc)
+            yield "event: error\n"
+            yield f"data: {dump({'message': str(exc)})}\n\n"
+        finally:
+            if not sent_done:
+                yield "event: done\n\n"
+            yield "event: close\n\n"
+
+    response = StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+    response['Cache-Control'] = 'no-cache, no-transform'
+    response['X-Accel-Buffering'] = 'no'
+    return response
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def api_generate_cooking_instructions(request):
@@ -3394,17 +3502,28 @@ def api_process_chef_meal_payment(request, order_id):
         
         # Prepare line items for Stripe Checkout
         line_items = []
-        
+        checkout_chef = None
+        total_amount_cents = 0
+
         for order_meal in order_meals:
             meal = order_meal.meal
             meal_event = order_meal.chef_meal_event
             meal_plan_meal = order_meal.meal_plan_meal
-            
+
             # Skip meals that have already been paid for
             if hasattr(meal_plan_meal, 'already_paid') and meal_plan_meal.already_paid:
-
                 continue
-            
+
+            current_chef = meal_event.chef
+            if checkout_chef is None:
+                checkout_chef = current_chef
+            elif checkout_chef.id != current_chef.id:
+                return standardize_stripe_response(
+                    success=False,
+                    message="Orders that include multiple chefs must be paid separately.",
+                    status_code=400
+                )
+
             # Get the associated ChefMealOrder for the correct quantity
             try:
                 chef_meal_order = ChefMealOrder.objects.get(
@@ -3412,15 +3531,16 @@ def api_process_chef_meal_payment(request, order_id):
                     meal_plan_meal=meal_plan_meal
                 )
                 actual_quantity = chef_meal_order.quantity
-
             except ChefMealOrder.DoesNotExist:
                 actual_quantity = order_meal.quantity
 
-            
             # Always use the current price from the meal event
             current_price = meal_event.current_price
+            unit_amount = int(decimal.Decimal(current_price) * 100)
+            if unit_amount <= 0 or actual_quantity <= 0:
+                continue
 
-            
+            total_amount_cents += unit_amount * actual_quantity
             line_items.append({
                 'price_data': {
                     'currency': 'usd',
@@ -3428,17 +3548,31 @@ def api_process_chef_meal_payment(request, order_id):
                         'name': meal.name,
                         'description': meal_event.description[:500] if meal_event.description else "",
                     },
-                    'unit_amount': int(current_price * 100),  # Convert to cents
+                    'unit_amount': unit_amount,
                 },
-                'quantity': actual_quantity,  # Use the quantity from ChefMealOrder
+                'quantity': actual_quantity,
             })
-        
+
         if not line_items:
             return standardize_stripe_response(
                 success=False,
                 message="No items requiring payment found in this order.",
                 status_code=400
             )
+
+        if checkout_chef is None or total_amount_cents <= 0:
+            return standardize_stripe_response(
+                success=False,
+                message="Unable to process payment for this order.",
+                status_code=400
+            )
+
+        try:
+            destination_account_id, _ = get_active_stripe_account(checkout_chef)
+        except StripeAccountError as exc:
+            return standardize_stripe_response(False, str(exc), status_code=400)
+
+        platform_fee_cents = calculate_platform_fee_cents(total_amount_cents)
         
         # Create Stripe Checkout Session
         stripe.api_key = settings.STRIPE_SECRET_KEY
@@ -3457,7 +3591,18 @@ def api_process_chef_meal_payment(request, order_id):
             metadata={
                 'order_id': str(order.id),
                 'order_type': 'chef_meal',
-                'customer_id': str(request.user.id)
+                'customer_id': str(request.user.id),
+                'chef_id': str(checkout_chef.id),
+            },
+            payment_intent_data={
+                'transfer_data': {'destination': destination_account_id},
+                'on_behalf_of': destination_account_id,
+                'metadata': {
+                    'order_id': str(order.id),
+                    'chef_id': str(checkout_chef.id),
+                    'order_type': 'chef_meal',
+                },
+                **({'application_fee_amount': platform_fee_cents} if platform_fee_cents else {}),
             }
         )
         
@@ -3534,6 +3679,8 @@ def api_process_meal_payment(request, order_id):
 
         # Prepare line items for Stripe Checkout
         line_items = []
+        checkout_chef = None
+        total_amount_cents = 0
         for order_meal in order.ordermeal_set.all():
             meal = order_meal.meal
             chef_meal_event = order_meal.chef_meal_event
@@ -3543,6 +3690,16 @@ def api_process_meal_payment(request, order_id):
             if not chef_meal_event:
 
                 continue
+
+            current_chef = chef_meal_event.chef
+            if checkout_chef is None:
+                checkout_chef = current_chef
+            elif checkout_chef.id != current_chef.id:
+                return standardize_stripe_response(
+                    success=False,
+                    message="Orders that include multiple chefs must be paid separately.",
+                    status_code=400
+                )
             
             # Get the quantity from the ChefMealOrder if it exists
             try:
@@ -3563,13 +3720,18 @@ def api_process_meal_payment(request, order_id):
 
                 continue
             
+            unit_amount = int(decimal.Decimal(unit_price) * 100)
+            if unit_amount <= 0 or actual_quantity <= 0:
+                continue
+
+            total_amount_cents += unit_amount * actual_quantity
             line_items.append({
                 'price_data': {
                     'currency': 'usd',
                     'product_data': {
                         'name': meal.name,
                     },
-                    'unit_amount': int(unit_price * 100), # Price per unit in cents
+                    'unit_amount': unit_amount, # Price per unit in cents
                 },
                 'quantity': actual_quantity,
             })
@@ -3581,6 +3743,21 @@ def api_process_meal_payment(request, order_id):
                  message="No items requiring payment found in this order.",
                  status_code=400
              )
+
+
+        if checkout_chef is None or total_amount_cents <= 0:
+            return standardize_stripe_response(
+                success=False,
+                message="Unable to process payment for this order.",
+                status_code=400
+            )
+
+        try:
+            destination_account_id, _ = get_active_stripe_account(checkout_chef)
+        except StripeAccountError as exc:
+            return standardize_stripe_response(False, str(exc), status_code=400)
+
+        platform_fee_cents = calculate_platform_fee_cents(total_amount_cents)
 
 
         
@@ -3597,9 +3774,20 @@ def api_process_meal_payment(request, order_id):
             metadata={
                 'order_id': str(order.id),
                 'order_type': 'standard',
-                'customer_id': str(request.user.id)
+                'customer_id': str(request.user.id),
+                'chef_id': str(checkout_chef.id),
             },
-            idempotency_key=idempotency_key
+            idempotency_key=idempotency_key,
+            payment_intent_data={
+                'transfer_data': {'destination': destination_account_id},
+                'on_behalf_of': destination_account_id,
+                'metadata': {
+                    'order_id': str(order.id),
+                    'chef_id': str(checkout_chef.id),
+                    'order_type': 'standard',
+                },
+                **({'application_fee_amount': platform_fee_cents} if platform_fee_cents else {}),
+            }
         )
 
         
@@ -4831,6 +5019,8 @@ def api_resend_payment_link(request, order_id):
         
         # Prepare line items for Stripe Checkout
         line_items = []
+        checkout_chef = None
+        total_amount_cents = 0
         for order_meal in order.ordermeal_set.all():
             meal = order_meal.meal
             chef_meal_event = order_meal.chef_meal_event
@@ -4839,18 +5029,32 @@ def api_resend_payment_link(request, order_id):
             if not chef_meal_event:
 
                 continue
+
+            current_chef = chef_meal_event.chef
+            if checkout_chef is None:
+                checkout_chef = current_chef
+            elif checkout_chef.id != current_chef.id:
+                return Response({
+                    "success": False,
+                    "message": "Orders that include multiple chefs must be paid separately."
+                }, status=400)
             unit_price = chef_meal_event.current_price
             if not unit_price or unit_price <= 0:
 
                 continue
             
+            unit_amount = int(decimal.Decimal(unit_price) * 100)
+            if unit_amount <= 0 or order_meal.quantity <= 0:
+                continue
+
+            total_amount_cents += unit_amount * order_meal.quantity
             line_items.append({
                 'price_data': {
                     'currency': 'usd',
                     'product_data': {
                         'name': meal.name,
                     },
-                    'unit_amount': int(unit_price * 100), # Price per unit in cents
+                    'unit_amount': unit_amount,
                 },
                 'quantity': order_meal.quantity,
             })
@@ -4860,6 +5064,22 @@ def api_resend_payment_link(request, order_id):
                 "success": False,
                 "message": "No items requiring payment found in this order."
             }, status=400)
+
+        if checkout_chef is None or total_amount_cents <= 0:
+            return Response({
+                "success": False,
+                "message": "Unable to process payment for this order."
+            }, status=400)
+
+        try:
+            destination_account_id, _ = get_active_stripe_account(checkout_chef)
+        except StripeAccountError as exc:
+            return Response({
+                "success": False,
+                "message": str(exc)
+            }, status=400)
+
+        platform_fee_cents = calculate_platform_fee_cents(total_amount_cents)
             
         # SECURITY: Create a unique idempotency key for this resend request
         # Include timestamp to ensure it's different from previous requests
@@ -4876,9 +5096,20 @@ def api_resend_payment_link(request, order_id):
                 'order_id': str(order.id),
                 'order_type': 'meal_plan',
                 'customer_id': str(request.user.id),
-                'is_resend': 'true'  # Mark this as a resent payment link
+                'is_resend': 'true',  # Mark this as a resent payment link
+                'chef_id': str(checkout_chef.id),
             },
-            idempotency_key=idempotency_key
+            idempotency_key=idempotency_key,
+            payment_intent_data={
+                'transfer_data': {'destination': destination_account_id},
+                'on_behalf_of': destination_account_id,
+                'metadata': {
+                    'order_id': str(order.id),
+                    'chef_id': str(checkout_chef.id),
+                    'order_type': 'meal_plan',
+                },
+                **({'application_fee_amount': platform_fee_cents} if platform_fee_cents else {}),
+            }
         )
         
         # Update the order with the new session ID for tracking

@@ -18,6 +18,7 @@ class ChefServiceOffering(models.Model):
     default_duration_minutes = models.PositiveIntegerField(null=True, blank=True)
     max_travel_miles = models.PositiveIntegerField(null=True, blank=True)
     notes = models.TextField(null=True, blank=True)
+    stripe_product_id = models.CharField(max_length=200, null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -42,7 +43,17 @@ class ChefServicePriceTier(models.Model):
     household_max = models.PositiveIntegerField(null=True, blank=True, help_text="Null means no upper bound")
 
     currency = models.CharField(max_length=10, default="usd")
-    stripe_price_id = models.CharField(max_length=200, blank=True, null=True, help_text="Provided by MCP server")
+    desired_unit_amount_cents = models.PositiveIntegerField()
+    stripe_price_id = models.CharField(max_length=200, blank=True, null=True, help_text="Linked Stripe Price ID")
+
+    PRICE_SYNC_STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("success", "Success"),
+        ("error", "Error"),
+    ]
+    price_sync_status = models.CharField(max_length=10, choices=PRICE_SYNC_STATUS_CHOICES, default="pending")
+    last_price_sync_error = models.TextField(null=True, blank=True)
+    price_synced_at = models.DateTimeField(null=True, blank=True)
 
     is_recurring = models.BooleanField(default=False)
     recurrence_interval = models.CharField(max_length=10, choices=RECURRENCE_CHOICES, null=True, blank=True)
@@ -70,6 +81,10 @@ class ChefServicePriceTier(models.Model):
             models.CheckConstraint(
                 check=(models.Q(is_recurring=False, recurrence_interval__isnull=True) | models.Q(is_recurring=True, recurrence_interval__isnull=False)),
                 name="tier_recurring_interval_consistency",
+            ),
+            models.CheckConstraint(
+                check=models.Q(desired_unit_amount_cents__gte=50),
+                name="tier_desired_amount_min_50",
             ),
         ]
 

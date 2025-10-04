@@ -11,8 +11,8 @@ class ChefServiceOfferingAdmin(admin.ModelAdmin):
 
 @admin.register(ChefServicePriceTier)
 class ChefServicePriceTierAdmin(admin.ModelAdmin):
-    list_display = ("id", "offering", "household_min", "household_max", "is_recurring", "currency", "active")
-    list_filter = ("is_recurring", "active", "currency")
+    list_display = ("id", "offering", "household_min", "household_max", "is_recurring", "currency", "desired_unit_amount_cents", "price_sync_status", "active")
+    list_filter = ("is_recurring", "active", "currency", "price_sync_status")
     search_fields = ("display_label", "stripe_price_id")
 
 
@@ -21,4 +21,3 @@ class ChefServiceOrderAdmin(admin.ModelAdmin):
     list_display = ("id", "customer", "chef", "offering", "tier", "status", "is_subscription", "created_at")
     list_filter = ("status", "is_subscription", "chef")
     search_fields = ("stripe_session_id", "stripe_subscription_id")
-

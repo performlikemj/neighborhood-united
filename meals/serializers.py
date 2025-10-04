@@ -234,15 +234,20 @@ class MealSerializer(serializers.ModelSerializer):
         if not obj.chef:
             return []
             
-        # Get upcoming events for this meal that are still available
-        now = timezone.now()
-        events = obj.events.filter(
-            event_date__gte=now.date(),
-            status__in=['scheduled', 'open'],
-            order_cutoff_time__gt=now,
-            orders_count__lt=F('max_orders')
-        ).order_by('event_date', 'event_time')[:5]  # Limit to 5 upcoming events
-        
+        # Get upcoming events for this meal that are still available, using prefetched
+        # data when available to avoid redundant queries during streaming responses.
+        events = getattr(obj, 'prefetched_upcoming_events', None)
+        if events is None:
+            now = timezone.now()
+            events = obj.events.filter(
+                event_date__gte=now.date(),
+                status__in=['scheduled', 'open'],
+                order_cutoff_time__gt=now,
+                orders_count__lt=F('max_orders')
+            ).order_by('event_date', 'event_time')[:5]
+        else:
+            events = list(events)[:5]
+
         # Format the events data
         event_data = []
         for event in events:
@@ -349,7 +354,97 @@ class MealPlanMealSerializer(serializers.ModelSerializer):
             'created_at': order.created_at
         }
 
-class MealPlanSerializer(serializers.ModelSerializer):
+class MealPlanPaymentMixin:
+    """Shared payment-related helpers for meal plan serializers."""
+
+    def get_payment_required(self, obj):
+        """Check if the meal plan has an associated order that is unpaid."""
+
+        if obj.order and not obj.order.is_paid:
+            # Further check if the order actually has items requiring payment
+            order_total = obj.order.total_price()
+
+            # Log details about order meals
+            order_meals = obj.order.ordermeal_set.all()
+
+            for om in order_meals:
+                event_price = None
+                if hasattr(om, 'chef_meal_event') and om.chef_meal_event:
+                    event_price = om.chef_meal_event.current_price
+
+            return order_total is not None and order_total > 0
+        return False
+
+    def get_pending_order_id(self, obj):
+        """Return the ID of the associated order if payment is required."""
+        if obj.order and not obj.order.is_paid:
+            order_total = obj.order.total_price()
+            if order_total is not None and order_total > 0:
+                return obj.order.id
+        return None
+
+    def get_payment_details(self, obj):
+        """Provide detailed payment information for this meal plan."""
+        if not obj.order:
+            return {
+                "status": "no_order",
+                "message": "No order has been created for this meal plan."
+            }
+
+        order = obj.order
+        total_price = order.total_price()
+
+        if order.is_paid:
+            return {
+                "status": "paid",
+                "message": "This meal plan has been paid for.",
+                "payment_date": order.updated_at,
+                "total_paid": float(total_price)
+            }
+
+        if total_price is None or total_price <= 0:
+            return {
+                "status": "no_payment_needed",
+                "message": "No payment is required for this meal plan."
+            }
+
+        # Get detailed breakdown of the order items
+        breakdown = []
+        chef_meal_count = 0
+
+        for order_meal in order.ordermeal_set.select_related('meal', 'chef_meal_event', 'meal_plan_meal').all():
+            # Skip already paid meals
+            if hasattr(order_meal.meal_plan_meal, 'already_paid') and order_meal.meal_plan_meal.already_paid:
+                continue
+
+            is_chef_meal = order_meal.chef_meal_event is not None
+            if is_chef_meal:
+                chef_meal_count += 1
+
+            # Get pricing
+            unit_price = order_meal.get_price()
+            subtotal = unit_price * order_meal.quantity
+
+            breakdown.append({
+                "meal_id": order_meal.meal.id,
+                "meal_name": order_meal.meal.name,
+                "unit_price": float(unit_price),
+                "quantity": order_meal.quantity,
+                "subtotal": float(subtotal),
+                "is_chef_meal": is_chef_meal
+            })
+
+        return {
+            "status": "payment_required",
+            "message": "Payment is required for this meal plan.",
+            "order_id": order.id,
+            "total_price": float(total_price),
+            "chef_meal_count": chef_meal_count,
+            "breakdown": breakdown
+        }
+
+
+class MealPlanSerializer(MealPlanPaymentMixin, serializers.ModelSerializer):
     meals = MealPlanMealSerializer(source='mealplanmeal_set', many=True)
     user = UserSerializer()
     payment_required = serializers.SerializerMethodField()
@@ -360,92 +455,30 @@ class MealPlanSerializer(serializers.ModelSerializer):
         model = MealPlan
         fields = ['id', 'user', 'meals', 'created_date', 'week_start_date', 'week_end_date', 'order', 'is_approved', 'meal_prep_preference', 'payment_required', 'pending_order_id', 'payment_details', 'instacart_url']
 
-    def get_payment_required(self, obj):
-        """Check if the meal plan has an associated order that is unpaid."""
-        
-        if obj.order and not obj.order.is_paid:
-            # Further check if the order actually has items requiring payment
-            order_total = obj.order.total_price()
-            
-            # Log details about order meals
-            order_meals = obj.order.ordermeal_set.all()
-            
-            for om in order_meals:
-                event_price = None
-                if hasattr(om, 'chef_meal_event') and om.chef_meal_event:
-                    event_price = om.chef_meal_event.current_price
-                
-            
-            return order_total is not None and order_total > 0
-        return False
 
-    def get_pending_order_id(self, obj):
-        """Return the ID of the associated order if payment is required."""
-        if obj.order and not obj.order.is_paid:
-             order_total = obj.order.total_price()
-             if order_total is not None and order_total > 0:
-                return obj.order.id
-        return None
-        
-    def get_payment_details(self, obj):
-        """Provide detailed payment information for this meal plan."""
-        if not obj.order:
-            return {
-                "status": "no_order",
-                "message": "No order has been created for this meal plan."
-            }
-            
-        order = obj.order
-        total_price = order.total_price()
-        
-        if order.is_paid:
-            return {
-                "status": "paid",
-                "message": "This meal plan has been paid for.",
-                "payment_date": order.updated_at,
-                "total_paid": float(total_price)
-            }
-            
-        if total_price is None or total_price <= 0:
-            return {
-                "status": "no_payment_needed",
-                "message": "No payment is required for this meal plan."
-            }
-            
-        # Get detailed breakdown of the order items
-        breakdown = []
-        chef_meal_count = 0
-        
-        for order_meal in order.ordermeal_set.select_related('meal', 'chef_meal_event', 'meal_plan_meal').all():
-            # Skip already paid meals
-            if hasattr(order_meal.meal_plan_meal, 'already_paid') and order_meal.meal_plan_meal.already_paid:
-                continue
-                
-            is_chef_meal = order_meal.chef_meal_event is not None
-            if is_chef_meal:
-                chef_meal_count += 1
-                
-            # Get pricing
-            unit_price = order_meal.get_price()
-            subtotal = unit_price * order_meal.quantity
-                
-            breakdown.append({
-                "meal_id": order_meal.meal.id,
-                "meal_name": order_meal.meal.name,
-                "unit_price": float(unit_price),
-                "quantity": order_meal.quantity,
-                "subtotal": float(subtotal),
-                "is_chef_meal": is_chef_meal
-            })
-            
-        return {
-            "status": "payment_required",
-            "message": "Payment is required for this meal plan.",
-            "order_id": order.id,
-            "total_price": float(total_price),
-            "chef_meal_count": chef_meal_count,
-            "breakdown": breakdown
-        }
+class MealPlanSummarySerializer(MealPlanPaymentMixin, serializers.ModelSerializer):
+    """Lightweight serializer for streaming contexts (no nested meals)."""
+
+    user = UserSerializer()
+    payment_required = serializers.SerializerMethodField()
+    pending_order_id = serializers.SerializerMethodField()
+    payment_details = serializers.SerializerMethodField()
+    meals = serializers.SerializerMethodField()
+    meal_plan_meals = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MealPlan
+        fields = [
+            'id', 'user', 'created_date', 'week_start_date', 'week_end_date', 'order',
+            'is_approved', 'meal_prep_preference', 'payment_required', 'pending_order_id',
+            'payment_details', 'instacart_url', 'meals', 'meal_plan_meals'
+        ]
+
+    def get_meals(self, obj):  # pragma: no cover - deterministic output
+        return []
+
+    def get_meal_plan_meals(self, obj):  # pragma: no cover - deterministic output
+        return []
 
 class OrderSerializer(serializers.ModelSerializer):
     meals = MealSerializer(many=True)

@@ -42,7 +42,7 @@ def offerings(request):
         data['chef'] = chef.id
         serializer = ChefServiceOfferingSerializer(data=data)
         if serializer.is_valid():
-            offering = serializer.save()
+            offering = serializer.save(chef=chef)
             return Response(ChefServiceOfferingSerializer(offering).data, status=201)
         return Response(serializer.errors, status=400)
 
@@ -94,6 +94,9 @@ def add_tier(request, offering_id):
     if offering.chef.user_id != request.user.id and not request.user.is_staff:
         return Response({"error": "Forbidden"}, status=403)
     data = request.data.copy()
+    # Prevent client from setting stripe_price_id/sync fields
+    for forbidden in ('stripe_price_id', 'price_sync_status', 'last_price_sync_error', 'price_synced_at', 'offering'):
+        data.pop(forbidden, None)
     serializer = ChefServicePriceTierSerializer(data=data)
     if serializer.is_valid():
         tier = ChefServicePriceTier(
@@ -102,6 +105,9 @@ def add_tier(request, offering_id):
         )
         try:
             tier.full_clean()
+            # New tier should be marked pending for sync
+            tier.price_sync_status = 'pending'
+            tier.last_price_sync_error = None
             tier.save()
         except Exception as e:
             return Response({"error": str(e)}, status=400)
@@ -117,14 +123,22 @@ def update_tier(request, tier_id):
         return Response({"error": "Forbidden"}, status=403)
     # Whitelist updatable fields to prevent mass assignment
     allowed = {
-        'household_min', 'household_max', 'currency', 'stripe_price_id',
-        'is_recurring', 'recurrence_interval', 'active', 'display_label'
+        'household_min', 'household_max', 'currency',
+        'is_recurring', 'recurrence_interval', 'active', 'display_label',
+        'desired_unit_amount_cents',
     }
+    price_related = {'currency', 'is_recurring', 'recurrence_interval', 'desired_unit_amount_cents'}
+    touched_price = False
     for field, value in request.data.items():
         if field in allowed:
             setattr(tier, field, value)
+            if field in price_related:
+                touched_price = True
     try:
         tier.full_clean()
+        if touched_price:
+            tier.price_sync_status = 'pending'
+            tier.last_price_sync_error = None
         tier.save()
     except Exception as e:
         return Response({"error": str(e)}, status=400)

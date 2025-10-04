@@ -2,6 +2,16 @@
 (function(){
   function ready(fn){ if(document.readyState!='loading'){fn()} else {document.addEventListener('DOMContentLoaded', fn)} }
 
+  // Pre-normalize any <svg width/height="*rem"> as early as possible to reduce console noise
+  try{
+    document.querySelectorAll('svg[width$="rem"], svg[height$="rem"]').forEach(function(svg){
+      svg.removeAttribute('width');
+      svg.removeAttribute('height');
+      svg.style.width = svg.style.width || '20px';
+      svg.style.height = svg.style.height || '20px';
+    });
+  }catch(_e){}
+
   ready(function(){
     // Utility: icon name mapping and SVGs (defined first so callers can use)
     var iconFor = function(href, text){

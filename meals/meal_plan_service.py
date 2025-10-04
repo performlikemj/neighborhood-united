@@ -229,8 +229,20 @@ def analyze_meal_compatibility(meal, dietary_preference):
             )
             raw_json = response.output_text
 
-        # Parse response
+        # Parse response (be robust to array- or string-wrapped JSON)
         result = json.loads(raw_json)
+        if isinstance(result, list):
+            candidate = next((item for item in result if isinstance(item, dict)), None)
+            if candidate is None and result:
+                first = result[0]
+                if isinstance(first, str):
+                    try:
+                        inner = json.loads(first)
+                        if isinstance(inner, dict):
+                            candidate = inner
+                    except Exception:
+                        pass
+            result = candidate or {}
         return {
             "is_compatible": result.get("is_compatible", False),
             "confidence": result.get("confidence", 0.0),
@@ -1359,8 +1371,20 @@ def analyze_and_replace_meals(user, meal_plan, meal_types, request_id=None):
             assistant_message = response.output_text
 
         try:
-            # Step 1: Deserialize the string into a Python dictionary
+            # Step 1: Deserialize the string into a Python dictionary (robust to wrapping)
             parsed_response = json.loads(assistant_message)
+            if isinstance(parsed_response, list):
+                candidate = next((item for item in parsed_response if isinstance(item, dict)), None)
+                if candidate is None and parsed_response:
+                    first = parsed_response[0]
+                    if isinstance(first, str):
+                        try:
+                            inner = json.loads(first)
+                            if isinstance(inner, dict):
+                                candidate = inner
+                        except Exception:
+                            pass
+                parsed_response = candidate or {}
 
             # Step 2: Validate the parsed response with Pydantic
             meals_to_replace = MealsToReplaceSchema.model_validate(parsed_response)
@@ -1910,7 +1934,20 @@ def guess_meal_ingredients_gpt(meal_name: str, meal_description: str) -> List[st
                 }
             )
             raw = response.output_text
+        # Be robust to array- or string-wrapped JSON
         data = json.loads(raw)
+        if isinstance(data, list):
+            candidate = next((item for item in data if isinstance(item, dict)), None)
+            if candidate is None and data:
+                first = data[0]
+                if isinstance(first, str):
+                    try:
+                        inner = json.loads(first)
+                        if isinstance(inner, dict):
+                            candidate = inner
+                    except Exception:
+                        pass
+            data = candidate or {}
         return data.get("likely_ingredients", [])
     except Exception as e:
         # n8n traceback
@@ -2196,7 +2233,20 @@ def check_meal_for_allergens_gpt(meal, user) -> Tuple[bool, List[str], Dict[str,
                 }
             )
             raw = response.output_text
+        # Be robust to occasional array- or string-wrapped JSON responses
         data = json.loads(raw)
+        if isinstance(data, list):
+            candidate = next((item for item in data if isinstance(item, dict)), None)
+            if candidate is None and data:
+                first = data[0]
+                if isinstance(first, str):
+                    try:
+                        inner = json.loads(first)
+                        if isinstance(inner, dict):
+                            candidate = inner
+                    except Exception:
+                        pass
+            data = candidate or {}
         is_safe = data.get("is_safe", False)
         gpt_flagged = data.get("flagged_ingredients", [])
         
@@ -2384,8 +2434,20 @@ def get_substitution_suggestions(flagged_ingredients, user_allergies, meal_name)
             )
             raw = response.output_text
         
-        # Parse response and convert to a simple mapping
+        # Parse response and convert to a simple mapping (robust to wrapping)
         result = json.loads(raw)
+        if isinstance(result, list):
+            candidate = next((item for item in result if isinstance(item, dict)), None)
+            if candidate is None and result:
+                first = result[0]
+                if isinstance(first, str):
+                    try:
+                        inner = json.loads(first)
+                        if isinstance(inner, dict):
+                            candidate = inner
+                    except Exception:
+                        pass
+            result = candidate or {}
         subs = {}
         for item in result.get("substitutions", []):
             ingredient = item.get("ingredient")
@@ -2762,6 +2824,18 @@ def apply_substitutions_to_meal(meal, substitutions, user):
         
         try:
             data = json.loads(raw)
+            if isinstance(data, list):
+                candidate = next((item for item in data if isinstance(item, dict)), None)
+                if candidate is None and data:
+                    first = data[0]
+                    if isinstance(first, str):
+                        try:
+                            inner = json.loads(first)
+                            if isinstance(inner, dict):
+                                candidate = inner
+                        except Exception:
+                            pass
+                data = candidate or {}
         except json.JSONDecodeError as e:
             # n8n traceback
             n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")

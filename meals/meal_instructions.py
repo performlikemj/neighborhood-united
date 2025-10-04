@@ -81,9 +81,8 @@ def send_daily_meal_instructions():
             next_day_name = next_day.strftime('%A')   # e.g. "Saturday"
             # Idempotency key: one send per user per next_day
             send_key = f"daily_instructions_sent:{user.id}:{next_day.isoformat()}"
-            # TTL: expire at end of the 8–9 PM window in user's local time
-            end_of_window_local = user_time.replace(hour=21, minute=0, second=0, microsecond=0)
-            ttl_seconds = max(60, int((end_of_window_local - user_time).total_seconds()))
+            # TTL: 24 hours to prevent duplicates on container restarts
+            ttl_seconds = 86400  # 24 hours
 
             meal_plan_meals_for_next_day = MealPlanMeal.objects.filter(
                 meal_plan__user=user,

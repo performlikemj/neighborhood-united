@@ -77,6 +77,10 @@ app.conf.beat_schedule = {
         'task': 'meals.tasks.celery_beat_heartbeat',
         'schedule': crontab(),  # every minute
     },
+    'sync-service-tier-prices': {
+        'task': 'chef_services.tasks.sync_pending_service_tiers',
+        'schedule': crontab(minute='*/5'),  # every 5 minutes
+    },
 }
 
 

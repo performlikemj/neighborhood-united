@@ -53,8 +53,20 @@ def get_macro_info(meal_name: str, meal_description: str, ingredients: List[str]
             response_format={"type": "json_object"}
         )
         
-        # Parse the response
+        # Parse the response (robust to array- or string-wrapped JSON)
         result = json.loads(response.choices[0].message.content)
+        if isinstance(result, list):
+            candidate = next((item for item in result if isinstance(item, dict)), None)
+            if candidate is None and result:
+                first = result[0]
+                if isinstance(first, str):
+                    try:
+                        inner = json.loads(first)
+                        if isinstance(inner, dict):
+                            candidate = inner
+                    except Exception:
+                        pass
+            result = candidate or {}
         logger.info(f"Received macro info for meal '{meal_name}': {result}")
         
         # Validate the result
@@ -125,8 +137,20 @@ def find_youtube_videos(meal_name: str, meal_description: str) -> Dict[str, Any]
             response_format={"type": "json_object"}
         )
         
-        # Parse the response
+        # Parse the response (robust to array- or string-wrapped JSON)
         result = json.loads(response.choices[0].message.content)
+        if isinstance(result, list):
+            candidate = next((item for item in result if isinstance(item, dict)), None)
+            if candidate is None and result:
+                first = result[0]
+                if isinstance(first, str):
+                    try:
+                        inner = json.loads(first)
+                        if isinstance(inner, dict):
+                            candidate = inner
+                    except Exception:
+                        pass
+            result = candidate or {}
         logger.info(f"Received YouTube video info for meal '{meal_name}': {result}")
         
         # Ensure 'videos' key exists

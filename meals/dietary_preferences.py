@@ -114,6 +114,18 @@ def handle_custom_dietary_preference(custom_prefs):
                 # Parse GPT response
                 gpt_output = response.output_text
                 new_pref_data = json.loads(gpt_output)
+                if isinstance(new_pref_data, list):
+                    candidate = next((item for item in new_pref_data if isinstance(item, dict)), None)
+                    if candidate is None and new_pref_data:
+                        first = new_pref_data[0]
+                        if isinstance(first, str):
+                            try:
+                                inner = json.loads(first)
+                                if isinstance(inner, dict):
+                                    candidate = inner
+                            except Exception:
+                                pass
+                    new_pref_data = candidate or {}
                 # Validate the structure using Pydantic
                 validated_pref = DietaryPreferenceDetail.model_validate(new_pref_data)
                 # Step 5: Store in the database

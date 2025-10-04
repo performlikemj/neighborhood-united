@@ -137,6 +137,18 @@ def extract_pantry_item_info(transcription: str) -> Dict[str, Any]:
         content = response.output_text
         import json
         data = json.loads(content)
+        if isinstance(data, list):
+            candidate = next((item for item in data if isinstance(item, dict)), None)
+            if candidate is None and data:
+                first = data[0]
+                if isinstance(first, str):
+                    try:
+                        inner = json.loads(first)
+                        if isinstance(inner, dict):
+                            candidate = inner
+                    except Exception:
+                        pass
+            data = candidate or {}
         
         # Process the expiration date if present
         expiration_date = None

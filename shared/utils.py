@@ -1552,7 +1552,7 @@ def create_meal(request=None, user_id=None, name=None, dietary_preferences=None,
                     generated_meal_type = meal_type_input
                     dietary_list = []
 
-                # Step 4: Create the Meal instance without dietary preferences
+                # Step 4: Create and immediately save the Meal instance so it has an ID
                 meal = Meal(
                     name=meal_name,
                     creator=user,
@@ -1560,11 +1560,11 @@ def create_meal(request=None, user_id=None, name=None, dietary_preferences=None,
                     meal_type=generated_meal_type,
                     created_date=timezone.now(),
                 )
+                meal.save()
 
                 # logger.info(f"Meal '{meal.name}' saved successfully with ID {meal.id}.")
 
-                # Step 5: Assign dietary preferences
-                # Fetch and assign the regular dietary preferences
+                # Step 5: Assign dietary preferences now that the meal has a primary key
                 if dietary_list:
                     assign_dietary_preferences(meal.id, dietary_list)
 

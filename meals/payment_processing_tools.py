@@ -20,6 +20,12 @@ from openai import OpenAI
 import stripe
 from custom_auth.models import CustomUser
 from meals.models import ChefMealOrder, Order
+from meals.utils.stripe_utils import (
+    calculate_platform_fee_cents,
+    get_active_stripe_account,
+    get_stripe_return_urls,
+    StripeAccountError,
+)
 from meals.pydantic_models import PaymentInfoSchema
 from decimal import Decimal
 # Set the Stripe API key
@@ -146,7 +152,6 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
     import stripe
     from django.conf import settings
     from django.shortcuts import get_object_or_404
-    from meals.utils.stripe_utils import get_stripe_return_urls
     from meals.models import Order, ChefMealOrder
     from custom_auth.models import CustomUser
     print("[generate_payment_link] START user_id=", user_id, "order_id=", order_id)
@@ -176,6 +181,8 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
 
         # 3) Build Stripe line_items ------------------------------------------
         line_items: List[Dict[str, Any]] = []
+        checkout_chef = None
+        total_amount_cents = 0
 
         for cmo in chef_meal_orders:
             print(f"[generate_payment_link] Processing ChefMealOrder {cmo.id}: "
@@ -202,9 +209,22 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
                 print(f"[generate_payment_link] Skipping item due to invalid price={price}")
                 continue  # ignore invalid prices
 
-            # Convert Decimal price to float if necessary
-            if isinstance(price, Decimal):
-                price = float(price)
+            price_decimal = price if isinstance(price, Decimal) else Decimal(str(price))
+            unit_amount = int(price_decimal * 100)
+            if unit_amount <= 0 or quantity <= 0:
+                print(f"[generate_payment_link] Skipping due to invalid unit_amount={unit_amount} or quantity={quantity}")
+                continue
+
+            current_chef = meal_event.chef
+            if checkout_chef is None:
+                checkout_chef = current_chef
+            elif checkout_chef.id != current_chef.id:
+                return {
+                    "status": "error",
+                    "message": "Orders that include multiple chefs must be paid separately."
+                }
+
+            total_amount_cents += unit_amount * quantity
 
             line_items.append({
                 "price_data": {
@@ -213,17 +233,27 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
                         "name": meal.name,
                         "description": (meal_event.description or "")[:500],
                     },
-                    "unit_amount": int(price * 100),  # cents
+                    "unit_amount": unit_amount,  # cents
                 },
                 "quantity": quantity,
             })
             print(f"[generate_payment_link] Added line_item – name={meal.name}, "
-                  f"unit_amount={int(price*100)}, qty={quantity}")
+                  f"unit_amount={unit_amount}, qty={quantity}")
 
         print(f"[generate_payment_link] Built {len(line_items)} total line_items")
         if not line_items:
             return {"status": "error",
                     "message": "No items requiring payment found in this order."}
+
+        if checkout_chef is None or total_amount_cents <= 0:
+            return {"status": "error", "message": "Unable to process payment for this order."}
+
+        try:
+            destination_account_id, _ = get_active_stripe_account(checkout_chef)
+        except StripeAccountError as exc:
+            return {"status": "error", "message": str(exc)}
+
+        platform_fee_cents = calculate_platform_fee_cents(total_amount_cents)
 
         # 4) Create Stripe Checkout session -----------------------------------
         return_urls = get_stripe_return_urls(success_path="", cancel_path="")
@@ -242,8 +272,19 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
                 "order_id":   str(order.id),
                 "order_type": "chef_meal",
                 "customer_id": str(user.id),
+                "chef_id": str(checkout_chef.id),
             },
             idempotency_key=idempotency_key,
+            payment_intent_data={
+                "transfer_data": {"destination": destination_account_id},
+                "on_behalf_of": destination_account_id,
+                "metadata": {
+                    "order_id": str(order.id),
+                    "chef_id": str(checkout_chef.id),
+                    "order_type": "chef_meal",
+                },
+                **({"application_fee_amount": platform_fee_cents} if platform_fee_cents else {}),
+            },
         )
         print(f"[generate_payment_link] Stripe session created: id={session.id}, "
               f"url={session.url}")
@@ -314,6 +355,18 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
             }
         )
         payment_info = json.loads(output.output_text)
+        if isinstance(payment_info, list):
+            candidate = next((item for item in payment_info if isinstance(item, dict)), None)
+            if candidate is None and payment_info:
+                first = payment_info[0]
+                if isinstance(first, str):
+                    try:
+                        inner = json.loads(first)
+                        if isinstance(inner, dict):
+                            candidate = inner
+                    except Exception:
+                        pass
+            payment_info = candidate or {}
         return decimal_to_float({
             "status": "success",
             "checkout_url": payment_info["checkout_url"],

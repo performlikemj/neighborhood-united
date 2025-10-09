@@ -80,6 +80,7 @@ INSTALLED_APPS = [
     'chef_admin',
     'customer_dashboard',
     'local_chefs',
+    'family_poll',
     'gamification',
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',

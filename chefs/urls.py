@@ -11,6 +11,7 @@ urlpatterns = [
     path('api/lookup/by-username/<str:username>/', views.chef_lookup_by_username, name='chef_lookup_by_username'),
     path('api/public/', views.chef_public_directory, name='chef_public_directory'),
     path('api/public/<int:chef_id>/serves-my-area/', views.chef_serves_my_area, name='chef_serves_my_area'),
+    path('api/public/<int:chef_id>/stripe-status/', views.chef_stripe_status, name='chef_stripe_status'),
     
     # Waitlist API
     path('api/waitlist/config/', views.waitlist_config, name='waitlist_config'),

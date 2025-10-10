@@ -4,7 +4,7 @@ from django.http import HttpResponseBadRequest, JsonResponse
 from django.contrib.auth.decorators import login_required
 from .forms import ChefProfileForm, ChefPhotoForm
 from .models import Chef, ChefRequest, ChefPhoto
-from meals.models import Dish, Meal
+from meals.models import Dish, Meal, StripeConnectAccount
 from .forms import MealForm
 from .decorators import chef_required
 from meals.forms import IngredientForm 
@@ -78,6 +78,121 @@ def check_chef_status(request):
         'is_chef': is_chef,
         'has_pending_request': has_pending_request
     })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def chef_stripe_status(request, chef_id):
+    """
+    Public endpoint to check if a chef can accept payments.
+    Returns customer-safe information about payment capability without exposing sensitive data.
+    
+    Response format:
+    {
+        "can_accept_payments": boolean,
+        "has_account": boolean,
+        "is_active": boolean,
+        "disabled_reason": string or null,
+        "message": string
+    }
+    """
+    try:
+        # Get the chef
+        chef = get_object_or_404(Chef, id=chef_id)
+        
+        # Check if chef is on break (business logic)
+        if chef.is_on_break:
+            return Response({
+                'can_accept_payments': False,
+                'has_account': True,  # Assume they have account, just on break
+                'is_active': False,
+                'disabled_reason': 'chef_on_break',
+                'message': 'This chef is temporarily not accepting orders.'
+            })
+        
+        # Check if chef has a Stripe account
+        try:
+            stripe_account = StripeConnectAccount.objects.get(chef=chef)
+            has_account = True
+            
+            # Optionally sync with Stripe to get real-time status
+            # Only do this if we want to check live status (adds latency)
+            try:
+                account_info = stripe.Account.retrieve(stripe_account.stripe_account_id)
+                
+                # Determine if account is fully active
+                is_fully_active = bool(
+                    getattr(account_info, 'charges_enabled', False) and
+                    getattr(account_info, 'details_submitted', False) and
+                    getattr(account_info, 'payouts_enabled', False)
+                )
+                
+                # Update local database if status changed
+                if stripe_account.is_active != is_fully_active:
+                    stripe_account.is_active = is_fully_active
+                    stripe_account.save(update_fields=['is_active'])
+                
+                # Get disabled reason if any
+                disabled_reason = getattr(account_info.requirements, 'disabled_reason', None) if hasattr(account_info, 'requirements') else None
+                
+                # Determine customer-facing message
+                if is_fully_active:
+                    message = 'This chef is ready to accept orders!'
+                elif disabled_reason:
+                    # Provide user-friendly messages based on disabled_reason
+                    reason_messages = {
+                        'requirements.past_due': 'This chef is currently setting up payments. Please check back soon.',
+                        'requirements.pending_verification': 'This chef is completing payment verification. Please check back soon.',
+                        'listed': 'Payment setup is in progress for this chef.',
+                        'rejected.fraud': 'This chef is not available for orders at this time.',
+                        'rejected.terms_of_service': 'This chef is not available for orders at this time.',
+                        'rejected.other': 'This chef is not available for orders at this time.',
+                        'under_review': 'This chef\'s payment setup is under review. Please check back soon.',
+                    }
+                    message = reason_messages.get(disabled_reason, 'This chef is setting up payments. Please check back soon.')
+                else:
+                    message = 'This chef is setting up payments. Please check back soon.'
+                
+                return Response({
+                    'can_accept_payments': is_fully_active,
+                    'has_account': has_account,
+                    'is_active': is_fully_active,
+                    'disabled_reason': disabled_reason,
+                    'message': message
+                })
+                
+            except stripe.error.StripeError as e:
+                # If Stripe API fails, fall back to database status
+                logger.warning(f"Stripe API error for chef {chef_id}: {str(e)}")
+                return Response({
+                    'can_accept_payments': stripe_account.is_active,
+                    'has_account': has_account,
+                    'is_active': stripe_account.is_active,
+                    'disabled_reason': None,
+                    'message': 'This chef is ready to accept orders!' if stripe_account.is_active else 'This chef is setting up payments. Please check back soon.'
+                })
+                
+        except StripeConnectAccount.DoesNotExist:
+            # Chef has no Stripe account yet
+            return Response({
+                'can_accept_payments': False,
+                'has_account': False,
+                'is_active': False,
+                'disabled_reason': 'no_account',
+                'message': 'This chef is setting up payments. Please check back soon.'
+            })
+            
+    except Exception as e:
+        logger.error(f"Error checking stripe status for chef {chef_id}: {str(e)}")
+        return Response({
+            'error': 'Unable to check payment status at this time.',
+            'can_accept_payments': False,
+            'has_account': False,
+            'is_active': False,
+            'disabled_reason': 'error',
+            'message': 'Unable to check payment status at this time. Please try again later.'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])

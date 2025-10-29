@@ -85,34 +85,67 @@ def generate_streaming_instructions(
             except Exception:
                 # Fall back without casting if inputs are already ints or non-castable
                 requested_ids = list({i for i in meal_plan_meal_ids})
+            
+            logger.info(f"Resolving meal IDs for meal plan {meal_plan_id}: requested_ids={requested_ids}")
 
             # First, match as MealPlanMeal IDs
             direct_mpm_ids = list(
                 base_qs.filter(id__in=requested_ids).values_list('id', flat=True)
             )
+            logger.info(f"Matched {len(direct_mpm_ids)} IDs as MealPlanMeal IDs: {direct_mpm_ids}")
 
             # Remaining IDs which did not match as MealPlanMeal IDs are treated as Meal IDs
             remaining_ids = [i for i in requested_ids if i not in set(direct_mpm_ids)]
 
             mpm_ids_from_meal = []
             if remaining_ids:
+                logger.info(f"Attempting to resolve {len(remaining_ids)} remaining IDs as Meal IDs: {remaining_ids}")
                 # Map Meal IDs -> MealPlanMeal IDs within this user's plan
                 mpm_ids_from_meal = list(
                     base_qs.filter(meal_id__in=remaining_ids).values_list('id', flat=True)
                 )
+                logger.info(f"Resolved {len(mpm_ids_from_meal)} Meal IDs to MealPlanMeal IDs: {mpm_ids_from_meal}")
 
                 # Determine which Meal IDs were actually present in the plan
                 meals_found = set(
                     base_qs.filter(meal_id__in=remaining_ids).values_list('meal_id', flat=True)
                 )
                 invalid_ids = [i for i in remaining_ids if i not in meals_found]
+                if invalid_ids:
+                    logger.warning(f"Invalid IDs not found in meal plan: {invalid_ids}")
             else:
                 invalid_ids = []
 
             if invalid_ids:
-                raise PermissionDenied(
-                    f"You don't have permission to access meal(s) {', '.join(str(i) for i in invalid_ids)}"
-                )
+                # Get diagnostic info for the error message
+                all_mpm_ids = list(base_qs.values_list('id', flat=True)[:10])  # First 10 for reference
+                all_meal_ids = list(base_qs.values_list('meal_id', flat=True)[:10])  # First 10 for reference
+                
+                # Check if these IDs exist in OTHER meal plans for this user
+                other_plan_check = MealPlanMeal.objects.filter(
+                    meal_plan__user_id=user_id,
+                    id__in=invalid_ids
+                ).exclude(meal_plan_id=meal_plan_id).values_list('meal_plan_id', flat=True).distinct()
+                
+                other_meal_check = MealPlanMeal.objects.filter(
+                    meal_plan__user_id=user_id,
+                    meal_id__in=invalid_ids
+                ).exclude(meal_plan_id=meal_plan_id).values_list('meal_plan_id', flat=True).distinct()
+                
+                error_msg = f"The IDs {', '.join(str(i) for i in invalid_ids)} were not found in meal plan {meal_plan_id}. "
+                
+                if other_plan_check:
+                    error_msg += f"MISMATCH DETECTED: These meal_plan_meal_ids belong to meal plan(s) {list(other_plan_check)}, not {meal_plan_id}! "
+                elif other_meal_check:
+                    error_msg += f"MISMATCH DETECTED: These meal_ids exist in meal plan(s) {list(other_meal_check)}, not {meal_plan_id}! "
+                else:
+                    error_msg += "These IDs don't exist in any of your meal plans. "
+                
+                error_msg += f"Call get_meal_plan_meals_info(user_id={user_id}, meal_plan_id={meal_plan_id}) to get the correct IDs for THIS meal plan. "
+                error_msg += f"This plan's meal_plan_meal_ids: {all_mpm_ids[:5] if all_mpm_ids else 'none'}. "
+                error_msg += f"This plan's meal_ids: {all_meal_ids[:5] if all_meal_ids else 'none'}."
+                
+                raise PermissionDenied(error_msg)
 
             resolved_mpm_ids = list({*direct_mpm_ids, *mpm_ids_from_meal})
 

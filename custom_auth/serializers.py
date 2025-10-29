@@ -72,6 +72,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
     
     # Add is_chef field from UserRole relationship
     is_chef = serializers.SerializerMethodField()
+    is_email_verified = serializers.SerializerMethodField()
     current_role = serializers.SerializerMethodField()
 
     household_members = HouseholdMemberSerializer(many=True, required=False)
@@ -81,7 +82,7 @@ class CustomUserSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'username', 'email', 'unsubscribed_from_emails', 'password',
             'phone_number', 'dietary_preferences', 'custom_dietary_preferences',
-            'allergies', 'custom_allergies', 'week_shift', 'email_confirmed',
+            'allergies', 'custom_allergies', 'week_shift', 'email_confirmed', 'is_email_verified',
             'preferred_language', 'timezone', 'emergency_supply_goal', 'measurement_system',
             'personal_assistant_email', 'is_chef', 'current_role',
             'household_member_count', 'household_members',
@@ -120,6 +121,11 @@ class CustomUserSerializer(serializers.ModelSerializer):
             return user_role.current_role
         except UserRole.DoesNotExist:
             return 'customer'
+
+    def get_is_email_verified(self, obj):
+        if hasattr(obj, 'is_email_verified'):
+            return bool(obj.is_email_verified)
+        return bool(getattr(obj, 'email_confirmed', False))
 
     def __init__(self, *args, **kwargs):
         super(CustomUserSerializer, self).__init__(*args, **kwargs)

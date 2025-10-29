@@ -67,9 +67,16 @@ class ChefPhotoSerializer(serializers.ModelSerializer):
 
 
 class UserPublicSerializer(serializers.ModelSerializer):
+    is_email_verified = serializers.SerializerMethodField()
+
     class Meta:
         model = get_user_model()
-        fields = ['username']
+        fields = ['username', 'is_active', 'is_email_verified']
+
+    def get_is_email_verified(self, obj):
+        if hasattr(obj, 'is_email_verified'):
+            return bool(obj.is_email_verified)
+        return bool(getattr(obj, 'email_confirmed', False))
 
 
 class ChefPublicSerializer(serializers.ModelSerializer):
@@ -81,7 +88,11 @@ class ChefPublicSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Chef
-        fields = ['id', 'user', 'experience', 'bio', 'is_on_break', 'serving_postalcodes', 'profile_pic_url', 'banner_url', 'review_summary', 'photos']
+        fields = ['id', 'user', 'experience', 'bio', 'is_on_break',
+                  'serving_postalcodes', 'profile_pic_url', 'banner_url',
+                  'review_summary', 'photos',
+                  'is_verified', 'background_checked', 'insured', 'insurance_expiry',
+                  'food_handlers_cert']
 
     def get_profile_pic_url(self, obj):
         # Safe check: ImageFieldFile.url raises if no file; rely on name to detect presence
@@ -103,6 +114,8 @@ class ChefPublicSerializer(serializers.ModelSerializer):
             url = default.image.url
             return request.build_absolute_uri(url) if request is not None else url
         return None
+
+    
 
 
 class ChefMeUpdateSerializer(serializers.ModelSerializer):

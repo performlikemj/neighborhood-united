@@ -89,6 +89,12 @@ def get_meal_macro_information(meal_name: str, meal_description: str, ingredient
             
             # Parse the structured output
             macro_data = json.loads(response.output_text)
+        
+        # Handle null from LLM
+        if macro_data is None:
+            logger.warning(f"LLM returned null for macro info for '{meal_name}'")
+            return None
+        
         # Validate the data against our schema
         validated_data = MealMacroInfo.model_validate(macro_data)
         

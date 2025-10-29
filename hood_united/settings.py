@@ -80,7 +80,6 @@ INSTALLED_APPS = [
     'chef_admin',
     'customer_dashboard',
     'local_chefs',
-    'family_poll',
     'gamification',
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',
@@ -145,6 +144,12 @@ if DEBUG:
         'http://localhost:8501', 'http://127.0.0.1:8501',
     ]
 
+# Session cookies must flow between the SPA and API domains when we serve the frontend separately.
+# Default to the production value via env while keeping local dev behaviour unchanged.
+SESSION_COOKIE_DOMAIN = os.getenv('SESSION_COOKIE_DOMAIN', None)
+SESSION_COOKIE_SAMESITE = 'None' if not DEBUG else 'Lax'
+SESSION_COOKIE_SECURE = not DEBUG
+
 ROOT_URLCONF = 'hood_united.urls'
 
 TEMPLATES = [
@@ -192,6 +197,17 @@ else:
             'PASSWORD': os.getenv('DB_PASSWORD'),
             'HOST': os.getenv('DB_HOST'),
             'PORT': os.getenv('DB_PORT'),
+            # Connection management for Azure PostgreSQL
+            'CONN_MAX_AGE': 0,  # Don't persist connections - open fresh for each task/request
+            'CONN_HEALTH_CHECKS': True,  # Test connection before each request (Django 4.1+)
+            'OPTIONS': {
+                'connect_timeout': 10,  # Connection timeout in seconds
+                'options': '-c statement_timeout=60000',  # 60 second query timeout (for complex queries)
+                'keepalives': 1,  # Enable TCP keepalives
+                'keepalives_idle': 30,  # Start keepalives after 30s of idle
+                'keepalives_interval': 10,  # Send keepalive every 10s
+                'keepalives_count': 5,  # 5 failed keepalives = connection dead
+            },
         }
     }
 
@@ -446,6 +462,16 @@ CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_BROKER_CONNECTION_RETRY = True
 CELERY_BROKER_CONNECTION_MAX_RETRIES = 3
 
+# Database connection handling for Celery workers
+# Close database connections after each task to prevent stale connections
+CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000  # Restart worker after 1000 tasks
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1  # Only fetch one task at a time
+CELERY_TASK_ACKS_LATE = True  # Acknowledge task after completion, not before
+
+# CELERY BEAT settings
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+CELERY_TIMEZONE = TIME_ZONE  # or explicit e.g. 'UTC' or 'Asia/Tokyo'
+CELERY_ENABLE_UTC = True
 # Celery broker transport options with more robust SSL handling
 if DEBUG:
     # Development: minimal SSL configuration or no SSL
@@ -520,11 +546,15 @@ if IS_PRODUCTION:
     # Production-only security settings
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-    CSRF_TRUSTED_ORIGINS = [
+    # Allow session cookies in cross-origin requests (needed for separate frontend)
+    SESSION_COOKIE_SAMESITE = 'None'
+    CSRF_COOKIE_SAMESITE = 'None'
+    # Build CSRF_TRUSTED_ORIGINS from CORS_ALLOWED_ORIGINS and additional domains
+    CSRF_TRUSTED_ORIGINS = list(set(CORS_ALLOWED_ORIGINS + [
         'https://sautai.com',
         'https://www.sautai.com',
         'https://*.127.0.0.1'
-    ]
+    ]))
 
     # HSTS (HTTP Strict Transport Security)
     SECURE_HSTS_SECONDS = 31536000

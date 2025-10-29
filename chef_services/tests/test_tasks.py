@@ -11,7 +11,13 @@ from chef_services.tasks import sync_pending_service_tiers
 
 class SyncPendingServiceTiersTests(TestCase):
     def setUp(self):
-        user = CustomUser.objects.create_user(username="chef", email="chef@example.com", password="pass123")
+        user = CustomUser.objects.create_user(
+            username="chef",
+            email="chef@example.com",
+            password="pass123",
+            first_name="Marcus",
+            last_name="Garvey",
+        )
         self.chef = Chef.objects.create(user=user)
         self.offering = ChefServiceOffering.objects.create(
             chef=self.chef,
@@ -45,6 +51,9 @@ class SyncPendingServiceTiersTests(TestCase):
         self.assertEqual(tier.price_sync_status, "success")
         self.assertIsNotNone(tier.price_synced_at)
         mock_stripe.Product.create.assert_called_once()
+        product_kwargs = mock_stripe.Product.create.call_args.kwargs
+        expected_name = "Private Dinner – Marcus Garvey"
+        self.assertEqual(product_kwargs["name"], expected_name)
         mock_stripe.Price.create.assert_called_once()
 
     @patch("chef_services.tasks.stripe")

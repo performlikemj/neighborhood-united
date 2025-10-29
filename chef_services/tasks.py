@@ -15,7 +15,21 @@ def _ensure_product(offering):
     if offering.stripe_product_id:
         return offering.stripe_product_id
     stripe.api_key = settings.STRIPE_SECRET_KEY
-    name = f"{offering.title} – Offering {offering.id} (Chef {offering.chef_id})"
+    chef = getattr(offering, "chef", None)
+    chef_user = getattr(chef, "user", None) if chef else None
+    chef_full_name = ""
+    if chef_user:
+        try:
+            chef_full_name = (chef_user.get_full_name() or "").strip()
+        except Exception:
+            chef_full_name = ""
+        if not chef_full_name:
+            username = getattr(chef_user, "username", "") or ""
+            chef_full_name = username.strip()
+    if not chef_full_name:
+        chef_full_name = f"Chef {offering.chef_id}"
+    offering_title = (offering.title or "").strip() or f"Offering {offering.id}"
+    name = f"{offering_title} – {chef_full_name}"
     try:
         product = stripe.Product.create(
             name=name,

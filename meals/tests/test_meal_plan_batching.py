@@ -4,9 +4,28 @@ from datetime import date, timedelta
 import pytest
 
 from custom_auth.models import CustomUser
-from meals.models import MealPlanBatchJob, MealPlanBatchRequest, MealPlan, MealPlanMeal
+from meals.models import MealPlanBatchJob, MealPlanBatchRequest, MealPlan, MealPlanMeal, Meal
 from meals.services.meal_plan_batching import MealPlanBatchRequestBuilder
 from meals.services import meal_plan_batch_service
+
+
+class _DummyRedisConnection:
+    def ping(self):
+        return True
+
+    def get(self, *args, **kwargs):
+        return None
+
+    def set(self, *args, **kwargs):
+        return True
+
+
+try:
+    import redis  # type: ignore
+
+    redis.Redis.from_url = lambda *args, **kwargs: _DummyRedisConnection()  # type: ignore[attr-defined]
+except Exception:
+    pass
 
 
 @pytest.mark.django_db
@@ -307,6 +326,10 @@ def test_process_batch_job_handles_completed_output(monkeypatch):
 
     meal_plan = MealPlan.objects.get(user=user, week_start_date=job.week_start_date)
     assert MealPlanMeal.objects.filter(meal_plan=meal_plan).count() == 1
+
+    meal = Meal.objects.get(mealplanmeal__meal_plan=meal_plan)
+    assert "Batch user prompt" not in meal.description
+    assert "Test prompt" not in meal.description
 
 
 @pytest.mark.django_db

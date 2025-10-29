@@ -1,7 +1,7 @@
 from __future__ import absolute_import, unicode_literals
 import os
 from celery import Celery
-from celery.signals import worker_ready
+from celery.signals import worker_ready, task_postrun
 from django.conf import settings
 from celery.schedules import crontab
 from dotenv import load_dotenv
@@ -17,13 +17,6 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 
 # Load task modules from all registered Django app configs.
 app.autodiscover_tasks(lambda: settings.INSTALLED_APPS)
-
-# Ensure shared tasks are registered even if not in INSTALLED_APPS
-try:
-    import meals.tasks  # noqa: F401
-except Exception:
-    pass
-
 
 app.conf.beat_schedule = {
     'send-daily-meal-instructions-hourly': {
@@ -90,6 +83,17 @@ app.conf.beat_schedule = {
         'schedule': crontab(minute='*/5'),  # every 5 minutes
     },
 }
+
+
+@task_postrun.connect
+def close_database_connections(**kwargs):
+    """
+    Close all database connections after each task to prevent stale connections.
+    Critical for Azure PostgreSQL which closes idle connections after ~5 minutes.
+    """
+    from django.db import connections
+    for conn in connections.all():
+        conn.close()
 
 
 @worker_ready.connect

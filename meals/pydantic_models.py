@@ -746,6 +746,36 @@ class IngredientSubstitutions(BaseModel):
         ]
     }
 
+
+class AllergenAnalysis(BaseModel):
+    """Schema for allergen analysis with substitution recommendations.
+    
+    This schema is used with Groq structured outputs and complies with
+    Groq's requirements: all fields required, no additionalProperties.
+    """
+    model_config = ConfigDict(extra="forbid")
+    
+    is_safe: bool = Field(..., description="Whether the meal is safe for the user's allergies")
+    flagged_ingredients: List[str] = Field(..., description="List of ingredients that contain allergens")
+    substitutions: List[IngredientSubstitution] = Field(..., description="Substitution recommendations for flagged ingredients")
+    reasoning: str = Field(..., description="Explanation of the allergen assessment")
+    
+    example: ClassVar[Dict[str, Any]] = {
+        "is_safe": False,
+        "flagged_ingredients": ["almonds", "milk"],
+        "substitutions": [
+            {
+                "ingredient": "almonds",
+                "alternatives": ["pumpkin seeds", "sunflower seeds"]
+            },
+            {
+                "ingredient": "milk",
+                "alternatives": ["oat milk", "soy milk"]
+            }
+        ],
+        "reasoning": "Almonds are a type of tree nut, which the user is allergic to. Milk is a dairy product."
+    }
+
 # --- Meal Modification Schemas ----------------------------------------------
 
 class IngredientChange(BaseModel):

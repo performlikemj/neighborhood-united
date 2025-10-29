@@ -145,6 +145,11 @@ class CustomUser(AbstractUser):
             return f"mj+{self.email_token}@sautai.com"
         return None
 
+    @property
+    def is_email_verified(self):
+        """Convenience alias used by public APIs/badges."""
+        return bool(getattr(self, 'email_confirmed', False))
+
     def save(self, *args, **kwargs):
         self.username = self.username.lower()
         # Ensure timezone-aware datetimes for fields when USE_TZ is enabled

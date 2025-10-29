@@ -103,6 +103,24 @@ def submit_weekly_batch(
 
     Returns the persisted job or ``None`` when we fall back to synchronous generation.
     """
+    # Check if a batch job already exists for this week to prevent duplicates
+    existing_job = MealPlanBatchJob.objects.filter(
+        week_start_date=week_start,
+        week_end_date=week_end,
+    ).exclude(
+        status__in=[MealPlanBatchJob.STATUS_FAILED, MealPlanBatchJob.STATUS_EXPIRED]
+    ).first()
+    
+    if existing_job:
+        logger.info(
+            "Batch job already exists for week %s-%s (job %s, status=%s). Skipping duplicate submission.",
+            week_start,
+            week_end,
+            existing_job.id,
+            existing_job.status,
+        )
+        return existing_job
+    
     users = list(_eligible_users())
     if not users:
         logger.info("No auto-enabled users to include in weekly batch %s-%s", week_start, week_end)
@@ -331,6 +349,14 @@ def _apply_batch_results(job: MealPlanBatchJob, lines: Sequence[str]) -> None:
             continue
 
         response_payload = payload.get("response") or {}
+        
+        # Handle null from batch response
+        if response_payload is None:
+            logger.warning("Batch response payload is null for %s", custom_id)
+            job.mark_request_failed(custom_id=custom_id, error_message="null_response")
+            _schedule_fallback_for_requests(job, user_ids=[request_obj.user_id])
+            continue
+        
         try:
             groq_response = GroqBatchResponse.model_validate(response_payload)
         except ValidationError as exc:
@@ -475,8 +501,6 @@ def _ensure_meal_from_slot(*, user: CustomUser, meal_type: str, slot: ParsedSlot
     meal = Meal.objects.filter(creator=user, name=name).first()
 
     description_parts = [note] if note else []
-    if user_prompt:
-        description_parts.append(f"Batch user prompt: {user_prompt}")
     description = "\n\n".join(description_parts) or name
 
     if meal is None:

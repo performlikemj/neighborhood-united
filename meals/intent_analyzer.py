@@ -35,6 +35,11 @@ def _safe_load_and_validate(model_cls, raw: str):
             lambda m: '\\u%04x' % ord(m.group()), raw
         )
         data = json.loads(cleaned)
+    
+    # Handle null from LLM
+    if data is None:
+        raise ValueError(f"LLM returned null when expecting {model_cls.__name__}")
+    
     return model_cls.model_validate(data)
 
 # Intent Classification Schema

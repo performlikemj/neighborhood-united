@@ -63,3 +63,9 @@ Azure-Container-Apps-Command-Override-Recovery-Guide.md
 Azure-Container-Apps-KEDA-Scaling-Best-Practices.md
 DEPLOYMENT_SECURITY.md
 *.jsonl
+UNIFIED_*.md
+STREAMING_*.md
+DATABASE_*.md
+LONG_RUNNING_TASKS_*.md
+PYDANTIC_*.md   
+GROQ_*.md

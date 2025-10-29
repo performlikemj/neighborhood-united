@@ -348,6 +348,74 @@ def get_order(request, order_id):
     return Response(ChefServiceOrderSerializer(order).data)
 
 
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def update_order(request, order_id):
+    """
+    Update a draft order with scheduling details and other information.
+    Allows users to add service_date, service_start_time, address, etc. before checkout.
+    """
+    order = get_object_or_404(ChefServiceOrder, id=order_id)
+    if order.customer_id != request.user.id and not request.user.is_staff:
+        return Response({"error": "Forbidden"}, status=403)
+    
+    # Only allow updates to draft orders
+    if order.status != 'draft':
+        return Response({"error": f"Cannot update order with status: {order.status}"}, status=400)
+    
+    # Parse and update allowed fields
+    if 'service_date' in request.data:
+        sd = request.data['service_date']
+        order.service_date = parse_date(sd) if isinstance(sd, str) else sd
+    
+    if 'service_start_time' in request.data:
+        st = request.data['service_start_time']
+        order.service_start_time = parse_time(st) if isinstance(st, str) else st
+    
+    if 'duration_minutes' in request.data:
+        dur = request.data['duration_minutes']
+        try:
+            duration = int(dur)
+            if duration > 0:
+                order.duration_minutes = duration
+        except (ValueError, TypeError):
+            pass
+    
+    if 'address_id' in request.data:
+        address_id = request.data['address_id']
+        if address_id:
+            from custom_auth.models import Address
+            try:
+                addr = Address.objects.get(id=address_id)
+                if addr.user_id != request.user.id:
+                    return Response({"error": "Invalid address for this user"}, status=403)
+                order.address = addr
+            except Address.DoesNotExist:
+                return Response({"error": "Address not found"}, status=404)
+    
+    if 'special_requests' in request.data:
+        order.special_requests = request.data['special_requests']
+    
+    if 'schedule_preferences' in request.data:
+        order.schedule_preferences = request.data['schedule_preferences']
+    
+    if 'household_size' in request.data:
+        try:
+            household_size = int(request.data['household_size'])
+            if household_size > 0:
+                order.household_size = household_size
+        except (ValueError, TypeError):
+            return Response({"error": "Invalid household_size"}, status=400)
+    
+    try:
+        order.full_clean()
+        order.save()
+    except Exception as e:
+        return Response({"error": str(e)}, status=400)
+    
+    return Response(ChefServiceOrderSerializer(order).data)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def my_orders(request):
@@ -359,6 +427,22 @@ def my_orders(request):
         ChefServiceOrder.objects
         .filter(chef=chef)
         .select_related('offering', 'tier', 'customer')
+        .order_by('-created_at')
+    )
+    return Response(ChefServiceOrderSerializer(qs, many=True).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_customer_orders(request):
+    """
+    Get all service orders for the authenticated customer.
+    Includes draft, awaiting payment, confirmed, and completed orders.
+    """
+    qs = (
+        ChefServiceOrder.objects
+        .filter(customer=request.user)
+        .select_related('offering', 'tier', 'chef', 'chef__user', 'address')
         .order_by('-created_at')
     )
     return Response(ChefServiceOrderSerializer(qs, many=True).data)
@@ -391,6 +475,41 @@ def checkout_order(request, order_id):
         except Exception:
             # Fall through to create a new session if retrieval fails
             pass
+
+    # Validate scheduling details before checkout
+    validation_errors = {}
+    if order.offering.service_type == "home_chef":
+        if not order.service_date:
+            validation_errors["service_date"] = "Service date is required for home chef services."
+        if not order.service_start_time:
+            validation_errors["service_start_time"] = "Service start time is required for home chef services."
+    elif order.offering.service_type == "weekly_prep":
+        if order.tier and order.tier.is_recurring:
+            if not order.schedule_preferences and (not order.service_date or not order.service_start_time):
+                validation_errors["schedule_preferences"] = "Provide schedule preferences or a preferred date/time for recurring weekly prep."
+        else:
+            if not order.service_date:
+                validation_errors["service_date"] = "Service date is required for weekly prep services."
+            if not order.service_start_time:
+                validation_errors["service_start_time"] = "Service start time is required for weekly prep services."
+    
+    # Check if address is required and missing
+    if not order.address:
+        validation_errors["address"] = "Delivery address is required."
+    
+    if validation_errors:
+        return Response({
+            "error": "Missing required fields for checkout",
+            "validation_errors": validation_errors
+        }, status=400)
+
+    # Update order status to awaiting_payment before creating checkout session
+    order.status = 'awaiting_payment'
+    try:
+        order.full_clean()  # This will now validate with the new status
+        order.save()
+    except Exception as e:
+        return Response({"error": str(e)}, status=400)
 
     ok, payload = create_service_checkout_session(order.id, customer_email=request.user.email)
     if not ok:

@@ -10,6 +10,12 @@ class Chef(models.Model):
     bio = models.TextField(blank=True)
     # Simple availability flag: when True, the chef is temporarily not accepting orders
     is_on_break = models.BooleanField(default=False, help_text="Temporarily not accepting orders")
+    # Verification & compliance
+    is_verified = models.BooleanField(default=False, help_text="Admin approval for platform listing")
+    background_checked = models.BooleanField(default=False)
+    insured = models.BooleanField(default=False)
+    insurance_expiry = models.DateField(blank=True, null=True)
+    food_handlers_cert = models.BooleanField(default=False)
     serving_postalcodes = models.ManyToManyField(
         PostalCode,
         through=ChefPostalCode,
@@ -146,6 +152,27 @@ class ChefDefaultBanner(models.Model):
     def __str__(self):
         return f"ChefDefaultBanner(id={self.id})"
 
+
+class ChefVerificationDocument(models.Model):
+    """Documents uploaded by chef for verification: insurance, background, certifications."""
+    DOC_TYPES = [
+        ('insurance', 'Insurance'),
+        ('background', 'Background Check'),
+        ('food_handlers', 'Food Handler Certificate'),
+        ('other', 'Other'),
+    ]
+    chef = models.ForeignKey('Chef', on_delete=models.CASCADE, related_name='verification_docs')
+    doc_type = models.CharField(max_length=32, choices=DOC_TYPES)
+    file = models.FileField(upload_to='chefs/verification_docs/')
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    is_approved = models.BooleanField(default=False)
+    rejected_reason = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ['-uploaded_at']
+
+    def __str__(self):
+        return f"VerificationDoc(type={self.doc_type}, chef_id={self.chef_id}, approved={self.is_approved})"
 
 # Waitlist feature models
 class ChefWaitlistConfig(models.Model):

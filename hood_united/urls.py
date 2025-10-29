@@ -34,7 +34,6 @@ urlpatterns = [
     path('reviews/', include('reviews.urls')),
     path('events/', include('events.urls')),
     path('local_chefs/', include('local_chefs.urls')),
-    path('family-poll/', include('family_poll.urls')),
 ]
 
 # Conditionally expose gamification routes

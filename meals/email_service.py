@@ -42,6 +42,32 @@ logger = logging.getLogger(__name__)
 
 # Approval emails removed; we keep other email tasks intact.
 
+def _iter_valid_shopping_items(items):
+    """
+    Yield well-formed shopping list items as dicts.
+    Accepts dicts directly, attempts to JSON-parse string payloads (legacy GPT responses),
+    and skips anything that cannot be coerced into a mapping.
+    """
+    if not items:
+        return
+    for raw in items:
+        item = raw
+        if isinstance(raw, str):
+            text = raw.strip()
+            if not text:
+                logger.info("Skipping empty string shopping list item.")
+                continue
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                logger.warning(f"Skipping unparsable shopping list string: {text!r}")
+                continue
+            item = parsed
+        if not isinstance(item, dict):
+            logger.warning(f"Skipping shopping list item with unsupported type: {type(raw).__name__}")
+            continue
+        yield item
+
 @shared_task
 @handle_task_failure
 def generate_shopping_list(meal_plan_id):
@@ -463,7 +489,7 @@ def generate_shopping_list(meal_plan_id):
             s = s[:137].rstrip() + '...'
         return s
 
-    for item in shopping_list_dict.get("items", []):
+    for item in _iter_valid_shopping_items(shopping_list_dict.get("items", [])):
         logger.info(f"Shopping list item: {item}")
         category = item.get("category", "Miscellaneous")
         ingredient = item.get("ingredient")

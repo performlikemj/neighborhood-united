@@ -1,6 +1,13 @@
 from django.urls import path, include
 from . import views
 from . import chef_meals_views
+from meals.cart_views.unified_cart import (
+    get_cart,
+    add_chef_service_to_cart,
+    remove_chef_service_from_cart,
+    unified_checkout,
+    clear_cart,
+)
 from rest_framework.routers import DefaultRouter
 
 app_name = 'meals'
@@ -128,4 +135,11 @@ urlpatterns = [
     # TODO: Update frontend to use this since Streamlit isn't stateful
     path('api/payment/success/', chef_meals_views.payment_success, name='payment_success'),
     path('api/payment/cancelled/', chef_meals_views.payment_cancelled, name='payment_cancelled'),
+    
+    # Unified cart API endpoints (meals + chef services)
+    path('api/cart/', get_cart, name='api_get_cart'),
+    path('api/cart/add-chef-service/', add_chef_service_to_cart, name='api_add_chef_service_to_cart'),
+    path('api/cart/remove-chef-service/', remove_chef_service_from_cart, name='api_remove_chef_service_from_cart'),
+    path('api/cart/checkout/', unified_checkout, name='api_unified_checkout'),
+    path('api/cart/clear/', clear_cart, name='api_clear_cart'),
 ]

@@ -778,6 +778,12 @@ def determine_items_to_replenish(user_id: int):
     # Validate
     try:
         parsed = json.loads(raw)
+        
+        # Handle null from LLM
+        if parsed is None:
+            logger.warning("LLM returned null for replenish items.")
+            return {"status": "error", "message": "Assistant returned null."}
+        
         validated = ReplenishItemsSchema.model_validate(parsed)
         return {
             "status": "success",

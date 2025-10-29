@@ -15,7 +15,14 @@ from django.core.validators import MinValueValidator, MaxValueValidator, RegexVa
 from django.db import migrations
 from pgvector.django import VectorExtension
 from pgvector.django import VectorField
-from openai import OpenAI, OpenAIError
+try:
+    from openai import OpenAI, OpenAIError
+except Exception:  # pragma: no cover - optional dependency may not be present in tests
+    OpenAI = None
+
+    class OpenAIError(Exception):
+        """Fallback OpenAI error when SDK is unavailable."""
+
 from meals.pydantic_models import ShoppingList as ShoppingListSchema, Instructions as InstructionsSchema, DietaryPreferencesSchema
 from reviews.models import Review
 from django.core.serializers.json import DjangoJSONEncoder
@@ -781,9 +788,46 @@ class Cart(models.Model):
     customer = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
     meal = models.ManyToManyField(Meal)
     meal_plan = models.ForeignKey(MealPlan, null=True, blank=True, on_delete=models.SET_NULL)
+    # Support for chef service orders in cart
+    chef_service_orders = models.ManyToManyField('chef_services.ChefServiceOrder', blank=True, related_name='carts')
 
     def __str__(self):
         return f'Cart for {self.customer.username}'
+    
+    def get_all_chefs(self):
+        """
+        Get all unique chefs from cart items (meals and chef services).
+        Returns a set of Chef objects.
+        """
+        from chefs.models import Chef
+        chefs = set()
+        
+        # Get chefs from meals
+        for meal in self.meal.all():
+            if hasattr(meal, 'chef'):
+                chefs.add(meal.chef)
+        
+        # Get chefs from chef service orders
+        for service_order in self.chef_service_orders.filter(status='draft'):
+            chefs.add(service_order.chef)
+        
+        return chefs
+    
+    def is_single_chef_cart(self):
+        """
+        Check if all cart items are from a single chef.
+        Required for Stripe Connect checkout (can only transfer to one account).
+        """
+        chefs = self.get_all_chefs()
+        return len(chefs) <= 1
+    
+    def get_cart_chef(self):
+        """
+        Get the chef for this cart if it's a single-chef cart.
+        Returns None if cart is empty or has multiple chefs.
+        """
+        chefs = self.get_all_chefs()
+        return list(chefs)[0] if len(chefs) == 1 else None
     
 
 class Order(models.Model):

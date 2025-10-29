@@ -126,6 +126,12 @@ def handle_custom_dietary_preference(custom_prefs):
                             except Exception:
                                 pass
                     new_pref_data = candidate or {}
+                
+                # Handle null from LLM
+                if new_pref_data is None:
+                    logger.warning(f"LLM returned null for dietary preference {custom_pref}. Using empty dict.")
+                    new_pref_data = {}
+                
                 # Validate the structure using Pydantic
                 validated_pref = DietaryPreferenceDetail.model_validate(new_pref_data)
                 # Step 5: Store in the database

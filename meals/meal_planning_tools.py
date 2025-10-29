@@ -324,7 +324,7 @@ MEAL_PLANNING_TOOLS = [
     {
         "type": "function",
         "name": "stream_meal_instructions",
-        "description": "Generate cooking instructions for meals in a meal plan. This function doesn't send emails and is designed for direct display in the UI.",
+        "description": "Generate cooking instructions for meals in a meal plan. This function doesn't send emails and is designed for direct display in the UI. IMPORTANT: Call get_meal_plan_meals_info first to get the correct meal_plan_meal_id values to pass to this function.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -341,7 +341,7 @@ MEAL_PLANNING_TOOLS = [
                     "items": {
                         "type": "integer"
                     },
-                    "description": "List of specific MealPlanMeal IDs that are related to the meal plan, to generate instructions for (not Meal IDs)"
+                    "description": "List of specific meal_plan_meal_id values (NOT meal_id values) to generate instructions for. Use get_meal_plan_meals_info to get these IDs. Each entry in a meal plan has a unique meal_plan_meal_id which is different from the meal_id."
                 }
             },
             "required": ["user_id", "meal_plan_id"],
@@ -1041,6 +1041,10 @@ def get_meal_macro_info(meal_id: int) -> Dict[str, Any]:
         
         if not data:
             return {"status": "error", "message": "Macro lookup failed."}
+        
+        # Handle null from LLM
+        if data is None:
+            return {"status": "error", "message": "Macro lookup returned null."}
             
         # Validate & coerce into canonical schema
         validated = MealMacroInfo.model_validate(data)
@@ -1097,6 +1101,11 @@ def find_related_youtube_videos(meal_id: int, max_results: int = 5) -> Dict[str,
         )
         
         formatted = format_for_structured_output(raw)
+        
+        # Handle null from LLM
+        if formatted is None:
+            logger.warning(f"Formatted YouTube data is null for meal {meal_id}")
+            return {"status": "error", "message": "YouTube video search returned null."}
         
         # Validate
         try:

@@ -456,6 +456,12 @@ def determine_items_to_replenish(user):
         # Step 7: Parse and validate GPT response
         try:
             parsed_response = json.loads(assistant_message)
+            
+            # Handle null from LLM
+            if parsed_response is None:
+                logger.warning("LLM returned null for replenish items. Returning empty list.")
+                return []
+            
             replenish_items = ReplenishItemsSchema.model_validate(parsed_response)
             return replenish_items.items_to_replenish
         except (json.JSONDecodeError, ValidationError) as e:
@@ -576,6 +582,12 @@ def assign_pantry_tags(pantry_item_id):
         # Parse and validate with Pydantic
         try:
             tags_data = json.loads(response_content)
+            
+            # Handle null from LLM
+            if tags_data is None:
+                logger.warning(f"LLM returned null for pantry tags for item {pantry_item_id}")
+                return
+            
             tags_schema = PantryTagsSchema.model_validate(tags_data)
         except (json.JSONDecodeError, ValueError) as e:
             logger.error(f"Failed to parse JSON for pantry item {pantry_item_id}: {e}")

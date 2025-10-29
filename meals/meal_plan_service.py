@@ -30,7 +30,8 @@ from meals.meal_generation import generate_and_create_meal, perform_openai_sanit
 from meals.models import Meal, MealPlan, MealPlanMeal, MealPlanInstruction, ChefMealEvent, Dish, Ingredient
 from meals.tasks import MAX_ATTEMPTS
 from meals.pydantic_models import (MealsToReplaceSchema, BulkPrepInstructions,
-                                  MealPlanModificationRequest, PromptMealMap, ModifiedMealSchema)
+                                  MealPlanModificationRequest, PromptMealMap, ModifiedMealSchema,
+                                  AllergenAnalysis, IngredientSubstitution)
 from meals.meal_modification_parser import parse_modification_request
 from shared.utils import (generate_user_context, get_embedding, cosine_similarity, replace_meal_in_plan,
                           remove_meal_from_plan, get_openai_client)
@@ -1386,6 +1387,11 @@ def analyze_and_replace_meals(user, meal_plan, meal_types, request_id=None):
                 parsed_response = candidate or {}
 
             # Step 2: Validate the parsed response with Pydantic
+            # Handle null from LLM
+            if parsed_response is None:
+                logger.warning("LLM returned null for meals to replace. Using empty dict.")
+                parsed_response = {}
+            
             meals_to_replace = MealsToReplaceSchema.model_validate(parsed_response)
         except Exception as e:
             # n8n traceback
@@ -2144,11 +2150,17 @@ def check_meal_for_allergens_gpt(meal, user) -> Tuple[bool, List[str], Dict[str,
                 {
                 "is_safe": false,
                 "flagged_ingredients": ["almonds", "milk"],
-                "substitutions": {
-                    "almonds": ["pumpkin seeds", "sunflower seeds"],
-                    "milk": ["almond milk", "oat milk"]
-                },
-                "reasoning": "Almonds are a type of tree nut, which the user is allergic to. Milk is a dairy product. Substitute almond with pumpkin seeds or sunflower seeds, and replace milk with almond milk or oat milk to maintain culinary function and flavor."
+                "substitutions": [
+                    {
+                        "ingredient": "almonds",
+                        "alternatives": ["pumpkin seeds", "sunflower seeds"]
+                    },
+                    {
+                        "ingredient": "milk",
+                        "alternatives": ["oat milk", "soy milk"]
+                    }
+                ],
+                "reasoning": "Almonds are a type of tree nut, which the user is allergic to. Milk is a dairy product. Substitute almonds with pumpkin seeds or sunflower seeds, and replace milk with oat milk or soy milk to maintain culinary function and flavor."
                 }
                 ```
 
@@ -2176,23 +2188,6 @@ def check_meal_for_allergens_gpt(meal, user) -> Tuple[bool, List[str], Dict[str,
     
     try:
         groq_client = _get_groq_client()
-        schema = {
-            "type": "object",
-            "properties": {
-                "is_safe": {"type": "boolean"},
-                "flagged_ingredients": {"type": "array", "items": {"type": "string"}},
-                "substitutions": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "array",
-                        "items": {"type": "string"}
-                    }
-                },
-                "reasoning": {"type": "string"}
-            },
-            "required": ["is_safe", "flagged_ingredients", "reasoning"],
-            "additionalProperties": False
-        }
         if groq_client:
             raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
             if raw_create:
@@ -2213,12 +2208,25 @@ def check_meal_for_allergens_gpt(meal, user) -> Tuple[bool, List[str], Dict[str,
                     "type": "json_schema",
                     "json_schema": {
                         "name": "allergen_analysis",
-                        "schema": schema,
+                        "schema": AllergenAnalysis.model_json_schema(),
                     },
                 },
             )
             raw = groq_resp.choices[0].message.content or "{}"
+            # Use Pydantic validation for robust parsing
+            try:
+                data = AllergenAnalysis.model_validate_json(raw)
+            except Exception as e:
+                logger.error(f"Failed to parse Groq response as AllergenAnalysis: {e}. Raw (first 500 chars): {raw[:500]}")
+                # Fallback to safe defaults
+                data = AllergenAnalysis(
+                    is_safe=False,
+                    flagged_ingredients=[],
+                    substitutions=[],
+                    reasoning="Unable to parse allergen analysis response"
+                )
         else:
+            schema = AllergenAnalysis.model_json_schema()
             response = get_openai_client().responses.create(
                 model="gpt-5-mini",
                 input=prompt_messages,
@@ -2232,29 +2240,29 @@ def check_meal_for_allergens_gpt(meal, user) -> Tuple[bool, List[str], Dict[str,
                 }
             )
             raw = response.output_text
-        # Be robust to occasional array- or string-wrapped JSON responses
-        data = json.loads(raw)
-        if isinstance(data, list):
-            candidate = next((item for item in data if isinstance(item, dict)), None)
-            if candidate is None and data:
-                first = data[0]
-                if isinstance(first, str):
-                    try:
-                        inner = json.loads(first)
-                        if isinstance(inner, dict):
-                            candidate = inner
-                    except Exception:
-                        pass
-            data = candidate or {}
-        is_safe = data.get("is_safe", False)
-        gpt_flagged = data.get("flagged_ingredients", [])
+            # Use Pydantic validation for robust parsing
+            try:
+                data = AllergenAnalysis.model_validate_json(raw)
+            except Exception as e:
+                logger.error(f"Failed to parse OpenAI response as AllergenAnalysis: {e}. Raw (first 500 chars): {raw[:500]}")
+                # Fallback to safe defaults
+                data = AllergenAnalysis(
+                    is_safe=False,
+                    flagged_ingredients=[],
+                    substitutions=[],
+                    reasoning="Unable to parse allergen analysis response"
+                )
+        
+        is_safe = data.is_safe
+        gpt_flagged = data.flagged_ingredients
         
         # For chef meals, don't offer substitutions regardless of what GPT suggests
         substitutions = {}
         if not is_chef and not is_safe:
-            substitutions = data.get("substitutions", {})
+            # Convert array format to dict for backward compatibility
+            substitutions = {sub.ingredient: sub.alternatives for sub in data.substitutions}
             
-        reasoning = data.get("reasoning", "")
+        reasoning = data.reasoning
         
         # For chef meals, add a note about not offering substitutions
         if is_chef and not is_safe:

@@ -123,6 +123,12 @@ def send_daily_meal_instructions():
                     # Deserialize and validate the instruction_text
                     try:
                         instruction_data = json.loads(instruction_text)
+                        
+                        # Handle null from LLM
+                        if instruction_data is None:
+                            logger.warning(f"Instruction data is null for user {user.email} on {next_day_name}")
+                            continue
+                        
                         # If instruction_data is a list, wrap it into a dictionary
                         if isinstance(instruction_data, list):
                             instruction_data = {
@@ -197,7 +203,13 @@ def send_daily_meal_instructions():
                         else:
                             try:
                                 bulk_data = json.loads(bulk_instruction.instruction_text)
-                                validated_bulk = BulkPrepInstructions.model_validate(bulk_data)
+                                
+                                # Handle null from LLM
+                                if bulk_data is None:
+                                    logger.warning(f"Bulk prep data is null for user {user.email}")
+                                    validated_bulk = None
+                                else:
+                                    validated_bulk = BulkPrepInstructions.model_validate(bulk_data)
                             except Exception as e:
                                 logger.error(f"Failed to parse bulk prep instructions for user {user.email}: {e}")
                                 validated_bulk = None
@@ -543,6 +555,12 @@ def generate_instructions(meal_plan_meal_ids, send_via_assistant: bool = False):
         # Process and format the instructions (whether existing or new)
         try:
             instructions_dict = json.loads(instructions_content)
+            
+            # Handle case where LLM returns null
+            if instructions_dict is None:
+                logger.warning(f"LLM returned null for MealPlanMeal ID {meal_plan_meal.id}. Skipping.")
+                continue
+            
             # Validate with Pydantic
             validated_instructions = InstructionsSchema.model_validate(instructions_dict)
 
@@ -1040,6 +1058,12 @@ def send_bulk_prep_instructions(meal_plan_id):
         # Parse the instruction text as JSON
         try:
             instruction_data = json.loads(instruction.instruction_text)
+            
+            # Handle null from LLM
+            if instruction_data is None:
+                logger.error(f"Bulk prep instruction data is null for meal plan {meal_plan_id}")
+                return {"status": "error", "reason": "instruction_data_is_null"}
+            
             validated_prep = BulkPrepInstructions.model_validate(instruction_data)
         except Exception as e:
             # n8n traceback
@@ -1325,6 +1349,12 @@ def send_follow_up_instructions(meal_plan_id):
         instruction_text = instruction.instruction_text
         try:
             instruction_data = json.loads(instruction_text)
+            
+            # Handle null from LLM
+            if instruction_data is None:
+                logger.warning(f"Instruction data is null for meal plan {meal_plan_id}")
+                continue
+            
             daily_task = DailyTask.model_validate(instruction_data)
             
             # Format task details

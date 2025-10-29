@@ -7,6 +7,7 @@ from .models import (
     PostalCode,
     ChefPhoto,
     ChefDefaultBanner,
+    ChefVerificationDocument,
     ChefWaitlistConfig,
     ChefWaitlistSubscription,
     ChefAvailabilityState,
@@ -29,11 +30,14 @@ class ChefPostalCodeInline(admin.TabularInline):
     extra = 1  # Number of extra forms to display
 
 class ChefAdmin(admin.ModelAdmin):
-    list_display = ('user', 'experience', 'bio', 'is_on_break')
+    list_display = ('user', 'experience', 'is_verified', 'background_checked', 'insured', 'food_handlers_cert', 'is_on_break')
     search_fields = ('user__username', 'experience', 'bio')
-    list_filter = ('user__is_active', 'is_on_break')
+    list_filter = ('user__is_active', 'is_on_break', 'is_verified', 'background_checked', 'insured', 'food_handlers_cert')
     # Exclude the pgvector field from the editable form to avoid numpy truth-value issues
-    fields = ('user', 'experience', 'bio', 'is_on_break', 'profile_pic', 'banner_image')
+    fields = (
+        'user', 'experience', 'bio', 'is_on_break', 'profile_pic', 'banner_image',
+        'is_verified', 'background_checked', 'insured', 'insurance_expiry', 'food_handlers_cert'
+    )
     readonly_fields = ()
     inlines = [MealInline, ChefPostalCodeInline]
     
@@ -181,6 +185,22 @@ class ChefPhotoAdmin(admin.ModelAdmin):
 class ChefDefaultBannerAdmin(admin.ModelAdmin):
     list_display = ('id', 'created_at', 'updated_at')
     readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(ChefVerificationDocument)
+class ChefVerificationDocumentAdmin(admin.ModelAdmin):
+    list_display = ('chef', 'doc_type', 'is_approved', 'uploaded_at')
+    list_filter = ('doc_type', 'is_approved')
+    search_fields = ('chef__user__username',)
+    actions = ['approve_documents', 'reject_documents']
+
+    def approve_documents(self, request, queryset):
+        updated = queryset.update(is_approved=True, rejected_reason='')
+        self.message_user(request, f"Approved {updated} document(s)")
+
+    def reject_documents(self, request, queryset):
+        updated = queryset.update(is_approved=False)
+        self.message_user(request, f"Marked {updated} document(s) as rejected")
 
 
 @admin.register(ChefWaitlistConfig)

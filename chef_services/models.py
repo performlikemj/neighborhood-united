@@ -195,8 +195,11 @@ class ChefServiceOrder(models.Model):
             if not (self.tier.household_min <= self.household_size <= max_sz):
                 errors["household_size"] = "Household size is not within the selected tier's bounds."
 
-        # Schedule validation
-        if self.offering:
+        # Schedule validation - only required when transitioning to payment or confirmed status
+        # Allow draft orders without scheduling details so users can add to cart
+        requires_schedule = self.status in ("awaiting_payment", "confirmed", "completed")
+        
+        if self.offering and requires_schedule:
             if self.offering.service_type == "home_chef":
                 if not self.service_date or not self.service_start_time:
                     errors["service_date"] = "Service date and start time are required for home chef."

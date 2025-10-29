@@ -63,6 +63,11 @@ def find_youtube_cooking_videos(meal_name: str, meal_description: str, limit: in
         # Parse the structured output
         video_data = json.loads(video_response.output_text)
         
+        # Handle null from LLM
+        if video_data is None:
+            logger.warning(f"LLM returned null for YouTube videos for '{meal_name}'")
+            return {"videos": [], "search_query": f"{meal_name} recipe"}
+        
         # Validate the data against our schema
         validated_data = YouTubeVideoResults.model_validate(video_data)
         

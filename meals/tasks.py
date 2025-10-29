@@ -327,15 +327,29 @@ def process_chef_meal_price_adjustments():
     logger.info(f"Price adjustment task completed. Processed {total_processed} refunds totaling ${total_refunded}")
     return {'processed': total_processed, 'total_refunded': str(total_refunded)}
 
-@shared_task
+@shared_task(
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_kwargs={'max_retries': 3, 'countdown': 60},
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True
+)
 @handle_task_failure
-def generate_daily_user_summaries():
+def generate_daily_user_summaries(self):
     """
     Task to generate daily summaries for all active users.
     This task runs hourly to catch users in different time zones
     and generates summaries only when it's 3:00 AM in the user's local timezone.
+    
+    Includes automatic retry with exponential backoff for database connection failures.
+    Uses connection refresh every 100 users to prevent stale connections in large datasets.
     """
     logger = logging.getLogger(__name__)
+    
+    # Close any stale connections before starting
+    from utils.database_utils import ensure_fresh_connection
+    ensure_fresh_connection()
     
     # Get all users with confirmed emails
     active_users = CustomUser.objects.filter(
@@ -344,11 +358,19 @@ def generate_daily_user_summaries():
     
     eligible_count = 0
     summary_count = 0
+    processed_count = 0
     
-    logger.info(f"Checking {active_users.count()} users with confirmed emails for daily summary generation")
+    total_users = active_users.count()
+    logger.info(f"Checking {total_users} users with confirmed emails for daily summary generation")
     
-    # Process each user
+    # Process each user with periodic connection refresh for large datasets
     for user in active_users:
+        processed_count += 1
+        
+        # Refresh connection every 100 users to prevent timeout on large datasets
+        if processed_count % 100 == 0:
+            logger.debug(f"Progress: {processed_count}/{total_users} users processed, refreshing connection")
+            ensure_fresh_connection()
         try:
             # Get the user's timezone
             user_timezone = ZoneInfo(user.timezone if user.timezone else 'UTC')

@@ -1,4 +1,5 @@
 import json
+import re
 import traceback
 import uuid
 from django.shortcuts import render, redirect
@@ -43,9 +44,64 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 import time
 from decimal import Decimal # Add this import
-from typing import List
+from typing import List, TypeVar, Type
+from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger(__name__)
+
+# Control character regex for JSON sanitization
+CTRL_CHARS = re.compile(r'[\x00-\x1F]')
+
+T = TypeVar('T', bound=BaseModel)
+
+def safe_parse_groq_response(
+    raw: str, 
+    model_cls: Type[T],
+    fallback_on_error: bool = False
+) -> T:
+    """
+    Safely parse Groq structured output response.
+    
+    This utility handles common JSON parsing issues from LLM responses including:
+    - Control characters in the response
+    - Malformed JSON syntax
+    - Schema validation errors
+    
+    Args:
+        raw: Raw JSON string from Groq API
+        model_cls: Pydantic model class to validate against
+        fallback_on_error: If True, return default instance on parse error
+        
+    Returns:
+        Validated Pydantic model instance
+        
+    Raises:
+        ValidationError: If JSON is valid but doesn't match schema
+        JSONDecodeError: If JSON is malformed and fallback_on_error=False
+    """
+    try:
+        # Try direct parsing first
+        return model_cls.model_validate_json(raw)
+    except json.JSONDecodeError as e:
+        # Log the raw response for debugging
+        logger.error(f"JSON decode error in {model_cls.__name__}: {e}. Raw response (first 1000 chars): {raw[:1000]}")
+        
+        # Try sanitizing control characters
+        cleaned = CTRL_CHARS.sub(lambda m: '\\u%04x' % ord(m.group()), raw)
+        try:
+            return model_cls.model_validate_json(cleaned)
+        except (json.JSONDecodeError, ValidationError) as inner_e:
+            logger.error(f"Failed to parse even after sanitization: {inner_e}")
+            if fallback_on_error:
+                logger.warning(f"Using fallback for {model_cls.__name__}")
+                return model_cls.model_construct()
+            raise
+    except ValidationError as e:
+        logger.error(f"Validation error for {model_cls.__name__}: {e}")
+        if fallback_on_error:
+            logger.warning(f"Using fallback for {model_cls.__name__}")
+            return model_cls.model_construct()
+        raise
 
 def get_openai_client():
     """Get OpenAI client with lazy initialization."""

@@ -204,3 +204,136 @@ class ChefServicesOrdersCheckoutTests(TestCase):
         self.assertTrue(data.get('success'))
         self.assertTrue(data.get('already_paid'))
         self.assertEqual(data.get('status'), 'confirmed')
+
+    def test_create_draft_order_without_scheduling_details(self):
+        """Test that draft orders can be created without scheduling details (add to cart)"""
+        url = reverse('service_create_order')
+        payload = {
+            "offering_id": self.off.id,
+            "household_size": 2,
+            # Note: No service_date, service_start_time, or address_id
+        }
+        resp = self.client.post(url, payload, format='json')
+        self.assertEqual(resp.status_code, 201, resp.content)
+        data = resp.json()
+        self.assertEqual(data['status'], 'draft')
+        self.assertIsNone(data.get('service_date'))
+        self.assertIsNone(data.get('service_start_time'))
+
+    def test_checkout_fails_without_scheduling_details(self):
+        """Test that checkout fails when required scheduling details are missing"""
+        # Create draft order without scheduling details
+        order = ChefServiceOrder.objects.create(
+            customer=self.user,
+            chef=self.chef,
+            offering=self.off,
+            tier=self.tier,
+            household_size=2,
+            status='draft',
+        )
+
+        url = reverse('service_checkout_order', args=[order.id])
+        resp = self.client.post(url, {}, format='json')
+        self.assertEqual(resp.status_code, 400)
+        data = resp.json()
+        self.assertIn('validation_errors', data)
+        self.assertIn('service_date', data['validation_errors'])
+        self.assertIn('service_start_time', data['validation_errors'])
+        self.assertIn('address', data['validation_errors'])
+
+    def test_update_draft_order_with_scheduling_details(self):
+        """Test updating a draft order with scheduling details"""
+        # Create draft order without scheduling
+        order = ChefServiceOrder.objects.create(
+            customer=self.user,
+            chef=self.chef,
+            offering=self.off,
+            tier=self.tier,
+            household_size=2,
+            status='draft',
+        )
+
+        url = reverse('service_update_order', args=[order.id])
+        payload = {
+            "service_date": timezone.now().date().isoformat(),
+            "service_start_time": "14:00:00",
+            "address_id": self.addr.id,
+            "special_requests": "Please use the back entrance"
+        }
+        resp = self.client.patch(url, payload, format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        data = resp.json()
+        self.assertEqual(data['service_date'], timezone.now().date().isoformat())
+        self.assertEqual(data['service_start_time'], "14:00:00")
+        self.assertEqual(data['special_requests'], "Please use the back entrance")
+
+    def test_cannot_update_non_draft_order(self):
+        """Test that only draft orders can be updated"""
+        order = ChefServiceOrder.objects.create(
+            customer=self.user,
+            chef=self.chef,
+            offering=self.off,
+            tier=self.tier,
+            household_size=2,
+            service_date=timezone.now().date(),
+            service_start_time=timezone.now().time(),
+            status='confirmed',
+        )
+
+        url = reverse('service_update_order', args=[order.id])
+        payload = {
+            "service_date": (timezone.now().date() + timezone.timedelta(days=1)).isoformat(),
+        }
+        resp = self.client.patch(url, payload, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('Cannot update order with status', resp.json()['error'])
+
+    @patch('chef_services.payments.stripe.checkout.Session.create', return_value=SimpleNamespace(id='cs_789', url='https://session'))
+    def test_full_workflow_draft_to_checkout(self, _mock_create):
+        """Test complete workflow: create draft, update with details, checkout"""
+        # Step 1: Create draft order
+        create_url = reverse('service_create_order')
+        create_payload = {
+            "offering_id": self.off.id,
+            "household_size": 2,
+        }
+        create_resp = self.client.post(create_url, create_payload, format='json')
+        self.assertEqual(create_resp.status_code, 201, create_resp.content)
+        order_id = create_resp.json()['id']
+
+        # Step 2: Update with scheduling details
+        update_url = reverse('service_update_order', args=[order_id])
+        update_payload = {
+            "service_date": timezone.now().date().isoformat(),
+            "service_start_time": "14:00:00",
+            "address_id": self.addr.id,
+        }
+        update_resp = self.client.patch(update_url, update_payload, format='json')
+        self.assertEqual(update_resp.status_code, 200, update_resp.content)
+
+        # Step 3: Checkout
+        checkout_url = reverse('service_checkout_order', args=[order_id])
+        checkout_resp = self.client.post(checkout_url, {}, format='json')
+        self.assertEqual(checkout_resp.status_code, 200, checkout_resp.content)
+        data = checkout_resp.json()
+        self.assertTrue(data.get('success'))
+        self.assertEqual(data.get('session_id'), 'cs_789')
+
+    def test_customer_can_list_their_orders(self):
+        """Test that customers can list their own service orders"""
+        order = ChefServiceOrder.objects.create(
+            customer=self.user,
+            chef=self.chef,
+            offering=self.off,
+            tier=self.tier,
+            household_size=2,
+            status='draft',
+        )
+
+        url = reverse('service_my_customer_orders')
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200, resp.content)
+        data = resp.json()
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]['id'], order.id)
+        self.assertEqual(data[0]['status'], 'draft')

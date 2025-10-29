@@ -85,16 +85,18 @@ export default function MapPanel({ open, onClose, countryCode, postalCodes = [],
       try{
         const osmtogeojson = (await import('osmtogeojson')).default
         const q = `
-          [out:json][timeout:25];
-          area["ISO3166-1"="${cc.toUpperCase()}"]->.searchArea;
-          (
-            relation["boundary"~"postal_code|administrative"]["postal_code"="${pc}"](area.searchArea);
-            relation["boundary"~"postal_code|administrative"]["addr:postcode"="${pc}"](area.searchArea);
-            way["boundary"~"postal_code|administrative"]["postal_code"="${pc}"](area.searchArea);
-            way["boundary"~"postal_code|administrative"]["addr:postcode"="${pc}"](area.searchArea);
-          );
-          out body; >; out skel qt;`
-        const r = await fetch('https://overpass-api.de/api/interpreter', { method:'POST', body: q, headers:{ 'Content-Type':'text/plain' } })
+[out:json][timeout:25];
+area["ISO3166-1"="${cc.toUpperCase()}"]->.searchArea;
+(
+  relation["boundary"~"postal_code|administrative"]["postal_code"="${pc}"](area.searchArea);
+  relation["boundary"~"postal_code|administrative"]["addr:postcode"="${pc}"](area.searchArea);
+  way["boundary"~"postal_code|administrative"]["postal_code"="${pc}"](area.searchArea);
+  way["boundary"~"postal_code|administrative"]["addr:postcode"="${pc}"](area.searchArea);
+);
+out body;
+>;
+out skel qt;`
+        const r = await fetch('https://overpass-api.de/api/interpreter', { method:'POST', body: q.trim(), headers:{ 'Content-Type':'text/plain' } })
         if (!r.ok) return null
         const data = await r.json()
         const gj = osmtogeojson(data)
@@ -224,5 +226,4 @@ export default function MapPanel({ open, onClose, countryCode, postalCodes = [],
     </>
   )
 }
-
 

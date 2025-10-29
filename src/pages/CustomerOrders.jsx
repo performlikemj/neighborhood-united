@@ -5,6 +5,7 @@ import { OrdersTab } from './MealPlans.jsx'
 import { getStoredServiceOrderIds, rememberServiceOrderId, removeServiceOrderId, replaceServiceOrderIds, SERVICE_ORDER_STORAGE_KEY } from '../utils/serviceOrdersStorage.js'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import '../components/ConfirmDialog.css'
+import { useCart } from '../context/CartContext.jsx'
 
 const SERVICE_STATUS_LABELS = {
   draft: 'Draft',
@@ -264,6 +265,7 @@ function getChefProfilePath(order, profile, fallbackId){
 }
 
 export default function CustomerOrders(){
+  const { loadExistingOrder, openCart } = useCart()
   const [tab, setTab] = useState('services')
   const [serviceOrders, setServiceOrders] = useState([])
   const [serviceLoading, setServiceLoading] = useState(true)
@@ -286,8 +288,24 @@ export default function CustomerOrders(){
     setServiceLoading(true)
     setServiceError(null)
     try{
+      const resp = await api.get('/services/my/customer-orders/', { params: { page_size: 100 } })
+      let orders = []
+      const payload = resp?.data
+      if (Array.isArray(payload)){
+        orders = payload
+      }else if (payload && typeof payload === 'object'){
+        if (Array.isArray(payload.results)) orders = payload.results
+        else if (Array.isArray(payload.data?.results)) orders = payload.data.results
+      }
+      if (orders.length > 0){
+        orders.forEach(order => {
+          if (order?.id != null) rememberServiceOrderId(order.id)
+        })
+        setServiceOrders(orders)
+        return
+      }
+      // Fallback to stored draft ids if the list is empty
       let ids = getStoredServiceOrderIds()
-      // Fallback: try to hydrate from lastServiceOrderId if storage is empty
       if (ids.length === 0){
         try{
           const last = localStorage.getItem('lastServiceOrderId')
@@ -303,8 +321,8 @@ export default function CustomerOrders(){
       }
       const results = await Promise.all(ids.map(async id => {
         try{
-          const resp = await api.get(`/services/orders/${id}/`)
-          const order = resp?.data
+          const respById = await api.get(`/services/orders/${id}/`)
+          const order = respById?.data
           if (order && order.id != null){
             rememberServiceOrderId(order.id)
             return order
@@ -316,8 +334,7 @@ export default function CustomerOrders(){
         }
         return null
       }))
-      const cleaned = results.filter(Boolean)
-      setServiceOrders(cleaned)
+      setServiceOrders(results.filter(Boolean))
     }catch{
       setServiceOrders([])
       setServiceError('Unable to load service orders right now.')
@@ -427,28 +444,39 @@ export default function CustomerOrders(){
 
   const startServiceCheckout = async (order)=>{
     try{
-      setVerifyingServiceId(order.id)
-      try{ localStorage.setItem('lastServiceOrderId', String(order.id)) }catch{}
-      const resp = await api.post(`/services/orders/${order.id}/checkout`, {})
-      const url = resp?.data?.session_url
-      const sessionId = resp?.data?.session_id
-      if (sessionId){ try{ localStorage.setItem('lastServiceCheckoutSessionId', String(sessionId)) }catch{} }
-      if (url){
-        window.location.href = url
+      console.log('[CustomerOrders] startServiceCheckout called', { orderId: order?.id, status: order?.status })
+      
+      // Get chef info for this order
+      const chef = chefDetails[order.chef] || {}
+      console.log('[CustomerOrders] Chef details', { chefId: order.chef, chef, chefDetails })
+      
+      const chefInfo = {
+        username: chef.username || chef.display_name || 'Chef',
+        id: order.chef
+      }
+      console.log('[CustomerOrders] Constructed chefInfo', chefInfo)
+
+      // Load order into cart
+      console.log('[CustomerOrders] About to call loadExistingOrder', { order, chefInfo })
+      const loaded = loadExistingOrder(order, chefInfo)
+      console.log('[CustomerOrders] loadExistingOrder returned', loaded)
+      
+      if (!loaded) {
+        // User cancelled the confirmation to clear cart
+        console.log('[CustomerOrders] User cancelled cart clear confirmation')
         return
       }
-      throw new Error('Missing session_url')
+
+      // Open cart sidebar for validation and checkout
+      console.log('[CustomerOrders] Opening cart sidebar')
+      openCart()
+      
+      // Scroll to top so user can see the cart
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+      console.log('[CustomerOrders] Checkout flow complete')
     }catch(e){
-      setVerifyingServiceId(null)
-      console.error('[CustomerOrders] startServiceCheckout failed', { id: order?.id, status: e?.response?.status, data: e?.response?.data, message: e?.message })
-      let message = 'We couldn\'t start checkout. Please try again shortly or contact support.'
-      if (e?.response){
-        try{
-          message = buildErrorMessage(e.response.data, message, e.response.status)
-        }catch{}
-      }
-      notify(message, 'error')
-      try{ localStorage.removeItem('lastServiceOrderId') }catch{}
+      console.error('[CustomerOrders] Failed to load order into cart', { id: order?.id, error: e })
+      notify('Unable to load order. Please try again.', 'error')
     }
   }
 
@@ -547,7 +575,10 @@ export default function CustomerOrders(){
               </div>
               {actionable && (
                 <div style={{marginTop:'.7rem', display:'flex', gap:'.5rem'}}>
-                  <button className="btn btn-primary btn-sm" onClick={()=> startServiceCheckout(order)} disabled={verifying}>
+                  <button className="btn btn-primary btn-sm" onClick={()=> {
+                    console.log('[CustomerOrders] Button clicked for order', order?.id)
+                    startServiceCheckout(order)
+                  }} disabled={verifying}>
                     {verifying ? 'Opening checkout…' : serviceActionLabel(status)}
                   </button>
                   <button className="btn btn-outline btn-sm" onClick={()=> cancelServiceOrder(order)} disabled={verifying}>Cancel order</button>

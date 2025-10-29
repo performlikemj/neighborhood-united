@@ -8,6 +8,7 @@ import Listbox from '../components/Listbox.jsx'
 import { EventSourcePolyfill } from 'event-source-polyfill'
 import { useAuth } from '../context/AuthContext.jsx'
 import { shouldHighlightGenerateButton } from '../utils/planAttention.mjs'
+import { stripPromptLeak, scrubPromptLeaks } from '../utils/promptSanitizer.mjs'
 
 function startOfWeek(d){
   const x = new Date(d); const day = x.getDay() // 0 Sun
@@ -209,26 +210,27 @@ export default function MealPlans(){
 
   const applyPlanDetailPayload = (detail)=>{
     if (!detail) return
-    const { meal_plan_meals, meals, ...rest } = detail
+    const sanitized = scrubPromptLeaks(detail)
+    const { meal_plan_meals, meals, ...rest } = sanitized
     const nextMeals = Array.isArray(meals) ? meals : (Array.isArray(meal_plan_meals) ? meal_plan_meals : [])
     setPlan(prev => ({ ...(prev || {}), ...rest, meals: nextMeals }))
-    const planId = detail.id || rest.id || null
+    const planId = sanitized.id || rest.id || null
     if (planId) setMealPlanId(planId)
-    if (typeof detail.is_approved !== 'undefined'){
-      setIsApproved(detail.is_approved === null ? null : Boolean(detail.is_approved))
+    if (typeof sanitized.is_approved !== 'undefined'){
+      setIsApproved(sanitized.is_approved === null ? null : Boolean(sanitized.is_approved))
     }
-    if (detail.meal_prep_preference){ setPrepPreference(detail.meal_prep_preference) }
-    if ('instacart_url' in detail){
-      setInstacartUrl(detail.instacart_url || null)
+    if (sanitized.meal_prep_preference){ setPrepPreference(sanitized.meal_prep_preference) }
+    if ('instacart_url' in sanitized){
+      setInstacartUrl(sanitized.instacart_url || null)
     }
-    if ('instacart_error' in detail){ setInstacartError(detail.instacart_error || null) }
-    if (planId && (('instacart_url' in detail) || ('instacart_error' in detail))){
+    if ('instacart_error' in sanitized){ setInstacartError(sanitized.instacart_error || null) }
+    if (planId && (('instacart_url' in sanitized) || ('instacart_error' in sanitized))){
       setInstacartTriedForPlan(planId)
     }
-    if ('instacart_has_chef_meals' in detail){ setInstacartHasChefMeals(Boolean(detail.instacart_has_chef_meals)) }
-    if ('has_pending_orders' in detail){ setHasPendingOrders(Boolean(detail.has_pending_orders)) }
-    if ('expected_slots' in detail && typeof detail.expected_slots === 'number' && detail.expected_slots > 0){
-      expectedSlotsRef.current = detail.expected_slots
+    if ('instacart_has_chef_meals' in sanitized){ setInstacartHasChefMeals(Boolean(sanitized.instacart_has_chef_meals)) }
+    if ('has_pending_orders' in sanitized){ setHasPendingOrders(Boolean(sanitized.has_pending_orders)) }
+    if ('expected_slots' in sanitized && typeof sanitized.expected_slots === 'number' && sanitized.expected_slots > 0){
+      expectedSlotsRef.current = sanitized.expected_slots
     }
   }
 
@@ -279,25 +281,27 @@ export default function MealPlans(){
     setInstacartHasChefMeals(false)
     setInstacartTriedForPlan(null)
 
-    if (initialPlan){
-      const { meal_plan_meals: _initialPlanMeals, meals: _initialMeals, ...rest } = initialPlan
+    const sanitizedInitialPlan = initialPlan ? scrubPromptLeaks(initialPlan) : null
+
+    if (sanitizedInitialPlan){
+      const { meal_plan_meals: _initialPlanMeals, meals: _initialMeals, ...rest } = sanitizedInitialPlan
       const basePlan = { ...rest, meals: [] }
       setPlan(basePlan)
-      if (typeof initialPlan.is_approved !== 'undefined'){
-        setIsApproved(initialPlan.is_approved === null ? null : Boolean(initialPlan.is_approved))
+      if (typeof sanitizedInitialPlan.is_approved !== 'undefined'){
+        setIsApproved(sanitizedInitialPlan.is_approved === null ? null : Boolean(sanitizedInitialPlan.is_approved))
       }
-      if (initialPlan.meal_prep_preference){ setPrepPreference(initialPlan.meal_prep_preference) }
-      if ('instacart_url' in initialPlan){
-        setInstacartUrl(initialPlan.instacart_url || null)
+      if (sanitizedInitialPlan.meal_prep_preference){ setPrepPreference(sanitizedInitialPlan.meal_prep_preference) }
+      if ('instacart_url' in sanitizedInitialPlan){
+        setInstacartUrl(sanitizedInitialPlan.instacart_url || null)
       }
-      if ('instacart_error' in initialPlan){ setInstacartError(initialPlan.instacart_error || null) }
-      if (('instacart_url' in initialPlan) || ('instacart_error' in initialPlan)){
+      if ('instacart_error' in sanitizedInitialPlan){ setInstacartError(sanitizedInitialPlan.instacart_error || null) }
+      if (('instacart_url' in sanitizedInitialPlan) || ('instacart_error' in sanitizedInitialPlan)){
         setInstacartTriedForPlan(planId)
       }
-      if ('instacart_has_chef_meals' in initialPlan){ setInstacartHasChefMeals(Boolean(initialPlan.instacart_has_chef_meals)) }
-      if ('has_pending_orders' in initialPlan){ setHasPendingOrders(Boolean(initialPlan.has_pending_orders)) }
-      if ('expected_slots' in initialPlan && typeof initialPlan.expected_slots === 'number' && initialPlan.expected_slots > 0){
-        expectedSlotsRef.current = initialPlan.expected_slots
+      if ('instacart_has_chef_meals' in sanitizedInitialPlan){ setInstacartHasChefMeals(Boolean(sanitizedInitialPlan.instacart_has_chef_meals)) }
+      if ('has_pending_orders' in sanitizedInitialPlan){ setHasPendingOrders(Boolean(sanitizedInitialPlan.has_pending_orders)) }
+      if ('expected_slots' in sanitizedInitialPlan && typeof sanitizedInitialPlan.expected_slots === 'number' && sanitizedInitialPlan.expected_slots > 0){
+        expectedSlotsRef.current = sanitizedInitialPlan.expected_slots
       }
     } else {
       setPlan({ id: planId, week_start_date: fmtYMD(weekStart), meals: [] })
@@ -342,15 +346,16 @@ export default function MealPlans(){
       if (!incoming) return
       const payload = incoming.meal_plan_meal || incoming
       if (!payload) return
-      const mealId = payload.meal_plan_meal_id || payload.id
+      const sanitizedPayload = scrubPromptLeaks(payload)
+      const mealId = sanitizedPayload.meal_plan_meal_id || sanitizedPayload.id
       setPlan(prev => {
         const current = prev || { id: planId, week_start_date: fmtYMD(weekStart), meals: [] }
         const existing = Array.isArray(current.meals) ? [...current.meals] : (Array.isArray(current.meal_plan_meals) ? [...current.meal_plan_meals] : [])
         const idx = mealId != null ? existing.findIndex(x => (x.meal_plan_meal_id || x.id) === mealId) : -1
         if (idx >= 0){
-          existing[idx] = { ...existing[idx], ...payload }
+          existing[idx] = { ...existing[idx], ...sanitizedPayload }
         } else {
-          existing.push(payload)
+          existing.push(sanitizedPayload)
         }
         if (expectedSlotsRef.current && expectedSlotsRef.current > 0){
           try{
@@ -364,26 +369,27 @@ export default function MealPlans(){
 
     const applySummary = (summary)=>{
       if (!summary || planStreamIdRef.current !== planId) return
+      const sanitizedSummary = scrubPromptLeaks(summary)
       planStreamHasSummaryRef.current = true
-      const { meal_plan_meals: _summaryPlanMeals, meals: _summaryMeals, ...rest } = summary
+      const { meal_plan_meals: _summaryPlanMeals, meals: _summaryMeals, ...rest } = sanitizedSummary
       setPlan(prev => ({ ...(prev || {}), ...rest }))
-      const idFromSummary = summary.id || planId
+      const idFromSummary = sanitizedSummary.id || planId
       if (idFromSummary) setMealPlanId(idFromSummary)
-      if (typeof summary.is_approved !== 'undefined'){
-        setIsApproved(summary.is_approved === null ? null : Boolean(summary.is_approved))
+      if (typeof sanitizedSummary.is_approved !== 'undefined'){
+        setIsApproved(sanitizedSummary.is_approved === null ? null : Boolean(sanitizedSummary.is_approved))
       }
-      if (summary.meal_prep_preference){ setPrepPreference(summary.meal_prep_preference) }
-      if ('instacart_url' in summary){
-        setInstacartUrl(summary.instacart_url || null)
+      if (sanitizedSummary.meal_prep_preference){ setPrepPreference(sanitizedSummary.meal_prep_preference) }
+      if ('instacart_url' in sanitizedSummary){
+        setInstacartUrl(sanitizedSummary.instacart_url || null)
       }
-      if ('instacart_error' in summary){ setInstacartError(summary.instacart_error || null) }
-      if (idFromSummary && (('instacart_url' in summary) || ('instacart_error' in summary))){
+      if ('instacart_error' in sanitizedSummary){ setInstacartError(sanitizedSummary.instacart_error || null) }
+      if (idFromSummary && (('instacart_url' in sanitizedSummary) || ('instacart_error' in sanitizedSummary))){
         setInstacartTriedForPlan(idFromSummary)
       }
-      if ('instacart_has_chef_meals' in summary){ setInstacartHasChefMeals(Boolean(summary.instacart_has_chef_meals)) }
-      if ('has_pending_orders' in summary){ setHasPendingOrders(Boolean(summary.has_pending_orders)) }
-      if ('expected_slots' in summary && typeof summary.expected_slots === 'number' && summary.expected_slots > 0){
-        expectedSlotsRef.current = summary.expected_slots
+      if ('instacart_has_chef_meals' in sanitizedSummary){ setInstacartHasChefMeals(Boolean(sanitizedSummary.instacart_has_chef_meals)) }
+      if ('has_pending_orders' in sanitizedSummary){ setHasPendingOrders(Boolean(sanitizedSummary.has_pending_orders)) }
+      if ('expected_slots' in sanitizedSummary && typeof sanitizedSummary.expected_slots === 'number' && sanitizedSummary.expected_slots > 0){
+        expectedSlotsRef.current = sanitizedSummary.expected_slots
       }
       setPlanStreaming(true)
       setLoading(false)
@@ -467,28 +473,29 @@ export default function MealPlans(){
         normalized = data
       }
       if (normalized){
-        const id = (normalized||{}).id
+        const sanitizedPlan = scrubPromptLeaks(normalized)
+        const id = (sanitizedPlan||{}).id
         try{
-          const mealsCount = Array.isArray(normalized.meals) ? normalized.meals.length : (Array.isArray(normalized.meal_plan_meals) ? normalized.meal_plan_meals.length : 0)
-          log('plan', { id, week: normalized.week_start_date, mealsCount })
+          const mealsCount = Array.isArray(sanitizedPlan.meals) ? sanitizedPlan.meals.length : (Array.isArray(sanitizedPlan.meal_plan_meals) ? sanitizedPlan.meal_plan_meals.length : 0)
+          log('plan', { id, week: sanitizedPlan.week_start_date, mealsCount })
         }catch{}
 
         const shouldStream = Boolean(id) && !streamingRef.current
         if (shouldStream){
           if (!(planStreamingRef.current && planStreamIdRef.current === id)){
-            startPlanStream(id, { initialPlan: normalized, silent })
+            startPlanStream(id, { initialPlan: sanitizedPlan, silent })
           } else if (!silent) {
             setLoading(false)
           }
         } else {
-          setPlan(normalized)
+          setPlan(sanitizedPlan)
           setMealPlanId(id||null)
-          if (typeof normalized.is_approved !== 'undefined'){
-            setIsApproved(normalized.is_approved === null ? null : Boolean(normalized.is_approved))
+          if (typeof sanitizedPlan.is_approved !== 'undefined'){
+            setIsApproved(sanitizedPlan.is_approved === null ? null : Boolean(sanitizedPlan.is_approved))
           } else {
             setIsApproved(null)
           }
-          if (normalized.meal_prep_preference){ setPrepPreference(normalized.meal_prep_preference) }
+          if (sanitizedPlan.meal_prep_preference){ setPrepPreference(sanitizedPlan.meal_prep_preference) }
           if (!silent) setLoading(false)
         }
       } else {
@@ -745,10 +752,11 @@ export default function MealPlans(){
         setPlan(prev => {
           const current = prev || { id: mealPlanId, week_start_date: fmtYMD(weekStart), meals: [] }
           const list = Array.isArray(current.meals) ? [...current.meals] : (current.meal_plan_meals ? [...current.meal_plan_meals] : [])
-          const mid = m.meal_plan_meal_id || m.id
+          const sanitizedMeal = scrubPromptLeaks(m)
+          const mid = sanitizedMeal.meal_plan_meal_id || sanitizedMeal.id
           const idx = list.findIndex(x => (x.meal_plan_meal_id||x.id) === mid)
-          if (idx >= 0) list[idx] = { ...list[idx], ...m }
-          else list.push(m)
+          if (idx >= 0) list[idx] = { ...list[idx], ...sanitizedMeal }
+          else list.push(sanitizedMeal)
           try{
             const pct = Math.min(100, Math.round((list.length/expectedSlotsRef.current)*100))
             if (!hasRealProgressRef.current){ setProgressPct(prev => Math.max(prev, pct)) }
@@ -766,10 +774,11 @@ export default function MealPlans(){
         setPlan(prev => {
           const current = prev || { id: mealPlanId, week_start_date: fmtYMD(weekStart), meals: [] }
           const list = Array.isArray(current.meals) ? [...current.meals] : (current.meal_plan_meals ? [...current.meal_plan_meals] : [])
-          const mid = m.meal_plan_meal_id || m.id
+          const sanitizedMeal = scrubPromptLeaks(m)
+          const mid = sanitizedMeal.meal_plan_meal_id || sanitizedMeal.id
           const idx = list.findIndex(x => (x.meal_plan_meal_id||x.id) === mid)
-          if (idx >= 0) list[idx] = { ...list[idx], ...m }
-          else list.push(m)
+          if (idx >= 0) list[idx] = { ...list[idx], ...sanitizedMeal }
+          else list.push(sanitizedMeal)
           try{
             const pct = Math.min(100, Math.round((list.length/expectedSlotsRef.current)*100))
             if (!hasRealProgressRef.current){ setProgressPct(prev => Math.max(prev, pct)) }
@@ -788,14 +797,14 @@ export default function MealPlans(){
           setProgressPct(prev => Math.max(prev, msg.pct))
         }
         if (msg && msg.type === 'meal_added' && msg.meal_plan_meal){
-          const m = msg.meal_plan_meal
+          const sanitized = scrubPromptLeaks(msg.meal_plan_meal)
           setPlan(prev => {
             const current = prev || { id: mealPlanId, week_start_date: fmtYMD(weekStart), meals: [] }
             const list = Array.isArray(current.meals) ? [...current.meals] : (current.meal_plan_meals ? [...current.meal_plan_meals] : [])
-            const mid = m.meal_plan_meal_id || m.id
+            const mid = sanitized.meal_plan_meal_id || sanitized.id
             const idx = list.findIndex(x => (x.meal_plan_meal_id||x.id) === mid)
-            if (idx >= 0) list[idx] = { ...list[idx], ...m }
-            else list.push(m)
+            if (idx >= 0) list[idx] = { ...list[idx], ...sanitized }
+            else list.push(sanitized)
             try{
               const pct = Math.min(100, Math.round((list.length/expectedSlotsRef.current)*100))
               if (!hasRealProgressRef.current){ setProgressPct(prev => Math.max(prev, pct)) }
@@ -1701,11 +1710,13 @@ function Overview({ plan, weekStart, chefMeals, isApproved, mealPlanId, onChange
         <tbody>
           {combinedRows.map((row, idx) => {
             if (row.kind === 'meal'){
-              const m = row.m
+            const m = row.m
             const day = m.__day
             const type = m.type || m.meal_type
-            const title = m.name || m.meal?.name
-            const desc = m.meal?.description || m.description || ''
+            const rawTitle = m.name || m.meal?.name || ''
+            const title = stripPromptLeak(rawTitle)
+            const rawDesc = m.meal?.description || m.description || ''
+            const desc = stripPromptLeak(rawDesc)
               const id = m.meal_plan_meal_id || m.id || m.meal?.id || `${day}-${idx}`
             const replacing = replacingId === (m.meal_plan_meal_id || m.id)
             const isChefMeal = Boolean(

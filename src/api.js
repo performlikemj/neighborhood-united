@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { jwtDecode } from 'jwt-decode'
+import { scrubPromptLeaks } from './utils/promptSanitizer.mjs'
 
 // Base URL
 const isDev = import.meta.env.DEV
@@ -133,7 +134,14 @@ api.interceptors.request.use(async (config) => {
 })
 
 api.interceptors.response.use(
-  (res)=>res,
+  (res)=>{
+    try{
+      if (res && Object.prototype.hasOwnProperty.call(res, 'data')){
+        res.data = scrubPromptLeaks(res.data)
+      }
+    }catch{}
+    return res
+  },
   async (error) => {
     let status = error?.response?.status
     try{

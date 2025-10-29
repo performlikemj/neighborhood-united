@@ -13,7 +13,11 @@ function load(path){
 
 test('CustomerOrders fetches service orders and reuses meal order tab', () => {
   const source = load(customerOrdersPath)
-  assert.ok(source.includes("api.get(`/services/orders/${"), 'Expected CustomerOrders to fetch individual service orders.')
+  assert.match(
+    source,
+    /api\.get\('\/services\/my\/customer-orders\/'/,
+    'Expected CustomerOrders to load service orders from /services/my/customer-orders/.'
+  )
   assert.match(source, /OrdersTab/, 'Expected CustomerOrders to reuse the OrdersTab component for meal orders.')
 })
 

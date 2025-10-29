@@ -3,10 +3,12 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api, buildErrorMessage } from '../api'
 import { rememberServiceOrderId } from '../utils/serviceOrdersStorage.js'
 import { useAuth } from '../context/AuthContext.jsx'
+import { useCart } from '../context/CartContext.jsx'
 import { countryNameFromCode, codeFromCountryName } from '../utils/geo.js'
 import MapPanel from '../components/MapPanel.jsx'
 import Carousel from '../components/Carousel.jsx'
 import MultiCarousel from '../components/MultiCarousel.jsx'
+import QuoteRequestModal from '../components/QuoteRequestModal.jsx'
 
 function renderAreas(areas){
   if (!Array.isArray(areas) || areas.length === 0) return null
@@ -88,6 +90,7 @@ function getDefaultServiceTime(tier){
 export default function PublicChef(){
   const { username } = useParams()
   const { user: authUser, loading: authLoading } = useAuth()
+  const { addToCart, openCart } = useCart()
   const [loading, setLoading] = useState(true)
   const [chef, setChef] = useState(null)
   const [events, setEvents] = useState([])
@@ -115,6 +118,8 @@ export default function PublicChef(){
   // Gallery infinite scroll
   const [visiblePhotos, setVisiblePhotos] = useState(12)
   const galleryRef = useRef(null)
+  // Quote request modal
+  const [quoteModalOpen, setQuoteModalOpen] = useState(false)
   const navigate = useNavigate()
   const chefSlug = useMemo(()=>{
     return String(chef?.user?.username || username || '').trim()
@@ -300,6 +305,125 @@ export default function PublicChef(){
     }
   }
 
+  // Cart functions
+  async function addServiceToCart(offering, tier) {
+    if (!authUser) {
+      if (typeof window !== 'undefined') {
+        const next = `${window.location.pathname}${window.location.search}`
+        window.location.href = `/login?next=${encodeURIComponent(next)}`
+      }
+      return
+    }
+
+    const min = Number(tier?.household_min)
+    const max = Number(tier?.household_max)
+    let defaultSize = Number.isFinite(min) && min > 0 ? min : 1
+    if (Number.isFinite(max) && max > 0 && defaultSize > max) defaultSize = max
+
+    const priceCents = tier.desired_unit_amount_cents ?? tier.unit_amount_cents ?? tier.price_cents ?? 0
+    const serviceType = String(offering?.service_type || '').toLowerCase()
+    const tierRecurring = Boolean(tier?.is_recurring || tier?.recurrence_interval)
+    const requiresDateTime = serviceType === 'home_chef' || (serviceType === 'weekly_prep' && !tierRecurring)
+    const needsScheduleNotes = serviceType === 'weekly_prep' && tierRecurring
+    
+    const cartItem = {
+      type: 'service_tier',
+      offering_id: offering.id,
+      tier_id: tier.id,
+      offeringTitle: offering.title || 'Service',
+      tierLabel: tier.display_label || tier.name || 'Tier',
+      householdSize: defaultSize,
+      price: priceCents,
+      serviceDate: '',
+      serviceStartTime: getDefaultServiceTime(tier),
+      durationMinutes: Number(tier?.duration_minutes) > 0 ? Number(tier.duration_minutes) : '',
+      specialRequests: '',
+      scheduleNotes: '',
+      serviceType,
+      requiresDateTime,
+      needsScheduleNotes,
+      tierRecurring,
+      orderStatus: 'draft',
+      addressId: authUser?.address?.id ?? authUser?.address_id ?? null
+    }
+
+    try{
+      const success = await addToCart(cartItem, { username: chef?.user?.username, id: chef?.id })
+      if (success) {
+        openCart()
+        if (typeof window !== 'undefined') {
+          try {
+            window.dispatchEvent(new CustomEvent('global-toast', {
+              detail: { text: 'Added to cart!', tone: 'success' }
+            }))
+          } catch {}
+        }
+      }
+    }catch(err){
+      let message = 'Unable to add this service to your cart.'
+      if (err?.response){
+        message = buildErrorMessage(err.response.data, message, err.response.status)
+      }else if (err?.message){
+        message = err.message
+      }
+      if (typeof window !== 'undefined') {
+        try {
+          window.dispatchEvent(new CustomEvent('global-toast', {
+            detail: { text: message, tone: 'error' }
+          }))
+        } catch {}
+      }
+    }
+  }
+
+  async function addMealToCart(ev) {
+    if (!authUser) {
+      if (typeof window !== 'undefined') {
+        const next = `${window.location.pathname}${window.location.search}`
+        window.location.href = `/login?next=${encodeURIComponent(next)}`
+      }
+      return
+    }
+
+    const cartItem = {
+      type: 'meal_event',
+      event_id: ev.id,
+      mealName: ev.meal?.name || ev.meal_name || 'Meal',
+      eventDate: ev.event_date,
+      eventTime: ev.event_time,
+      price: 0, // Price would come from event if available
+      quantity: 1
+    }
+
+    try{
+      const success = await addToCart(cartItem, { username: chef?.user?.username, id: chef?.id })
+      if (success) {
+        openCart()
+        if (typeof window !== 'undefined') {
+          try {
+            window.dispatchEvent(new CustomEvent('global-toast', {
+              detail: { text: 'Meal added to cart!', tone: 'success' }
+            }))
+          } catch {}
+        }
+      }
+    }catch(err){
+      let message = 'Unable to add this meal to your cart.'
+      if (err?.response){
+        message = buildErrorMessage(err.response.data, message, err.response.status)
+      }else if (err?.message){
+        message = err.message
+      }
+      if (typeof window !== 'undefined') {
+        try {
+          window.dispatchEvent(new CustomEvent('global-toast', {
+            detail: { text: message, tone: 'error' }
+          }))
+        } catch {}
+      }
+    }
+  }
+
   function toEventsArray(payload){
     try{
       if (!payload) return []
@@ -396,6 +520,7 @@ export default function PublicChef(){
           const cid = r2?.data?.chef_id || r2?.data?.id
           if (cid){
             const r3 = await api.get(`/chefs/api/public/${cid}/`, { skipUserId: true })
+            try{ console.log('[PublicChef] serializer /chefs/', r3?.data) }catch{}
             if (!mounted) return
             setChef(r3.data || null)
             return r3.data
@@ -405,6 +530,7 @@ export default function PublicChef(){
         // Numeric usernames map directly to chef id
         try{
           const r4 = await api.get(`/chefs/api/public/${username}/`, { skipUserId: true })
+          try{ console.log('[PublicChef] serializer /chefs/', r4?.data) }catch{}
           if (!mounted) return
           setChef(r4.data || null)
           return r4.data
@@ -834,6 +960,39 @@ export default function PublicChef(){
                   <span>{chef.review_summary}</span>
                 </div>
               )}
+
+              {/* Trust Badges */}
+              <div className="trust-badges">
+                {/* Platform Verified - shows if email verified and profile meets basic requirements */}
+                {(chef?.user?.is_email_verified || chef?.is_verified || chef?.user?.is_active) && (
+                  <div className="trust-badge">
+                    <i className="fa-solid fa-shield-check"></i>
+                    <span>Platform Verified</span>
+                  </div>
+                )}
+                
+                {/* Background Checked - shows if chef has passed background verification */}
+                {chef?.background_checked && (
+                  <div className="trust-badge verified">
+                    <i className="fa-solid fa-certificate"></i>
+                    <span>Background Checked</span>
+                  </div>
+                )}
+                
+                {/* Insured & Licensed - shows if chef has valid insurance/licenses */}
+                {chef?.insured && (
+                  <div className="trust-badge verified">
+                    <i className="fa-solid fa-shield-halved"></i>
+                    <span>Insured & Licensed</span>
+                  </div>
+                )}
+                
+                {/* Secure Payments - always shows since all payments go through Stripe */}
+                <div className="trust-badge">
+                  <i className="fa-solid fa-lock"></i>
+                  <span>Secure Payments</span>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -913,7 +1072,28 @@ export default function PublicChef(){
                   </div>
                 ) : (
                   upcomingEvents.length===0 ? (
-                    <div className="muted">No upcoming events posted.</div>
+                    <div className="empty-state-professional">
+                      <div className="icon">📅</div>
+                      <h3>Menu Coming Soon</h3>
+                      <p>
+                        This chef is preparing new meal offerings. Check back soon or request a quote 
+                        for custom meal preparation services.
+                      </p>
+                      <button 
+                        className="btn btn-primary btn-lg" 
+                        onClick={() => {
+                          if (!authUser) {
+                            const next = `${window.location.pathname}${window.location.search}`
+                            window.location.href = `/login?next=${encodeURIComponent(next)}`
+                            return
+                          }
+                          setQuoteModalOpen(true)
+                        }}
+                      >
+                        <i className="fa-solid fa-file-invoice" style={{marginRight:'.5rem'}}></i>
+                        Request Custom Meals
+                      </button>
+                    </div>
                   ) : (
                     <div className="grid">
                       {upcomingEvents.map(ev => (
@@ -931,11 +1111,20 @@ export default function PublicChef(){
                                 const q = `Can you tell me more about ${mealName}?`
                                 const url = `/chat?chef=${encodeURIComponent(chef?.user?.username||'')}&topic=${encodeURIComponent(ev.meal?.name||'Meal')}&meal_id=${encodeURIComponent(mealId)}&q=${encodeURIComponent(q)}`
                                 window.open(url,'_self')
-                              }}>Ask about this meal</button>
+                              }}>
+                                <i className="fa-solid fa-message" style={{marginRight:'.35rem'}}></i>
+                                Ask Chef
+                              </button>
                               {authUser && servesMyArea ? (
-                                <button className="btn btn-primary" onClick={()=>{
-                                  window.location.href = `/meal-plans?addFromChefEvent=${encodeURIComponent(ev.id)}`
-                                }}>Add to my plan</button>
+                                <>
+                                  <button className="btn btn-primary" onClick={()=> addMealToCart(ev)}>
+                                    <i className="fa-solid fa-cart-plus" style={{marginRight:'.35rem'}}></i>
+                                    Add to Cart
+                                  </button>
+                                  <button className="btn btn-outline" onClick={()=>{
+                                    window.location.href = `/meal-plans?addFromChefEvent=${encodeURIComponent(ev.id)}`
+                                  }}>Add to Plan</button>
+                                </>
                               ) : null}
                             </div>
                           </div>
@@ -965,7 +1154,7 @@ export default function PublicChef(){
                 </div>
               )}
             </div>
-            <div className="chef-services-container">
+            <div className="services-container">
             {servicesLoading ? (
               <div className="muted" style={{marginTop:'.5rem'}}>Loading services…</div>
             ) : servicesError ? (
@@ -1045,15 +1234,95 @@ export default function PublicChef(){
                                         </div>
                                       )}
                                       {tier.description && <div style={{marginTop:'.35rem'}}>{tier.description}</div>}
+                                      
+                                      {/* What's Included/Excluded */}
+                                      <div className="tier-details-section" style={{marginTop:'.75rem'}}>
+                                        <div className="tier-includes">
+                                          <div style={{fontWeight:600, fontSize:'.9rem', marginBottom:'.4rem', color:'var(--primary-700)'}}>
+                                            ✓ What's Included:
+                                          </div>
+                                          <ul style={{margin:0, paddingLeft:'1.25rem', fontSize:'.85rem', display:'flex', flexDirection:'column', gap:'.25rem'}}>
+                                            {(offering.service_type === 'home_chef' || offering.service_type === 'in_house') ? (
+                                              <>
+                                                <li>Professional chef arrives at your home</li>
+                                                <li>Menu planning and customization</li>
+                                                <li>Grocery shopping with itemized receipts</li>
+                                                <li>Fresh cooking in your kitchen</li>
+                                                <li>Meal preparation for {householdMin && householdMax ? `${householdMin}-${householdMax}` : householdMin || householdMax || 'your'} {householdMin === 1 && householdMax === 1 ? 'person' : 'people'}</li>
+                                                <li>Storage containers and labeling</li>
+                                                <li>Full kitchen cleanup</li>
+                                                <li>Reheating and storage instructions</li>
+                                              </>
+                                            ) : offering.service_type === 'weekly_prep' || offering.service_type === 'bulk_prep' ? (
+                                              <>
+                                                <li>Customized meal plan consultation</li>
+                                                <li>Grocery shopping with receipts provided</li>
+                                                <li>Bulk meal preparation</li>
+                                                <li>Portioned meals for {householdMin && householdMax ? `${householdMin}-${householdMax}` : householdMin || householdMax || 'your'} {householdMin === 1 && householdMax === 1 ? 'person' : 'people'}</li>
+                                                <li>Food-safe storage containers</li>
+                                                <li>Meal labels with dates and instructions</li>
+                                                <li>Kitchen cleanup after prep</li>
+                                                {isRecurring && <li>Flexible recurring schedule</li>}
+                                              </>
+                                            ) : offering.service_type === 'catering' || offering.service_type === 'event' ? (
+                                              <>
+                                                <li>Custom event menu planning</li>
+                                                <li>Ingredient sourcing and procurement</li>
+                                                <li>On-site food preparation and setup</li>
+                                                <li>Serving for {householdMin && householdMax ? `${householdMin}-${householdMax}` : householdMin || householdMax || 'your group of'} guests</li>
+                                                <li>Professional presentation and plating</li>
+                                                <li>Event cleanup and breakdown</li>
+                                                <li>Coordination with event timeline</li>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <li>Professional chef service</li>
+                                                <li>Menu planning and consultation</li>
+                                                <li>Grocery shopping for ingredients</li>
+                                                <li>Meal preparation and cooking</li>
+                                                <li>Storage containers provided</li>
+                                                <li>Kitchen cleanup included</li>
+                                                <li>Heating instructions provided</li>
+                                              </>
+                                            )}
+                                          </ul>
+                                        </div>
+                                        <div className="tier-excludes" style={{marginTop:'.6rem'}}>
+                                          <div style={{fontWeight:600, fontSize:'.85rem', marginBottom:'.35rem', color:'var(--muted)'}}>
+                                            ✗ Not Included:
+                                          </div>
+                                          <ul style={{margin:0, paddingLeft:'1.25rem', fontSize:'.8rem', color:'var(--muted)', display:'flex', flexDirection:'column', gap:'.2rem'}}>
+                                            <li>Specialty ingredients over $50 (billed separately)</li>
+                                            <li>Kitchen equipment or appliances</li>
+                                            <li>Alcohol or beverages (unless specified)</li>
+                                            <li>Parking fees or tolls</li>
+                                            {(offering.service_type === 'catering' || offering.service_type === 'event') && (
+                                              <>
+                                                <li>Venue rental or event space</li>
+                                                <li>Tableware, linens, or decorations</li>
+                                                <li>Wait staff or service personnel</li>
+                                              </>
+                                            )}
+                                          </ul>
+                                        </div>
+                                      </div>
                                     </div>
                                     <div style={{display:'flex', flexDirection:'column', gap:'.3rem'}}>
                                       <button
                                         className="btn btn-primary btn-sm"
                                         type="button"
+                                        onClick={()=> addServiceToCart(offering, tier)}
+                                      >
+                                        <i className="fa-solid fa-cart-plus" style={{marginRight:'.35rem'}}></i>
+                                        Book this service tier
+                                      </button>
+                                      <button
+                                        className="btn btn-outline btn-sm"
+                                        type="button"
                                         onClick={()=> startServiceBooking(offering, tier)}
                                         aria-expanded={isActiveTier}
                                       >
-                                        Book this service tier
+                                        Book Now
                                       </button>
                                     </div>
                                   </div>
@@ -1160,10 +1429,89 @@ export default function PublicChef(){
                 )}
               </div>
             ) : servicesHasViewerLocation ? (
-              <div className="muted" style={{marginTop:'.5rem'}}>This chef hasn't listed any services yet.</div>
+              <div className="empty-state-professional">
+                <div className="icon">📋</div>
+                <h3>Building Our Menu</h3>
+                <p>
+                  We're carefully crafting our service offerings. 
+                  In the meantime, you can request a custom quote for:
+                </p>
+                <ul>
+                  <li>In-home personal chef services</li>
+                  <li>Weekly meal preparation</li>
+                  <li>Special event catering</li>
+                  <li>Dietary-specific meal plans</li>
+                </ul>
+                <button 
+                  className="btn btn-primary btn-lg" 
+                  onClick={() => {
+                    if (!authUser) {
+                      const next = `${window.location.pathname}${window.location.search}`
+                      window.location.href = `/login?next=${encodeURIComponent(next)}`
+                      return
+                    }
+                    setQuoteModalOpen(true)
+                  }}
+                >
+                  <i className="fa-solid fa-file-invoice" style={{marginRight:'.5rem'}}></i>
+                  Request Custom Quote
+                </button>
+              </div>
             ) : (
               <div className="muted" style={{marginTop:'.5rem'}}>Add your location to check service availability.</div>
             )}
+            </div>
+          </div>
+
+          {/* Custom Quote Request Section */}
+          <div className="chef-section">
+            <div className="quote-request-section">
+              <h2 className="quote-request-title">
+                <i className="fa-solid fa-file-invoice" style={{marginRight:'.5rem'}}></i>
+                Need Something Custom?
+              </h2>
+              <p className="quote-request-description">
+                I'm happy to create custom menus for special events, dietary needs, or unique occasions. Get in touch for a personalized quote!
+              </p>
+              <div className="quote-request-features">
+                <div className="quote-feature">
+                  <i className="fa-solid fa-birthday-cake"></i>
+                  <div className="quote-feature-title">Special Events</div>
+                  <div className="quote-feature-text">Birthdays, anniversaries, celebrations</div>
+                </div>
+                <div className="quote-feature">
+                  <i className="fa-solid fa-briefcase"></i>
+                  <div className="quote-feature-title">Corporate Catering</div>
+                  <div className="quote-feature-text">Team lunches, office events</div>
+                </div>
+                <div className="quote-feature">
+                  <i className="fa-solid fa-heart"></i>
+                  <div className="quote-feature-title">Dietary Needs</div>
+                  <div className="quote-feature-text">Custom nutrition plans</div>
+                </div>
+              </div>
+              <button 
+                className="btn btn-lg" 
+                style={{
+                  background:'white',
+                  color:'var(--primary-700)',
+                  fontWeight:800,
+                  padding:'1rem 2rem',
+                  fontSize:'1.125rem',
+                  boxShadow:'0 4px 12px rgba(0,0,0,0.2)'
+                }}
+                onClick={() => {
+                  if (!authUser) {
+                    const next = `${window.location.pathname}${window.location.search}`
+                    window.location.href = `/login?next=${encodeURIComponent(next)}`
+                    return
+                  }
+                  setQuoteModalOpen(true)
+                }}
+              >
+                <i className="fa-solid fa-file-invoice" style={{marginRight:'.5rem'}}></i>
+                Request a Custom Quote
+              </button>
             </div>
           </div>
 
@@ -1240,6 +1588,231 @@ export default function PublicChef(){
             )}
           </div>
 
+          {/* FAQ Section */}
+          <div className="chef-section">
+            <div className="chef-section-header">
+              <div>
+                <h2 className="chef-section-title">
+                  <i className="fa-solid fa-circle-question"></i>
+                  Frequently Asked Questions
+                </h2>
+                <p className="chef-section-subtitle">Everything you need to know about booking</p>
+              </div>
+            </div>
+            <div className="faq-container">
+              <div className="faq-item">
+                <div className="faq-question">
+                  <i className="fa-solid fa-check-circle"></i>
+                  <strong>How do I book a chef service?</strong>
+                </div>
+                <div className="faq-answer">
+                  Choose a service above, select your household size and preferred date/time, then proceed to secure checkout. 
+                  You'll receive a confirmation email with all the details.
+                </div>
+              </div>
+
+              <div className="faq-item">
+                <div className="faq-question">
+                  <i className="fa-solid fa-check-circle"></i>
+                  <strong>What if I need to cancel or reschedule?</strong>
+                </div>
+                <div className="faq-answer">
+                  Cancel up to 48 hours before your service for a full refund. Between 24-48 hours you'll receive a 50% refund. 
+                  Less than 24 hours notice forfeits the payment. See our <Link to="/refund-policy">Refund Policy</Link> for details.
+                </div>
+              </div>
+
+              <div className="faq-item">
+                <div className="faq-question">
+                  <i className="fa-solid fa-check-circle"></i>
+                  <strong>Do I need to provide anything?</strong>
+                </div>
+                <div className="faq-answer">
+                  Just a clean kitchen with basic cooking equipment (pots, pans, utensils) and access to your stove/oven. 
+                  The chef brings ingredients, containers, and everything else needed.
+                </div>
+              </div>
+
+              <div className="faq-item">
+                <div className="faq-question">
+                  <i className="fa-solid fa-check-circle"></i>
+                  <strong>Can I request specific dietary requirements?</strong>
+                </div>
+                <div className="faq-answer">
+                  Absolutely! When booking, there's a special requests field where you can note allergies, dietary restrictions, 
+                  or meal preferences. The chef will accommodate your needs.
+                </div>
+              </div>
+
+              <div className="faq-item">
+                <div className="faq-question">
+                  <i className="fa-solid fa-check-circle"></i>
+                  <strong>How are payments processed?</strong>
+                </div>
+                <div className="faq-answer">
+                  All payments are securely processed through Stripe. Your payment is authorized at booking and charged 
+                  after service completion. Major credit cards and digital wallets are accepted.
+                </div>
+              </div>
+
+              <div className="faq-item">
+                <div className="faq-question">
+                  <i className="fa-solid fa-check-circle"></i>
+                  <strong>Can I message the chef before booking?</strong>
+                </div>
+                <div className="faq-answer">
+                  Yes! Click "Ask Chef" buttons throughout the page or use our <Link to="/chat">messaging system</Link> to 
+                  ask questions about menus, availability, or special requests before committing to a booking.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Customer Reviews Section */}
+          <div className="chef-section">
+            <div className="chef-section-header">
+              <div>
+                <h2 className="chef-section-title">
+                  <i className="fa-solid fa-star"></i>
+                  Customer Reviews
+                </h2>
+                <p className="chef-section-subtitle">See what others are saying</p>
+              </div>
+              {chef?.review_summary && (
+                <div className="chef-gallery-count">
+                  <i className="fa-solid fa-star" style={{color:'#fbbf24'}}></i>
+                  <span>{chef.review_summary}</span>
+                </div>
+              )}
+            </div>
+            <div className="reviews-container">
+              {/* Placeholder for empty reviews */}
+              {(!chef?.reviews || chef.reviews.length === 0) && (
+                <div className="empty-state-professional">
+                  <div className="icon">⭐</div>
+                  <h3>No Reviews Yet</h3>
+                  <p>
+                    Be the first to share your experience with {chef?.user?.username || 'this chef'}! 
+                    Reviews help others discover great chefs and build trust in our community.
+                  </p>
+                  {authUser && servesMyArea && (
+                    <button 
+                      className="btn btn-primary btn-lg" 
+                      onClick={() => {
+                        const q = `I'd like to leave a review for ${chef?.user?.username || 'this chef'}`
+                        const url = `/chat?chef=${encodeURIComponent(chef?.user?.username||'')}&q=${encodeURIComponent(q)}`
+                        window.open(url,'_self')
+                      }}
+                    >
+                      <i className="fa-solid fa-comment" style={{marginRight:'.5rem'}}></i>
+                      Contact Chef
+                    </button>
+                  )}
+                  <p className="muted" style={{fontSize:'.85rem',marginTop:'1rem'}}>
+                    Reviews will be displayed here once customers share their feedback
+                  </p>
+                </div>
+              )}
+              
+              {/* Future: Actual reviews would be rendered here */}
+              {chef?.reviews && chef.reviews.length > 0 && (
+                <div className="reviews-grid">
+                  {chef.reviews.slice(0, 6).map((review, idx) => (
+                    <div key={idx} className="review-card card">
+                      <div className="review-header">
+                        <div className="review-avatar">
+                          {review.user?.profile_pic_url ? (
+                            <img src={review.user.profile_pic_url} alt={review.user.username || 'User'} />
+                          ) : (
+                            <div className="review-avatar-placeholder">
+                              <i className="fa-solid fa-user"></i>
+                            </div>
+                          )}
+                        </div>
+                        <div className="review-meta">
+                          <div className="review-author">{review.user?.username || 'Customer'}</div>
+                          <div className="review-rating">
+                            {Array.from({length: 5}, (_, i) => (
+                              <i 
+                                key={i} 
+                                className={`fa-solid fa-star ${i < (review.rating || 5) ? 'filled' : 'empty'}`}
+                                style={{color: i < (review.rating || 5) ? '#fbbf24' : '#e5e7eb'}}
+                              ></i>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="review-content">{review.comment || review.text || 'Great experience!'}</div>
+                      {review.date && (
+                        <div className="review-date muted" style={{fontSize:'.8rem',marginTop:'.5rem'}}>
+                          {new Date(review.date).toLocaleDateString()}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Chef Profile Footer - Policy Links & Contact */}
+          <div className="chef-profile-footer">
+            <div className="chef-profile-footer-content">
+              <div className="footer-section">
+                <h3>About {chef?.user?.username || 'This Chef'}</h3>
+                <p>{chef?.bio ? chef.bio.substring(0, 120) + (chef.bio.length > 120 ? '...' : '') : 'Independent personal chef providing quality meal services.'}</p>
+                {(cityCountry || areaText) && (
+                  <div className="chef-contact-info" style={{marginTop:'1rem'}}>
+                    <div className="contact-item">
+                      <i className="fa-solid fa-location-dot"></i>
+                      <span>{cityCountry || areaText}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="footer-section">
+                <h3>Contact & Support</h3>
+                <div className="chef-contact-info">
+                  <div className="contact-item">
+                    <i className="fa-solid fa-envelope"></i>
+                    <span>Via sautai messaging</span>
+                  </div>
+                  <div className="contact-item">
+                    <i className="fa-solid fa-headset"></i>
+                    <a href="mailto:support@sautai.com">support@sautai.com</a>
+                  </div>
+                  <div className="contact-item">
+                    <i className="fa-solid fa-circle-info"></i>
+                    <span>Response within 24 hours</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="footer-section">
+                <h3>Legal & Policies</h3>
+                <div className="footer-links">
+                  <Link to="/terms">Terms of Service</Link>
+                  <Link to="/privacy">Privacy Policy</Link>
+                  <Link to="/refund-policy">Cancellation & Refunds</Link>
+                  <a href="mailto:support@sautai.com">Report an Issue</a>
+                </div>
+              </div>
+
+              <div className="footer-section">
+                <h3>Platform Info</h3>
+                <p style={{fontSize:'0.9rem',color:'var(--muted)'}}>
+                  {chef?.user?.username || 'This chef'} is an independent contractor. 
+                  Services are provided directly by the chef. sautai facilitates bookings 
+                  and payments but is not the service provider.
+                </p>
+                <p style={{fontSize:'0.85rem',color:'var(--muted)',marginTop:'0.75rem'}}>
+                  © 2025 sautai. All rights reserved.
+                </p>
+              </div>
+            </div>
+          </div>
+
           {/* Close marketplace container */}
           </div>
 
@@ -1251,6 +1824,14 @@ export default function PublicChef(){
             countryCode={mapCountryCode}
             postalCodes={(chef?.serving_postalcodes||[]).map(p=> p?.postal_code || p?.postalcode || p?.code || p?.name || '').filter(Boolean)}
             city={chef?.city || chef?.location?.city || chef?.address?.city || ''}
+          />
+
+          {/* Quote Request Modal */}
+          <QuoteRequestModal
+            isOpen={quoteModalOpen}
+            onClose={() => setQuoteModalOpen(false)}
+            chef={chef}
+            authUser={authUser}
           />
         </div>
       )}

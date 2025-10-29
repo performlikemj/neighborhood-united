@@ -925,6 +925,17 @@ export default function ChefDashboard(){
       <main className="chef-main-content">
         {notice && <div className="card" style={{borderColor:'#f0d000', marginBottom:'1rem'}}>{notice}</div>}
 
+        <div className="seg-control seg-scroll" role="tablist" aria-label="Chef dashboard sections">
+          <button className={`seg ${tab==='dashboard'?'active':''}`} onClick={()=> setTab('dashboard')} role="tab" aria-selected={tab==='dashboard'}>Overview</button>
+          <button className={`seg ${tab==='profile'?'active':''}`} onClick={()=> setTab('profile')} role="tab" aria-selected={tab==='profile'}>Profile</button>
+          <button className={`seg ${tab==='photos'?'active':''}`} onClick={()=> setTab('photos')} role="tab" aria-selected={tab==='photos'}>Photos</button>
+          <button className={`seg ${tab==='kitchen'?'active':''}`} onClick={()=> setTab('kitchen')} role="tab" aria-selected={tab==='kitchen'}>Kitchen</button>
+          <button className={`seg ${tab==='services'?'active':''}`} onClick={()=> setTab('services')} role="tab" aria-selected={tab==='services'}>Services</button>
+          <button className={`seg ${tab==='events'?'active':''}`} onClick={()=> setTab('events')} role="tab" aria-selected={tab==='events'}>Events</button>
+          <button className={`seg ${tab==='orders'?'active':''}`} onClick={()=> setTab('orders')} role="tab" aria-selected={tab==='orders'}>Orders</button>
+          <button className={`seg ${tab==='meals'?'active':''}`} onClick={()=> setTab('meals')} role="tab" aria-selected={tab==='meals'}>Meals</button>
+        </div>
+
       {/* Content Sections */}
       {tab==='dashboard' && (
         <div>
@@ -1701,18 +1712,31 @@ export default function ChefDashboard(){
 
       {tab==='meals' && (
         <div>
-          <SectionHeader 
-            title="Meals" 
-            subtitle="Create complete meals from your dishes"
-            onAdd={()=> setShowMealForm(!showMealForm)}
-            addLabel={showMealForm ? 'Cancel' : 'Add Meal'}
-          />
+      <SectionHeader 
+        title="Meals" 
+        subtitle="Create complete meals from your dishes"
+        onAdd={()=> setShowMealForm(!showMealForm)}
+        addLabel={showMealForm ? 'Cancel' : 'Add Meal'}
+      />
 
-          {showMealForm && (
-            <div className="card chef-create-card" style={{marginBottom:'1rem'}}>
-              <h3 style={{marginTop:0}}>Create meal</h3>
-              <form onSubmit={createMeal} aria-busy={mealSaving}>
-                <div className="label">Name</div>
+      {!showMealForm && (
+        <div style={{display:'flex', justifyContent:'flex-end', marginBottom:'1rem'}}>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            disabled={mealSaving}
+            onClick={()=> setShowMealForm(true)}
+          >
+            {mealSaving ? 'Saving…' : 'Create'}
+          </button>
+        </div>
+      )}
+
+      {showMealForm && (
+        <div className="card chef-create-card" style={{marginBottom:'1rem'}}>
+          <h3 style={{marginTop:0}}>Create meal</h3>
+          <form onSubmit={createMeal} aria-busy={mealSaving}>
+            <div className="label">Name</div>
                 <input className="input" value={mealForm.name} onChange={e=> setMealForm(f=>({ ...f, name:e.target.value }))} required placeholder="e.g., Sunday Family Dinner" />
                 <div className="label">Description</div>
                 <textarea className="textarea" rows={2} value={mealForm.description} onChange={e=> setMealForm(f=>({ ...f, description:e.target.value }))} placeholder="Describe this meal..." />

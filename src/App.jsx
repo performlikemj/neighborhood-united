@@ -23,6 +23,11 @@ import PublicChef from './pages/PublicChef.jsx'
 import ChefGallery from './pages/ChefGallery.jsx'
 import ChefsDirectory from './pages/ChefsDirectory.jsx'
 import Onboarding from './pages/Onboarding.jsx'
+import Terms from './pages/Terms.jsx'
+import Privacy from './pages/Privacy.jsx'
+import RefundPolicy from './pages/RefundPolicy.jsx'
+import CartButton from './components/CartButton.jsx'
+import CartSidebar from './components/CartSidebar.jsx'
 
 export default function App(){
   const [globalToasts, setGlobalToasts] = useState([]) // {id, text, tone, closing}
@@ -47,6 +52,7 @@ export default function App(){
   return (
     <div>
       <NavBar />
+      <CartButton />
       <Routes>
         <Route path="/chefs/dashboard" element={<ProtectedRoute requiredRole="chef"><ChefDashboard /></ProtectedRoute>} />
         <Route path="*" element={
@@ -68,6 +74,9 @@ export default function App(){
               <Route path="/c/:username" element={<PublicChef />} />
               <Route path="/c/:username/gallery" element={<ChefGallery />} />
               <Route path="/chefs" element={<ChefsDirectory />} />
+              <Route path="/terms" element={<Terms />} />
+              <Route path="/privacy" element={<Privacy />} />
+              <Route path="/refund-policy" element={<RefundPolicy />} />
               {/* History route removed */}
               <Route path="/health" element={<ProtectedRoute requiredRole="customer"><HealthMetrics /></ProtectedRoute>} />
               <Route path="/403" element={<AccessDenied />} />
@@ -79,6 +88,7 @@ export default function App(){
           </div>
         } />
       </Routes>
+      <CartSidebar />
       <GlobalToastOverlay toasts={globalToasts} />
     </div>
   )

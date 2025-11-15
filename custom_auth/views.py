@@ -20,7 +20,7 @@ from datetime import timedelta
 from .utils import send_email_change_confirmation
 from django.views import View
 from django.contrib.auth.mixins import LoginRequiredMixin
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.response import Response
 from django.contrib.sites.shortcuts import get_current_site
 from django.template.loader import render_to_string
@@ -32,6 +32,7 @@ from .serializers import (
     HouseholdMemberSerializer,
     OnboardingUserSerializer,
 )
+from .throttles import AuthenticatedBurstThrottle, AuthenticatedDailyThrottle
 from rest_framework import serializers
 import requests
 from local_chefs.models import PostalCode
@@ -72,6 +73,8 @@ logger = logging.getLogger(__name__)
 # Constants from secure_email_integration.py (or define them in a shared place)
 ACTIVE_DB_AGGREGATION_SESSION_FLAG_PREFIX = "active_db_aggregation_session_user_"
 AGGREGATION_WINDOW_MINUTES = 5
+
+PROFILE_MUTATION_THROTTLES = [AuthenticatedBurstThrottle, AuthenticatedDailyThrottle]
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
@@ -624,6 +627,7 @@ def reset_password(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([])
 def user_details_view(request):
     # Serialize the request user's data
     serializer = CustomUserSerializer(request.user)
@@ -631,6 +635,7 @@ def user_details_view(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([])
 def address_details_view(request):
     try:
         address = request.user.address
@@ -680,6 +685,7 @@ def get_countries(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes(PROFILE_MUTATION_THROTTLES)
 def update_profile_api(request):
     try:
         user = request.user

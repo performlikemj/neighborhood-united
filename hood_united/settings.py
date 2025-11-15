@@ -39,6 +39,8 @@ def str_to_bool(value, default=False):
 
 # Test mode flag (used by some components), but does not alter core settings
 TEST_MODE = str_to_bool(os.getenv("TEST_MODE", "False"))
+if any('pytest' in arg for arg in sys.argv):
+    TEST_MODE = True
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -92,6 +94,10 @@ INSTALLED_APPS = [
 # Feature flags
 # Toggle gamification system on/off without removing the app
 GAMIFICATION_ENABLED = str_to_bool(os.getenv('GAMIFICATION_ENABLED', 'False'))
+# Chef-focused pivot: disable consumer meal-plan/instruction emails unless explicitly re-enabled
+MEAL_PLAN_EMAIL_NOTIFICATIONS_ENABLED = str_to_bool(
+    os.getenv('MEAL_PLAN_EMAIL_NOTIFICATIONS_ENABLED', 'False')
+)
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',  # CORS must be as high as possible
@@ -242,11 +248,19 @@ _DEFAULT_AUTH_CLASSES = (
 REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
-        'rest_framework.throttling.UserRateThrottle'
+        'custom_auth.throttles.AuthenticatedBurstThrottle',
+        'custom_auth.throttles.AuthenticatedDailyThrottle',
+        'api.throttles.GPT4DailyThrottle',
+        'api.throttles.GuestGPT4MiniThrottle',
+        'rest_framework.throttling.UserRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
         'anon': '100/day',
-        'user': '1000/day'
+        'auth_burst': '60/min',
+        'auth_daily': '15000/day',
+        'gpt4': f'{GPT41_AUTH_LIMIT}/day',
+        'gpt4_mini_guest': f'{GPT41_MINI_GUEST_LIMIT}/day',
+        'user': '15000/day',
     },
     'DEFAULT_AUTHENTICATION_CLASSES': _DEFAULT_AUTH_CLASSES,
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',

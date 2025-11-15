@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import ChefServiceOffering, ChefServicePriceTier, ChefServiceOrder
+from .models import ChefServiceOffering, ChefServicePriceTier, ChefServiceOrder, ChefCustomerConnection
 
 
 @admin.register(ChefServiceOffering)
@@ -21,3 +21,10 @@ class ChefServiceOrderAdmin(admin.ModelAdmin):
     list_display = ("id", "customer", "chef", "offering", "tier", "status", "is_subscription", "created_at")
     list_filter = ("status", "is_subscription", "chef")
     search_fields = ("stripe_session_id", "stripe_subscription_id")
+
+
+@admin.register(ChefCustomerConnection)
+class ChefCustomerConnectionAdmin(admin.ModelAdmin):
+    list_display = ("id", "chef", "customer", "status", "initiated_by", "requested_at")
+    list_filter = ("status", "initiated_by", "chef")
+    search_fields = ("chef__user__username", "customer__username", "customer__email")

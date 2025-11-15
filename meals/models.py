@@ -533,6 +533,11 @@ class MealPlan(models.Model):
     approval_token = models.UUIDField(default=uuid.uuid4, unique=True)   
     approval_email_sent = models.BooleanField(default=False)
     instacart_url = models.URLField(max_length=1000, blank=True, null=True, help_text="URL to the Instacart shopping list for this meal plan")
+    groq_auto_approved_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp of the first auto-approval triggered by Groq batch processing.",
+    )
     order = models.OneToOneField(
         'Order',
         null=True,

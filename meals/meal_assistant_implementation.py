@@ -46,6 +46,7 @@ import pytz
 from zoneinfo import ZoneInfo
 from local_chefs.models import ChefPostalCode
 from django.db.models import F
+from meals.feature_flags import is_meal_plan_template, meal_plan_notifications_enabled
 from meals.models import ChefMealEvent
 from dotenv import load_dotenv
 import os
@@ -3112,6 +3113,14 @@ class MealPlanningAssistant:
                 allow_emails = os.getenv("ALLOW_ASSISTANT_EMAILS", "").lower() in ("1", "true", "yes", "on")
                 if running_pytest and not allow_emails:
                     return {"status": "skipped", "reason": "test_mode"}
+
+            if not meal_plan_notifications_enabled() and is_meal_plan_template(template_key):
+                logger.info(
+                    "Skipping meal-plan notification '%s' for user %s because chef-mode emails are disabled.",
+                    template_key,
+                    user_id,
+                )
+                return {"status": "skipped", "reason": "meal_plan_notifications_disabled"}
 
             # Ensure DB connection is usable; be resilient in tests/workers
             user = None

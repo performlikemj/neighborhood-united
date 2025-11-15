@@ -2,7 +2,13 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from .models import ChefServiceOffering, ChefServicePriceTier, ChefServiceOrder
+from custom_auth.models import CustomUser
+from .models import (
+    ChefServiceOffering,
+    ChefServicePriceTier,
+    ChefServiceOrder,
+    ChefCustomerConnection,
+)
 
 
 _CURRENCY_SYMBOLS = {
@@ -81,13 +87,20 @@ class ChefServiceOfferingSerializer(serializers.ModelSerializer):
     tiers = ChefServicePriceTierSerializer(many=True, read_only=True)
     service_type_label = serializers.CharField(source='get_service_type_display', read_only=True)
     tier_summary = serializers.SerializerMethodField()
+    target_customer_ids = serializers.PrimaryKeyRelatedField(
+        source='target_customers',
+        queryset=CustomUser.objects.all(),
+        many=True,
+        required=False,
+    )
 
     class Meta:
         model = ChefServiceOffering
         fields = [
             'id', 'chef', 'service_type', 'title', 'description', 'active',
             'default_duration_minutes', 'max_travel_miles', 'notes',
-            'created_at', 'updated_at', 'tiers', 'service_type_label', 'tier_summary'
+            'created_at', 'updated_at', 'tiers', 'service_type_label', 'tier_summary',
+            'target_customer_ids',
         ]
         read_only_fields = ['chef', 'created_at', 'updated_at', 'tiers', 'service_type_label', 'tier_summary']
 
@@ -104,6 +117,50 @@ class ChefServiceOfferingSerializer(serializers.ModelSerializer):
                 key=lambda t: (t.household_min, t.household_max or 10**9, t.id or 0),
             )
         return [build_tier_summary(tier) for tier in iterable if tier.active]
+
+    def _resolve_chef(self):
+        chef = self.context.get('chef')
+        if chef:
+            return chef
+        instance = getattr(self, 'instance', None)
+        if instance is not None:
+            return instance.chef
+        return None
+
+    def validate_target_customers(self, customers):
+        chef = self._resolve_chef()
+        if not chef or not customers:
+            return customers
+
+        accepted_ids = set(
+            ChefCustomerConnection.objects.filter(
+                chef=chef,
+                customer__in=customers,
+                status=ChefCustomerConnection.STATUS_ACCEPTED,
+            ).values_list('customer_id', flat=True)
+        )
+        invalid = [c.id for c in customers if c.id not in accepted_ids]
+        if invalid:
+            raise serializers.ValidationError(
+                "Target customers must have an accepted connection with the chef. Invalid IDs: %s" % (
+                    ", ".join(str(pk) for pk in invalid)
+                )
+            )
+        return customers
+
+    def create(self, validated_data):
+        target_customers = validated_data.pop('target_customers', [])
+        offering = super().create(validated_data)
+        if target_customers:
+            offering.target_customers.set(target_customers)
+        return offering
+
+    def update(self, instance, validated_data):
+        target_customers = validated_data.pop('target_customers', None)
+        offering = super().update(instance, validated_data)
+        if target_customers is not None:
+            offering.target_customers.set(target_customers)
+        return offering
 
 
 class ChefServiceOrderSerializer(serializers.ModelSerializer):
@@ -161,3 +218,16 @@ class PublicChefServiceOfferingSerializer(serializers.ModelSerializer):
                 key=lambda t: (t.household_min, t.household_max or 10**9, t.id or 0),
             )
         return [build_tier_summary(tier) for tier in iterable if tier.active]
+
+
+class ChefCustomerConnectionSerializer(serializers.ModelSerializer):
+    chef_id = serializers.IntegerField(read_only=True)
+    customer_id = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = ChefCustomerConnection
+        fields = [
+            'id', 'chef_id', 'customer_id', 'status', 'initiated_by',
+            'requested_at', 'responded_at', 'ended_at',
+        ]
+        read_only_fields = fields

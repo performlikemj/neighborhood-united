@@ -35,6 +35,7 @@ from customer_dashboard.models import GoalTracking, UserHealthMetrics, CalorieIn
 from shared.utils import generate_user_context, get_openai_client, _get_language_name
 from meals.meal_plan_service import is_chef_meal
 from django.template.loader import render_to_string
+from meals.feature_flags import meal_plan_notifications_enabled
 from meals.meal_assistant_implementation import MealPlanningAssistant
 from .celery_utils import handle_task_failure
 
@@ -621,6 +622,13 @@ def generate_shopping_list(meal_plan_id):
                     instacart_url = gen_result.get('instacart_url')
         except Exception as _insta_err:
             logger.warning(f"Instacart link generation skipped or failed for user {user.id}: {_insta_err}")
+
+        if not meal_plan_notifications_enabled():
+            logger.info(
+                "Skipping shopping list notification for MealPlan %s due to chef focus mode.",
+                meal_plan_id,
+            )
+            return
 
         result = MealPlanningAssistant.send_notification_via_assistant(
             user_id=user.id,

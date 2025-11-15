@@ -12,6 +12,7 @@ from openai import OpenAI
 from django.conf import settings
 from rest_framework.test import APIRequestFactory
 from meals.email_service import generate_shopping_list, generate_user_summary, mark_summary_stale
+from meals.feature_flags import meal_plan_notifications_enabled
 from meals.meal_instructions import generate_bulk_prep_instructions
 from meals.meal_plan_service import create_meal_plan_for_new_user
 from meals.pantry_management import assign_pantry_tags
@@ -48,8 +49,26 @@ def pre_save_mealplan(sender, instance, **kwargs):
 
 @receiver(post_save, sender=MealPlan)
 def send_meal_plan_email(sender, instance, **kwargs):
+    if not meal_plan_notifications_enabled():
+        logger.info(
+            "Meal-plan email notifications disabled; skipping shopping list for MealPlan %s",
+            instance.id,
+        )
+        return
+
     user = instance.user
     if user.unsubscribed_from_emails:
+        return
+
+    if getattr(instance, "_suppress_auto_approval_email", False):
+        try:
+            delattr(instance, "_suppress_auto_approval_email")
+        except AttributeError:
+            pass
+        logger.debug(
+            "Skipping shopping list email for MealPlan %s due to Groq auto-approval suppression.",
+            instance.id,
+        )
         return
 
     # Check if approval status changed from unapproved to approved and has_changes from True to False

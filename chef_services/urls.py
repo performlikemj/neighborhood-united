@@ -11,6 +11,8 @@ urlpatterns = [
     path('my/offerings/', views.my_offerings, name='service_my_offerings'),
     path('my/orders/', views.my_orders, name='service_my_orders'),
     path('my/customer-orders/', views.my_customer_orders, name='service_my_customer_orders'),
+    path('connections/', views.connections, name='service_connections'),
+    path('connections/<int:connection_id>/', views.connection_detail, name='service_connection_detail'),
 
     # Orders
     path('orders/', views.create_order, name='service_create_order'),

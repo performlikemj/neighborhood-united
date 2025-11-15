@@ -19,6 +19,11 @@ class ChefServiceOffering(models.Model):
     max_travel_miles = models.PositiveIntegerField(null=True, blank=True, default=1)
     notes = models.TextField(null=True, blank=True)
     stripe_product_id = models.CharField(max_length=200, null=True, blank=True)
+    target_customers = models.ManyToManyField(
+        "custom_auth.CustomUser",
+        blank=True,
+        related_name="personalized_service_offerings",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -129,6 +134,58 @@ class ChefServicePriceTier(models.Model):
                 if not (this_max < other_min or other_max < this_min):
                     # Overlap
                     raise ValidationError("Overlapping household size ranges are not allowed for the same offering.")
+
+
+class ChefCustomerConnection(models.Model):
+    """Represents a mutually approved pairing between a chef and a customer."""
+
+    STATUS_PENDING = "pending"
+    STATUS_ACCEPTED = "accepted"
+    STATUS_DECLINED = "declined"
+    STATUS_ENDED = "ended"
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_ACCEPTED, "Accepted"),
+        (STATUS_DECLINED, "Declined"),
+        (STATUS_ENDED, "Ended"),
+    ]
+
+    INITIATED_BY_CHEF = "chef"
+    INITIATED_BY_CUSTOMER = "customer"
+    INITIATED_BY_CHOICES = [
+        (INITIATED_BY_CHEF, "Chef"),
+        (INITIATED_BY_CUSTOMER, "Customer"),
+    ]
+
+    chef = models.ForeignKey("chefs.Chef", on_delete=models.CASCADE, related_name="customer_connections")
+    customer = models.ForeignKey(
+        "custom_auth.CustomUser",
+        on_delete=models.CASCADE,
+        related_name="chef_connections",
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    initiated_by = models.CharField(max_length=20, choices=INITIATED_BY_CHOICES)
+    requested_at = models.DateTimeField(auto_now_add=True)
+    responded_at = models.DateTimeField(null=True, blank=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        unique_together = ("chef", "customer")
+        indexes = [
+            models.Index(fields=["chef", "customer"]),
+            models.Index(fields=["chef", "status"]),
+            models.Index(fields=["customer", "status"]),
+        ]
+        ordering = ["-requested_at", "-id"]
+
+    def __str__(self):
+        return f"Connection(chef={self.chef_id}, customer={self.customer_id}, status={self.status})"
+
+    def clean(self):
+        if self.chef and self.customer and self.chef.user_id == self.customer_id:
+            raise ValidationError("Chefs cannot connect to themselves.")
 
 
 class ChefServiceOrder(models.Model):

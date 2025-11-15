@@ -545,9 +545,20 @@ def _finalize_meal_plan(*, user: CustomUser, meal_plan: MealPlan, request_id: st
     meal_types = [choice for choice, _ in Meal.MEAL_TYPE_CHOICES]
     analyze_and_replace_meals(user, meal_plan, meal_types, request_id)
 
+    first_groq_approval = meal_plan.groq_auto_approved_at is None
+    if first_groq_approval:
+        meal_plan.groq_auto_approved_at = timezone.now()
+        if hasattr(meal_plan, "_suppress_auto_approval_email"):
+            delattr(meal_plan, "_suppress_auto_approval_email")
+    else:
+        meal_plan._suppress_auto_approval_email = True
+
     meal_plan.is_approved = True
     meal_plan.has_changes = False
-    meal_plan.save(update_fields=["is_approved", "has_changes"])
+    update_fields = ["is_approved", "has_changes"]
+    if first_groq_approval:
+        update_fields.append("groq_auto_approved_at")
+    meal_plan.save(update_fields=update_fields)
 
 
 def _extract_plan_from_response(groq_response: GroqBatchResponse) -> tuple[dict, List[ParsedSlot]]:

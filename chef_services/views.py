@@ -8,15 +8,24 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from django.utils.dateparse import parse_date, parse_time
+from django.utils import timezone
+from django.core.exceptions import ValidationError
 
 from chefs.models import Chef
+from custom_auth.models import CustomUser
 from local_chefs.geo import ensure_postal_code_coordinates
-from .models import ChefServiceOffering, ChefServicePriceTier, ChefServiceOrder
+from .models import (
+    ChefServiceOffering,
+    ChefServicePriceTier,
+    ChefServiceOrder,
+    ChefCustomerConnection,
+)
 from .serializers import (
     ChefServiceOfferingSerializer,
     ChefServicePriceTierSerializer,
     ChefServiceOrderSerializer,
     PublicChefServiceOfferingSerializer,
+    ChefCustomerConnectionSerializer,
 )
 from .payments import create_service_checkout_session
 from .tasks import sync_pending_service_tiers
@@ -106,6 +115,13 @@ def _get_request_chef_or_403(request):
     return chef
 
 
+def _resolve_connection_scope(request):
+    chef = Chef.objects.filter(user=request.user).first()
+    if chef:
+        return 'chef', chef
+    return 'customer', getattr(request, 'user', None)
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([AllowAny])
 def offerings(request):
@@ -121,7 +137,7 @@ def offerings(request):
             return Response({"error": "Only chefs can create offerings"}, status=403)
         data = request.data.copy()
         data['chef'] = chef.id
-        serializer = ChefServiceOfferingSerializer(data=data)
+        serializer = ChefServiceOfferingSerializer(data=data, context={'request': request, 'chef': chef})
         if serializer.is_valid():
             offering = serializer.save(chef=chef)
             return Response(ChefServiceOfferingSerializer(offering).data, status=201)
@@ -135,8 +151,18 @@ def offerings(request):
         qs = qs.filter(chef_id=chef_id)
     if service_type:
         qs = qs.filter(service_type=service_type)
+    if request.user and request.user.is_authenticated:
+        qs = qs.filter(
+            Q(target_customers__isnull=True) | Q(target_customers=request.user)
+        )
+    else:
+        qs = qs.filter(target_customers__isnull=True)
+    qs = qs.distinct()
     # Hide offerings without any active tier
-    qs = qs.prefetch_related(Prefetch('tiers', queryset=ChefServicePriceTier.objects.filter(active=True)))
+    qs = qs.prefetch_related(
+        Prefetch('tiers', queryset=ChefServicePriceTier.objects.filter(active=True)),
+        'target_customers',
+    )
     viewer_coords = _resolve_viewer_coordinates(request)
     results = []
     for off in qs:
@@ -164,7 +190,7 @@ def update_offering(request, offering_id):
     offering = get_object_or_404(ChefServiceOffering, id=offering_id)
     if offering.chef.user_id != request.user.id and not request.user.is_staff:
         return Response({"error": "Forbidden"}, status=403)
-    serializer = ChefServiceOfferingSerializer(offering, data=request.data, partial=True)
+    serializer = ChefServiceOfferingSerializer(offering, data=request.data, partial=True, context={'request': request})
     if serializer.is_valid():
         serializer.save()
         return Response(serializer.data)
@@ -177,8 +203,201 @@ def my_offerings(request):
     chef = _get_request_chef_or_403(request)
     if not chef:
         return Response({"error": "Only chefs can list their offerings"}, status=403)
-    qs = ChefServiceOffering.objects.filter(chef=chef).prefetch_related('tiers')
+    qs = ChefServiceOffering.objects.filter(chef=chef).prefetch_related('tiers', 'target_customers')
     return Response(ChefServiceOfferingSerializer(qs, many=True).data)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def connections(request):
+    print(f"connections request: {request.method}, {request.data}")
+    role, actor = _resolve_connection_scope(request)
+    print(f"role: {role}, actor: {actor}")
+    if request.method == 'GET':
+        if role == 'chef' and actor:
+            qs = ChefCustomerConnection.objects.filter(chef=actor)
+        else:
+            qs = ChefCustomerConnection.objects.filter(customer=request.user)
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        qs = qs.select_related('chef__user').order_by('-requested_at')
+        serializer = ChefCustomerConnectionSerializer(qs, many=True)
+        return Response(serializer.data)
+
+    # POST
+    if role == 'chef' and actor:
+        customer_id = request.data.get('customer_id')
+        if not customer_id:
+            logger.warning(
+                "customer_id is required for connection requests (chef_user=%s)",
+                getattr(request.user, 'id', None),
+            )
+            return Response({"error": "customer_id is required"}, status=400)
+        try:
+            customer = CustomUser.objects.get(id=customer_id)
+        except CustomUser.DoesNotExist:
+            logger.warning(
+                "Connection request invalid customer_id=%s (chef_user=%s)",
+                customer_id,
+                getattr(request.user, 'id', None),
+            )
+            return Response({"error": "Customer not found"}, status=404)
+        chef = actor
+        initiator = ChefCustomerConnection.INITIATED_BY_CHEF
+    else:
+        chef_id = request.data.get('chef_id')
+        if not chef_id:
+            logger.warning(
+                "chef_id is required for connection requests (customer_user=%s)",
+                getattr(request.user, 'id', None),
+            )
+            return Response({"error": "chef_id is required"}, status=400)
+        chef = Chef.objects.filter(id=chef_id).first()
+        if not chef:
+            logger.warning(
+                "Connection request invalid chef_id=%s (customer_user=%s)",
+                chef_id,
+                getattr(request.user, 'id', None),
+            )
+            return Response({"error": "Chef not found"}, status=404)
+        customer = request.user
+        initiator = ChefCustomerConnection.INITIATED_BY_CUSTOMER
+
+    if not isinstance(customer, CustomUser):
+        return Response({"error": "Only authenticated customers can create connections"}, status=401)
+
+    if chef.user_id == customer.id:
+        return Response({"error": "Cannot connect a chef account to itself"}, status=400)
+
+    defaults = {"initiated_by": initiator}
+    try:
+        connection, created = ChefCustomerConnection.objects.get_or_create(
+            chef=chef,
+            customer=customer,
+            defaults=defaults,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to create or fetch connection (chef=%s, customer=%s)",
+            chef.id,
+            customer.id,
+        )
+        return Response({"error": "Could not process connection request"}, status=500)
+    if not created:
+        now = timezone.now()
+        connection.initiated_by = initiator
+        if connection.status != ChefCustomerConnection.STATUS_PENDING:
+            connection.status = ChefCustomerConnection.STATUS_PENDING
+        connection.responded_at = None
+        connection.ended_at = None
+        connection.requested_at = now
+        try:
+            connection.full_clean()
+        except ValidationError as exc:
+            logger.warning(
+                "Validation error refreshing connection (chef=%s, customer=%s): %s",
+                connection.chef_id,
+                connection.customer_id,
+                exc,
+            )
+            return Response({"error": exc.message_dict or exc.messages}, status=400)
+        try:
+            connection.save(update_fields=['initiated_by', 'status', 'responded_at', 'ended_at', 'requested_at'])
+        except Exception:
+            logger.exception(
+                "Failed to save connection refresh (chef=%s, customer=%s)",
+                connection.chef_id,
+                connection.customer_id,
+            )
+            return Response({"error": "Could not process connection request"}, status=500)
+    serializer = ChefCustomerConnectionSerializer(connection)
+    return Response(serializer.data, status=201 if created else 200)
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def connection_detail(request, connection_id):
+    connection = get_object_or_404(ChefCustomerConnection, id=connection_id)
+    user = request.user
+    is_chef_party = connection.chef.user_id == user.id
+    is_customer_party = connection.customer_id == user.id
+    if not (is_chef_party or is_customer_party):
+        return Response({"error": "Forbidden"}, status=403)
+
+    action = (request.data or {}).get('action')
+    if action not in {"accept", "decline", "end"}:
+        logger.warning(
+            "Invalid connection action '%s' attempted by user %s on connection %s",
+            action,
+            getattr(user, 'id', None),
+            connection_id,
+        )
+        return Response({"error": "Invalid action"}, status=400)
+
+    now = timezone.now()
+
+    if action in {"accept", "decline"}:
+        if connection.status != ChefCustomerConnection.STATUS_PENDING:
+            logger.warning(
+                "Connection %s not pending for action '%s' by user %s",
+                connection_id,
+                action,
+                getattr(user, 'id', None),
+            )
+            return Response({"error": "Only pending connections can be responded to"}, status=400)
+        if connection.initiated_by == ChefCustomerConnection.INITIATED_BY_CHEF and is_chef_party:
+            logger.warning(
+                "Chef %s attempted to respond to their own pending request (connection %s)",
+                connection.chef_id,
+                connection_id,
+            )
+            return Response({"error": "Awaiting customer response"}, status=400)
+        if connection.initiated_by == ChefCustomerConnection.INITIATED_BY_CUSTOMER and is_customer_party:
+            logger.warning(
+                "Customer %s attempted to respond to their own pending request (connection %s)",
+                connection.customer_id,
+                connection_id,
+            )
+            return Response({"error": "Awaiting chef response"}, status=400)
+
+    if action == 'accept':
+        connection.status = ChefCustomerConnection.STATUS_ACCEPTED
+        connection.responded_at = now
+        connection.ended_at = None
+        save_fields = ['status', 'responded_at', 'ended_at']
+    elif action == 'decline':
+        connection.status = ChefCustomerConnection.STATUS_DECLINED
+        connection.responded_at = now
+        connection.ended_at = now
+        save_fields = ['status', 'responded_at', 'ended_at']
+    else:  # end
+        if connection.status != ChefCustomerConnection.STATUS_ACCEPTED:
+            logger.warning(
+                "Attempt to end non-accepted connection %s by user %s",
+                connection_id,
+                getattr(user, 'id', None),
+            )
+            return Response({"error": "Only accepted connections can be ended"}, status=400)
+        connection.status = ChefCustomerConnection.STATUS_ENDED
+        connection.ended_at = now
+        save_fields = ['status', 'ended_at']
+        if not connection.responded_at:
+            connection.responded_at = now
+            save_fields.append('responded_at')
+
+    try:
+        connection.save(update_fields=save_fields)
+    except Exception:
+        logger.exception(
+            "Failed to persist connection %s state change '%s' by user %s",
+            connection_id,
+            action,
+            getattr(user, 'id', None),
+        )
+        return Response({"error": "Could not update connection"}, status=500)
+    serializer = ChefCustomerConnectionSerializer(connection)
+    return Response(serializer.data)
 
 
 @api_view(['POST'])

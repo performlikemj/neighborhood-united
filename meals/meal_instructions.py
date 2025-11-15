@@ -30,6 +30,7 @@ from shared.utils import generate_user_context, get_openai_client, build_age_saf
 from meals.pantry_management import get_expiring_pantry_items
 from meals.pydantic_models import BulkPrepInstructions, DailyTask
 from django.template.loader import render_to_string
+from meals.feature_flags import meal_plan_notifications_enabled
 from meals.macro_info_retrieval import get_meal_macro_information
 from meals.youtube_api_search import find_youtube_cooking_videos
 import traceback
@@ -53,6 +54,10 @@ def _get_groq_client():
 def send_daily_meal_instructions():
     from meals.models import MealPlanMeal, MealPlan, MealPlanInstruction
     from meals.meal_assistant_implementation import MealPlanningAssistant
+
+    if not meal_plan_notifications_enabled():
+        logger.info("Daily meal instruction notifications disabled; skipping task run.")
+        return
 
     # Get the current time in UTC
     current_utc_time = timezone.now()
@@ -288,6 +293,7 @@ def generate_instructions(meal_plan_meal_ids, send_via_assistant: bool = False):
     If send_via_assistant=True, also sends an email via the meal planning assistant.
     """
     logger.info(f"=== MEAL INSTRUCTIONS DEBUG: generate_instructions called for meal_plan_meal_ids={meal_plan_meal_ids}")
+    notifications_enabled = meal_plan_notifications_enabled()
     
     from meals.models import MealAllergenSafety
     from meals.meal_assistant_implementation import MealPlanningAssistant
@@ -305,6 +311,13 @@ def generate_instructions(meal_plan_meal_ids, send_via_assistant: bool = False):
     first_meal = meal_plan_meals.first()
     user = first_meal.meal_plan.user
     meal_plan = first_meal.meal_plan # Get the meal plan object
+    if send_via_assistant and not notifications_enabled:
+        logger.info(
+            "Meal-plan notifications disabled; instructions will not be emailed for user %s (MealPlan %s).",
+            user.id,
+            meal_plan.id,
+        )
+        send_via_assistant = False
     user_email = user.email
     user_name = user.username
 
@@ -686,6 +699,7 @@ def generate_bulk_prep_instructions(meal_plan_id, send_via_assistant: bool = Tru
     """
     logger.info(f"=== MEAL INSTRUCTIONS DEBUG: generate_bulk_prep_instructions called for meal_plan_id={meal_plan_id}")
     logger.info(f"MEAL INSTRUCTIONS DEBUG: THIS IS NOT THE EMERGENCY PANTRY PLAN FUNCTION!")
+    notifications_enabled = meal_plan_notifications_enabled()
 
     from meals.models import Meal, MealPlan, MealPlanMeal, MealPlanInstruction, PantryItem
     from django.db import transaction
@@ -708,6 +722,12 @@ def generate_bulk_prep_instructions(meal_plan_id, send_via_assistant: bool = Tru
     logger.info(f"Starting bulk prep generation for MealPlan ID: {meal_plan_id}")
     meal_plan = get_object_or_404(MealPlan, id=meal_plan_id)
     user = meal_plan.user
+    if send_via_assistant and not notifications_enabled:
+        logger.info(
+            "Meal-plan notifications disabled; bulk prep instructions will not be emailed for MealPlan %s.",
+            meal_plan_id,
+        )
+        send_via_assistant = False
 
     # Check if instructions already exist
     existing_instructions = MealPlanInstruction.objects.filter(
@@ -1038,6 +1058,13 @@ def send_bulk_prep_instructions(meal_plan_id):
     """
     from meals.models import MealPlan, MealPlanInstruction
     from meals.meal_assistant_implementation import MealPlanningAssistant
+
+    if not meal_plan_notifications_enabled():
+        logger.info(
+            "Bulk prep instruction emails disabled; skipping send for MealPlan %s.",
+            meal_plan_id,
+        )
+        return {"status": "skipped", "reason": "meal_plan_notifications_disabled"}
     
     try:
         # Get the meal plan and bulk prep instruction
@@ -1293,6 +1320,14 @@ def format_follow_up_instructions(daily_task: DailyTask, user_name: str):
 
 def send_follow_up_email(user, daily_task_context):
     from meals.meal_assistant_implementation import MealPlanningAssistant
+
+    if not meal_plan_notifications_enabled():
+        logger.info(
+            "Follow-up instruction emails disabled; skipping user %s.",
+            user.id,
+        )
+        return {"status": "skipped", "reason": "meal_plan_notifications_disabled"}
+
     # Create a formatted message for the assistant
     daily_task = daily_task_context['daily_task']
     
@@ -1341,6 +1376,14 @@ def send_follow_up_instructions(meal_plan_id):
     from django.utils import timezone
     from meals.models import MealPlanInstruction, MealPlan
     from meals.meal_assistant_implementation import MealPlanningAssistant
+
+    if not meal_plan_notifications_enabled():
+        logger.info(
+            "Follow-up instruction emails disabled; skipping send for MealPlan %s.",
+            meal_plan_id,
+        )
+        return {"status": "skipped", "reason": "meal_plan_notifications_disabled"}
+
     meal_plan = MealPlan.objects.get(id=meal_plan_id)
     instructions = MealPlanInstruction.objects.filter(meal_plan=meal_plan, is_bulk_prep=False)
     user = meal_plan.user

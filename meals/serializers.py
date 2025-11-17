@@ -11,6 +11,8 @@ import decimal
 import logging
 from decimal import Decimal
 
+LEGACY_MEAL_PLAN = True
+
 logger = logging.getLogger(__name__)
 
 
@@ -265,6 +267,7 @@ class MealSerializer(serializers.ModelSerializer):
             
         return event_data
 
+# @deprecated Legacy meal-plan serializer guarded by LEGACY_MEAL_PLAN.
 class MealPlanMealSerializer(serializers.ModelSerializer):
     meal_plan_meal_id = serializers.IntegerField(source='id', read_only=True)  # Add this line to include the ID
     meal = MealSerializer()
@@ -354,6 +357,7 @@ class MealPlanMealSerializer(serializers.ModelSerializer):
             'created_at': order.created_at
         }
 
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 class MealPlanPaymentMixin:
     """Shared payment-related helpers for meal plan serializers."""
 
@@ -444,6 +448,7 @@ class MealPlanPaymentMixin:
         }
 
 
+# @deprecated Legacy meal-plan serializer guarded by LEGACY_MEAL_PLAN.
 class MealPlanSerializer(MealPlanPaymentMixin, serializers.ModelSerializer):
     meals = MealPlanMealSerializer(source='mealplanmeal_set', many=True)
     user = UserSerializer()
@@ -456,6 +461,7 @@ class MealPlanSerializer(MealPlanPaymentMixin, serializers.ModelSerializer):
         fields = ['id', 'user', 'meals', 'created_date', 'week_start_date', 'week_end_date', 'order', 'is_approved', 'meal_prep_preference', 'payment_required', 'pending_order_id', 'payment_details', 'instacart_url']
 
 
+# @deprecated Legacy meal-plan serializer guarded by LEGACY_MEAL_PLAN.
 class MealPlanSummarySerializer(MealPlanPaymentMixin, serializers.ModelSerializer):
     """Lightweight serializer for streaming contexts (no nested meals)."""
 

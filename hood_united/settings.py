@@ -94,6 +94,8 @@ INSTALLED_APPS = [
 # Feature flags
 # Toggle gamification system on/off without removing the app
 GAMIFICATION_ENABLED = str_to_bool(os.getenv('GAMIFICATION_ENABLED', 'False'))
+# Central kill-switch for the legacy meal-plan stack
+LEGACY_MEAL_PLAN_ENABLED = str_to_bool(os.getenv('LEGACY_MEAL_PLAN_ENABLED', 'True'))
 # Chef-focused pivot: disable consumer meal-plan/instruction emails unless explicitly re-enabled
 MEAL_PLAN_EMAIL_NOTIFICATIONS_ENABLED = str_to_bool(
     os.getenv('MEAL_PLAN_EMAIL_NOTIFICATIONS_ENABLED', 'False')

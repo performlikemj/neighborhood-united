@@ -31,6 +31,8 @@ import traceback
 from meals.services import meal_plan_batch_service
 from meals.models import MealPlanBatchJob
 
+LEGACY_MEAL_PLAN = True
+
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
@@ -846,6 +848,7 @@ def generate_chat_session_summaries():
 
 
 @shared_task
+# @deprecated Legacy meal-plan maintenance task guarded by LEGACY_MEAL_PLAN.
 def cleanup_old_meal_plans_and_meals(dry_run: bool = False):
     """
     Delete meal plans whose week_end_date is older than 3 weeks and delete any
@@ -951,6 +954,7 @@ def _next_week_range_from_today(today=None):
 
 @shared_task(bind=True, ignore_result=True)
 @handle_task_failure
+# @deprecated Legacy meal-plan task guarded by LEGACY_MEAL_PLAN.
 def submit_weekly_meal_plan_batch(self, request_id=None):
     """Submit a Groq batch for all auto-enabled users for the upcoming week."""
     week_start, week_end = _next_week_range_from_today()
@@ -966,6 +970,8 @@ def submit_weekly_meal_plan_batch(self, request_id=None):
 
 
 @shared_task(bind=True, ignore_result=True)
+@handle_task_failure
+# @deprecated Legacy meal-plan task guarded by LEGACY_MEAL_PLAN.
 def poll_incomplete_meal_plan_batches(self):
     """Poll Groq for any meal plan batch jobs that are still in flight."""
     pending_statuses = [

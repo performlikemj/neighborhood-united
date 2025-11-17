@@ -36,6 +36,8 @@ from meals.youtube_api_search import find_youtube_cooking_videos
 import traceback
 from .celery_utils import handle_task_failure
 
+LEGACY_MEAL_PLAN = True
+
 logger = logging.getLogger(__name__)
 
 # Lazy Groq client factory
@@ -286,6 +288,7 @@ def send_daily_meal_instructions():
 
 @shared_task
 @handle_task_failure
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 def generate_instructions(meal_plan_meal_ids, send_via_assistant: bool = False):
     """
     Generate cooking instructions for a list of MealPlanMeal IDs.
@@ -693,6 +696,7 @@ def generate_instructions(meal_plan_meal_ids, send_via_assistant: bool = False):
 
 @shared_task
 @handle_task_failure
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 def generate_bulk_prep_instructions(meal_plan_id, send_via_assistant: bool = True):
     """
     Generate bulk meal prep instructions for a given meal plan.

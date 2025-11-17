@@ -83,6 +83,8 @@ INSTALLED_APPS = [
     'customer_dashboard',
     'local_chefs',
     'gamification',
+    'services',
+    'crm',
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',

@@ -11,8 +11,11 @@ from django.conf import settings
 from custom_auth.models import CustomUser
 from shared.utils import generate_user_context
 
+LEGACY_MEAL_PLAN = True
+
 
 @dataclass(frozen=True)
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 class MealPlanBatchRequest:
     """Lightweight value object representing one JSONL request line."""
 
@@ -32,6 +35,7 @@ class MealPlanBatchRequest:
         )
 
 
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 class MealPlanBatchRequestBuilder:
     """Builds Groq JSONL payloads for weekly meal plan generation."""
 
@@ -134,6 +138,7 @@ class MealPlanBatchRequestBuilder:
         return f"plan-{user.id}-{week_start.isoformat()}"
 
 
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 def generate_batch_entries(
     users: Iterable[CustomUser],
     week_start: date,

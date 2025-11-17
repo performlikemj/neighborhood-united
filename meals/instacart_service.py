@@ -23,6 +23,8 @@ from django.conf import settings
 import traceback
 from shared.utils import get_openai_client
 
+LEGACY_MEAL_PLAN = True
+
 # internal helper to lazily instantiate Groq
 def _get_groq_client():
     try:
@@ -37,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 def normalize_lines(lines: list[str]) -> dict:
     prompt = (
         "Turn these loose shopping-list lines into structured JSON ensuring the items are actual shopping list items.\n"
@@ -173,6 +176,7 @@ UNIT_MAPPING = {
     "bottles": "package",
 }
 
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 def create_instacart_shopping_list(
     shopping_list_data: dict,
     user_id: int = None,
@@ -410,6 +414,7 @@ def _call_instacart_api(payload: dict, api_key: str) -> str:
     
     return _append_instacart_utm_params(instacart_url)
 
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 def generate_instacart_link(user_id: int, meal_plan_id: int, postal_code: str = None) -> dict:
     """
     Generate an Instacart shopping list link for a meal plan.

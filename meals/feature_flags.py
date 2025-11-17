@@ -7,6 +7,8 @@ from typing import Optional
 
 from django.conf import settings
 
+LEGACY_MEAL_PLAN = True
+
 # Template keys that correspond to consumer meal plan or instruction emails.
 MEAL_PLAN_TEMPLATE_KEYS = frozenset(
     {
@@ -22,6 +24,8 @@ def meal_plan_notifications_enabled() -> bool:
     Return True when consumer-facing meal plan emails are allowed to send.
     Defaults to True if the setting is absent so existing environments stay unchanged.
     """
+    if not getattr(settings, "LEGACY_MEAL_PLAN_ENABLED", True):
+        return False
     return getattr(settings, "MEAL_PLAN_EMAIL_NOTIFICATIONS_ENABLED", True)
 
 

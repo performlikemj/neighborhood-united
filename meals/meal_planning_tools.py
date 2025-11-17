@@ -45,6 +45,8 @@ from django.conf import settings
 from meals.instacart_service import generate_instacart_link as _util_generate_instacart_link
 import traceback
 
+LEGACY_MEAL_PLAN = True
+
 logger = logging.getLogger(__name__)
 
 # Tool definitions for the OpenAI Responses API
@@ -514,6 +516,7 @@ def update_user_info(
         requests.post(n8n_traceback_url, json={"error": str(e), "source":"update_user_info", "traceback": traceback.format_exc()})
         return {"status": "error", "message": str(e)}
 
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 def create_meal_plan(
     user_id: int,
     days_to_plan: Optional[List[str]] = None,
@@ -577,7 +580,8 @@ def create_meal_plan(
         requests.post(n8n_traceback_url, json={"error": str(e), "source":"create_meal_plan", "traceback": traceback.format_exc()})
         return {"status": "error", "message": str(e)}
 
-def modify_meal_plan(user_id: int, meal_plan_id: int, day: str = None, meal_type: str = None, 
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
+def modify_meal_plan(user_id: int, meal_plan_id: int, day: str = None, meal_type: str = None,
                     user_prompt: str = None) -> Dict[str, Any]:
     """
     Modify an existing meal plan using free-form text prompt.
@@ -754,6 +758,7 @@ def get_meal_details(meal_id: int) -> Dict[str, Any]:
             "message": f"Failed to get meal details"
         }
 
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 def get_meal_plan_meals_info(user_id: int, meal_plan_id: int) -> Dict[str, Any]:
     """
     Get detailed information about all MealPlanMeal entries for a given MealPlan.
@@ -790,6 +795,7 @@ def get_meal_plan_meals_info(user_id: int, meal_plan_id: int) -> Dict[str, Any]:
             "message": f"Failed to get meal plan meals info"
         }
 
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 def get_meal_plan(user_id: int, meal_plan_id: int = None) -> Dict[str, Any]:
     """
     Get details of an existing meal plan.
@@ -812,6 +818,7 @@ def get_meal_plan(user_id: int, meal_plan_id: int = None) -> Dict[str, Any]:
         requests.post(n8n_traceback_url, json={"error": str(e), "source":"get_meal_plan", "traceback": traceback.format_exc()})
         return {"status": "error", "message": f"Failed to get meal plan"}
 
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 def list_user_meal_plans(user_id: int) -> Dict[str, Any]:
     """
     Get a summary list of all meal plans for a user, showing just the meal plan IDs, 
@@ -849,7 +856,8 @@ def list_user_meal_plans(user_id: int) -> Dict[str, Any]:
         requests.post(n8n_traceback_url, json={"error": str(e), "source":"list_user_meal_plans", "traceback": traceback.format_exc()})
         return {"status": "error", "message": f"Failed to list user meal plans"}
 
-def email_generate_meal_instructions(user_id: int, meal_plan_id: int, day: str = None, 
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
+def email_generate_meal_instructions(user_id: int, meal_plan_id: int, day: str = None,
                               meal_type: str = None) -> Dict[str, Any]:
     """
     Generate cooking instructions for meals in a meal plan and send via email.
@@ -1131,6 +1139,7 @@ def find_related_youtube_videos(meal_id: int, max_results: int = 5) -> Dict[str,
         requests.post(n8n_traceback_url, json={"error": str(e), "source":"find_related_youtube_videos", "traceback": traceback.format_exc()})
         return {"status": "error", "message": f"Failed to find related youtube videos"}
 
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 def generate_instacart_link_tool(user_id: int, meal_plan_id: int, postal_code: str = None) -> Dict[str, Any]:
     """
     Generate an Instacart shopping list link from the user's meal plan to buy ingredients
@@ -1147,6 +1156,7 @@ def generate_instacart_link_tool(user_id: int, meal_plan_id: int, postal_code: s
         return {"status": "error", "message": f"Failed to generate instacart link"}
 
 # Function to get all meal planning tools
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 def get_meal_planning_tools():
     """
     Get all meal planning tools for the OpenAI Responses API.

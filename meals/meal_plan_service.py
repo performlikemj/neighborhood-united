@@ -39,6 +39,8 @@ from django.db import transaction
 from pydantic import BaseModel, Field, ConfigDict
 from utils.groq_rate_limit import groq_call_with_retry
 
+LEGACY_MEAL_PLAN = True
+
 logger = logging.getLogger(__name__)
 
 # Lazy Groq client factory
@@ -449,6 +451,7 @@ def day_to_offset(day_name: str) -> int:
 
 @shared_task(ignore_result=True)
 @handle_task_failure
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 def create_meal_plan_for_user(
     user=None,
     user_id=None,
@@ -1036,6 +1039,7 @@ def create_meal_plan_for_user(
 # -----------------------------------------------
 # New function: modify_existing_meal_plan
 # -----------------------------------------------
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 def modify_existing_meal_plan(
     user,
     meal_plan_id: int,
@@ -3078,6 +3082,7 @@ def regenerate_replaced_meal(original_meal_id, user, meal_type, meal_plan, reque
         logger.error(f"[{request_id}] Exception regenerating meal: {e}")
         return False
 
+# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 def apply_modifications(
     user,
     meal_plan: MealPlan,

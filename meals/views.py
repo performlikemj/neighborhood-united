@@ -75,6 +75,7 @@ from zoneinfo import ZoneInfo
 from django.http import HttpResponseForbidden
 
 
+LEGACY_MEAL_PLAN = True
 
 logger = logging.getLogger(__name__)
 
@@ -344,6 +345,7 @@ def api_post_meal_plan_preference(request):
 @csrf_exempt
 @api_view(['POST', 'GET', 'OPTIONS'])
 @permission_classes([AllowAny])  # Allow unauthenticated access
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_email_approved_meal_plan(request):
     # Support GET query params for environments where POST may be blocked from email clients
     if request.method == 'GET':
@@ -439,6 +441,7 @@ def api_create_ingredient(request):
 
 @login_required
 @require_http_methods(["GET", "POST"])  # Restrict to GET and POST methods
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_customize_meal_plan(request, meal_plan_id):
     meal_plan = get_object_or_404(MealPlan, id=meal_plan_id, user=request.user)
 
@@ -530,6 +533,7 @@ def get_alternative_meals(request):
 @login_required
 @user_passes_test(is_customer, login_url='custom_auth:profile')
 @require_http_methods(["POST"])
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def submit_meal_plan_updates(request):
     try:
         # Load the JSON data from the request
@@ -667,6 +671,7 @@ def meal_plan_approval(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_get_meal_plans(request):
     try:
         user = request.user
@@ -724,6 +729,7 @@ def api_get_meal_plans(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_get_meal_plan_by_id(request, meal_plan_id):
     try:
         user = request.user
@@ -740,6 +746,7 @@ def api_get_meal_plan_by_id(request, meal_plan_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 @renderer_classes([EventStreamRenderer, renderers.JSONRenderer])
+# @deprecated Legacy meal-plan SSE endpoint guarded by LEGACY_MEAL_PLAN.
 def api_stream_meal_plan_detail(request, meal_plan_id):
     """Stream an existing meal plan incrementally via Server-Sent Events."""
 
@@ -830,6 +837,7 @@ def api_stream_meal_plan_detail(request, meal_plan_id):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_generate_cooking_instructions(request):
     try:
         from .meal_instructions import generate_instructions
@@ -863,6 +871,7 @@ def api_generate_cooking_instructions(request):
     
 @api_view(['DELETE'])
 @permission_classes([IsAuthenticated])
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_remove_meal_from_plan(request):
     """
     API endpoint to remove meals from a user's meal plan.
@@ -899,6 +908,7 @@ def api_remove_meal_from_plan(request):
     
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_fetch_instructions(request):
     from meals.models import MealPlanMeal, Instruction, MealPlan, MealPlanInstruction
     meal_plan_meal_ids = request.query_params.get('meal_plan_meal_ids', '').split(',')
@@ -988,6 +998,7 @@ def api_fetch_instructions(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_approve_meal_plan(request):
     """
     Endpoint to approve a meal plan with specified meal prep preference.
@@ -1243,6 +1254,7 @@ def api_generate_emergency_plan(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_update_meals_with_prompt(request):
     """
     API endpoint to update meals in a meal plan based on a text prompt.
@@ -1604,6 +1616,7 @@ def api_update_meals_with_prompt(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_suggest_meal_alternatives(request):
     """
     API endpoint to suggest alternative meals for given meal plan entries.
@@ -1855,6 +1868,7 @@ def get_user_postal_code(user):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_generate_meal_plan(request):
     """
     Start asynchronous meal plan generation for a specific week.
@@ -2022,6 +2036,7 @@ class EventStreamRenderer(BaseRenderer):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 @renderer_classes([EventStreamRenderer])
+# @deprecated Legacy meal-plan SSE endpoint guarded by LEGACY_MEAL_PLAN.
 def api_stream_meal_plan_generation(request):
     """
     SSE endpoint to stream meal plan generation events for a given week.
@@ -2276,6 +2291,7 @@ def api_cleanup_meal_plan_locks(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_meal_plan_status(request, task_id):
     """
     Check the status of a meal plan generation task.
@@ -4325,6 +4341,7 @@ def api_dietary_preferences(request):
 
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated])
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_replace_meal_plan_meal(request):
     """
     Replace a meal in a meal plan with either a chef-created meal or an auto-generated/user-created meal.
@@ -4634,6 +4651,7 @@ def api_replace_meal_plan_meal(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_add_meal_slot(request):
     """
     Create or fill an empty meal slot for a user's meal plan when there is no existing MealPlanMeal to replace.
@@ -4743,6 +4761,7 @@ def api_add_meal_slot(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_suggest_alternatives_for_slot(request):
     """
     Suggest alternative meals for a slot where there is no existing MealPlanMeal.
@@ -4805,6 +4824,7 @@ def api_suggest_alternatives_for_slot(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_fill_meal_slot(request):
     """
     Fill an empty meal slot with a specific existing meal (chef or non‑chef), mirroring order-handling from api_replace_meal_plan_meal.
@@ -5338,6 +5358,7 @@ def payment_success(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_modify_meal_plan(request, meal_plan_id):
     """
     API endpoint to modify an existing meal plan using free-form text input.
@@ -5444,6 +5465,7 @@ def api_modify_meal_plan(request, meal_plan_id):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_generate_instacart_link(request):
     """
     API endpoint to generate an Instacart shopping list link for a meal plan.
@@ -5537,6 +5559,7 @@ def api_generate_instacart_link(request):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
+# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_get_instacart_url(request, meal_plan_id):
     """
     API endpoint to get the Instacart URL for a meal plan if it exists.

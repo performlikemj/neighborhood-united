@@ -1,4 +1,5 @@
 from django.urls import path, include
+from django.conf import settings
 from . import views
 from . import chef_meals_views
 from meals.cart_views.unified_cart import (
@@ -9,6 +10,9 @@ from meals.cart_views.unified_cart import (
     clear_cart,
 )
 from rest_framework.routers import DefaultRouter
+
+LEGACY_MEAL_PLAN = True
+_legacy_enabled = getattr(settings, 'LEGACY_MEAL_PLAN_ENABLED', True)
 
 app_name = 'meals'
 
@@ -38,26 +42,6 @@ urlpatterns = [
     # Existing API URLs
     path('api/search_ingredients/', views.api_search_ingredients, name='api_search_ingredients'),
     path('api/create_ingredient/', views.api_create_ingredient, name='api_create_ingredient'),
-    path('api/customize_meal/', views.api_customize_meal_plan, name='api_customize_meal'),
-    path('api/submit_meal_plan/', views.submit_meal_plan_updates, name='submit_meal_plan_updates'),
-    path('api/meal_plans/', views.api_get_meal_plans, name='api_get_meal_plans'),
-    path('api/meal_plans/<int:meal_plan_id>/', views.api_get_meal_plan_by_id, name='api_get_meal_plan_by_id'),
-    path('api/meal_plans/<int:meal_plan_id>/stream/', views.api_stream_meal_plan_detail, name='api_stream_meal_plan_detail'),
-    path('api/generate_cooking_instructions/', views.api_generate_cooking_instructions, name='api_generate_cooking_instructions'),
-    path('api/fetch_instructions/', views.api_fetch_instructions, name='api_fetch_instructions'),
-    path('api/approve_meal_plan/', views.api_approve_meal_plan, name='api_approve_meal_plan'),
-    path('api/email_approved_meal_plan/', views.api_email_approved_meal_plan, name='api_email_approved_meal_plan'),
-    path('api/remove_meal_from_plan/', views.api_remove_meal_from_plan, name='api_remove_meal_from_plan'),
-    path('api/replace_meal_plan_meal/', views.api_replace_meal_plan_meal, name='api_replace_meal_plan_meal'),
-    path('api/add_meal_slot/', views.api_add_meal_slot, name='api_add_meal_slot'),
-    path('api/suggest_alternatives_for_slot/', views.api_suggest_alternatives_for_slot, name='api_suggest_alternatives_for_slot'),
-    path('api/fill_meal_slot/', views.api_fill_meal_slot, name='api_fill_meal_slot'),
-    path('api/update_meals_with_prompt/', views.api_update_meals_with_prompt, name='api_update_meals_with_prompt'),
-    path('api/suggest_meal_alternatives/', views.api_suggest_meal_alternatives, name='api_suggest_meal_alternatives'),
-    path('api/generate_meal_plan/', views.api_generate_meal_plan, name='api_generate_meal_plan'),
-    path('api/meal_plan_status/<str:task_id>/', views.api_meal_plan_status, name='api_meal_plan_status'),
-    path('api/modify_meal_plan/<int:meal_plan_id>/', views.api_modify_meal_plan, name='api_modify_meal_plan'),
-    path('api/meal_plans/stream', views.api_stream_meal_plan_generation, name='api_stream_meal_plan_generation'),
     
     # Function-based API views for chef meal orders
     path('api/chef-meal-orders/', chef_meals_views.api_chef_meal_orders, name='api_chef_meal_orders'),
@@ -107,10 +91,6 @@ urlpatterns = [
     # API endpoint for dietary preferences
     path('api/dietary-preferences/', views.api_dietary_preferences, name='api_dietary_preferences'),
     
-    # API endpoints for Instacart integration
-    path('api/generate-instacart-link/', views.api_generate_instacart_link, name='api_generate_instacart_link'),
-    path('api/meal-plans/<int:meal_plan_id>/instacart-url/', views.api_get_instacart_url, name='api_get_instacart_url'),
-    
     # API endpoint for dishes
     path('api/dishes/', chef_meals_views.api_get_dishes, name='api_get_dishes'),
     path('api/dishes/<int:dish_id>/', chef_meals_views.api_get_dish_by_id, name='api_get_dish_by_id'),
@@ -143,3 +123,30 @@ urlpatterns = [
     path('api/cart/checkout/', unified_checkout, name='api_unified_checkout'),
     path('api/cart/clear/', clear_cart, name='api_clear_cart'),
 ]
+
+
+if _legacy_enabled:
+    urlpatterns += [
+        path('api/customize_meal_plan/', views.api_customize_meal_plan, name='api_customize_meal'),
+        path('api/submit_meal_plan/', views.submit_meal_plan_updates, name='submit_meal_plan_updates'),
+        path('api/meal_plans/', views.api_get_meal_plans, name='api_get_meal_plans'),
+        path('api/meal_plans/<int:meal_plan_id>/', views.api_get_meal_plan_by_id, name='api_get_meal_plan_by_id'),
+        path('api/meal_plans/<int:meal_plan_id>/stream/', views.api_stream_meal_plan_detail, name='api_stream_meal_plan_detail'),
+        path('api/generate_cooking_instructions/', views.api_generate_cooking_instructions, name='api_generate_cooking_instructions'),
+        path('api/fetch_instructions/', views.api_fetch_instructions, name='api_fetch_instructions'),
+        path('api/approve_meal_plan/', views.api_approve_meal_plan, name='api_approve_meal_plan'),
+        path('api/email_approved_meal_plan/', views.api_email_approved_meal_plan, name='api_email_approved_meal_plan'),
+        path('api/remove_meal_from_plan/', views.api_remove_meal_from_plan, name='api_remove_meal_from_plan'),
+        path('api/replace_meal_plan_meal/', views.api_replace_meal_plan_meal, name='api_replace_meal_plan_meal'),
+        path('api/add_meal_slot/', views.api_add_meal_slot, name='api_add_meal_slot'),
+        path('api/suggest_alternatives_for_slot/', views.api_suggest_alternatives_for_slot, name='api_suggest_alternatives_for_slot'),
+        path('api/fill_meal_slot/', views.api_fill_meal_slot, name='api_fill_meal_slot'),
+        path('api/update_meals_with_prompt/', views.api_update_meals_with_prompt, name='api_update_meals_with_prompt'),
+        path('api/suggest_meal_alternatives/', views.api_suggest_meal_alternatives, name='api_suggest_meal_alternatives'),
+        path('api/generate_meal_plan/', views.api_generate_meal_plan, name='api_generate_meal_plan'),
+        path('api/meal_plan_status/<str:task_id>/', views.api_meal_plan_status, name='api_meal_plan_status'),
+        path('api/modify_meal_plan/<int:meal_plan_id>/', views.api_modify_meal_plan, name='api_modify_meal_plan'),
+        path('api/meal_plans/stream', views.api_stream_meal_plan_generation, name='api_stream_meal_plan_generation'),
+        path('api/generate-instacart-link/', views.api_generate_instacart_link, name='api_generate_instacart_link'),
+        path('api/meal-plans/<int:meal_plan_id>/instacart-url/', views.api_get_instacart_url, name='api_get_instacart_url'),
+    ]

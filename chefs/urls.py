@@ -1,4 +1,6 @@
-from django.urls import path 
+from django.urls import path
+
+from chefs.api import waitlist as waitlist_api
 from . import views
 
 
@@ -7,17 +9,17 @@ app_name = 'chefs'
 urlpatterns = [
     # Public API
     path('api/public/<int:chef_id>/', views.chef_public, name='chef_public'),
-    path('api/public/by-username/<str:username>/', views.chef_public_by_username, name='chef_public_by_username'),
+    path('api/public/by-username/<slug:slug>/', views.chef_public_by_username, name='chef_public_by_username'),
     path('api/lookup/by-username/<str:username>/', views.chef_lookup_by_username, name='chef_lookup_by_username'),
     path('api/public/', views.chef_public_directory, name='chef_public_directory'),
     path('api/public/<int:chef_id>/serves-my-area/', views.chef_serves_my_area, name='chef_serves_my_area'),
     path('api/public/<int:chef_id>/stripe-status/', views.chef_stripe_status, name='chef_stripe_status'),
     
     # Waitlist API
-    path('api/waitlist/config/', views.waitlist_config, name='waitlist_config'),
-    path('api/public/<int:chef_id>/waitlist/status/', views.waitlist_status, name='waitlist_status'),
-    path('api/public/<int:chef_id>/waitlist/subscribe', views.waitlist_subscribe, name='waitlist_subscribe'),
-    path('api/public/<int:chef_id>/waitlist/unsubscribe', views.waitlist_unsubscribe, name='waitlist_unsubscribe'),
+    path('api/waitlist/config/', waitlist_api.waitlist_config, name='waitlist_config'),
+    path('api/public/<int:chef_id>/waitlist/status/', waitlist_api.waitlist_status, name='waitlist_status'),
+    path('api/public/<int:chef_id>/waitlist/subscribe', waitlist_api.waitlist_subscribe, name='waitlist_subscribe'),
+    path('api/public/<int:chef_id>/waitlist/unsubscribe', waitlist_api.waitlist_unsubscribe, name='waitlist_unsubscribe'),
     
     # Gallery API - Public endpoints for chef photo galleries
     path('api/<str:username>/photos/', views.chef_gallery_photos, name='chef_gallery_photos'),

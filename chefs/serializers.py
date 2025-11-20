@@ -82,7 +82,7 @@ class UserPublicSerializer(serializers.ModelSerializer):
 class ChefPublicSerializer(serializers.ModelSerializer):
     user = UserPublicSerializer(read_only=True)
     serving_postalcodes = PostalCodePublicSerializer(many=True, read_only=True)
-    photos = ChefPhotoSerializer(many=True, read_only=True)
+    photos = serializers.SerializerMethodField()
     profile_pic_url = serializers.SerializerMethodField()
     banner_url = serializers.SerializerMethodField()
 
@@ -114,6 +114,14 @@ class ChefPublicSerializer(serializers.ModelSerializer):
             url = default.image.url
             return request.build_absolute_uri(url) if request is not None else url
         return None
+
+    def get_photos(self, obj):
+        """Return only public photos, prioritizing featured items."""
+        public_photos = getattr(obj, 'public_photos', None)
+        if public_photos is None:
+            public_photos = obj.photos.filter(is_public=True)
+        serializer = ChefPhotoSerializer(public_photos[:6], many=True, context=self.context)
+        return serializer.data
 
     
 

@@ -38,6 +38,7 @@ import dateutil.parser
 import re
 import json
 import requests
+from meals.order_service import ensure_chef_meal_order
 from django.db import transaction
 from decimal import Decimal, InvalidOperation
 from django.core.paginator import Paginator
@@ -796,6 +797,17 @@ def stripe_webhook(request):
                     # Use transaction to make the order/payment update atomic
                     with transaction.atomic():
                         order = Order.objects.select_for_update().select_related('customer').get(id=parent_order_id)
+
+                        # Ensure ChefMealOrder rows exist for all chef-linked OrderMeals
+                        order_meals = order.ordermeal_set.filter(chef_meal_event__isnull=False).select_related('chef_meal_event')
+                        for order_meal in order_meals:
+                            ensure_chef_meal_order(
+                                order=order,
+                                event=order_meal.chef_meal_event,
+                                customer=order.customer,
+                                quantity=order_meal.quantity or 1,
+                                unit_price=order_meal.chef_meal_event.current_price,
+                            )
 
                         # Idempotency: acknowledge if already paid
                         if getattr(order, 'is_paid', False):

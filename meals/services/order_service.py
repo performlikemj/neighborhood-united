@@ -54,6 +54,7 @@ def create_order(user, event: ChefMealEvent, qty: int, idem_key: str):
             'currency': 'usd',
             'capture_method': 'manual',
             'metadata': {
+                'order_type': 'chef_meal',
                 'meal_event': event.id,
                 'customer': user.id,
                 'quantity': qty,

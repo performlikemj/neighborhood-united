@@ -19,6 +19,7 @@ from django.urls import path, include
 from django.http import HttpResponse
 from django.conf.urls.static import static
 from django.conf import settings
+from meals.api_dashboard_views import chef_dashboard
 
 
 urlpatterns = [
@@ -30,6 +31,7 @@ urlpatterns = [
     path('customer_dashboard/', include('customer_dashboard.urls')),
     path('auth/', include('custom_auth.urls')),
     path('meals/', include('meals.urls')),
+    path('chef/api/dashboard/', chef_dashboard, name='chef_dashboard_api'),
     path('services/', include('chef_services.urls')),
     path('reviews/', include('reviews.urls')),
     path('events/', include('events.urls')),

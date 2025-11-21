@@ -2,6 +2,7 @@ from django.urls import path, include
 from django.conf import settings
 from . import views
 from . import chef_meals_views
+from . import api_dashboard_views
 from meals.cart_views.unified_cart import (
     get_cart,
     add_chef_service_to_cart,
@@ -48,6 +49,8 @@ urlpatterns = [
     path('api/chef-meal-orders/<int:order_id>/', chef_meals_views.api_chef_meal_order_detail, name='api_chef_meal_order_detail'),
     path('api/chef-meal-orders/<int:order_id>/cancel/', chef_meals_views.api_cancel_chef_meal_order, name='api_cancel_chef_meal_order'),
     path('api/chef-meal-orders/<int:order_id>/confirm/', chef_meals_views.api_confirm_chef_meal_order, name='api_confirm_chef_meal_order'),
+    path('api/chef-calendar/', api_dashboard_views.chef_calendar, name='api_chef_calendar'),
+    path('api/my-orders/', api_dashboard_views.my_orders, name='api_my_orders'),
     
     # New API endpoints for the updated chef meal order flow
     path('api/chef-meal-events/<int:event_id>/order/', chef_meals_views.api_create_chef_meal_order, name='api_create_chef_meal_order'),

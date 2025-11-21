@@ -1,6 +1,7 @@
 # meals/serializers.py
 from rest_framework import serializers
 from .models import MealPlan, Meal, MealPlanMeal, CustomUser, Order, Ingredient, Dish, PantryItem, Tag, DietaryPreference, ChefMealEvent, ChefMealOrder, ChefMealReview, StripeConnectAccount, OrderMeal
+from meals.order_service import DashboardItem, format_money
 from custom_auth.models import CustomUser, Address
 from chefs.models import Chef
 from django.db.models import Avg
@@ -38,6 +39,20 @@ class SimpleChefMealEventSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChefMealEvent
         fields = ['id', 'meal_id', 'meal_name', 'chef_id', 'chef_name', 'event_date', 'event_time']
+
+
+# Lightweight serializer for dashboard/calendar aggregate items
+class DashboardItemSerializer(serializers.Serializer):
+    title = serializers.CharField()
+    status = serializers.CharField()
+    amount = serializers.CharField()
+    scheduled_at = serializers.DateTimeField(allow_null=True)
+    metadata = serializers.JSONField()
+
+    def to_representation(self, instance: DashboardItem):
+        base = super().to_representation(instance)
+        base["amount"] = format_money(instance.amount)
+        return base
 
 
 # --- Original Serializer Definitions (Modified) ---

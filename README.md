@@ -49,6 +49,14 @@ sautai serves multiple user types with tailored experiences:
 - **Chef Verification**: Oversee the approval process for local chefs and verify credentials
 - **Platform Management**: Manage the overall platform operations and community standards
 
+## Legacy meal-plan feature flag
+
+The legacy meal-planning stack (including `/meal-plans` links, Instacart helpers, and the old Streamlit dashboard) is controlled by the `LEGACY_MEAL_PLAN_ENABLED` setting. Production environments keep the flag off by default to avoid exposing deprecated flows; to re-enable the stack for internal testing:
+
+1. Set `LEGACY_MEAL_PLAN_ENABLED=True` in your environment (for example, in `dev.env` or the hosting provider's configuration).
+2. Restart Django so the setting propagates to the new context processor and the `/meals/api/config/` endpoint.
+3. Verify that templates render meal-plan widgets again and that the config endpoint reports `"legacy_meal_plan_enabled": true`.
+
 ## AI Assistant Prompts
 
 sautai features MJ, an AI-powered meal planning consultant. Below are the core prompt templates that define MJ's personality and capabilities:

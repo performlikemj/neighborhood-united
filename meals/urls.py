@@ -22,6 +22,7 @@ urlpatterns = [
     # Existing URLs
     path('embeddings/', views.embeddings_list, name='meal_list'),
     path('approve_meal_plan/', views.meal_plan_approval, name='approve_meal_plan'),
+    path('api/config/', views.api_meals_config, name='api_meals_config'),
     
     # Keep the template URLs for admin and similar purposes, but they might not be used by Streamlit
     path('chef/meal_events/', views.chef_meal_dashboard, name='chef_meal_dashboard'),

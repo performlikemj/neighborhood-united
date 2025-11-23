@@ -2,7 +2,7 @@
 from uuid import uuid4
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
-from django.http import JsonResponse
+from django.http import JsonResponse, Http404
 from meals.models import Order, Dish, Meal, Cart, MealPlanMeal, MealPlan, Meal
 from custom_auth.models import CustomUser, UserRole
 from django.contrib.auth.decorators import user_passes_test
@@ -78,6 +78,7 @@ from meals.guest_tool_registration import get_guest_tool_registry
 from meals.tool_registration import get_all_tools, handle_tool_call
 from meals.enhanced_email_processor import process_email_with_enhanced_formatting
 from customer_dashboard.template_router import render_email_sections
+from meals.feature_flags import legacy_meal_plan_enabled
 
 class GuestChatThrottle(UserRateThrottle):
     rate = '100/day'  
@@ -908,6 +909,9 @@ def update_week_shift(request):
 @login_required
 @user_passes_test(is_customer)
 def meal_plans(request):
+    if not legacy_meal_plan_enabled():
+        raise Http404("Legacy meal plans are disabled.")
+
     week_shift = get_current_week_shift_context(request)
 
     current_date = timezone.now()

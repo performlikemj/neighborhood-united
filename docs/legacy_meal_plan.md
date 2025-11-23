@@ -63,4 +63,5 @@ loading them from new entry points.
   detect when the legacy stack is imported.
 * When the flag is off the views are unregistered, the feature flag helper short-circuits email
   sends, and the assistant tools should also be considered unavailable because they all depend on
-  these modules.
+  these modules. The `/meals/api/config/` endpoint and template context processors expose the flag
+  value so frontends can hide `/meal-plans` widgets rather than linking to disabled routes.

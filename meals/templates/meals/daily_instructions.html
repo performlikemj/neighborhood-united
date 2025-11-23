@@ -99,11 +99,13 @@
                             {% endwith %}
                         </div>
                         <!-- Add the link to review this meal -->
-                        <p>
-                          <a href="{{ streamlit_url }}/meal_plans?action=review_meal&amp;meal_plan_id={{ meal.meal_plan_id }}&amp;meal_id={{ meal.meal_id }}">
-                            Review This Meal
-                          </a>
-                        </p>
+                        {% if streamlit_url %}
+                            <p>
+                              <a href="{{ streamlit_url }}/meal_plans?action=review_meal&amp;meal_plan_id={{ meal.meal_plan_id }}&amp;meal_id={{ meal.meal_id }}">
+                                Review This Meal
+                              </a>
+                            </p>
+                        {% endif %}
                       {% endfor %}
                     {% endif %}
                   {% endfor %}
@@ -112,24 +114,30 @@
                     <p>Bon appétit!</p>
                     <p>Warm regards,<br>The sautai Team</p>
 
-                    <div style="text-align: center; margin: 20px 0;">
-                      <p>Be prepared for the unexpected. Generate an emergency pantry plan:</p>
-                      <a href="{{ streamlit_url }}/meal_plans?action=generate_emergency_plan&approval_token={{ approval_token }}&user_id={{ user_id }}"
-                         style="
-                            display: inline-block; 
-                            background-color: #ff4c4c;
-                            color: #ffffff; 
-                            padding: 10px 20px; 
-                            border-radius: 5px; 
-                            text-decoration: none;
-                         ">
-                        Generate Emergency Pantry Plan
-                      </a>
-                    </div>
+                    {% if streamlit_url %}
+                        <div style="text-align: center; margin: 20px 0;">
+                          <p>Be prepared for the unexpected. Generate an emergency pantry plan:</p>
+                          <a href="{{ streamlit_url }}/meal_plans?action=generate_emergency_plan&approval_token={{ approval_token }}&user_id={{ user_id }}"
+                             style="
+                                display: inline-block;
+                                background-color: #ff4c4c;
+                                color: #ffffff;
+                                padding: 10px 20px;
+                                border-radius: 5px;
+                                text-decoration: none;
+                             ">
+                            Generate Emergency Pantry Plan
+                          </a>
+                        </div>
+                    {% endif %}
                 
                     <div class="footer">
                         <p>You are receiving this email because you opted in for cooking instructions emails.</p>
-                        <p><a href="{{ profile_url }}">Manage Your Email Preferences</a></p>
+                        {% if profile_url %}
+                            <p><a href="{{ profile_url }}">Manage Your Email Preferences</a></p>
+                        {% else %}
+                            <p>The legacy meal plan dashboard is currently disabled.</p>
+                        {% endif %}
                     </div>
                     <p style="color: #777; font-size: 12px; margin-top: 20px;">
                       <strong>Disclaimer:</strong> sautai uses generative AI for meal planning, 

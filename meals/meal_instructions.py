@@ -30,7 +30,7 @@ from shared.utils import generate_user_context, get_openai_client, build_age_saf
 from meals.pantry_management import get_expiring_pantry_items
 from meals.pydantic_models import BulkPrepInstructions, DailyTask
 from django.template.loader import render_to_string
-from meals.feature_flags import meal_plan_notifications_enabled
+from meals.feature_flags import meal_plan_notifications_enabled, legacy_meal_plan_enabled
 from meals.macro_info_retrieval import get_meal_macro_information
 from meals.youtube_api_search import find_youtube_cooking_videos
 import traceback
@@ -656,7 +656,11 @@ def generate_instructions(meal_plan_meal_ids, send_via_assistant: bool = False):
         grouped_instructions[meal_type].append(item)
 
 
-    streamlit_url = os.getenv("STREAMLIT_URL") + '/meal-plans'
+    streamlit_url = None
+    if legacy_meal_plan_enabled():
+        base_streamlit_url = os.getenv("STREAMLIT_URL")
+        if base_streamlit_url:
+            streamlit_url = f"{base_streamlit_url}/meal-plans"
 
 
     if send_via_assistant and instructions_list:

@@ -73,11 +73,20 @@ import pytz
 from django.views.decorators.csrf import csrf_exempt
 from zoneinfo import ZoneInfo
 from django.http import HttpResponseForbidden
+from meals.feature_flags import legacy_meal_plan_enabled, require_legacy_meal_plan_enabled
 
 
 LEGACY_MEAL_PLAN = True
 
 logger = logging.getLogger(__name__)
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def api_meals_config(request):
+    """Expose meal-related feature flags for frontend consumers."""
+
+    return Response({"legacy_meal_plan_enabled": legacy_meal_plan_enabled()})
 
 
 class EventStreamRenderer(renderers.BaseRenderer):
@@ -576,6 +585,7 @@ def submit_meal_plan_updates(request):
 
 
 @login_required
+@require_legacy_meal_plan_enabled
 def meal_plan_approval(request):
     # Step 1: Retrieve the current MealPlan for the user
     week_shift = max(int(request.user.week_shift), 0)

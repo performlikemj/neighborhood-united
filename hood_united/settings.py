@@ -174,6 +174,7 @@ TEMPLATES = [
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
                 'custom_auth.context_processors.role_context_processor',
+                'meals.context_processors.legacy_meal_plan_flags',
             ],
         },
     },

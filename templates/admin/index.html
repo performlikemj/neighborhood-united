@@ -17,14 +17,16 @@
         <div class="hu-card-kpi">{{ metrics.users_total }}</div>
         <div class="hu-card-label">Users</div>
       </a>
-      <a class="hu-card" href="{% url 'admin:meals_mealplan_changelist' %}?is_approved__exact=1">
-        <div class="hu-card-kpi">{{ metrics.meal_plans_active }}</div>
-        <div class="hu-card-label">Active Meal Plans</div>
-      </a>
-      <a class="hu-card" href="{% url 'admin:meals_mealplan_changelist' %}?has_changes__exact=1&is_approved__exact=0">
-        <div class="hu-card-kpi">{{ metrics.approvals_pending }}</div>
-        <div class="hu-card-label">Plan Approvals</div>
-      </a>
+      {% if legacy_meal_plan_enabled %}
+        <a class="hu-card" href="{% url 'admin:meals_mealplan_changelist' %}?is_approved__exact=1">
+          <div class="hu-card-kpi">{{ metrics.meal_plans_active }}</div>
+          <div class="hu-card-label">Active Meal Plans</div>
+        </a>
+        <a class="hu-card" href="{% url 'admin:meals_mealplan_changelist' %}?has_changes__exact=1&is_approved__exact=0">
+          <div class="hu-card-kpi">{{ metrics.approvals_pending }}</div>
+          <div class="hu-card-label">Plan Approvals</div>
+        </a>
+      {% endif %}
       <a class="hu-card" href="{% url 'admin:meals_order_changelist' %}">
         <div class="hu-card-kpi">{{ metrics.orders_today }}</div>
         <div class="hu-card-label">Orders Today</div>
@@ -42,7 +44,9 @@
     <div class="hu-quick">
       <div class="hu-quick-title">Quick Actions</div>
       <div class="hu-quick-links">
-        <a href="{% url 'admin:meals_mealplan_changelist' %}?has_changes__exact=1&is_approved__exact=0" class="hu-quick-link">Review Meal Plan Changes</a>
+        {% if legacy_meal_plan_enabled %}
+          <a href="{% url 'admin:meals_mealplan_changelist' %}?has_changes__exact=1&is_approved__exact=0" class="hu-quick-link">Review Meal Plan Changes</a>
+        {% endif %}
         <a href="{% url 'admin:chefs_chefrequest_changelist' %}" class="hu-quick-link">Chef Requests</a>
         <a href="{% url 'admin:meals_systemupdate_changelist' %}" class="hu-quick-link">Send System Update</a>
         <a href="{% url 'admin:meals_order_changelist' %}" class="hu-quick-link">Orders</a>

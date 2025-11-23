@@ -814,7 +814,14 @@ def process_aggregated_emails(self, session_identifier_str, use_enhanced_formatt
                     formatted_content = f'<p>{formatted_content}</p>'
                 
                 email_body_data = f"<div class='assistant-response'>{formatted_content}</div>"
-                email_body_final = f"<p>Need more help? Just reply to this email or visit your <a href='{os.getenv('STREAMLIT_URL')}/meal-plans'>sautai dashboard</a>!</p>"
+                streamlit_url = os.getenv('STREAMLIT_URL')
+                if settings.LEGACY_MEAL_PLAN_ENABLED and streamlit_url:
+                    email_body_final = (
+                        f"<p>Need more help? Just reply to this email or visit your "
+                        f"<a href='{streamlit_url}/meal-plans'>sautai dashboard</a>!</p>"
+                    )
+                else:
+                    email_body_final = "<p>Need more help? Just reply to this email.</p>"
                 css_classes = ['original-formatting']
                 
                 processing_metadata = {

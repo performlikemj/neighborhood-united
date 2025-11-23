@@ -5,7 +5,9 @@ from __future__ import annotations
 
 from typing import Optional
 
+from functools import wraps
 from django.conf import settings
+from django.http import Http404
 
 LEGACY_MEAL_PLAN = True
 
@@ -27,6 +29,24 @@ def meal_plan_notifications_enabled() -> bool:
     if not getattr(settings, "LEGACY_MEAL_PLAN_ENABLED", True):
         return False
     return getattr(settings, "MEAL_PLAN_EMAIL_NOTIFICATIONS_ENABLED", True)
+
+
+def legacy_meal_plan_enabled() -> bool:
+    """Return the current on/off state for the legacy meal-plan stack."""
+
+    return getattr(settings, "LEGACY_MEAL_PLAN_ENABLED", True)
+
+
+def require_legacy_meal_plan_enabled(view_func):
+    """Raise 404s for legacy entry points when the feature is disabled."""
+
+    @wraps(view_func)
+    def _wrapped_view(*args, **kwargs):
+        if not legacy_meal_plan_enabled():
+            raise Http404("Legacy meal plans are disabled.")
+        return view_func(*args, **kwargs)
+
+    return _wrapped_view
 
 
 def is_meal_plan_template(template_key: Optional[str]) -> bool:

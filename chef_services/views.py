@@ -14,6 +14,8 @@ from django.core.exceptions import ValidationError
 from chefs.models import Chef
 from custom_auth.models import CustomUser
 from local_chefs.geo import ensure_postal_code_coordinates
+from crm.models import Lead, LeadInteraction
+from crm.service import create_or_update_lead_for_user
 from .models import (
     ChefServiceOffering,
     ChefServicePriceTier,
@@ -554,6 +556,17 @@ def create_order(request):
         order.save()
     except Exception as e:
         return Response({"error": str(e)}, status=400)
+
+    create_or_update_lead_for_user(
+        user=customer,
+        chef_user=chef.user,
+        source=Lead.Source.WEB,
+        offering=offering,
+        summary="Created service order",
+        details=f"Order #{order.id} created for offering {offering.id}",
+        interaction_type=LeadInteraction.InteractionType.MESSAGE,
+        interaction_payload={"household_size": household_size, "tier_id": tier.id if tier else None},
+    )
 
     return Response(ChefServiceOrderSerializer(order).data, status=201)
 

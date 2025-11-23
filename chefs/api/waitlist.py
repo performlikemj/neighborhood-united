@@ -8,6 +8,8 @@ from rest_framework.response import Response
 
 from chefs.models import Chef, ChefWaitlistConfig, ChefWaitlistSubscription
 from meals.models import ChefMealEvent, STATUS_OPEN, STATUS_SCHEDULED
+from crm.models import Lead, LeadInteraction
+from crm.service import create_or_update_lead_for_user
 
 
 @api_view(['GET'])
@@ -62,6 +64,15 @@ def waitlist_subscribe(request, chef_id):
         chef=chef,
         active=True,
         defaults={},
+    )
+
+    create_or_update_lead_for_user(
+        user=request.user,
+        chef_user=chef.user,
+        source=Lead.Source.WEB,
+        summary="Joined chef waitlist",
+        details=f"User subscribed to {chef.user.get_full_name() or chef.user.username} waitlist",
+        interaction_type=LeadInteraction.InteractionType.MESSAGE,
     )
     return Response({'status': 'ok', 'subscribed': True})
 

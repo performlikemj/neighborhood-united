@@ -116,16 +116,8 @@ class LeadInteraction(models.Model):
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
-
-        latest_interaction_at = (
-            self.lead.interactions.visible()
-            .order_by("-happened_at", "-id")
-            .values_list("happened_at", flat=True)
-            .first()
-        )
-
-        if self.lead.last_interaction_at != latest_interaction_at:
-            self.lead.last_interaction_at = latest_interaction_at
+        if not self.is_deleted:
+            self.lead.last_interaction_at = self.happened_at
             self.lead.save(update_fields=["last_interaction_at", "updated_at"])
 
     def __str__(self):

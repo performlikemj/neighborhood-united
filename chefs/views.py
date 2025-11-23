@@ -18,9 +18,9 @@ from .serializers import (
     ChefPublicSerializer, ChefMeUpdateSerializer, ChefPhotoSerializer,
     GalleryPhotoSerializer, GalleryStatsSerializer
 )
-from .models import ChefWaitlistConfig, ChefWaitlistSubscription, ChefAvailabilityState
+from .models import ChefAvailabilityState
 from django.utils import timezone
-from django.db.models import F, Q
+from django.db.models import F, Prefetch, Q
 from meals.models import (
     ChefMealEvent, ChefMealOrder, PaymentLog,
     STATUS_SCHEDULED, STATUS_OPEN, STATUS_CANCELLED, STATUS_COMPLETED,
@@ -652,10 +652,22 @@ def me_set_break(request):
     })
 
 
+PUBLIC_PHOTO_PREFETCH = Prefetch(
+    'photos',
+    queryset=ChefPhoto.objects.filter(is_public=True).order_by('-is_featured', '-created_at'),
+    to_attr='public_photos',
+)
+
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def chef_public(request, chef_id):
-    chef = get_object_or_404(Chef, id=chef_id)
+    chef = get_object_or_404(
+        Chef.objects.select_related('user').prefetch_related('serving_postalcodes', PUBLIC_PHOTO_PREFETCH),
+        id=chef_id,
+    )
+    if not chef.is_verified:
+        return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
     # Ensure approved – presence of Chef row generally indicates approval; optionally check UserRole
     try:
         user_role = UserRole.objects.get(user=chef.user)
@@ -669,9 +681,16 @@ def chef_public(request, chef_id):
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
-def chef_public_by_username(request, username):
-    chef = Chef.objects.filter(user__username__iexact=username).first()
+def chef_public_by_username(request, slug):
+    chef = (
+        Chef.objects.select_related('user')
+        .prefetch_related('serving_postalcodes', PUBLIC_PHOTO_PREFETCH)
+        .filter(user__username__iexact=slug)
+        .first()
+    )
     if not chef:
+        return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
+    if not chef.is_verified:
         return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
     try:
         user_role = UserRole.objects.get(user=chef.user)
@@ -702,10 +721,10 @@ def chef_lookup_by_username(request, username):
 @permission_classes([AllowAny])
 def chef_public_directory(request):
     from django.db.models import Count, Q
-    queryset = Chef.objects.all()
+    queryset = Chef.objects.select_related('user').prefetch_related('serving_postalcodes', PUBLIC_PHOTO_PREFETCH)
 
     # Only approved chefs
-    queryset = queryset.filter(user__userrole__is_chef=True)
+    queryset = queryset.filter(user__userrole__is_chef=True, is_verified=True)
 
     q = request.query_params.get('q')
     serves_postal = request.query_params.get('serves_postal')
@@ -740,6 +759,7 @@ def chef_public_directory(request):
     # Pagination
     from rest_framework.pagination import PageNumberPagination
     paginator = PageNumberPagination()
+    paginator.page_size = 12
     page_size = request.query_params.get('page_size')
     if page_size:
         try:
@@ -781,87 +801,6 @@ def chef_serves_my_area(request, chef_id):
         'user_postal_code': address.display_postalcode or address.input_postalcode,
         'user_country': address.country.code if hasattr(address.country, 'code') else str(address.country)
     })
-
-
-# =========================
-# Waitlist API Endpoints
-# =========================
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def waitlist_config(request):
-    # Simplified: treat waitlist as enabled by default
-    cfg = ChefWaitlistConfig.get_config()
-    enabled = True if cfg is None else bool(getattr(cfg, 'enabled', True))
-    return Response({'enabled': enabled})
-
-
-def _count_upcoming_events(chef_id):
-    now = timezone.now()
-    return ChefMealEvent.objects.filter(
-        chef_id=chef_id,
-        status__in=[STATUS_SCHEDULED, STATUS_OPEN],
-        order_cutoff_time__gt=now,
-        orders_count__lt=F('max_orders')
-    ).count()
-
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def waitlist_status(request, chef_id):
-    try:
-        chef = Chef.objects.get(id=chef_id)
-    except Chef.DoesNotExist:
-        return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
-
-    # Simplified: waitlist is enabled by default
-    enabled = True
-    upcoming = _count_upcoming_events(chef.id)
-
-    subscribed = False
-    can_subscribe = False
-    if getattr(request, 'user', None) and request.user.is_authenticated:
-        subscribed = ChefWaitlistSubscription.objects.filter(user=request.user, chef=chef, active=True).exists()
-        # Allow subscribing if chef is on break or has no upcoming orderable events
-        can_subscribe = enabled and not subscribed and (chef.is_on_break or upcoming == 0)
-
-    return Response({
-        'enabled': enabled,
-        'subscribed': subscribed,
-        'can_subscribe': can_subscribe,
-        'chef_is_on_break': chef.is_on_break,
-        'upcoming_events_count': upcoming,
-    })
-
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def waitlist_subscribe(request, chef_id):
-    try:
-        chef = Chef.objects.get(id=chef_id)
-    except Chef.DoesNotExist:
-        return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
-
-    sub, created = ChefWaitlistSubscription.objects.get_or_create(
-        user=request.user,
-        chef=chef,
-        active=True,
-        defaults={}
-    )
-    return Response({'status': 'ok', 'subscribed': True})
-
-
-@api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
-def waitlist_unsubscribe(request, chef_id):
-    try:
-        chef = Chef.objects.get(id=chef_id)
-    except Chef.DoesNotExist:
-        return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
-    updated = ChefWaitlistSubscription.objects.filter(user=request.user, chef=chef, active=True).update(active=False)
-    if updated == 0:
-        return Response(status=status.HTTP_404_NOT_FOUND)
-    return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 # ============================================================================

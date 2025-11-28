@@ -49,3 +49,83 @@ class LeadQuerySetTests(TestCase):
         Lead.objects.create(first_name="Closed", status=Lead.Status.WON)
         qs = Lead.objects.open()
         self.assertEqual([lead_open], list(qs))
+
+
+class LeadInteractionSaveTests(TestCase):
+    def setUp(self):
+        user_model = get_user_model()
+        self.author = user_model.objects.create_user(username="author", password="pw")
+        self.lead = Lead.objects.create(first_name="Latest")
+
+    def test_backdated_interaction_does_not_override_newer_activity(self):
+        latest_time = timezone.now()
+        older_time = latest_time - timedelta(days=1)
+
+        LeadInteraction.objects.create(
+            lead=self.lead,
+            author=self.author,
+            interaction_type=LeadInteraction.InteractionType.NOTE,
+            summary="Most recent",
+            happened_at=latest_time,
+        )
+
+        LeadInteraction.objects.create(
+            lead=self.lead,
+            author=self.author,
+            interaction_type=LeadInteraction.InteractionType.NOTE,
+            summary="Backdated",
+            happened_at=older_time,
+        )
+
+        self.lead.refresh_from_db()
+        self.assertEqual(self.lead.last_interaction_at, latest_time)
+
+    def test_updating_older_interaction_keeps_latest_timestamp(self):
+        latest_time = timezone.now()
+        older_time = latest_time - timedelta(hours=2)
+
+        LeadInteraction.objects.create(
+            lead=self.lead,
+            author=self.author,
+            interaction_type=LeadInteraction.InteractionType.CALL,
+            summary="Call",
+            happened_at=latest_time,
+        )
+        older = LeadInteraction.objects.create(
+            lead=self.lead,
+            author=self.author,
+            interaction_type=LeadInteraction.InteractionType.NOTE,
+            summary="Note",
+            happened_at=older_time,
+        )
+
+        older.happened_at = older_time - timedelta(days=1)
+        older.save()
+
+        self.lead.refresh_from_db()
+        self.assertEqual(self.lead.last_interaction_at, latest_time)
+
+    def test_deleting_latest_recomputes_to_next_newest(self):
+        newest_time = timezone.now()
+        older_time = newest_time - timedelta(hours=1)
+
+        newest = LeadInteraction.objects.create(
+            lead=self.lead,
+            author=self.author,
+            interaction_type=LeadInteraction.InteractionType.EMAIL,
+            summary="Newest",
+            happened_at=newest_time,
+        )
+        LeadInteraction.objects.create(
+            lead=self.lead,
+            author=self.author,
+            interaction_type=LeadInteraction.InteractionType.NOTE,
+            summary="Older",
+            happened_at=older_time,
+        )
+
+        newest.is_deleted = True
+        newest.save()
+
+        self.lead.refresh_from_db()
+        self.assertEqual(self.lead.last_interaction_at, older_time)

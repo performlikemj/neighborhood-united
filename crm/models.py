@@ -2,6 +2,8 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
+# settings is required for AUTH_USER_MODEL references on foreign keys
+
 
 class LeadQuerySet(models.QuerySet):
     def active(self):

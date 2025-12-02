@@ -74,6 +74,7 @@ INSTALLED_APPS = [
     'chefs',
     'chef_services',
     'meals',
+    'services',
     'events',
     'reviews',
     'custom_auth',

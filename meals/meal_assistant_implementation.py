@@ -3460,40 +3460,12 @@ class OnboardingAssistant(MealPlanningAssistant):
             raise
 
     def _get_tools_for_user(self, is_guest: bool) -> List[Dict[str, Any]]:
-        """Override to only allow onboarding tools for security."""
-        try:
-            # Always use guest tools for onboarding, but filter to onboarding-specific ones only
-            from .guest_tools import get_guest_tools
-            all_guest_tools = get_guest_tools()
-            
-            # Security restriction: Only allow onboarding-specific tools
-            allowed_tool_names = {
-                "guest_register_user", 
-                "onboarding_save_progress", 
-                "onboarding_request_password"
-            }
-            
-            filtered_tools = [
-                tool for tool in all_guest_tools 
-                if tool.get("name") in allowed_tool_names
-            ]
-            
-            return filtered_tools
-            
-        except Exception as e:
-            logger.error(f"OnboardingAssistant._get_tools_for_user: Error getting tools for user_id={self.user_id}: {str(e)}", exc_info=True)
-            # n8n traceback
-            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-            if n8n_traceback_url:
-                requests.post(n8n_traceback_url, json={
-                    "error": str(e), 
-                    "source": "OnboardingAssistant._get_tools_for_user", 
-                    "user_id": self.user_id,
-                    "is_guest": is_guest,
-                    "traceback": traceback.format_exc()
-                })
-            # Return empty list as fallback to prevent complete failure
-            return []
+        """Override to only allow onboarding tools for security.
+        
+        Note: Guest tools have been removed - customer standalone meal planning deprecated.
+        """
+        # Guest tools removed - return empty list
+        return []
 
     def _instructions(self, is_guest: bool) -> str:
         """Override to provide onboarding-specific instructions with current progress."""

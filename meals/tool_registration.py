@@ -15,7 +15,7 @@ from .chef_connection_tools import get_chef_connection_tools
 from .payment_processing_tools import get_payment_processing_tools
 from .dietary_preference_tools import get_dietary_preference_tools
 from .customer_dashboard_tools import get_customer_dashboard_tools
-from .guest_tools import get_guest_tools
+# Guest tools removed - customer standalone meal planning deprecated
 from local_chefs.views import chef_service_areas
 
 # Import all tool implementation functions
@@ -83,16 +83,10 @@ from .customer_dashboard_tools import (
     get_user_settings
 )
 
-from .guest_tools import (
-    guest_search_dishes,
-    guest_search_chefs,
-    guest_get_meal_plan,
-    guest_search_ingredients,
-    guest_register_user,
-    onboarding_save_progress,
-    onboarding_request_password,
-    get_guest_tools
-)
+# Guest tools removed - customer standalone meal planning deprecated
+def get_guest_tools():
+    """Legacy stub - guest tools have been removed."""
+    return []
 
 logger = logging.getLogger(__name__)
 

@@ -70,7 +70,7 @@ from meals.views import EventStreamRenderer
 import traceback
 from django.conf import settings
 from asgiref.sync import async_to_sync
-from meals.guest_tool_registration import get_guest_tool_registry
+# Guest tool registration removed - customer standalone meal planning deprecated
 from meals.tool_registration import get_all_tools, handle_tool_call
 from meals.enhanced_email_processor import process_email_with_enhanced_formatting
 from customer_dashboard.template_router import render_email_sections

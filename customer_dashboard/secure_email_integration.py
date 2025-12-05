@@ -16,7 +16,7 @@ from custom_auth.models import CustomUser
 from customer_dashboard.models import AssistantEmailToken, UserEmailSession, EmailAggregationSession, AggregatedMessageContent, PreAuthenticationMessage
 from meals.meal_assistant_implementation import MealPlanningAssistant
 from shared.utils import get_openai_client
-from meals.enhanced_email_processor import process_email_with_enhanced_formatting
+# Enhanced email processor removed - customer standalone meal planning deprecated
 from utils.redis_client import get, set, delete
 from django.template.loader import render_to_string 
 from .tasks import process_aggregated_emails
@@ -541,57 +541,9 @@ def enhanced_process_aggregated_emails_task(session_identifier_str, use_enhanced
         
         logger.info(f"Processing {messages.count()} aggregated messages for user {session.user.id}")
         
-        # ENHANCED PROCESSING - This is where the magic happens
-        if use_enhanced_formatting:
-            try:
-                # Use the enhanced email processor
-                openai_client = get_openai_client()
-                assistant = MealPlanningAssistant(str(session.user.id))
-                
-                # Convert Django ManyRelatedManager to list to avoid JSON serialization issues
-                dietary_prefs = getattr(session.user, 'dietary_preferences', None)
-                user_preferences = []
-                if dietary_prefs is not None:
-                    try:
-                        user_preferences = [str(pref) for pref in dietary_prefs.all()]
-                    except AttributeError:
-                        user_preferences = []
-                
-                result = process_email_with_enhanced_formatting(
-                    combined_message,
-                    openai_client,
-                    assistant,
-                    user_context={
-                        'user_id': str(session.user.id),
-                        'sender_email': session.recipient_email,
-                        'session_id': session_identifier_str,
-                        'message_count': messages.count(),
-                        'user_preferences': user_preferences
-                    }
-                )
-                
-                if result['status'] == 'success':
-                    # Use the enhanced formatting results
-                    email_body_main = result.get('email_body_main', '')
-                    email_body_data = result.get('email_body_data', '')
-                    email_body_final = result.get('email_body_final', '')
-                    css_classes = result.get('css_classes', [])
-                    
-                    logger.info(f"Enhanced formatting applied successfully for session {session_identifier_str}")
-                    logger.info(f"Intent detected: {result.get('metadata', {}).get('intent_analysis', {}).get('primary_intent', 'unknown')}")
-                    logger.info(f"Tools used: {result.get('metadata', {}).get('tools_used', [])}")
-                    
-                else:
-                    # Enhanced processing failed, fall back to original
-                    logger.warning(f"Enhanced processing failed for session {session_identifier_str}, falling back to original")
-                    use_enhanced_formatting = False
-            
-            except Exception as e:
-                logger.error(f"Enhanced processing error for session {session_identifier_str}: {str(e)}")
-                use_enhanced_formatting = False
-        
-        # Original processing (fallback or when enhanced is disabled)
-        if not use_enhanced_formatting:
+        # Enhanced formatting removed - customer standalone meal planning deprecated
+        # Using standard processing only
+        if True:
             assistant = MealPlanningAssistant(str(session.user.id))
             response = assistant.send_message(combined_message)
             

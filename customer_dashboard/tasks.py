@@ -19,8 +19,7 @@ import os
 from .models import ChatThread, ChatSessionSummary, UserChatSummary, EmailAggregationSession, AggregatedMessageContent
 from custom_auth.models import CustomUser
 from meals.meal_assistant_implementation import MealPlanningAssistant
-from meals.enhanced_email_processor import process_email_with_enhanced_formatting
-from customer_dashboard.tool_specific_formatters_instacart_compliant import ToolSpecificFormatterManager
+# Enhanced email processor and Instacart formatters removed - customer standalone meal planning deprecated
 from utils.translate_html import translate_paragraphs, _get_language_name
 from shared.utils import get_groq_client
 from django.template.loader import render_to_string

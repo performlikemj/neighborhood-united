@@ -4,7 +4,6 @@ import traceback
 import uuid
 from django.shortcuts import render, redirect
 from django.urls import reverse
-from qa_app.models import FoodQA
 from meals.models import PantryItem, Dish, MealType, Meal, MealPlan, MealPlanMeal, Order, OrderMeal, Ingredient, DietaryPreference, CustomDietaryPreference
 from django.db import transaction, IntegrityError
 from meals.pydantic_models import MealOutputSchema, RelevantSchema

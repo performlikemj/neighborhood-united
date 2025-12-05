@@ -10,13 +10,12 @@ from .models import Review
 from .serializers import ReviewSerializer
 from chefs.models import Chef
 from meals.models import Meal, Order, MealPlan
-from events.models import Event
 from custom_auth.models import UserRole
 from django.views.generic.edit import UpdateView, DeleteView
 from django.db import IntegrityError
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-from qa_app.views import generate_review_summary
+from shared.utils import generate_review_summary
 
 # from django.core.cache import cache  # For rate limiting
 # from django.core.mail import send_mail  # For sending email notifications

@@ -1,7 +1,7 @@
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from .models import Review
-from qa_app.views import generate_review_summary
+from shared.utils import generate_review_summary
 
 @receiver(post_save, sender=Review)
 def update_review_summary(sender, instance, **kwargs):

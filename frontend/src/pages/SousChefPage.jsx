@@ -87,29 +87,31 @@ export default function SousChefPage() {
     <div className={`sous-chef-page ${isMinimizing ? 'minimizing' : ''}`}>
       {/* Page Header */}
       <header className="page-header">
-        <div className="header-left">
-          <div 
-            className="emoji-trigger"
-            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-            title="Click to customize your Sous Chef icon"
-          >
-            <span className="emoji">{currentEmoji}</span>
-            <span className="edit-hint">✎</span>
+        <div className="header-inner">
+          <div className="header-left">
+            <div 
+              className="emoji-trigger"
+              onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+              title="Click to customize your Sous Chef icon"
+            >
+              <span className="emoji">{currentEmoji}</span>
+              <span className="edit-hint">✎</span>
+            </div>
+            <div className="header-text">
+              <h1>Sous Chef</h1>
+              <span className="subtitle">Your AI kitchen assistant</span>
+            </div>
           </div>
-          <div className="header-text">
-            <h1>Sous Chef</h1>
-            <span className="subtitle">Your AI kitchen assistant</span>
+          <div className="header-actions">
+            <button 
+              className="btn btn-outline minimize-btn"
+              onClick={handleMinimize}
+              title="Return to dashboard"
+            >
+              <span className="minimize-icon">↙</span>
+              <span className="minimize-text">Minimize</span>
+            </button>
           </div>
-        </div>
-        <div className="header-actions">
-          <button 
-            className="btn btn-outline minimize-btn"
-            onClick={handleMinimize}
-            title="Return to dashboard"
-          >
-            <span className="minimize-icon">↙</span>
-            <span className="minimize-text">Minimize</span>
-          </button>
         </div>
       </header>
 
@@ -202,13 +204,23 @@ export default function SousChefPage() {
 
         /* Page Header */
         .page-header {
+          position: relative;
+          padding: 0.85rem 1rem;
+          background: linear-gradient(135deg,
+            color-mix(in oklab, var(--primary, #5cb85c) 72%, var(--surface, #0f1511) 28%),
+            color-mix(in oklab, var(--primary-700, #3E8F3E) 70%, var(--surface, #0f1511) 20%)
+          );
+          color: white;
+          box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25);
+        }
+
+        .header-inner {
+          max-width: 1240px;
+          margin: 0 auto;
           display: flex;
           align-items: center;
           justify-content: space-between;
-          padding: 1rem 1.5rem;
-          background: linear-gradient(135deg, var(--primary, #5cb85c) 0%, var(--primary-700, #3E8F3E) 100%);
-          color: white;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+          gap: 1rem;
         }
 
         .header-left {
@@ -261,13 +273,13 @@ export default function SousChefPage() {
 
         .header-text h1 {
           margin: 0;
-          font-size: 1.5rem;
-          font-weight: 600;
+          font-size: 1.25rem;
+          font-weight: 700;
         }
 
         .header-text .subtitle {
-          font-size: 0.875rem;
-          opacity: 0.9;
+          font-size: 0.8rem;
+          opacity: 0.92;
         }
 
         .header-actions {
@@ -495,6 +507,12 @@ export default function SousChefPage() {
         @media (max-width: 640px) {
           .page-header {
             padding: 0.75rem 1rem;
+          }
+
+          .header-inner {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.5rem;
           }
 
           .header-text h1 {

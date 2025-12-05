@@ -196,14 +196,7 @@ TOOL_FUNCTION_MAP = {
     "access_past_orders": access_past_orders,
     "update_user_settings": update_user_settings,
     "get_user_settings": get_user_settings,
-    # Guest Tools
-    "guest_search_dishes": guest_search_dishes,
-    "guest_search_chefs": guest_search_chefs,
-    "guest_get_meal_plan": guest_get_meal_plan,
-    "guest_search_ingredients": guest_search_ingredients,
-    "guest_register_user": guest_register_user,
-    "onboarding_save_progress": onboarding_save_progress,
-    "onboarding_request_password": onboarding_request_password,
+    # Guest Tools removed - customer standalone meal planning deprecated
     "chef_service_areas": chef_service_areas
 }
 
@@ -240,17 +233,8 @@ def get_all_tools():
     return all_tools
 
 def get_all_guest_tools():
-    """
-    Get guest tools for the OpenAI Responses API.
-    """
-    guest_tools = []
-    # Add default guest tools
-    guest_tools.extend(get_guest_tools())
-    # Add individual utility tools
-    guest_tools.extend(
-        [tool for tool in get_all_tools() if tool.get("name") in ["get_current_date"]]
-    )
-    return guest_tools
+    """Legacy stub - guest tools have been removed."""
+    return []
 
 def get_tools_by_category(category: str):
     """

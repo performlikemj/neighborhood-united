@@ -1,0 +1,973 @@
+# meals/sous_chef_tools.py
+"""
+Sous Chef Tools - Chef-specific AI tools for family meal planning.
+
+These tools are designed to help chefs make better decisions when 
+planning and preparing meals for the families they serve.
+"""
+
+import json
+import logging
+from typing import Dict, Any, List, Optional
+from decimal import Decimal
+from datetime import datetime, timedelta
+
+from django.utils import timezone
+from django.db.models import Sum, F
+
+from chefs.models import Chef
+from custom_auth.models import CustomUser
+from crm.models import Lead, LeadInteraction, LeadHouseholdMember
+
+logger = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TOOL DEFINITIONS (OpenAI Function Schema)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+SOUS_CHEF_TOOLS = [
+    {
+        "type": "function",
+        "name": "get_family_dietary_summary",
+        "description": "Get a comprehensive summary of all dietary restrictions and allergies for the entire household. Use this to understand what ingredients to avoid and what dietary preferences to honor.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "type": "function",
+        "name": "check_recipe_compliance",
+        "description": "Check if a recipe or list of ingredients is safe for this family, considering all dietary restrictions and allergies across household members.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "recipe_name": {
+                    "type": "string",
+                    "description": "Name of the recipe or dish"
+                },
+                "ingredients": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of ingredients in the recipe"
+                }
+            },
+            "required": ["ingredients"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "suggest_family_menu",
+        "description": "Generate menu suggestions for this family based on their dietary needs, preferences, and order history. Optionally specify the number of days and meal types.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "Number of days to plan for (default: 7)",
+                    "default": 7
+                },
+                "meal_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["Breakfast", "Lunch", "Dinner", "Snack"]
+                    },
+                    "description": "Which meals to include (default: all)"
+                },
+                "cuisine_preference": {
+                    "type": "string",
+                    "description": "Optional cuisine style preference"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "type": "function",
+        "name": "scale_recipe_for_household",
+        "description": "Calculate scaled ingredient quantities for a recipe based on the household size and optional serving adjustments.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "recipe_name": {
+                    "type": "string",
+                    "description": "Name of the recipe"
+                },
+                "original_servings": {
+                    "type": "integer",
+                    "description": "Number of servings the original recipe makes"
+                },
+                "ingredients": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "quantity": {"type": "number"},
+                            "unit": {"type": "string"}
+                        }
+                    },
+                    "description": "Original ingredient list with quantities"
+                },
+                "servings_per_person": {
+                    "type": "number",
+                    "description": "Servings per household member (default: 1)",
+                    "default": 1
+                }
+            },
+            "required": ["recipe_name", "original_servings", "ingredients"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_family_order_history",
+        "description": "Retrieve the order history between this chef and this family, including what dishes were ordered and when.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of orders to return (default: 10)",
+                    "default": 10
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "type": "function",
+        "name": "add_family_note",
+        "description": "Add a note about this family to the chef's CRM. Use this to record important preferences, feedback, or observations.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "summary": {
+                    "type": "string",
+                    "description": "Brief summary of the note (max 255 chars)"
+                },
+                "details": {
+                    "type": "string",
+                    "description": "Full details of the note"
+                },
+                "interaction_type": {
+                    "type": "string",
+                    "enum": ["note", "call", "email", "meeting", "message"],
+                    "description": "Type of interaction (default: note)",
+                    "default": "note"
+                },
+                "next_steps": {
+                    "type": "string",
+                    "description": "Any follow-up actions needed"
+                }
+            },
+            "required": ["summary"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_upcoming_family_orders",
+        "description": "Get scheduled/upcoming orders for this family.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "type": "function",
+        "name": "estimate_prep_time",
+        "description": "Estimate total preparation time for a menu or list of dishes, considering the household size.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "dishes": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "base_prep_minutes": {"type": "integer"},
+                            "base_cook_minutes": {"type": "integer"}
+                        }
+                    },
+                    "description": "List of dishes with their base prep/cook times"
+                },
+                "parallel_cooking": {
+                    "type": "boolean",
+                    "description": "Whether dishes can be cooked in parallel (default: true)",
+                    "default": True
+                }
+            },
+            "required": ["dishes"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_household_members",
+        "description": "Get detailed information about each household member, including their individual dietary needs.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "type": "function",
+        "name": "save_family_insight",
+        "description": "Save a persistent insight about this family for future reference. Use this when you discover important preferences, tips, things to avoid, or successes that should be remembered across conversations.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "insight_type": {
+                    "type": "string",
+                    "enum": ["preference", "tip", "avoid", "success"],
+                    "description": "Type of insight: preference (what they like), tip (useful info), avoid (things to not do), success (what worked well)"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The insight to remember (max 500 chars). Be specific and actionable."
+                }
+            },
+            "required": ["insight_type", "content"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_family_insights",
+        "description": "Get all saved insights about this family. Use this to recall what you've learned about them.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    }
+]
+
+
+def get_sous_chef_tools() -> List[Dict[str, Any]]:
+    """Return the list of Sous Chef tool definitions."""
+    return SOUS_CHEF_TOOLS
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TOOL IMPLEMENTATIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def handle_sous_chef_tool_call(
+    name: str,
+    arguments: str,
+    chef: Chef,
+    customer: Optional[CustomUser] = None,
+    lead: Optional[Lead] = None
+) -> Dict[str, Any]:
+    """
+    Route and execute a sous chef tool call.
+    
+    Args:
+        name: Tool name
+        arguments: JSON string of arguments
+        chef: The Chef instance
+        customer: Optional platform customer
+        lead: Optional CRM lead
+        
+    Returns:
+        Tool execution result
+    """
+    try:
+        args = json.loads(arguments) if arguments else {}
+    except json.JSONDecodeError:
+        args = {}
+    
+    tool_map = {
+        "get_family_dietary_summary": _get_family_dietary_summary,
+        "check_recipe_compliance": _check_recipe_compliance,
+        "suggest_family_menu": _suggest_family_menu,
+        "scale_recipe_for_household": _scale_recipe_for_household,
+        "get_family_order_history": _get_family_order_history,
+        "add_family_note": _add_family_note,
+        "get_upcoming_family_orders": _get_upcoming_family_orders,
+        "estimate_prep_time": _estimate_prep_time,
+        "get_household_members": _get_household_members,
+        "save_family_insight": _save_family_insight,
+        "get_family_insights": _get_family_insights,
+    }
+    
+    handler = tool_map.get(name)
+    if not handler:
+        return {"status": "error", "message": f"Unknown tool: {name}"}
+    
+    try:
+        return handler(args, chef, customer, lead)
+    except Exception as e:
+        logger.error(f"Tool {name} error: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+def _get_family_dietary_summary(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """Get comprehensive dietary summary for the household."""
+    all_restrictions = set()
+    all_allergies = set()
+    member_details = []
+    household_size = 1
+    
+    if customer:
+        household_size = getattr(customer, 'household_member_count', 1)
+        
+        # Primary contact
+        prefs = [p.name for p in customer.dietary_preferences.all()]
+        allergies = list(customer.allergies or []) + list(customer.custom_allergies or [])
+        
+        all_restrictions.update(prefs)
+        all_allergies.update(allergies)
+        
+        member_details.append({
+            "name": customer.first_name or customer.username,
+            "role": "Primary Contact",
+            "dietary_preferences": prefs,
+            "allergies": allergies
+        })
+        
+        # Household members
+        if hasattr(customer, 'household_members'):
+            for member in customer.household_members.all():
+                m_prefs = [p.name for p in member.dietary_preferences.all()]
+                all_restrictions.update(m_prefs)
+                
+                member_details.append({
+                    "name": member.name,
+                    "age": member.age,
+                    "dietary_preferences": m_prefs,
+                    "notes": member.notes
+                })
+    
+    elif lead:
+        household_size = lead.household_size
+        
+        # Primary contact
+        prefs = list(lead.dietary_preferences or [])
+        allergies = list(lead.allergies or []) + list(lead.custom_allergies or [])
+        
+        all_restrictions.update(prefs)
+        all_allergies.update(allergies)
+        
+        member_details.append({
+            "name": f"{lead.first_name} {lead.last_name}".strip(),
+            "role": "Primary Contact",
+            "dietary_preferences": prefs,
+            "allergies": allergies
+        })
+        
+        # Household members
+        for member in lead.household_members.all():
+            m_prefs = list(member.dietary_preferences or [])
+            m_allergies = list(member.allergies or []) + list(member.custom_allergies or [])
+            
+            all_restrictions.update(m_prefs)
+            all_allergies.update(m_allergies)
+            
+            member_details.append({
+                "name": member.name,
+                "relationship": member.relationship,
+                "age": member.age,
+                "dietary_preferences": m_prefs,
+                "allergies": m_allergies,
+                "notes": member.notes
+            })
+    
+    return {
+        "status": "success",
+        "household_size": household_size,
+        "all_dietary_restrictions": sorted(list(all_restrictions)),
+        "all_allergies_must_avoid": sorted(list(all_allergies)),
+        "member_details": member_details,
+        "compliance_note": "Any meal must satisfy ALL listed restrictions and avoid ALL listed allergies."
+    }
+
+
+def _check_recipe_compliance(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """Check if a recipe is compliant with family dietary needs."""
+    recipe_name = args.get("recipe_name", "Unnamed Recipe")
+    ingredients = args.get("ingredients", [])
+    
+    if not ingredients:
+        return {"status": "error", "message": "No ingredients provided"}
+    
+    # Get family dietary info
+    dietary_summary = _get_family_dietary_summary({}, chef, customer, lead)
+    
+    all_allergies = set(a.lower() for a in dietary_summary.get("all_allergies_must_avoid", []))
+    all_restrictions = set(r.lower() for r in dietary_summary.get("all_dietary_restrictions", []))
+    
+    # Common allergen mappings (simplified)
+    allergen_keywords = {
+        "peanuts": ["peanut", "groundnut"],
+        "tree nuts": ["almond", "walnut", "cashew", "pecan", "pistachio", "hazelnut", "macadamia", "brazil nut"],
+        "milk": ["milk", "cream", "butter", "cheese", "yogurt", "whey", "casein", "lactose"],
+        "egg": ["egg", "mayonnaise", "meringue"],
+        "wheat": ["wheat", "flour", "bread", "pasta", "couscous"],
+        "soy": ["soy", "tofu", "edamame", "tempeh", "miso"],
+        "fish": ["fish", "salmon", "tuna", "cod", "tilapia", "anchovy"],
+        "shellfish": ["shrimp", "crab", "lobster", "oyster", "clam", "mussel", "scallop"],
+        "sesame": ["sesame", "tahini"],
+        "gluten": ["wheat", "barley", "rye", "flour", "bread", "pasta"],
+    }
+    
+    # Diet restriction incompatible ingredients (simplified)
+    restriction_conflicts = {
+        "vegan": ["meat", "chicken", "beef", "pork", "fish", "egg", "milk", "cheese", "butter", "cream", "honey"],
+        "vegetarian": ["meat", "chicken", "beef", "pork", "fish", "bacon", "gelatin"],
+        "pescatarian": ["meat", "chicken", "beef", "pork", "bacon"],
+        "gluten-free": ["wheat", "flour", "bread", "pasta", "barley", "rye"],
+        "dairy-free": ["milk", "cheese", "butter", "cream", "yogurt", "whey"],
+        "keto": ["sugar", "bread", "pasta", "rice", "potato", "corn"],
+        "halal": ["pork", "bacon", "ham", "lard", "alcohol", "wine"],
+        "kosher": ["pork", "shellfish", "mixing dairy and meat"],
+    }
+    
+    issues = []
+    warnings = []
+    
+    ingredients_lower = [i.lower() for i in ingredients]
+    
+    # Check allergens
+    for allergen in all_allergies:
+        allergen_lower = allergen.lower()
+        keywords = allergen_keywords.get(allergen_lower, [allergen_lower])
+        
+        for ingredient in ingredients_lower:
+            for keyword in keywords:
+                if keyword in ingredient:
+                    issues.append(f"⚠️ ALLERGEN ALERT: '{ingredient}' may contain {allergen}")
+    
+    # Check dietary restrictions
+    for restriction in all_restrictions:
+        restriction_lower = restriction.lower()
+        conflicts = restriction_conflicts.get(restriction_lower, [])
+        
+        for ingredient in ingredients_lower:
+            for conflict in conflicts:
+                if conflict in ingredient:
+                    warnings.append(f"⚡ Dietary conflict: '{ingredient}' may not be compatible with {restriction}")
+    
+    is_compliant = len(issues) == 0
+    
+    return {
+        "status": "success",
+        "recipe_name": recipe_name,
+        "is_compliant": is_compliant,
+        "allergen_issues": issues,
+        "dietary_warnings": warnings,
+        "ingredients_checked": len(ingredients),
+        "recommendation": "SAFE to prepare" if is_compliant else "DO NOT prepare without modifications"
+    }
+
+
+def _suggest_family_menu(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """Suggest menu ideas based on family preferences."""
+    days = args.get("days", 7)
+    meal_types = args.get("meal_types", ["Breakfast", "Lunch", "Dinner"])
+    cuisine_preference = args.get("cuisine_preference")
+    
+    # Get dietary summary
+    dietary_summary = _get_family_dietary_summary({}, chef, customer, lead)
+    
+    restrictions = dietary_summary.get("all_dietary_restrictions", [])
+    allergies = dietary_summary.get("all_allergies_must_avoid", [])
+    household_size = dietary_summary.get("household_size", 1)
+    
+    return {
+        "status": "success",
+        "message": "Menu suggestion framework ready",
+        "parameters": {
+            "days_to_plan": days,
+            "meal_types": meal_types,
+            "household_size": household_size,
+            "cuisine_preference": cuisine_preference,
+        },
+        "constraints": {
+            "must_satisfy_diets": restrictions,
+            "must_avoid_allergens": allergies,
+        },
+        "suggestion_note": "Please generate menu suggestions that comply with ALL listed constraints. Each dish should be clearly labeled with which dietary restrictions it satisfies."
+    }
+
+
+def _scale_recipe_for_household(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """Scale recipe ingredients for household size."""
+    recipe_name = args.get("recipe_name", "Recipe")
+    original_servings = args.get("original_servings", 4)
+    ingredients = args.get("ingredients", [])
+    servings_per_person = args.get("servings_per_person", 1)
+    
+    # Get household size
+    if customer:
+        household_size = getattr(customer, 'household_member_count', 1)
+    elif lead:
+        household_size = lead.household_size
+    else:
+        household_size = 1
+    
+    target_servings = household_size * servings_per_person
+    scale_factor = target_servings / original_servings if original_servings > 0 else 1
+    
+    scaled_ingredients = []
+    for ing in ingredients:
+        scaled = {
+            "name": ing.get("name", "Unknown"),
+            "original_quantity": ing.get("quantity", 0),
+            "scaled_quantity": round(ing.get("quantity", 0) * scale_factor, 2),
+            "unit": ing.get("unit", "")
+        }
+        scaled_ingredients.append(scaled)
+    
+    return {
+        "status": "success",
+        "recipe_name": recipe_name,
+        "original_servings": original_servings,
+        "target_servings": target_servings,
+        "household_size": household_size,
+        "scale_factor": round(scale_factor, 2),
+        "scaled_ingredients": scaled_ingredients
+    }
+
+
+def _get_family_order_history(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """Get order history for this family with this chef."""
+    from chef_services.models import ChefServiceOrder
+    from meals.models import ChefMealOrder
+    
+    limit = args.get("limit", 10)
+    orders = []
+    
+    if customer:
+        # Service orders
+        service_orders = ChefServiceOrder.objects.filter(
+            chef=chef,
+            customer=customer,
+            status__in=['confirmed', 'completed']
+        ).select_related('offering', 'tier').order_by('-created_at')[:limit]
+        
+        for order in service_orders:
+            orders.append({
+                "type": "service",
+                "date": order.created_at.strftime('%Y-%m-%d'),
+                "service": order.offering.title if order.offering else "Service",
+                "status": order.status,
+                "household_size": order.household_size,
+            })
+        
+        # Meal orders
+        meal_orders = ChefMealOrder.objects.filter(
+            meal_event__chef=chef,
+            customer=customer,
+            status__in=['confirmed', 'completed']
+        ).select_related('meal_event__meal').order_by('-created_at')[:limit]
+        
+        for order in meal_orders:
+            orders.append({
+                "type": "meal_event",
+                "date": order.created_at.strftime('%Y-%m-%d'),
+                "meal": order.meal_event.meal.name if order.meal_event and order.meal_event.meal else "Meal",
+                "quantity": order.quantity,
+                "status": order.status,
+            })
+    
+    # Sort combined by date
+    orders.sort(key=lambda x: x.get('date', ''), reverse=True)
+    
+    return {
+        "status": "success",
+        "total_orders": len(orders),
+        "orders": orders[:limit],
+        "family_type": "customer" if customer else "lead"
+    }
+
+
+def _add_family_note(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """Add a note to the family's CRM record."""
+    summary = args.get("summary", "")[:255]
+    details = args.get("details", "")
+    interaction_type = args.get("interaction_type", "note")
+    next_steps = args.get("next_steps", "")
+    
+    if not summary:
+        return {"status": "error", "message": "Summary is required"}
+    
+    # Find or create lead for this family
+    if customer:
+        target_lead, _ = Lead.objects.get_or_create(
+            owner=chef.user,
+            email=customer.email,
+            defaults={
+                'first_name': customer.first_name or customer.username,
+                'last_name': customer.last_name or '',
+                'status': Lead.Status.WON,
+                'source': Lead.Source.WEB,
+            }
+        )
+    elif lead:
+        target_lead = lead
+    else:
+        return {"status": "error", "message": "No family context available"}
+    
+    # Create interaction
+    interaction = LeadInteraction.objects.create(
+        lead=target_lead,
+        author=chef.user,
+        interaction_type=interaction_type,
+        summary=summary,
+        details=details,
+        next_steps=next_steps,
+        happened_at=timezone.now(),
+    )
+    
+    return {
+        "status": "success",
+        "message": "Note added successfully",
+        "note_id": interaction.id,
+        "summary": summary,
+        "created_at": interaction.created_at.isoformat()
+    }
+
+
+def _get_upcoming_family_orders(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """Get upcoming orders for this family."""
+    from chef_services.models import ChefServiceOrder
+    from meals.models import ChefMealOrder
+    
+    now = timezone.now()
+    upcoming = []
+    
+    if customer:
+        # Upcoming service orders
+        service_orders = ChefServiceOrder.objects.filter(
+            chef=chef,
+            customer=customer,
+            service_date__gte=now.date(),
+            status__in=['draft', 'awaiting_payment', 'confirmed']
+        ).select_related('offering').order_by('service_date')
+        
+        for order in service_orders:
+            upcoming.append({
+                "type": "service",
+                "service_date": order.service_date.isoformat() if order.service_date else None,
+                "service_time": order.service_start_time.isoformat() if order.service_start_time else None,
+                "service": order.offering.title if order.offering else "Service",
+                "status": order.status,
+            })
+        
+        # Upcoming meal events
+        meal_orders = ChefMealOrder.objects.filter(
+            meal_event__chef=chef,
+            customer=customer,
+            meal_event__event_date__gte=now.date(),
+            status__in=['placed', 'confirmed']
+        ).select_related('meal_event__meal').order_by('meal_event__event_date')
+        
+        for order in meal_orders:
+            upcoming.append({
+                "type": "meal_event",
+                "event_date": order.meal_event.event_date.isoformat() if order.meal_event else None,
+                "meal": order.meal_event.meal.name if order.meal_event and order.meal_event.meal else "Meal",
+                "quantity": order.quantity,
+                "status": order.status,
+            })
+    
+    # Sort by date
+    upcoming.sort(key=lambda x: x.get('service_date') or x.get('event_date') or '')
+    
+    return {
+        "status": "success",
+        "upcoming_orders": upcoming,
+        "total_upcoming": len(upcoming)
+    }
+
+
+def _estimate_prep_time(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """Estimate total prep time for dishes."""
+    dishes = args.get("dishes", [])
+    parallel_cooking = args.get("parallel_cooking", True)
+    
+    if not dishes:
+        return {"status": "error", "message": "No dishes provided"}
+    
+    # Get household size for scaling
+    if customer:
+        household_size = getattr(customer, 'household_member_count', 1)
+    elif lead:
+        household_size = lead.household_size
+    else:
+        household_size = 1
+    
+    # Scale factor for larger households (more prep, same cook time)
+    prep_scale = 1 + (household_size - 1) * 0.15  # 15% more prep per extra person
+    
+    total_prep = 0
+    total_cook = 0
+    max_cook = 0
+    
+    dish_breakdown = []
+    
+    for dish in dishes:
+        base_prep = dish.get("base_prep_minutes", 15)
+        base_cook = dish.get("base_cook_minutes", 30)
+        
+        scaled_prep = round(base_prep * prep_scale)
+        
+        dish_breakdown.append({
+            "name": dish.get("name", "Dish"),
+            "prep_minutes": scaled_prep,
+            "cook_minutes": base_cook,
+        })
+        
+        total_prep += scaled_prep
+        total_cook += base_cook
+        max_cook = max(max_cook, base_cook)
+    
+    # If parallel cooking, cook time is the longest dish, not sum
+    effective_cook = max_cook if parallel_cooking else total_cook
+    total_time = total_prep + effective_cook
+    
+    return {
+        "status": "success",
+        "household_size": household_size,
+        "dishes": dish_breakdown,
+        "total_prep_minutes": total_prep,
+        "total_cook_minutes": effective_cook,
+        "total_time_minutes": total_time,
+        "total_time_formatted": f"{total_time // 60}h {total_time % 60}m" if total_time >= 60 else f"{total_time}m",
+        "parallel_cooking": parallel_cooking,
+        "note": f"Prep time scaled by {round(prep_scale, 2)}x for {household_size} people"
+    }
+
+
+def _get_household_members(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """Get detailed info about household members."""
+    members = []
+    
+    if customer:
+        # Primary contact
+        prefs = [p.name for p in customer.dietary_preferences.all()]
+        allergies = list(customer.allergies or []) + list(customer.custom_allergies or [])
+        
+        members.append({
+            "name": f"{customer.first_name} {customer.last_name}".strip() or customer.username,
+            "role": "Primary Contact",
+            "email": customer.email,
+            "dietary_preferences": prefs,
+            "allergies": allergies,
+        })
+        
+        # Other members
+        if hasattr(customer, 'household_members'):
+            for member in customer.household_members.all():
+                m_prefs = [p.name for p in member.dietary_preferences.all()]
+                members.append({
+                    "name": member.name,
+                    "age": member.age,
+                    "dietary_preferences": m_prefs,
+                    "notes": member.notes,
+                })
+    
+    elif lead:
+        # Primary contact
+        prefs = list(lead.dietary_preferences or [])
+        allergies = list(lead.allergies or []) + list(lead.custom_allergies or [])
+        
+        members.append({
+            "name": f"{lead.first_name} {lead.last_name}".strip(),
+            "role": "Primary Contact",
+            "email": lead.email,
+            "phone": lead.phone,
+            "dietary_preferences": prefs,
+            "allergies": allergies,
+        })
+        
+        # Other members
+        for member in lead.household_members.all():
+            m_prefs = list(member.dietary_preferences or [])
+            m_allergies = list(member.allergies or []) + list(member.custom_allergies or [])
+            
+            members.append({
+                "name": member.name,
+                "relationship": member.relationship,
+                "age": member.age,
+                "dietary_preferences": m_prefs,
+                "allergies": m_allergies,
+                "notes": member.notes,
+            })
+    
+    return {
+        "status": "success",
+        "total_members": len(members),
+        "members": members
+    }
+
+
+def _save_family_insight(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """Save a persistent insight about this family."""
+    from customer_dashboard.models import FamilyInsight, SousChefThread
+    
+    insight_type = args.get("insight_type", "preference")
+    content = args.get("content", "").strip()
+    
+    if not content:
+        return {"status": "error", "message": "Content is required"}
+    
+    if len(content) > 500:
+        content = content[:500]
+    
+    valid_types = ["preference", "tip", "avoid", "success"]
+    if insight_type not in valid_types:
+        return {"status": "error", "message": f"Invalid insight_type. Must be one of: {valid_types}"}
+    
+    # Find the current active thread (for source_thread reference)
+    thread_filter = {'chef': chef, 'is_active': True}
+    if customer:
+        thread_filter['customer'] = customer
+    elif lead:
+        thread_filter['lead'] = lead
+    
+    source_thread = SousChefThread.objects.filter(**thread_filter).first()
+    
+    # Create the insight
+    insight = FamilyInsight.objects.create(
+        chef=chef,
+        customer=customer,
+        lead=lead,
+        insight_type=insight_type,
+        content=content,
+        source_thread=source_thread
+    )
+    
+    # Get family name for response
+    family_name = "this family"
+    if customer:
+        family_name = f"{customer.first_name} {customer.last_name}".strip() or customer.username
+    elif lead:
+        family_name = f"{lead.first_name} {lead.last_name}".strip()
+    
+    type_labels = {
+        "preference": "Preference",
+        "tip": "Useful Tip",
+        "avoid": "Thing to Avoid",
+        "success": "Success"
+    }
+    
+    return {
+        "status": "success",
+        "message": f"Saved {type_labels[insight_type].lower()} for {family_name}",
+        "insight_id": insight.id,
+        "insight_type": insight_type,
+        "content": content
+    }
+
+
+def _get_family_insights(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """Get all saved insights about this family."""
+    from customer_dashboard.models import FamilyInsight
+    
+    # Build filter for this family
+    insight_filter = {'chef': chef, 'is_active': True}
+    if customer:
+        insight_filter['customer'] = customer
+        insight_filter['lead__isnull'] = True
+    elif lead:
+        insight_filter['lead'] = lead
+        insight_filter['customer__isnull'] = True
+    else:
+        return {"status": "error", "message": "No family selected"}
+    
+    insights = FamilyInsight.objects.filter(**insight_filter).order_by('-created_at')[:20]
+    
+    # Group by type
+    grouped = {
+        "preference": [],
+        "tip": [],
+        "avoid": [],
+        "success": []
+    }
+    
+    for insight in insights:
+        grouped[insight.insight_type].append({
+            "id": insight.id,
+            "content": insight.content,
+            "created_at": insight.created_at.isoformat()
+        })
+    
+    # Get family name
+    family_name = "this family"
+    if customer:
+        family_name = f"{customer.first_name} {customer.last_name}".strip() or customer.username
+    elif lead:
+        family_name = f"{lead.first_name} {lead.last_name}".strip()
+    
+    return {
+        "status": "success",
+        "family": family_name,
+        "total_insights": len(insights),
+        "insights_by_type": {
+            "preferences": grouped["preference"],
+            "tips": grouped["tip"],
+            "things_to_avoid": grouped["avoid"],
+            "successes": grouped["success"]
+        }
+    }

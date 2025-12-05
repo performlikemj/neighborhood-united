@@ -137,7 +137,11 @@ class ChefServicePriceTier(models.Model):
 
 
 class ChefCustomerConnection(models.Model):
-    """Represents a mutually approved pairing between a chef and a customer."""
+    """Represents a mutually approved pairing between a chef and a customer.
+    
+    Activity tracking fields are used to order chefs by recent activity
+    for customers with multiple chef connections.
+    """
 
     STATUS_PENDING = "pending"
     STATUS_ACCEPTED = "accepted"
@@ -170,6 +174,23 @@ class ChefCustomerConnection(models.Model):
     responded_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True)
+    
+    # Activity tracking for ordering chefs by recency (multi-chef support)
+    last_order_at = models.DateTimeField(
+        null=True, 
+        blank=True,
+        help_text="Last time customer placed an order with this chef"
+    )
+    last_message_at = models.DateTimeField(
+        null=True, 
+        blank=True,
+        help_text="Last time there was a message exchange"
+    )
+    last_plan_update_at = models.DateTimeField(
+        null=True, 
+        blank=True,
+        help_text="Last time a meal plan was created or updated"
+    )
 
     class Meta:
         unique_together = ("chef", "customer")
@@ -177,6 +198,7 @@ class ChefCustomerConnection(models.Model):
             models.Index(fields=["chef", "customer"]),
             models.Index(fields=["chef", "status"]),
             models.Index(fields=["customer", "status"]),
+            models.Index(fields=["customer", "status", "-last_order_at"]),
         ]
         ordering = ["-requested_at", "-id"]
 
@@ -186,6 +208,21 @@ class ChefCustomerConnection(models.Model):
     def clean(self):
         if self.chef and self.customer and self.chef.user_id == self.customer_id:
             raise ValidationError("Chefs cannot connect to themselves.")
+    
+    def update_activity(self, activity_type: str):
+        """Update the appropriate activity timestamp.
+        
+        Args:
+            activity_type: One of 'order', 'message', 'plan'
+        """
+        now = timezone.now()
+        if activity_type == 'order':
+            self.last_order_at = now
+        elif activity_type == 'message':
+            self.last_message_at = now
+        elif activity_type == 'plan':
+            self.last_plan_update_at = now
+        self.save(update_fields=[f'last_{activity_type}_at' if activity_type != 'plan' else 'last_plan_update_at'])
 
 
 class ChefServiceOrder(models.Model):

@@ -1,0 +1,937 @@
+/**
+ * MealPlanSlideout Component
+ * 
+ * Responsive slide-out panel for managing client meal plans.
+ * - Desktop: Side panel (60% width)
+ * - Tablet: Overlay (85% width)  
+ * - Mobile: Full screen modal
+ */
+
+import React, { useState, useEffect, useCallback } from 'react'
+import MealPlanWeekView from './MealPlanWeekView.jsx'
+import MealSlotPicker from './MealSlotPicker.jsx'
+import {
+  getClientPlans,
+  createPlan,
+  getPlanDetail,
+  updatePlan,
+  publishPlan,
+  startMealGeneration,
+  addPlanDay,
+  addPlanItem,
+  deletePlanItem
+} from '../api/chefMealPlanClient.js'
+import { useSousChefNotifications } from '../contexts/SousChefNotificationContext.jsx'
+
+// Lowercase values match the backend ChefMealPlanItem model
+const MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack']
+const MEAL_TYPE_LABELS = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner', snack: 'Snack' }
+
+export default function MealPlanSlideout({ 
+  isOpen, 
+  onClose, 
+  client,
+  onPlanUpdate 
+}) {
+  // Notification context for Sous Chef
+  let notifications = null
+  try {
+    notifications = useSousChefNotifications()
+  } catch (e) {
+    // Context not available (not wrapped in provider)
+  }
+  
+  const [activeTab, setActiveTab] = useState('week')
+  const [plans, setPlans] = useState([])
+  const [selectedPlan, setSelectedPlan] = useState(null)
+  const [planDetail, setPlanDetail] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [generating, setGenerating] = useState(false)
+  const [suggestions, setSuggestions] = useState([])
+  const [error, setError] = useState(null)
+  
+  // Slot picker state
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [pickerSlot, setPickerSlot] = useState(null)
+  
+  // New plan form
+  const [showNewPlanForm, setShowNewPlanForm] = useState(false)
+  const [newPlanForm, setNewPlanForm] = useState({
+    title: '',
+    start_date: '',
+    end_date: '',
+    notes: ''
+  })
+
+  // Watch for active jobs completing (in case they started before modal opened)
+  useEffect(() => {
+    if (notifications?.activeJobs && selectedPlan) {
+      const activeJob = notifications.activeJobs.find(j => j.planId === selectedPlan.id)
+      if (activeJob) {
+        setGenerating(true)
+        setGenerationStatus(`Generating... (${activeJob.slotsGenerated || 0}/${activeJob.slotsRequested || '?'} slots)`)
+      } else if (generating && !generationStatus.includes('starting')) {
+        // Job completed while we were watching
+        setGenerating(false)
+        setGenerationStatus('')
+      }
+    }
+  }, [notifications?.activeJobs, selectedPlan])
+  
+  // Load plans when client changes
+  useEffect(() => {
+    if (isOpen && client) {
+      loadPlans()
+    }
+  }, [isOpen, client])
+
+  // Load plan detail when selected plan changes
+  useEffect(() => {
+    if (selectedPlan) {
+      loadPlanDetail(selectedPlan.id)
+    } else {
+      setPlanDetail(null)
+    }
+  }, [selectedPlan])
+
+  const loadPlans = async () => {
+    if (!client) return
+    setLoading(true)
+    setError(null)
+    try {
+      // Extract numeric ID from unified client ID (e.g., "platform_123" -> 123)
+      const clientId = String(client.id).replace(/^(platform_|contact_)/, '')
+      const data = await getClientPlans(clientId)
+      setPlans(data?.plans || [])
+      // Auto-select first draft or most recent
+      if (data?.plans?.length > 0) {
+        const draft = data.plans.find(p => p.status === 'draft')
+        setSelectedPlan(draft || data.plans[0])
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to load plans')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const loadPlanDetail = async (planId) => {
+    setLoading(true)
+    try {
+      const data = await getPlanDetail(planId)
+      setPlanDetail(data)
+    } catch (err) {
+      setError(err.message || 'Failed to load plan details')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleCreatePlan = async (e) => {
+    e.preventDefault()
+    if (!client) return
+    
+    setLoading(true)
+    setError(null)
+    try {
+      const clientId = String(client.id).replace(/^(platform_|contact_)/, '')
+      const newPlan = await createPlan(clientId, newPlanForm)
+      setPlans(prev => [newPlan, ...prev])
+      setSelectedPlan(newPlan)
+      setShowNewPlanForm(false)
+      setNewPlanForm({ title: '', start_date: '', end_date: '', notes: '' })
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || 'Failed to create plan')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const [generationStatus, setGenerationStatus] = useState('')
+  
+  const handleGenerateMeals = async (mode = 'full_week') => {
+    if (!selectedPlan) return
+    
+    setGenerating(true)
+    setError(null)
+    setGenerationStatus('Starting AI generation...')
+    
+    try {
+      // Start the async generation job
+      const startData = await startMealGeneration(selectedPlan.id, { mode })
+      
+      if (!startData?.job_id) {
+        throw new Error('Failed to start generation job')
+      }
+      
+      const clientName = client?.name || client?.first_name || 'Client'
+      const planTitle = selectedPlan?.title || 'Meal Plan'
+      
+      // Track job globally - this continues even if modal closes!
+      if (notifications?.trackJob) {
+        notifications.trackJob({
+          jobId: startData.job_id,
+          planId: selectedPlan.id,
+          planTitle,
+          clientName,
+          mode,
+          onComplete: (result) => {
+            // If modal is still open, update local state
+            if (selectedPlan?.id === result.plan_id || selectedPlan?.id) {
+              const suggestionsList = result?.suggestions || []
+              setSuggestions(suggestionsList)
+              setActiveTab('suggestions')
+              setGenerating(false)
+              setGenerationStatus('')
+            }
+          }
+        })
+        
+        setGenerationStatus('AI is generating in background - you can close this modal...')
+        
+        // Show a helpful message that they can leave
+        setTimeout(() => {
+          if (generating) {
+            setGenerationStatus('✓ Generation running. Feel free to close - Sous Chef will notify you when done!')
+          }
+        }, 3000)
+      } else {
+        // Fallback if no notification context - show error
+        setError('Background tracking not available')
+        setGenerating(false)
+      }
+      
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || 'Failed to start generation')
+      setGenerationStatus('')
+      setGenerating(false)
+    }
+  }
+
+  const handleAcceptSuggestion = async (suggestion) => {
+    if (!selectedPlan || !planDetail) return
+    
+    try {
+      // Find or create the day
+      const dayName = suggestion.day
+      const dates = getDatesInRange(planDetail.start_date, planDetail.end_date)
+      const targetDate = dates.find(d => new Date(d).toLocaleDateString('en-US', { weekday: 'long' }) === dayName)
+      
+      if (!targetDate) {
+        setError(`Could not find ${dayName} in plan date range`)
+        return
+      }
+      
+      // Check if day exists
+      let day = planDetail.days?.find(d => d.date === targetDate)
+      
+      if (!day) {
+        // Create the day
+        day = await addPlanDay(selectedPlan.id, { date: targetDate })
+      }
+      
+      // Add the item
+      await addPlanItem(selectedPlan.id, day.id, {
+        meal_type: suggestion.meal_type,
+        custom_name: suggestion.name,
+        custom_description: suggestion.description,
+        servings: 1
+      })
+      
+      // Refresh plan detail
+      await loadPlanDetail(selectedPlan.id)
+      
+      // Remove from suggestions
+      setSuggestions(prev => prev.filter(s => 
+        !(s.day === suggestion.day && s.meal_type === suggestion.meal_type)
+      ))
+      
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || 'Failed to add meal')
+    }
+  }
+
+  const handleSlotClick = useCallback((date, mealType, existingItem) => {
+    setPickerSlot({ date, mealType, existingItem })
+    setPickerOpen(true)
+  }, [])
+
+  const handleSlotAssign = async (assignment) => {
+    if (!selectedPlan || !pickerSlot) return
+    
+    try {
+      const { date, mealType, existingItem } = pickerSlot
+      
+      // Delete existing item if any
+      if (existingItem) {
+        const day = planDetail.days?.find(d => d.date === date)
+        if (day) {
+          await deletePlanItem(selectedPlan.id, day.id, existingItem.id)
+        }
+      }
+      
+      // Find or create day
+      let day = planDetail.days?.find(d => d.date === date)
+      if (!day) {
+        day = await addPlanDay(selectedPlan.id, { date })
+      }
+      
+      // Add new item
+      await addPlanItem(selectedPlan.id, day.id, {
+        meal_type: mealType,
+        meal_id: assignment.meal_id,
+        custom_name: assignment.custom_name || '',
+        custom_description: assignment.custom_description || '',
+        servings: assignment.servings || 1
+      })
+      
+      // Refresh
+      await loadPlanDetail(selectedPlan.id)
+      setPickerOpen(false)
+      setPickerSlot(null)
+      
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || 'Failed to assign meal')
+    }
+  }
+
+  const handlePublish = async () => {
+    if (!selectedPlan) return
+    try {
+      await publishPlan(selectedPlan.id)
+      await loadPlans()
+      if (onPlanUpdate) onPlanUpdate()
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || 'Failed to publish plan')
+    }
+  }
+
+  if (!isOpen) return null
+
+  const isDraft = selectedPlan?.status === 'draft'
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div className="mps-backdrop" onClick={onClose} />
+      
+      {/* Panel */}
+      <div className="mps-panel">
+        {/* Header */}
+        <header className="mps-header">
+          <div className="mps-header-left">
+            <button className="mps-back-btn" onClick={onClose} aria-label="Close">
+              ←
+            </button>
+            <div className="mps-header-text">
+              <h2>Meal Plans</h2>
+              <span className="mps-client-name">{client?.name}</span>
+            </div>
+          </div>
+          <div className="mps-header-actions">
+            {isDraft && (
+              <button 
+                className="mps-btn mps-btn-primary"
+                onClick={handlePublish}
+                disabled={loading}
+              >
+                Publish
+              </button>
+            )}
+          </div>
+        </header>
+
+        {/* Plan Selector */}
+        <div className="mps-plan-selector">
+          <select 
+            className="mps-select"
+            value={selectedPlan?.id || ''}
+            onChange={(e) => {
+              const plan = plans.find(p => p.id === parseInt(e.target.value))
+              setSelectedPlan(plan)
+            }}
+          >
+            <option value="">Select a plan...</option>
+            {plans.map(plan => (
+              <option key={plan.id} value={plan.id}>
+                {plan.title || `${plan.start_date} - ${plan.end_date}`}
+                {plan.status === 'draft' ? ' (Draft)' : ''}
+              </option>
+            ))}
+          </select>
+          <button 
+            className="mps-btn mps-btn-outline"
+            onClick={() => setShowNewPlanForm(true)}
+          >
+            + New Plan
+          </button>
+        </div>
+
+        {/* New Plan Form */}
+        {showNewPlanForm && (
+          <div className="mps-new-plan-form">
+            <h3>Create New Plan</h3>
+            <form onSubmit={handleCreatePlan}>
+              <div className="mps-form-row">
+                <label>Title (optional)</label>
+                <input 
+                  type="text"
+                  placeholder="e.g., Holiday Week Menu"
+                  value={newPlanForm.title}
+                  onChange={e => setNewPlanForm(f => ({ ...f, title: e.target.value }))}
+                />
+              </div>
+              <div className="mps-form-row mps-form-row-2col">
+                <div>
+                  <label>Start Date *</label>
+                  <input 
+                    type="date"
+                    required
+                    value={newPlanForm.start_date}
+                    onChange={e => setNewPlanForm(f => ({ ...f, start_date: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label>End Date *</label>
+                  <input 
+                    type="date"
+                    required
+                    value={newPlanForm.end_date}
+                    onChange={e => setNewPlanForm(f => ({ ...f, end_date: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className="mps-form-row">
+                <label>Notes</label>
+                <textarea 
+                  rows={2}
+                  placeholder="Any notes for the client..."
+                  value={newPlanForm.notes}
+                  onChange={e => setNewPlanForm(f => ({ ...f, notes: e.target.value }))}
+                />
+              </div>
+              <div className="mps-form-actions">
+                <button type="button" className="mps-btn mps-btn-outline" onClick={() => setShowNewPlanForm(false)}>
+                  Cancel
+                </button>
+                <button type="submit" className="mps-btn mps-btn-primary" disabled={loading}>
+                  {loading ? 'Creating...' : 'Create Plan'}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* Error */}
+        {error && (
+          <div className="mps-error">
+            {error}
+            <button onClick={() => setError(null)}>×</button>
+          </div>
+        )}
+
+        {/* Tabs */}
+        {selectedPlan && (
+          <div className="mps-tabs">
+            <button 
+              className={`mps-tab ${activeTab === 'week' ? 'active' : ''}`}
+              onClick={() => setActiveTab('week')}
+            >
+              Week View
+            </button>
+            <button 
+              className={`mps-tab ${activeTab === 'suggestions' ? 'active' : ''}`}
+              onClick={() => setActiveTab('suggestions')}
+            >
+              AI Suggestions {suggestions.length > 0 && `(${suggestions.length})`}
+            </button>
+          </div>
+        )}
+
+        {/* Content */}
+        <div className="mps-content">
+          {loading && !planDetail ? (
+            <div className="mps-loading">Loading...</div>
+          ) : !selectedPlan ? (
+            <div className="mps-empty">
+              <div className="mps-empty-icon">📅</div>
+              <p>No plan selected. Create a new plan or select an existing one.</p>
+            </div>
+          ) : activeTab === 'week' ? (
+            <>
+              {/* AI Generate Button */}
+              {isDraft && (
+                <div className="mps-ai-bar">
+                  <button 
+                    className="mps-btn mps-btn-ai"
+                    onClick={() => handleGenerateMeals('full_week')}
+                    disabled={generating}
+                  >
+                    {generating ? `🔄 ${generationStatus || 'Generating...'}` : '✨ Generate Full Week with AI'}
+                  </button>
+                  <button 
+                    className="mps-btn mps-btn-outline"
+                    onClick={() => handleGenerateMeals('fill_empty')}
+                    disabled={generating}
+                  >
+                    Fill Empty Slots
+                  </button>
+                </div>
+              )}
+              
+              <MealPlanWeekView 
+                planDetail={planDetail}
+                onSlotClick={isDraft ? handleSlotClick : null}
+                readOnly={!isDraft}
+              />
+            </>
+          ) : (
+            /* Suggestions Tab */
+            <div className="mps-suggestions">
+              {suggestions.length === 0 ? (
+                <div className="mps-empty">
+                  <div className="mps-empty-icon">✨</div>
+                  <p>No suggestions yet. Click "Generate" to get AI meal ideas.</p>
+                  <button 
+                    className="mps-btn mps-btn-ai"
+                    onClick={() => handleGenerateMeals('full_week')}
+                    disabled={generating}
+                  >
+                    {generating ? 'Generating...' : 'Generate Suggestions'}
+                  </button>
+                </div>
+              ) : (
+                <div className="mps-suggestions-list">
+                  {suggestions.map((s, idx) => (
+                    <div key={idx} className="mps-suggestion-card">
+                      <div className="mps-suggestion-header">
+                        <span className="mps-suggestion-slot">{s.day} • {s.meal_type}</span>
+                        <div className="mps-suggestion-actions">
+                          <button 
+                            className="mps-btn mps-btn-sm mps-btn-primary"
+                            onClick={() => handleAcceptSuggestion(s)}
+                          >
+                            Accept
+                          </button>
+                          <button 
+                            className="mps-btn mps-btn-sm mps-btn-outline"
+                            onClick={() => setSuggestions(prev => prev.filter((_, i) => i !== idx))}
+                          >
+                            Skip
+                          </button>
+                        </div>
+                      </div>
+                      <h4 className="mps-suggestion-name">{s.name}</h4>
+                      <p className="mps-suggestion-desc">{s.description}</p>
+                      {s.dietary_tags?.length > 0 && (
+                        <div className="mps-suggestion-tags">
+                          {s.dietary_tags.map((tag, i) => (
+                            <span key={i} className="mps-tag">{tag}</span>
+                          ))}
+                        </div>
+                      )}
+                      {s.household_notes && (
+                        <p className="mps-suggestion-notes">💡 {s.household_notes}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Slot Picker Modal */}
+      {pickerOpen && (
+        <MealSlotPicker 
+          isOpen={pickerOpen}
+          onClose={() => { setPickerOpen(false); setPickerSlot(null) }}
+          slot={pickerSlot}
+          onAssign={handleSlotAssign}
+          planId={selectedPlan?.id}
+          planTitle={selectedPlan?.title || 'Meal Plan'}
+          clientName={client?.name || client?.first_name || 'Client'}
+        />
+      )}
+
+      <style>{`
+        /* Backdrop */
+        .mps-backdrop {
+          position: fixed;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.4);
+          z-index: 1000;
+          animation: fadeIn 0.2s ease;
+        }
+        
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+
+        /* Panel - Mobile First (Full Screen) */
+        .mps-panel {
+          position: fixed;
+          top: 0;
+          right: 0;
+          bottom: 0;
+          width: 100%;
+          background: var(--bg, #fff);
+          z-index: 1001;
+          display: flex;
+          flex-direction: column;
+          animation: slideIn 0.25s ease;
+        }
+        
+        @keyframes slideIn {
+          from { transform: translateX(100%); }
+          to { transform: translateX(0); }
+        }
+
+        /* Tablet */
+        @media (min-width: 768px) {
+          .mps-panel {
+            width: 85%;
+            max-width: 700px;
+            box-shadow: -4px 0 24px rgba(0, 0, 0, 0.15);
+          }
+        }
+
+        /* Desktop */
+        @media (min-width: 1024px) {
+          .mps-panel {
+            width: 60%;
+            max-width: 800px;
+          }
+        }
+
+        /* Header */
+        .mps-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 1rem;
+          border-bottom: 1px solid var(--border, #e5e7eb);
+          background: var(--surface, #fff);
+          flex-shrink: 0;
+        }
+
+        .mps-header-left {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+        }
+
+        .mps-back-btn {
+          width: 36px;
+          height: 36px;
+          border: none;
+          background: var(--surface-2, #f3f4f6);
+          border-radius: 8px;
+          font-size: 1.25rem;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .mps-header-text h2 {
+          margin: 0;
+          font-size: 1.1rem;
+          font-weight: 600;
+        }
+
+        .mps-client-name {
+          font-size: 0.85rem;
+          color: var(--muted, #666);
+        }
+
+        /* Plan Selector */
+        .mps-plan-selector {
+          display: flex;
+          gap: 0.5rem;
+          padding: 0.75rem 1rem;
+          border-bottom: 1px solid var(--border, #e5e7eb);
+          flex-wrap: wrap;
+        }
+
+        .mps-select {
+          flex: 1;
+          min-width: 200px;
+          padding: 0.5rem 0.75rem;
+          border: 1px solid var(--border, #ddd);
+          border-radius: 8px;
+          background: var(--surface, #fff);
+          color: var(--text, #333);
+          font-size: 0.9rem;
+        }
+
+        .mps-select option {
+          background: var(--surface, #fff);
+          color: var(--text, #333);
+        }
+
+        /* Buttons */
+        .mps-btn {
+          padding: 0.5rem 1rem;
+          border-radius: 8px;
+          font-size: 0.9rem;
+          font-weight: 500;
+          cursor: pointer;
+          border: 1px solid transparent;
+          transition: all 0.15s;
+          white-space: nowrap;
+        }
+
+        .mps-btn-sm {
+          padding: 0.35rem 0.75rem;
+          font-size: 0.8rem;
+        }
+
+        .mps-btn-primary {
+          background: var(--primary, #5cb85c);
+          color: white;
+          border-color: var(--primary, #5cb85c);
+        }
+
+        .mps-btn-primary:hover {
+          background: var(--primary-700, #4a9d4a);
+        }
+
+        .mps-btn-outline {
+          background: transparent;
+          border-color: var(--border, #ddd);
+          color: var(--text, #333);
+        }
+
+        .mps-btn-outline:hover {
+          background: var(--surface-2, #f3f4f6);
+        }
+
+        .mps-btn-ai {
+          background: linear-gradient(135deg, var(--primary, #5cb85c), var(--primary-700, #4a9d4a));
+          color: white;
+          border: none;
+        }
+
+        .mps-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+
+        /* New Plan Form */
+        .mps-new-plan-form {
+          padding: 1rem;
+          background: var(--surface-2, #f9fafb);
+          border-bottom: 1px solid var(--border, #e5e7eb);
+        }
+
+        .mps-new-plan-form h3 {
+          margin: 0 0 1rem 0;
+          font-size: 1rem;
+        }
+
+        .mps-form-row {
+          margin-bottom: 0.75rem;
+        }
+
+        .mps-form-row label {
+          display: block;
+          font-size: 0.8rem;
+          font-weight: 500;
+          margin-bottom: 0.25rem;
+          color: var(--muted, #666);
+        }
+
+        .mps-form-row input,
+        .mps-form-row textarea {
+          width: 100%;
+          padding: 0.5rem 0.75rem;
+          border: 1px solid var(--border, #ddd);
+          border-radius: 8px;
+          font-size: 0.9rem;
+        }
+
+        .mps-form-row-2col {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 0.75rem;
+        }
+
+        .mps-form-actions {
+          display: flex;
+          gap: 0.5rem;
+          justify-content: flex-end;
+          margin-top: 1rem;
+        }
+
+        /* Error */
+        .mps-error {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 0.75rem 1rem;
+          background: #fee2e2;
+          color: #dc2626;
+          font-size: 0.9rem;
+        }
+
+        .mps-error button {
+          background: none;
+          border: none;
+          font-size: 1.25rem;
+          cursor: pointer;
+          color: inherit;
+        }
+
+        /* Tabs */
+        .mps-tabs {
+          display: flex;
+          border-bottom: 1px solid var(--border, #e5e7eb);
+          flex-shrink: 0;
+        }
+
+        .mps-tab {
+          flex: 1;
+          padding: 0.75rem 1rem;
+          background: none;
+          border: none;
+          border-bottom: 2px solid transparent;
+          font-size: 0.9rem;
+          font-weight: 500;
+          color: var(--muted, #666);
+          cursor: pointer;
+          transition: all 0.15s;
+        }
+
+        .mps-tab.active {
+          color: var(--primary, #5cb85c);
+          border-bottom-color: var(--primary, #5cb85c);
+        }
+
+        .mps-tab:hover:not(.active) {
+          background: var(--surface-2, #f9fafb);
+        }
+
+        /* Content */
+        .mps-content {
+          flex: 1;
+          overflow-y: auto;
+          padding: 1rem;
+        }
+
+        .mps-loading,
+        .mps-empty {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          padding: 3rem 1rem;
+          text-align: center;
+          color: var(--muted, #666);
+        }
+
+        .mps-empty-icon {
+          font-size: 3rem;
+          margin-bottom: 1rem;
+          opacity: 0.5;
+        }
+
+        /* AI Bar */
+        .mps-ai-bar {
+          display: flex;
+          gap: 0.5rem;
+          margin-bottom: 1rem;
+          flex-wrap: wrap;
+        }
+
+        /* Suggestions */
+        .mps-suggestions-list {
+          display: flex;
+          flex-direction: column;
+          gap: 0.75rem;
+        }
+
+        .mps-suggestion-card {
+          background: var(--surface, #fff);
+          border: 1px solid var(--border, #e5e7eb);
+          border-radius: 12px;
+          padding: 1rem;
+        }
+
+        .mps-suggestion-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 0.5rem;
+          flex-wrap: wrap;
+          gap: 0.5rem;
+        }
+
+        .mps-suggestion-slot {
+          font-size: 0.8rem;
+          font-weight: 600;
+          color: var(--primary, #5cb85c);
+          background: rgba(92, 184, 92, 0.1);
+          padding: 0.25rem 0.5rem;
+          border-radius: 4px;
+        }
+
+        .mps-suggestion-actions {
+          display: flex;
+          gap: 0.35rem;
+        }
+
+        .mps-suggestion-name {
+          margin: 0 0 0.35rem 0;
+          font-size: 1rem;
+          font-weight: 600;
+        }
+
+        .mps-suggestion-desc {
+          margin: 0 0 0.5rem 0;
+          font-size: 0.9rem;
+          color: var(--muted, #666);
+          line-height: 1.4;
+        }
+
+        .mps-suggestion-tags {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.35rem;
+          margin-bottom: 0.5rem;
+        }
+
+        .mps-tag {
+          font-size: 0.75rem;
+          padding: 0.2rem 0.5rem;
+          background: var(--surface-2, #f3f4f6);
+          border-radius: 4px;
+          color: var(--muted, #666);
+        }
+
+        .mps-suggestion-notes {
+          font-size: 0.85rem;
+          color: var(--muted, #666);
+          margin: 0;
+          font-style: italic;
+        }
+      `}</style>
+    </>
+  )
+}
+
+// Helper to get dates in range
+function getDatesInRange(startDate, endDate) {
+  const dates = []
+  const start = new Date(startDate)
+  const end = new Date(endDate)
+  
+  while (start <= end) {
+    dates.push(start.toISOString().split('T')[0])
+    start.setDate(start.getDate() + 1)
+  }
+  
+  return dates
+}

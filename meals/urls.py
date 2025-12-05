@@ -3,6 +3,8 @@ from django.conf import settings
 from . import views
 from . import chef_meals_views
 from . import api_dashboard_views
+from . import sample_plan_views
+from .api import customer_plans as customer_plans_api
 from meals.cart_views.unified_cart import (
     get_cart,
     add_chef_service_to_cart,
@@ -19,6 +21,13 @@ app_name = 'meals'
 
 
 urlpatterns = [
+    # Collaborative Meal Plans API (Customer endpoints)
+    path('api/my-plans/', customer_plans_api.get_my_plans, name='api_my_plans'),
+    path('api/my-plans/current/', customer_plans_api.get_current_plan, name='api_current_plan'),
+    path('api/my-plans/<int:plan_id>/', customer_plans_api.get_plan_detail, name='api_plan_detail'),
+    path('api/my-plans/<int:plan_id>/suggest/', customer_plans_api.submit_suggestion, name='api_submit_suggestion'),
+    path('api/my-plans/<int:plan_id>/suggestions/', customer_plans_api.get_my_suggestions, name='api_my_suggestions'),
+
     # Existing URLs
     path('embeddings/', views.embeddings_list, name='meal_list'),
     path('approve_meal_plan/', views.meal_plan_approval, name='approve_meal_plan'),
@@ -126,6 +135,11 @@ urlpatterns = [
     path('api/cart/remove-chef-service/', remove_chef_service_from_cart, name='api_remove_chef_service_from_cart'),
     path('api/cart/checkout/', unified_checkout, name='api_unified_checkout'),
     path('api/cart/clear/', clear_cart, name='api_clear_cart'),
+    
+    # Sample Plan Preview API (Chef Preview Mode)
+    path('api/sample-plan/', sample_plan_views.get_sample_plan, name='api_get_sample_plan'),
+    path('api/sample-plan/generate/', sample_plan_views.generate_sample_plan, name='api_generate_sample_plan'),
+    path('api/sample-plan/status/', sample_plan_views.sample_plan_status, name='api_sample_plan_status'),
 ]
 
 

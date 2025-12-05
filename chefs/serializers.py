@@ -92,7 +92,7 @@ class ChefPublicSerializer(serializers.ModelSerializer):
                   'serving_postalcodes', 'profile_pic_url', 'banner_url',
                   'review_summary', 'photos',
                   'is_verified', 'background_checked', 'insured', 'insurance_expiry',
-                  'food_handlers_cert']
+                  'food_handlers_cert', 'sous_chef_emoji']
 
     def get_profile_pic_url(self, obj):
         # Safe check: ImageFieldFile.url raises if no file; rely on name to detect presence
@@ -129,7 +129,7 @@ class ChefPublicSerializer(serializers.ModelSerializer):
 class ChefMeUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Chef
-        fields = ['experience', 'bio', 'profile_pic', 'banner_image', 'is_on_break']
+        fields = ['experience', 'bio', 'profile_pic', 'banner_image', 'is_on_break', 'sous_chef_emoji']
 
 
 # Gallery-specific serializers for the new public gallery endpoints

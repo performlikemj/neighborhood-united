@@ -1,7 +1,9 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useTheme } from '../context/ThemeContext.jsx'
+import { FEATURES } from '../config/features.js'
+import { api } from '../api'
 
 function PlateStackIcon(){
   const stroke = 'currentColor'
@@ -17,7 +19,7 @@ function PlateStackIcon(){
 }
 
 export default function NavBar(){
-  const { user, logout, switchRole } = useAuth()
+  const { user, logout, switchRole, hasChefAccess } = useAuth()
   const { theme, toggleTheme } = useTheme()
   const nav = useNavigate()
   const [switching, setSwitching] = useState(false)
@@ -27,6 +29,21 @@ export default function NavBar(){
   const onBrandError = ()=> setBrandSrc('/sautai_logo_transparent_800.png')
   const isAuthed = Boolean(user)
   const inChef = user?.current_role === 'chef'
+  
+  // Track connected chefs for adaptive nav text
+  const [connectedChefCount, setConnectedChefCount] = useState(0)
+  
+  // Fetch connected chef count for customers
+  useEffect(() => {
+    if (isAuthed && !inChef && FEATURES.CLIENT_PORTAL_MY_CHEFS) {
+      api.get('/customer-dashboard/api/my-chefs/')
+        .then(resp => setConnectedChefCount(resp?.data?.count || 0))
+        .catch(() => setConnectedChefCount(0))
+    }
+  }, [isAuthed, inChef])
+  
+  // Determine if user has chef connection(s)
+  const hasChefConnection = connectedChefCount > 0
 
   const doLogout = () => {
     logout()
@@ -83,17 +100,65 @@ export default function NavBar(){
 
         <div id="site-menu" className={"nav-links" + (menuOpen ? " open" : "") }>
           <Link to="/" onClick={closeMenu} className="btn btn-outline">Home</Link>
-          {(!inChef && isAuthed) && <Link to="/meal-plans" onClick={closeMenu} className="btn btn-outline">Meal Plans</Link>}
-          {(inChef && isAuthed) && <Link to="/chefs/dashboard" onClick={closeMenu} className="btn btn-outline">Chef Dashboard</Link>}
+          
+          {/* Chef Dashboard link for chefs */}
+          {(inChef && isAuthed) && (
+            <Link to="/chefs/dashboard" onClick={closeMenu} className="btn btn-outline">Chef Dashboard</Link>
+          )}
+          
+          {/* Client Portal Navigation for customers with chef connections */}
+          {(!inChef && isAuthed && hasChefConnection && FEATURES.CLIENT_PORTAL_MY_CHEFS) && (
+            <Link to="/my-chefs" onClick={closeMenu} className="btn btn-outline">
+              {connectedChefCount === 1 ? 'My Chef' : 'My Chefs'}
+            </Link>
+          )}
+          
+          {/* Legacy Meal Plans link (only if feature enabled and no chef connection) */}
+          {(!inChef && isAuthed && FEATURES.CUSTOMER_STANDALONE_MEAL_PLANS && !hasChefConnection) && (
+            <Link to="/meal-plans" onClick={closeMenu} className="btn btn-outline">Meal Plans</Link>
+          )}
+          
+          {/* Get Started link for customers without chef access */}
+          {(!inChef && isAuthed && !hasChefAccess && !hasChefConnection) && (
+            <Link to="/get-ready" onClick={closeMenu} className="btn btn-outline">Get Started</Link>
+          )}
+          
+          {/* Discover Chefs for customers with area access but no connection */}
+          {(!inChef && isAuthed && hasChefAccess && !hasChefConnection) && (
+            <Link to="/chefs" onClick={closeMenu} className="btn btn-outline">Find a Chef</Link>
+          )}
+          
+          {/* Public chefs directory for non-authenticated users */}
           {!isAuthed && (
             <Link to="/chefs" onClick={closeMenu} className="btn btn-outline">Chefs</Link>
           )}
+          
           {isAuthed && (
             (()=>{
               const items = []
-              if (!inChef){ items.push({ to:'/orders', label:'Orders' }); items.push({ to:'/chat', label:'Chat' }); items.push({ to:'/health', label:'Health' }) }
-              items.push({ to:'/chefs', label:'Chefs' })
-              items.push({ to:'/profile', label:'Profile' })
+              
+              // Customer navigation items
+              if (!inChef) {
+                // Orders always visible for customers
+                items.push({ to: '/orders', label: 'Orders' })
+                
+                // Legacy features (behind feature flags)
+                if (FEATURES.CUSTOMER_AI_CHAT) {
+                  items.push({ to: '/chat', label: 'Chat' })
+                }
+                if (FEATURES.CUSTOMER_HEALTH_TRACKING) {
+                  items.push({ to: '/health', label: 'Health' })
+                }
+                
+                // Chefs directory for discovery (if not in primary nav)
+                if (hasChefConnection) {
+                  items.push({ to: '/chefs', label: 'Find More Chefs' })
+                }
+              }
+              
+              // Profile always visible
+              items.push({ to: '/profile', label: 'Profile' })
+              
               if (items.length === 0) return null
               return (
                 <div className="menu-wrap">

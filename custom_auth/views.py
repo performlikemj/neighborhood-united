@@ -637,6 +637,14 @@ def user_details_view(request):
 @permission_classes([IsAuthenticated])
 @throttle_classes([])
 def address_details_view(request):
+    """
+    POTENTIALLY REDUNDANT: As of Dec 2024, address is now included in the
+    /auth/api/user_details/ response via CustomUserSerializer.get_address().
+    
+    This endpoint is kept for backwards compatibility but can be removed once
+    all clients have migrated to using user_details. Check for active usage
+    before removing.
+    """
     try:
         address = request.user.address
     except Address.DoesNotExist:

@@ -94,8 +94,8 @@ class OfferingsDistanceFilterTests(TestCase):
         viewer = CustomUser.objects.create_user(username='viewer', email='viewer@example.com', password='pass')
         Address.objects.create(
             user=viewer,
-            input_postalcode='90001',
-            display_postalcode='90001',
+            normalized_postalcode='90001',
+            original_postalcode='90001',
             country='US',
             latitude=Decimal('34.000000'),
             longitude=Decimal('-118.000000'),

@@ -1,107 +1,197 @@
-import React, { useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
-import { Routes, Route } from 'react-router-dom'
+import React from 'react'
+import { Routes, Route, Navigate } from 'react-router-dom'
+
+// Layout
 import NavBar from './components/NavBar.jsx'
 import ProtectedRoute from './components/ProtectedRoute.jsx'
+
+// Config
+import { FEATURES } from './config/features.js'
+
+// Pages
 import Home from './pages/Home.jsx'
 import Login from './pages/Login.jsx'
 import Register from './pages/Register.jsx'
-import Chat from './pages/Chat.jsx'
-import MealPlans from './pages/MealPlans.jsx'
 import Profile from './pages/Profile.jsx'
-import ChefDashboard from './pages/ChefDashboard.jsx'
-import CustomerOrders from './pages/CustomerOrders.jsx'
-import NotFound from './pages/NotFound.jsx'
-import AccessDenied from './pages/AccessDenied.jsx'
-import VerifyEmail from './pages/VerifyEmail.jsx'
 import Account from './pages/Account.jsx'
-import MealPlanApproval from './pages/MealPlanApproval.jsx'
-import EmailAuth from './pages/EmailAuth.jsx'
-// History removed
-import HealthMetrics from './pages/HealthMetrics.jsx'
-import PublicChef from './pages/PublicChef.jsx'
+import MealPlans from './pages/MealPlans.jsx'
+import Chat from './pages/Chat.jsx'
+import ChefDashboard from './pages/ChefDashboard.jsx'
 import ChefGallery from './pages/ChefGallery.jsx'
 import ChefsDirectory from './pages/ChefsDirectory.jsx'
+import PublicChef from './pages/PublicChef.jsx'
+import CustomerOrders from './pages/CustomerOrders.jsx'
+import HealthMetrics from './pages/HealthMetrics.jsx'
 import Onboarding from './pages/Onboarding.jsx'
-import Terms from './pages/Terms.jsx'
+import EmailAuth from './pages/EmailAuth.jsx'
+import VerifyEmail from './pages/VerifyEmail.jsx'
+import MealPlanApproval from './pages/MealPlanApproval.jsx'
 import Privacy from './pages/Privacy.jsx'
+import Terms from './pages/Terms.jsx'
 import RefundPolicy from './pages/RefundPolicy.jsx'
-import CartButton from './components/CartButton.jsx'
-import CartSidebar from './components/CartSidebar.jsx'
+import AccessDenied from './pages/AccessDenied.jsx'
+import NotFound from './pages/NotFound.jsx'
+import GetReady from './pages/GetReady.jsx'
+
+// Client Portal Pages (Multi-Chef Support)
+import MyChefs from './pages/MyChefs.jsx'
+import ChefHub from './pages/ChefHub.jsx'
+import MyMealPlan from './pages/MyMealPlan.jsx'
+import AllOrders from './pages/AllOrders.jsx'
 
 export default function App(){
-  const [globalToasts, setGlobalToasts] = useState([]) // {id, text, tone, closing}
-
-  useEffect(()=>{
-    const onToast = (e)=>{
-      try{
-        const detail = e?.detail || {}
-        const text = detail.text || String(detail) || 'An error occurred'
-        const tone = detail.tone || 'error'
-        const id = Math.random().toString(36).slice(2)
-        setGlobalToasts(prev => [...prev, { id, text, tone, closing:false }])
-        setTimeout(()=>{
-          setGlobalToasts(prev => prev.map(t => t.id === id ? { ...t, closing:true } : t))
-          setTimeout(()=> setGlobalToasts(prev => prev.filter(t => t.id !== id)), 260)
-        }, 3800)
-      }catch{}
-    }
-    window.addEventListener('global-toast', onToast)
-    return ()=> window.removeEventListener('global-toast', onToast)
-  }, [])
   return (
-    <div>
+    <>
       <NavBar />
-      <CartButton />
       <Routes>
-        <Route path="/chefs/dashboard" element={<ProtectedRoute requiredRole="chef"><ChefDashboard /></ProtectedRoute>} />
-        <Route path="*" element={
-          <div className="container">
-            <Routes>
-              <Route path="/" element={<Home />} />
-              <Route path="/login" element={<Login />} />
-              <Route path="/account" element={<Account />} />
-              <Route path="/register" element={<Register />} />
-              <Route path="/onboarding" element={<Onboarding />} />
-              <Route path="/chat" element={<ProtectedRoute requiredRole="customer"><Chat /></ProtectedRoute>} />
-              <Route path="/meal-plans" element={<ProtectedRoute requiredRole="customer"><MealPlans /></ProtectedRoute>} />
-              <Route path="/orders" element={<ProtectedRoute requiredRole="customer"><CustomerOrders /></ProtectedRoute>} />
-              <Route path="/meal_plans" element={<MealPlanApproval />} />
-              <Route path="/email_auth" element={<EmailAuth />} />
-              <Route path="/assistant" element={<EmailAuth />} />
-              <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
-              <Route path="/verify-email" element={<ProtectedRoute><VerifyEmail /></ProtectedRoute>} />
-              <Route path="/c/:username" element={<PublicChef />} />
-              <Route path="/c/:username/gallery" element={<ChefGallery />} />
-              <Route path="/chefs" element={<ChefsDirectory />} />
-              <Route path="/terms" element={<Terms />} />
-              <Route path="/privacy" element={<Privacy />} />
-              <Route path="/refund-policy" element={<RefundPolicy />} />
-              {/* History route removed */}
-              <Route path="/health" element={<ProtectedRoute requiredRole="customer"><HealthMetrics /></ProtectedRoute>} />
-              <Route path="/403" element={<AccessDenied />} />
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-            <div className="footer">
-              <p>Cook with care. Share with joy. — <a href="https://www.buymeacoffee.com/sautai" target="_blank">Support sautai</a></p>
-            </div>
-          </div>
-        } />
-      </Routes>
-      <CartSidebar />
-      <GlobalToastOverlay toasts={globalToasts} />
-    </div>
-  )
-}
+        {/* Public routes */}
+        <Route path="/" element={<Home />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+        <Route path="/chefs" element={<ChefsDirectory />} />
+        <Route path="/chefs/:username" element={<PublicChef />} />
+        <Route path="/chefs/:username/gallery" element={<ChefGallery />} />
+        {/* Short URL aliases for chef profiles */}
+        <Route path="/c/:username" element={<PublicChef />} />
+        <Route path="/c/:username/gallery" element={<ChefGallery />} />
+        <Route path="/privacy" element={<Privacy />} />
+        <Route path="/terms" element={<Terms />} />
+        <Route path="/refund-policy" element={<RefundPolicy />} />
+        <Route path="/email-auth" element={<EmailAuth />} />
+        <Route path="/403" element={<AccessDenied />} />
 
-function GlobalToastOverlay({ toasts }){
-  if (!toasts || toasts.length===0) return null
-  return createPortal(
-    <div className="toast-container" role="status" aria-live="polite">
-      {toasts.map(t => (
-        <div key={t.id} className={`toast ${t.tone} ${t.closing?'closing':''}`}>{t.text}</div>
-      ))}
-    </div>,
-    document.body
+        {/* Protected routes - require authentication */}
+        <Route path="/profile" element={
+          <ProtectedRoute>
+            <Profile />
+          </ProtectedRoute>
+        } />
+        <Route path="/account" element={
+          <ProtectedRoute>
+            <Account />
+          </ProtectedRoute>
+        } />
+        <Route path="/verify-email" element={
+          <ProtectedRoute>
+            <VerifyEmail />
+          </ProtectedRoute>
+        } />
+        <Route path="/onboarding" element={
+          <ProtectedRoute>
+            <Onboarding />
+          </ProtectedRoute>
+        } />
+        <Route path="/health-metrics" element={
+          <ProtectedRoute>
+            {FEATURES.CUSTOMER_HEALTH_TRACKING ? (
+              <HealthMetrics />
+            ) : (
+              <Navigate to="/profile" replace />
+            )}
+          </ProtectedRoute>
+        } />
+        
+        {/* Legacy Health route alias */}
+        <Route path="/health" element={
+          <Navigate to="/health-metrics" replace />
+        } />
+        
+        {/* Chef Preview Mode - for users without chef access */}
+        <Route path="/get-ready" element={
+          <ProtectedRoute>
+            <GetReady />
+          </ProtectedRoute>
+        } />
+
+        {/* =================================================================== */}
+        {/* Client Portal Routes (Multi-Chef Support) */}
+        {/* =================================================================== */}
+        
+        {/* My Chefs - list of connected chefs (with smart redirect for single chef) */}
+        <Route path="/my-chefs" element={
+          <ProtectedRoute requiredRole="customer">
+            <MyChefs />
+          </ProtectedRoute>
+        } />
+        
+        {/* Individual Chef Hub */}
+        <Route path="/my-chefs/:chefId" element={
+          <ProtectedRoute requiredRole="customer">
+            <ChefHub />
+          </ProtectedRoute>
+        } />
+        
+        {/* Chef-specific Meal Plan View */}
+        <Route path="/my-chefs/:chefId/meal-plan" element={
+          <ProtectedRoute requiredRole="customer">
+            <MyMealPlan />
+          </ProtectedRoute>
+        } />
+        
+        {/* Chef-specific Orders (redirect to AllOrders with filter) */}
+        <Route path="/my-chefs/:chefId/orders" element={
+          <ProtectedRoute requiredRole="customer">
+            <AllOrders />
+          </ProtectedRoute>
+        } />
+        
+        {/* Legacy redirect: /my-chef -> /my-chefs */}
+        <Route path="/my-chef" element={<Navigate to="/my-chefs" replace />} />
+
+        {/* =================================================================== */}
+        {/* Customer-specific routes */}
+        {/* =================================================================== */}
+        
+        {/* Unified Orders page (all chefs) */}
+        <Route path="/orders" element={
+          <ProtectedRoute requiredRole="customer">
+            <AllOrders />
+          </ProtectedRoute>
+        } />
+        
+        {/* Legacy Meal Plans (behind feature flag, or redirect) */}
+        <Route path="/meal-plans" element={
+          <ProtectedRoute requiredRole="customer">
+            {FEATURES.CUSTOMER_STANDALONE_MEAL_PLANS ? (
+              <MealPlans />
+            ) : (
+              <Navigate to="/my-chefs" replace />
+            )}
+          </ProtectedRoute>
+        } />
+        
+        {/* Legacy Chat (behind feature flag) */}
+        <Route path="/chat" element={
+          <ProtectedRoute requiredRole="customer">
+            {FEATURES.CUSTOMER_AI_CHAT ? (
+              <Chat />
+            ) : (
+              <Navigate to="/my-chefs" replace />
+            )}
+          </ProtectedRoute>
+        } />
+        
+        {/* Legacy Customer Orders (redirect to new AllOrders) */}
+        <Route path="/customer-orders" element={
+          <Navigate to="/orders" replace />
+        } />
+        
+        <Route path="/meal-plan-approval" element={
+          <ProtectedRoute requiredRole="customer">
+            <MealPlanApproval />
+          </ProtectedRoute>
+        } />
+
+        {/* Chef-specific routes */}
+        <Route path="/chefs/dashboard" element={
+          <ProtectedRoute requiredRole="chef">
+            <ChefDashboard />
+          </ProtectedRoute>
+        } />
+
+        {/* 404 catch-all */}
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    </>
   )
 }

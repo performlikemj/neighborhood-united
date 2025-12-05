@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api, buildErrorMessage } from '../api'
+import { useConnections } from '../hooks/useConnections.js'
 import { OrdersTab } from './MealPlans.jsx'
 import { getStoredServiceOrderIds, rememberServiceOrderId, removeServiceOrderId, replaceServiceOrderIds, SERVICE_ORDER_STORAGE_KEY } from '../utils/serviceOrdersStorage.js'
 import ConfirmDialog from '../components/ConfirmDialog.jsx'
@@ -264,6 +265,17 @@ function getChefProfilePath(order, profile, fallbackId){
   return null
 }
 
+function connectionStatusLabel(status){
+  const normalized = String(status || '').toLowerCase()
+  if (!normalized) return 'Unknown'
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1)
+}
+
+function connectionChefName(connection){
+  const profile = connection?.chef || connection?.chef_profile || connection?.chef_details || {}
+  return deriveChefName(connection, profile) || 'Chef'
+}
+
 export default function CustomerOrders(){
   const { loadExistingOrder, openCart } = useCart()
   const [tab, setTab] = useState('services')
@@ -273,6 +285,18 @@ export default function CustomerOrders(){
   const [verifyingServiceId, setVerifyingServiceId] = useState(null)
   const [cancellingOrder, setCancellingOrder] = useState(null)
   const [searchParams] = useSearchParams()
+  const {
+    connections,
+    pendingConnections,
+    acceptedConnections,
+    declinedConnections,
+    endedConnections,
+    respondToConnection,
+    refetchConnections,
+    respondStatus: connectionRespondStatus
+  } = useConnections('customer')
+  const [connectionActionId, setConnectionActionId] = useState(null)
+  const connectionUpdating = connectionRespondStatus === 'pending'
 
   const [verifyingMealOrderId, setVerifyingMealOrderId] = useState(null)
   const [chefDetails, setChefDetails] = useState({})
@@ -340,6 +364,30 @@ export default function CustomerOrders(){
       setServiceError('Unable to load service orders right now.')
     }finally{
       setServiceLoading(false)
+    }
+  }
+
+  const handleConnectionAction = async (connectionId, action)=>{
+    if (!connectionId || !action) return
+    setConnectionActionId(connectionId)
+    try{
+      await respondToConnection({ connectionId, action })
+      await refetchConnections()
+      const message = action === 'accept'
+        ? 'Connection accepted.'
+        : action === 'decline'
+          ? 'Invitation declined.'
+          : 'Service connection ended.'
+      try{
+        window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text: message, tone:'success' } }))
+      }catch{}
+    }catch(error){
+      const msg = error?.response?.data?.detail || 'Unable to update this connection. Please try again.'
+      try{
+        window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text: msg, tone:'error' } }))
+      }catch{}
+    } finally {
+      setConnectionActionId(null)
     }
   }
 
@@ -661,6 +709,106 @@ export default function CustomerOrders(){
       </div>
       {tab === 'services' ? (
         <div>
+          <div className="card" style={{marginBottom:'1rem'}}>
+            <div style={{display:'flex', justifyContent:'space-between', flexWrap:'wrap', gap:'.5rem'}}>
+              <div>
+                <h2 style={{margin:'0 0 .25rem 0'}}>Client connections</h2>
+                <div className="muted">Manage invitations and active chef partnerships.</div>
+              </div>
+              <div className="muted" style={{fontSize:'.85rem'}}>
+                Accepted: {acceptedConnections.length} · Pending: {pendingConnections.length}
+              </div>
+            </div>
+            {connections.length === 0 ? (
+              <div className="muted" style={{marginTop:'.75rem'}}>You have not connected with any chefs yet.</div>
+            ) : (
+              <div style={{display:'flex', flexDirection:'column', gap:'1rem', marginTop:'.75rem'}}>
+                {pendingConnections.length > 0 && (
+                  <div>
+                    <h3 style={{margin:'0 0 .35rem 0', fontSize:'1rem'}}>Pending invitations</h3>
+                    <ul style={{listStyle:'none', margin:0, padding:0, display:'flex', flexDirection:'column', gap:'.75rem'}}>
+                      {pendingConnections.map(connection => {
+                        const busy = connectionUpdating && String(connectionActionId) === String(connection?.id)
+                        const chefName = connectionChefName(connection)
+                        const link = getChefProfilePath(connection, connection?.chef, connection?.chefId)
+                        return (
+                          <li key={connection?.id || `pending-${connection?.chefId || connection?.id}`}
+                            style={{display:'flex', justifyContent:'space-between', gap:'1rem', flexWrap:'wrap', alignItems:'center'}}>
+                            <div>
+                              <div style={{fontWeight:600}}>
+                                {link ? <Link to={link}>{chefName}</Link> : chefName}
+                              </div>
+                              <div className="muted" style={{fontSize:'.85rem'}}>
+                                {connectionStatusLabel(connection.status)} · {connection.viewerInitiated ? 'Waiting for chef response' : 'Chef invited you'}
+                              </div>
+                            </div>
+                            <div style={{display:'flex', gap:'.5rem'}}>
+                              {connection.canAccept && (
+                                <button className="btn btn-primary btn-sm" disabled={busy} onClick={()=> handleConnectionAction(connection.id, 'accept')}>
+                                  {busy ? 'Accepting…' : 'Accept'}
+                                </button>
+                              )}
+                              {connection.canDecline && (
+                                <button className="btn btn-outline btn-sm" disabled={busy} onClick={()=> handleConnectionAction(connection.id, 'decline')}>
+                                  {busy ? 'Declining…' : 'Decline'}
+                                </button>
+                              )}
+                            </div>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </div>
+                )}
+                {acceptedConnections.length > 0 && (
+                  <div>
+                    <h3 style={{margin:'0 0 .35rem 0', fontSize:'1rem'}}>Active chefs</h3>
+                    <ul style={{listStyle:'none', margin:0, padding:0, display:'flex', flexDirection:'column', gap:'.75rem'}}>
+                      {acceptedConnections.map(connection => {
+                        const busy = connectionUpdating && String(connectionActionId) === String(connection?.id)
+                        const chefName = connectionChefName(connection)
+                        const link = getChefProfilePath(connection, connection?.chef, connection?.chefId)
+                        return (
+                          <li key={connection?.id || `accepted-${connection?.chefId || connection?.id}`}
+                            style={{display:'flex', justifyContent:'space-between', gap:'1rem', flexWrap:'wrap', alignItems:'center'}}>
+                            <div>
+                              <div style={{fontWeight:600}}>
+                                {link ? <Link to={link}>{chefName}</Link> : chefName}
+                              </div>
+                              <div className="muted" style={{fontSize:'.85rem'}}>
+                                {connectionStatusLabel(connection.status)}
+                              </div>
+                            </div>
+                            <button className="btn btn-outline btn-sm" disabled={busy} onClick={()=> handleConnectionAction(connection.id, 'end')}>
+                              {busy ? 'Ending…' : 'End Service'}
+                            </button>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </div>
+                )}
+                {(declinedConnections.length > 0 || endedConnections.length > 0) && (
+                  <div>
+                    <h3 style={{margin:'0 0 .35rem 0', fontSize:'1rem'}}>Recent updates</h3>
+                    <ul style={{listStyle:'none', margin:0, padding:0, display:'flex', flexDirection:'column', gap:'.5rem'}}>
+                      {[...declinedConnections, ...endedConnections].slice(0,5).map(connection => {
+                        const chefName = connectionChefName(connection)
+                        return (
+                          <li key={connection?.id || `history-${connection?.chefId || connection?.id}`}>
+                            <div style={{display:'flex', justifyContent:'space-between', gap:'.75rem', flexWrap:'wrap'}}>
+                              <span>{chefName}</span>
+                              <span className="muted" style={{fontSize:'.85rem'}}>{connectionStatusLabel(connection.status)}</span>
+                            </div>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           <div className="card" style={{marginBottom:'1rem', display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'.5rem'}}>
             <div>
               <h2 style={{margin:'0 0 .35rem 0'}}>Service orders</h2>

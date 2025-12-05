@@ -74,6 +74,9 @@ class CustomUserSerializer(serializers.ModelSerializer):
     is_chef = serializers.SerializerMethodField()
     is_email_verified = serializers.SerializerMethodField()
     current_role = serializers.SerializerMethodField()
+    
+    # Include address data directly in user response (avoids separate API call)
+    address = serializers.SerializerMethodField()
 
     household_members = HouseholdMemberSerializer(many=True, required=False)
     
@@ -86,7 +89,8 @@ class CustomUserSerializer(serializers.ModelSerializer):
             'preferred_language', 'timezone', 'emergency_supply_goal', 'measurement_system',
             'personal_assistant_email', 'is_chef', 'current_role',
             'household_member_count', 'household_members',
-            'auto_meal_plans_enabled'
+            'auto_meal_plans_enabled',
+            'address'  # Now included in user details response
         ]
         extra_kwargs = {
             'password': {'write_only': True},
@@ -126,6 +130,28 @@ class CustomUserSerializer(serializers.ModelSerializer):
         if hasattr(obj, 'is_email_verified'):
             return bool(obj.is_email_verified)
         return bool(getattr(obj, 'email_confirmed', False))
+
+    def get_address(self, obj):
+        """
+        Get user's address data inline, avoiding need for separate API call.
+        Returns None if user has no address.
+        """
+        try:
+            address = obj.address
+            if not address:
+                return None
+            return {
+                'street': address.street,
+                'city': address.city,
+                'state': address.state,
+                'input_postalcode': address.input_postalcode,
+                'postalcode': address.input_postalcode,  # Alias for frontend compatibility
+                'normalized_postalcode': address.normalized_postalcode,
+                'original_postalcode': address.original_postalcode,
+                'country': str(address.country) if address.country else None,
+            }
+        except Address.DoesNotExist:
+            return None
 
     def __init__(self, *args, **kwargs):
         super(CustomUserSerializer, self).__init__(*args, **kwargs)

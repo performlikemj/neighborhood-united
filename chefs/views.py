@@ -739,8 +739,8 @@ def chef_public_directory(request):
         )
 
     if serves_postal:
-        from local_chefs.models import PostalCode
-        normalized = PostalCode.normalize_code(serves_postal)
+        from shared.services.location_service import LocationService
+        normalized = LocationService.normalize(serves_postal)
         queryset = queryset.filter(serving_postalcodes__code=normalized)
 
     if country:
@@ -776,30 +776,31 @@ def chef_public_directory(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def chef_serves_my_area(request, chef_id):
+    from shared.services.location_service import LocationService
+    
     try:
         chef = Chef.objects.get(id=chef_id)
     except Chef.DoesNotExist:
         return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
 
-    address = getattr(request.user, 'address', None)
-    if not address or not address.input_postalcode or not address.country:
+    location = LocationService.get_user_location(request.user)
+    if not location.is_complete:
         return Response({
             'serves': False,
             'detail': 'Missing user address country or postal code'
         }, status=status.HTTP_400_BAD_REQUEST)
 
-    normalized_code = PostalCode.normalize_code(address.input_postalcode)
     serves = ChefPostalCode.objects.filter(
         chef=chef,
-        postal_code__code=normalized_code,
-        postal_code__country=address.country
+        postal_code__code=location.normalized_postal,
+        postal_code__country=location.country
     ).exists()
 
     return Response({
         'serves': serves,
         'chef_id': chef.id,
-        'user_postal_code': address.display_postalcode or address.input_postalcode,
-        'user_country': address.country.code if hasattr(address.country, 'code') else str(address.country)
+        'user_postal_code': location.display_postal,
+        'user_country': location.country
     })
 
 

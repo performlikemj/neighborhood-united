@@ -62,13 +62,22 @@ export default function CartSidebar() {
   const [addressFormError, setAddressFormError] = useState('')
   const [addressSaving, setAddressSaving] = useState(false)
   const addressesFetchedRef = useRef(false)
+  const isDev = Boolean(import.meta?.env?.DEV)
+  const addressesCount = Array.isArray(addresses) ? addresses.length : 0
   
-  console.log('[CartSidebar] Render - isOpen:', isOpen, 'cart items:', cart?.items?.length || 0)
+  if (isDev){
+    console.debug('[CartSidebar] Render', {
+      isOpen,
+      cartCount: Array.isArray(cart?.items) ? cart.items.length : 0
+    })
+  }
 
   const defaultAddressId = useMemo(() => {
     const addr = authUser?.address || {}
     const id = addr.id ?? addr.address_id ?? null
-    console.log('[CartSidebar] defaultAddressId from authUser:', { authUser, address: addr, id })
+    if (isDev){
+      console.debug('[CartSidebar] defaultAddressId resolved', { id, hasAuthUser: Boolean(authUser) })
+    }
     return id != null ? String(id) : null
   }, [authUser])
 
@@ -79,27 +88,69 @@ export default function CartSidebar() {
   }, [addresses])
 
   const fetchAddresses = useCallback(async (force = false)=>{
-    if (!force && addressesFetchedRef.current && addresses.length > 0) return
+    const existingCount = addressesCount
+    const devStack = isDev
+      ? (new Error('fetchAddresses trace').stack || '').split('\n').slice(2, 7).map(line => line.trim())
+      : null
+    if (isDev){
+      console.debug('[CartSidebar] fetchAddresses invoked', {
+        force,
+        hasFetchedOnce: addressesFetchedRef.current,
+        existingCount,
+        stack: devStack
+      })
+    }
+    if (!force && addressesFetchedRef.current && existingCount > 0){
+      if (isDev){
+        console.debug('[CartSidebar] fetchAddresses skipped (cached)', {
+          hasFetchedOnce: addressesFetchedRef.current,
+          existingCount
+        })
+      }
+      return
+    }
     setAddressesLoading(true)
     setAddressesError('')
+    let nextCount = existingCount
     try{
-      console.log('[CartSidebar] Fetching addresses...')
+      if (isDev){
+        console.debug('[CartSidebar] Fetching addresses from API…')
+      }
       const resp = await api.get('/auth/api/address_details/')
-      console.log('[CartSidebar] Raw API response:', resp?.data)
       const list = normalizeAddressList(resp?.data)
-      console.log('[CartSidebar] After normalization:', list)
-      setAddresses(Array.isArray(list) ? list.filter(Boolean) : [])
+      const filtered = Array.isArray(list) ? list.filter(Boolean) : []
+      if (isDev){
+        console.debug('[CartSidebar] fetchAddresses response received', {
+          rawType: Array.isArray(resp?.data) ? 'array' : typeof resp?.data,
+          normalizedCount: filtered.length
+        })
+      }
+      setAddresses(filtered)
       addressesFetchedRef.current = true
+      nextCount = filtered.length
     }catch(err){
+      if (isDev){
+        console.debug('[CartSidebar] fetchAddresses failed', {
+          status: err?.response?.status,
+          message: err?.message
+        })
+      }
       const message = err?.response
         ? buildErrorMessage(err.response.data, 'Unable to load saved addresses. Please try again.', err.response.status)
         : (err?.message || 'Unable to load saved addresses. Please try again.')
       setAddresses([])
       setAddressesError(message)
     }finally{
+      if (isDev){
+        console.debug('[CartSidebar] fetchAddresses finished', {
+          loading: false,
+          finalCount: nextCount,
+          hasFetchedOnce: addressesFetchedRef.current
+        })
+      }
       setAddressesLoading(false)
     }
-  }, [addresses.length])
+  }, [addressesCount, isDev])
 
   useEffect(() => {
     if (!Array.isArray(cart.items)) return

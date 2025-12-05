@@ -2,9 +2,16 @@ from django.urls import path
 from . import views
 from . import utils
 from . import secure_email_integration
+from .api import my_chefs as my_chefs_api
+
 app_name = 'customer_dashboard'
 
 urlpatterns = [
+    # Client Portal - My Chefs endpoints (multi-chef support)
+    path('api/my-chefs/', my_chefs_api.get_my_chefs, name='get_my_chefs'),
+    path('api/my-chefs/<int:chef_id>/', my_chefs_api.get_chef_hub, name='get_chef_hub'),
+    path('api/my-chefs/<int:chef_id>/orders/', my_chefs_api.get_chef_orders, name='get_chef_orders'),
+
     path('', views.customer_dashboard, name='customer_dashboard'),
     path('history_page/', views.history_page, name='history_page'),
     path('api/history/', views.history, name='history'),

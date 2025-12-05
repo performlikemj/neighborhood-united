@@ -138,6 +138,16 @@ class CustomUser(AbstractUser):
         default=True,
         help_text="If False, do not auto-generate weekly meal plans."
     )
+    # Chef Preview Mode: tracks if user has generated their one-time sample plan
+    sample_plan_generated = models.BooleanField(
+        default=False,
+        help_text="Whether the user has generated their one-time sample meal plan preview."
+    )
+    sample_plan_generated_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the sample plan was generated."
+    )
     
     @property
     def personal_assistant_email(self):
@@ -176,118 +186,133 @@ class CustomUser(AbstractUser):
         super().save(*args, **kwargs)
 
 class Address(models.Model):
+    """
+    User address with postal code handling.
+    
+    Field naming convention:
+    - normalized_postalcode: Normalized format for DB lookups (uppercase, no special chars)
+    - original_postalcode: Original user input format for display
+    """
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='address')
     street = models.CharField(max_length=255, blank=True, null=True)
     city = models.CharField(max_length=255, blank=True, null=True)
     state = models.CharField(max_length=255, blank=True, null=True)
-    input_postalcode = models.CharField(max_length=10, blank=True, null=True)  # Normalized format for lookups
-    display_postalcode = models.CharField(max_length=15, blank=True, null=True)  # Original user input format
-    latitude  = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    normalized_postalcode = models.CharField(max_length=10, blank=True, null=True, help_text="Normalized format for lookups")
+    original_postalcode = models.CharField(max_length=15, blank=True, null=True, help_text="Original user input format")
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     country = CountryField(blank=True, null=True)
 
+    # Backwards compatibility properties for code that still uses old field names
+    @property
+    def input_postalcode(self):
+        """Backwards compatibility alias for normalized_postalcode."""
+        return self.normalized_postalcode
+    
+    @input_postalcode.setter
+    def input_postalcode(self, value):
+        """Backwards compatibility setter - normalizes and stores the value."""
+        from shared.services.location_service import LocationService
+        if value:
+            # Store original if not already set
+            if not self.original_postalcode:
+                self.original_postalcode = value
+            self.normalized_postalcode = LocationService.normalize(value)
+        else:
+            self.normalized_postalcode = None
+    
+    @property
+    def display_postalcode(self):
+        """Backwards compatibility alias for original_postalcode."""
+        return self.original_postalcode
+    
+    @display_postalcode.setter
+    def display_postalcode(self, value):
+        """Backwards compatibility setter."""
+        self.original_postalcode = value
+
     def __str__(self):
-        display_code = self.display_postalcode or self.input_postalcode
+        display_code = self.original_postalcode or self.normalized_postalcode
         return f'{self.user} - {display_code}, {self.country}'
 
-    def normalize_postal_code(self, postal_code):
-        """
-        Normalize the postal code for database storage and lookups
-        Removes all non-alphanumeric characters and converts to uppercase
-        """
-        if not postal_code:
-            return None
-            
-        import re
-        # Remove all non-alphanumeric characters and convert to uppercase
-        return re.sub(r'[^A-Z0-9]', '', postal_code.upper())
-
     def clean(self):
-        # Store the original user input for display
-        if self.input_postalcode and not self.display_postalcode:
-            self.display_postalcode = self.input_postalcode
+        from shared.services.location_service import LocationService
+        
+        # Store the original user input for display if we have a postal code
+        if self.normalized_postalcode and not self.original_postalcode:
+            self.original_postalcode = self.normalized_postalcode
             
         # Normalize postal code for lookups
-        if self.input_postalcode and self.country:
+        if self.normalized_postalcode and self.country:
             # Store the original format before normalizing
-            if not self.display_postalcode:
-                self.display_postalcode = self.input_postalcode
+            if not self.original_postalcode:
+                self.original_postalcode = self.normalized_postalcode
                 
             # Normalize for database storage and lookups
-            self.input_postalcode = self.normalize_postal_code(self.input_postalcode)
+            self.normalized_postalcode = LocationService.normalize(self.normalized_postalcode)
             
-            # You could add country-specific postal code validation here
-            # For example, US postal codes are 5 digits or 5+4 digits
-            if self.country == 'US' and not (
-                len(self.input_postalcode) == 5 or len(self.input_postalcode) == 9
-            ):
-                raise ValidationError({'input_postalcode': 'US postal codes must be 5 digits or 9 digits (ZIP+4)'})
-            
-            # Canadian postal codes are in the format A1A1A1 (after normalization)
-            elif self.country == 'CA' and not (
-                len(self.input_postalcode) == 6 and
-                self.input_postalcode[0::2].isalpha() and
-                self.input_postalcode[1::2].isdigit()
-            ):
-                raise ValidationError({'input_postalcode': 'Canadian postal codes must be in the format A1A 1A1'})
-                
-            # Japanese postal codes are 7 digits after normalization
-            elif self.country == 'JP' and not (
-                len(self.input_postalcode) == 7 and self.input_postalcode.isdigit()
-            ):
-                raise ValidationError({'input_postalcode': 'Japanese postal codes must be 7 digits'})
+            # Validate postal code format using LocationService
+            is_valid, error_message = LocationService.validate_postal_code(
+                self.normalized_postalcode,
+                str(self.country)
+            )
+            if not is_valid:
+                raise ValidationError({'normalized_postalcode': error_message})
                 
         # Require both country and postal code if either is provided
-        if (self.country and not self.input_postalcode) or (self.input_postalcode and not self.country):
+        if (self.country and not self.normalized_postalcode) or (self.normalized_postalcode and not self.country):
             raise ValidationError('Both country and postal code must be provided together')
 
     def get_or_create_postal_code(self):
         """
         Gets the corresponding PostalCode object for this address, creating one if it doesn't exist.
-        Returns None if either country or input_postalcode is missing.
+        Returns None if either country or normalized_postalcode is missing.
         """
-        if not self.country or not self.input_postalcode:
+        from shared.services.location_service import LocationService
+        
+        if not self.country or not self.normalized_postalcode:
             return None
-            
-        postal_code, created = PostalCode.objects.get_or_create(
-            code=self.input_postalcode,  # Using normalized code
-            country=self.country
+        
+        return LocationService.get_or_create_postal_code(
+            self.normalized_postalcode,
+            str(self.country),
+            display_code=self.original_postalcode
         )
-        return postal_code
 
     def is_postalcode_served(self):
         """
-        Checks if the input postal code is in the list of served postal codes.
+        Checks if the postal code is served by any chef.
         Returns True if served, False otherwise.
         """
-        # First ensure the postal code exists in our system
-        try:
-            postal_code = PostalCode.objects.get(
-                code=self.input_postalcode,  # Using normalized code
-                country=self.country
-            )
-            # Then check if any chef is serving this postal code
-            return ChefPostalCode.objects.filter(postal_code=postal_code).exists()
-        except PostalCode.DoesNotExist:
+        from shared.services.location_service import LocationService
+        
+        if not self.country or not self.normalized_postalcode:
             return False
+        
+        return LocationService.has_chef_coverage_for_area(
+            self.normalized_postalcode,
+            str(self.country)
+        )
 
     def save(self, *args, **kwargs):
+        from shared.services.location_service import LocationService
+        
         # Check if this is an update and if postal code has changed
         should_run_full_clean = True
         if self.pk:  # Existing instance
             try:
                 original = Address.objects.get(pk=self.pk)
-                # Normalize the current input postal code for accurate comparison
-                current_normalized_postalcode = self.normalize_postal_code(self.input_postalcode)
-                if original.input_postalcode != current_normalized_postalcode:
+                # Normalize the current postal code for accurate comparison
+                current_normalized = LocationService.normalize(self.normalized_postalcode)
+                if original.normalized_postalcode != current_normalized:
                     self.latitude = None
                     self.longitude = None
 
-                # Only run full_clean if either country or input_postalcode changed
+                # Only run full_clean if either country or postal code changed
                 original_country = original.country
-                original_postal = original.input_postalcode
+                original_postal = original.normalized_postalcode
                 new_country = self.country
-                new_postal = current_normalized_postalcode
+                new_postal = current_normalized
                 should_run_full_clean = (original_country != new_country) or (original_postal != new_postal)
             except Address.DoesNotExist:
                 # If somehow not found, treat as new and validate

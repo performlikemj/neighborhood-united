@@ -1,11 +1,30 @@
 import React, { useMemo, useState } from 'react'
-import { Link, Navigate } from 'react-router-dom'
+import { Link, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx'
 
+// Pages that require chef access for customers (redirect to /get-ready if no chef)
+const CHEF_ACCESS_REQUIRED_PATHS = new Set([
+  '/meal-plans',
+  '/orders',
+  '/chat',
+  '/meal-plan-approval'
+])
+
+// Pages that are always allowed regardless of chef access
+const ALWAYS_ALLOWED_PATHS = new Set([
+  '/profile',
+  '/account',
+  '/verify-email',
+  '/get-ready',
+  '/health-metrics',
+  '/onboarding'
+])
+
 export default function ProtectedRoute({ children, requiredRole }){
-  const { user, loading, switchRole } = useAuth()
+  const { user, loading, switchRole, hasChefAccess, chefAccessLoading } = useAuth()
   const [busyRole, setBusyRole] = useState(null)
   const [switchError, setSwitchError] = useState(null)
+  const location = useLocation()
 
   const roleOptions = useMemo(()=>{
     if (!user) return []
@@ -38,6 +57,7 @@ export default function ProtectedRoute({ children, requiredRole }){
   }
 
   const currentRole = user?.current_role || 'customer'
+  const currentPath = location.pathname
 
   // If user not verified, restrict access to most protected pages
   try{
@@ -49,6 +69,33 @@ export default function ProtectedRoute({ children, requiredRole }){
       return <Navigate to="/verify-email" replace />
     }
   }catch{}
+
+  // Chef Preview Mode: Redirect customers without chef access to /get-ready
+  // Only applies to customer role pages that require chef access
+  const needsChefAccessCheck = (
+    currentRole === 'customer' &&
+    !user?.is_chef &&
+    CHEF_ACCESS_REQUIRED_PATHS.has(currentPath) &&
+    !ALWAYS_ALLOWED_PATHS.has(currentPath)
+  )
+  
+  if (needsChefAccessCheck) {
+    // Wait for chef access check to complete
+    if (hasChefAccess === null || chefAccessLoading) {
+      return (
+        <div className="container" style={{ textAlign: 'center', padding: '3rem' }}>
+          <div className="spinner" style={{ margin: '0 auto 1rem', width: 40, height: 40 }} />
+          <p className="muted">Checking chef availability in your area...</p>
+        </div>
+      )
+    }
+    
+    // Redirect to /get-ready if no chef access
+    if (hasChefAccess === false) {
+      console.debug('[ProtectedRoute] No chef access, redirecting to /get-ready', { currentPath })
+      return <Navigate to="/get-ready" replace />
+    }
+  }
 
   if (requiredRole){
     const isChef = Boolean(user?.is_chef)

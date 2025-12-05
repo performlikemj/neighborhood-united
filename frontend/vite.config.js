@@ -23,11 +23,15 @@ export default defineConfig({
         target: 'http://127.0.0.1:8000',
         changeOrigin: true
       },
-      '/chefs': {
+      '/chefs/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true
       },
       '/reviews': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true
+      },
+      '/services': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true
       }

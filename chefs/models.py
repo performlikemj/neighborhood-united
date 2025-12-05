@@ -3,6 +3,7 @@ from django.db import models
 from local_chefs.models import PostalCode, ChefPostalCode
 from pgvector.django import VectorField
 from django.utils import timezone
+from django_countries.fields import CountryField
 
 class Chef(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
@@ -29,6 +30,13 @@ class Chef(models.Model):
     chef_request_profile_pic = models.ImageField(upload_to='profile_pics/', blank=True, null=True)
     review_summary = models.TextField(blank=True, null=True)
     chef_embedding = VectorField(dimensions=1536, null=True, blank=True)  # Embedding field
+    # Sous Chef assistant customization
+    sous_chef_emoji = models.CharField(
+        max_length=10,
+        default='🧑‍🍳',
+        blank=True,
+        help_text="Emoji icon for the Sous Chef assistant widget"
+    )
 
 
     def __str__(self):
@@ -242,3 +250,141 @@ class ChefWaitlistSubscription(models.Model):
     def __str__(self):
         status = 'active' if self.active else 'inactive'
         return f"Waitlist({self.user_id} -> chef {self.chef_id}, {status}, last_epoch={self.last_notified_epoch})"
+
+
+class AreaWaitlist(models.Model):
+    """Users waiting for ANY chef to become available in their area.
+    
+    This is distinct from ChefWaitlistSubscription which tracks users waiting
+    for a specific chef. AreaWaitlist is for users in areas with no chef coverage
+    who want to be notified when any chef starts serving their postal code.
+    
+    Uses a ForeignKey to PostalCode for referential integrity and easier joins.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='area_waitlist_entries'
+    )
+    location = models.ForeignKey(
+        'local_chefs.PostalCode',
+        on_delete=models.CASCADE,
+        related_name='area_waitlist_entries',
+        help_text="The postal code location the user is waiting for"
+    )
+    notified = models.BooleanField(default=False, help_text="Whether user has been notified of chef availability")
+    notified_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        app_label = 'chefs'
+        unique_together = ('user', 'location')
+        indexes = [
+            models.Index(fields=['location', 'notified']),
+            models.Index(fields=['user', 'notified']),
+        ]
+        verbose_name = 'Area Waitlist Entry'
+        verbose_name_plural = 'Area Waitlist Entries'
+
+    def __str__(self):
+        status = 'notified' if self.notified else 'waiting'
+        return f"AreaWaitlist({self.user_id} in {self.location}, {status})"
+    
+    # Backwards compatibility properties
+    @property
+    def postal_code(self) -> str:
+        """Backwards compatibility: returns normalized postal code string."""
+        return self.location.code if self.location else None
+    
+    @property
+    def country(self) -> str:
+        """Backwards compatibility: returns country code string."""
+        return str(self.location.country) if self.location else None
+
+    @classmethod
+    def get_waiting_users_for_area(cls, postal_code: str, country: str):
+        """Get all users waiting for chefs in a specific area who haven't been notified."""
+        from shared.services.location_service import LocationService
+        
+        normalized = LocationService.normalize(postal_code)
+        if not normalized:
+            return cls.objects.none()
+        
+        return cls.objects.filter(
+            location__code=normalized,
+            location__country=country,
+            notified=False
+        ).select_related('user', 'location')
+
+    @classmethod
+    def get_position(cls, user, postal_code: str, country: str) -> int:
+        """Get user's position in the waitlist for their area (1-indexed)."""
+        from shared.services.location_service import LocationService
+        
+        normalized = LocationService.normalize(postal_code)
+        if not normalized:
+            return 0
+        
+        try:
+            entry = cls.objects.get(
+                user=user,
+                location__code=normalized,
+                location__country=country
+            )
+            # Count entries created before this one in the same location
+            position = cls.objects.filter(
+                location=entry.location,
+                created_at__lt=entry.created_at
+            ).count() + 1
+            return position
+        except cls.DoesNotExist:
+            return 0
+
+    @classmethod
+    def get_total_waiting(cls, postal_code: str, country: str) -> int:
+        """Get total count of users waiting in an area."""
+        from shared.services.location_service import LocationService
+        
+        normalized = LocationService.normalize(postal_code)
+        if not normalized:
+            return 0
+        
+        return cls.objects.filter(
+            location__code=normalized,
+            location__country=country,
+            notified=False
+        ).count()
+    
+    @classmethod
+    def join_waitlist(cls, user, postal_code: str, country: str):
+        """
+        Add a user to the waitlist for a specific area.
+        
+        Args:
+            user: The user to add
+            postal_code: The postal code (will be normalized)
+            country: The country code
+            
+        Returns:
+            tuple: (entry, created) - The waitlist entry and whether it was created
+        """
+        from shared.services.location_service import LocationService
+        
+        # Get or create the PostalCode record
+        location = LocationService.get_or_create_postal_code(postal_code, country)
+        if not location:
+            return None, False
+        
+        entry, created = cls.objects.get_or_create(
+            user=user,
+            location=location,
+            defaults={'notified': False}
+        )
+        
+        # If existing entry was notified (user rejoining), reset it
+        if not created and entry.notified:
+            entry.notified = False
+            entry.notified_at = None
+            entry.save(update_fields=['notified', 'notified_at'])
+        
+        return entry, created

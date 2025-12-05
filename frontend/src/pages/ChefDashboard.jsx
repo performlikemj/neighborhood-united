@@ -1,6 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, stripe } from '../api'
+import { createOffering } from '../api/servicesClient.js'
+import { useConnections } from '../hooks/useConnections.js'
+
+import ChefAllClients from '../components/ChefAllClients.jsx'
+import FamilySelector from '../components/FamilySelector.jsx'
+import SousChefChat from '../components/SousChefChat.jsx'
+import SousChefWidget from '../components/SousChefWidget.jsx'
+import { SousChefNotificationProvider } from '../contexts/SousChefNotificationContext.jsx'
 
 function toArray(payload){
   if (!payload) return []
@@ -36,7 +44,8 @@ const INITIAL_SERVICE_FORM = {
   description: '',
   default_duration_minutes: '',
   max_travel_miles: '',
-  notes: ''
+  notes: '',
+  targetCustomerIds: []
 }
 
 const INITIAL_TIER_FORM = {
@@ -198,6 +207,89 @@ function flattenErrors(errors){
   return [String(errors)]
 }
 
+function pickFirstString(...values){
+  for (const value of values){
+    if (typeof value === 'string'){
+      const trimmed = value.trim()
+      if (trimmed) return trimmed
+    }
+  }
+  return null
+}
+
+function joinNames(first, last){
+  const parts = []
+  if (typeof first === 'string' && first.trim()) parts.push(first.trim())
+  if (typeof last === 'string' && last.trim()) parts.push(last.trim())
+  if (parts.length === 0) return null
+  return parts.join(' ')
+}
+
+function connectionPartnerDetails(connection = {}, viewerRole = 'chef'){
+  if (viewerRole === 'chef'){
+    return connection.customer || connection.customer_profile || connection.customer_details || connection.customer_user || {}
+  }
+  return connection.chef || connection.chef_profile || connection.chef_details || connection.chef_user || {}
+}
+
+function connectionDisplayName(connection = {}, viewerRole = 'chef'){
+  const normalizedRole = viewerRole === 'chef' ? 'chef' : 'customer'
+  const partner = connectionPartnerDetails(connection, normalizedRole)
+  const nameFromRecord = normalizedRole === 'chef'
+    ? pickFirstString(
+      connection.customer_display_name,
+      connection.customer_full_name,
+      connection.customer_name,
+      joinNames(connection.customer_first_name, connection.customer_last_name),
+      partner.full_name,
+      partner.display_name,
+      joinNames(partner.first_name, partner.last_name),
+      partner.public_name,
+      partner.name
+    )
+    : pickFirstString(
+      connection.chef_display_name,
+      connection.chef_full_name,
+      connection.chef_name,
+      joinNames(connection.chef_first_name, connection.chef_last_name),
+      partner.full_name,
+      partner.display_name,
+      joinNames(partner.first_name, partner.last_name),
+      partner.public_name,
+      partner.name
+    )
+
+  if (nameFromRecord) return nameFromRecord
+
+  const usernameFallback = normalizedRole === 'chef'
+    ? pickFirstString(connection.customer_username, partner.username, connection.customer_email, partner.email)
+    : pickFirstString(connection.chef_username, partner.username, connection.chef_email, partner.email)
+  if (usernameFallback) return usernameFallback
+
+  const fallbackId = normalizedRole === 'chef'
+    ? (connection.customerId ?? connection.customer_id ?? partner?.id)
+    : (connection.chefId ?? connection.chef_id ?? partner?.id)
+
+  if (fallbackId != null){
+    return normalizedRole === 'chef' ? `Customer #${fallbackId}` : `Chef #${fallbackId}`
+  }
+  return 'Connection'
+}
+
+function connectionInitiatedCopy(connection = {}){
+  if (connection.viewerInitiated) return 'You sent this invitation'
+  const role = String(connection?.initiated_by || '').toLowerCase()
+  if (role === 'chef') return 'Chef sent the invitation'
+  if (role === 'customer') return 'Customer sent the invitation'
+  return ''
+}
+
+function formatConnectionStatus(status){
+  const normalized = String(status || '').toLowerCase()
+  if (!normalized) return 'Unknown'
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1)
+}
+
 function FileSelect({ label, accept, onChange }){
   const inputRef = useRef(null)
   const [fileName, setFileName] = useState('')
@@ -226,6 +318,7 @@ const ProfileIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="n
 const PhotosIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" y="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
 const KitchenIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2M7 2v20M21 15V2v0a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>
 const ServicesIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
+const ConnectionsIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 9a4 4 0 1 0-4-4 4 4 0 0 0 4 4Z"/><path d="M16 21a4 4 0 1 0-4-4 4 4 0 0 0 4 4Z"/><path d="M11 7c.5 2.5 2.5 4 5 4h2a3 3 0 0 1 3 3v1"/><path d="M13 17c-.5-2.5-2.5-4-5-4H6a3 3 0 0 1-3-3V9"/></svg>
 const EventsIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
 const OrdersIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
 
@@ -233,6 +326,9 @@ export default function ChefDashboard(){
   const [tab, setTab] = useState('dashboard')
   const [notice, setNotice] = useState(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+
+  // Sous Chef state (family selection for AI assistant)
+  const [selectedFamily, setSelectedFamily] = useState({ familyId: null, familyType: 'customer', familyName: null })
 
   // Stripe Connect status
   const [payouts, setPayouts] = useState({ loading: true, has_account:false, is_active:false, needs_onboarding:false, account_id:null, continue_onboarding_url:null, disabled_reason:null, diagnostic:null })
@@ -295,6 +391,22 @@ export default function ChefDashboard(){
   const [serviceCustomerDetails, setServiceCustomerDetails] = useState({})
   const serviceCustomerPending = useRef(new Set())
 
+  const {
+    connections,
+    pendingConnections,
+    acceptedConnections,
+    declinedConnections,
+    endedConnections,
+    respondToConnection,
+    refetchConnections,
+    isLoading: connectionsLoading,
+    requestError: connectionRequestError,
+    respondError: connectionRespondError,
+    respondStatus
+  } = useConnections('chef')
+  const [connectionActionId, setConnectionActionId] = useState(null)
+  const connectionMutating = respondStatus === 'pending'
+
   // Chef services
   const [serviceOfferings, setServiceOfferings] = useState([])
   const [serviceLoading, setServiceLoading] = useState(false)
@@ -326,6 +438,16 @@ export default function ChefDashboard(){
   }, [serviceOfferings])
 
   const todayISO = useMemo(()=> new Date().toISOString().slice(0,10), [])
+
+  const acceptedCustomerOptions = useMemo(()=>{
+    return acceptedConnections
+      .map(connection => {
+        const id = connection?.customerId ?? connection?.customer_id
+        if (id == null) return null
+        return { value: String(id), label: connectionDisplayName(connection, 'chef') }
+      })
+      .filter(Boolean)
+  }, [acceptedConnections])
 
   const loadIngredients = async ()=>{
     setIngLoading(true)
@@ -752,6 +874,11 @@ export default function ChefDashboard(){
 
   const editServiceOffering = (offering)=>{
     if (!offering) return
+    const targetIds = Array.isArray(offering?.target_customer_ids)
+      ? offering.target_customer_ids
+      : Array.isArray(offering?.target_customers)
+        ? offering.target_customers.map(t => t?.id ?? t?.customer_id ?? t)
+        : []
     setServiceForm({
       id: offering.id || null,
       service_type: offering.service_type || 'home_chef',
@@ -759,9 +886,35 @@ export default function ChefDashboard(){
       description: offering.description || '',
       default_duration_minutes: offering.default_duration_minutes != null ? String(offering.default_duration_minutes) : '',
       max_travel_miles: offering.max_travel_miles != null ? String(offering.max_travel_miles) : '',
-      notes: offering.notes || ''
+      notes: offering.notes || '',
+      targetCustomerIds: Array.isArray(targetIds) ? targetIds.filter(id => id != null).map(String) : []
     })
     setServiceErrors(null)
+  }
+
+  const handleConnectionAction = async (connectionId, action)=>{
+    if (!connectionId || !action) return
+    setConnectionActionId(connectionId)
+    try{
+      await respondToConnection({ connectionId, action })
+      await refetchConnections()
+      const message = action === 'accept'
+        ? 'Connection accepted'
+        : action === 'decline'
+          ? 'Connection declined'
+          : 'Connection ended'
+      try{
+        window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text: message, tone:'success' } }))
+      }catch{}
+    }catch(error){
+      console.error('update connection failed', error)
+      const msg = error?.response?.data?.detail || 'Unable to update the connection. Please try again.'
+      try{
+        window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text: msg, tone:'error' } }))
+      }catch{}
+    } finally {
+      setConnectionActionId(null)
+    }
   }
 
   const submitServiceOffering = async (e)=>{
@@ -774,6 +927,15 @@ export default function ChefDashboard(){
       const num = Number(val)
       return Number.isFinite(num) ? num : null
     }
+    const targetIds = Array.isArray(serviceForm.targetCustomerIds)
+      ? serviceForm.targetCustomerIds
+        .map(id => {
+          if (id == null) return null
+          const numeric = Number(id)
+          return Number.isNaN(numeric) ? String(id) : numeric
+        })
+        .filter(id => id != null && String(id).trim() !== '')
+      : []
     const payload = {
       service_type: serviceForm.service_type || 'home_chef',
       title: serviceForm.title || '',
@@ -784,10 +946,13 @@ export default function ChefDashboard(){
     }
     try{
       if (serviceForm.id){
-        await api.patch(`${SERVICES_ROOT}/offerings/${serviceForm.id}/`, payload)
+        await api.patch(`${SERVICES_ROOT}/offerings/${serviceForm.id}/`, {
+          ...payload,
+          target_customer_ids: targetIds
+        })
         try{ window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text:'Service offering updated', tone:'success' } })) }catch{}
       }else{
-        await api.post(`${SERVICES_ROOT}/offerings/`, payload)
+        await createOffering({ ...payload, targetCustomerIds: targetIds })
         try{ window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text:'Service offering created', tone:'success' } })) }catch{}
       }
       resetServiceForm()
@@ -897,6 +1062,7 @@ export default function ChefDashboard(){
   )
 
   return (
+    <SousChefNotificationProvider>
     <div className={`chef-dashboard-layout ${sidebarCollapsed?'sidebar-collapsed':''}`}>
       {/* Sidebar Navigation */}
       <aside className={`chef-sidebar ${sidebarCollapsed?'collapsed':''}`}>
@@ -915,6 +1081,9 @@ export default function ChefDashboard(){
           <NavItem value="profile" label="Profile" icon={ProfileIcon} />
           <NavItem value="photos" label="Photos" icon={PhotosIcon} />
           <NavItem value="kitchen" label="Kitchen" icon={KitchenIcon} />
+          <NavItem value="connections" label="Connections" icon={ConnectionsIcon} />
+          
+          <NavItem value="clients" label="Clients" icon={ProfileIcon} />
           <NavItem value="services" label="Services" icon={ServicesIcon} />
           <NavItem value="events" label="Events" icon={EventsIcon} />
           <NavItem value="orders" label="Orders" icon={OrdersIcon} />
@@ -930,10 +1099,14 @@ export default function ChefDashboard(){
           <button className={`seg ${tab==='profile'?'active':''}`} onClick={()=> setTab('profile')} role="tab" aria-selected={tab==='profile'}>Profile</button>
           <button className={`seg ${tab==='photos'?'active':''}`} onClick={()=> setTab('photos')} role="tab" aria-selected={tab==='photos'}>Photos</button>
           <button className={`seg ${tab==='kitchen'?'active':''}`} onClick={()=> setTab('kitchen')} role="tab" aria-selected={tab==='kitchen'}>Kitchen</button>
+          <button className={`seg ${tab==='connections'?'active':''}`} onClick={()=> setTab('connections')} role="tab" aria-selected={tab==='connections'}>Client Connections</button>
+          
+                    <button className={`seg ${tab==='clients'?'active':''}`} onClick={()=> setTab('clients')} role="tab" aria-selected={tab==='clients'}>Clients</button>
           <button className={`seg ${tab==='services'?'active':''}`} onClick={()=> setTab('services')} role="tab" aria-selected={tab==='services'}>Services</button>
           <button className={`seg ${tab==='events'?'active':''}`} onClick={()=> setTab('events')} role="tab" aria-selected={tab==='events'}>Events</button>
           <button className={`seg ${tab==='orders'?'active':''}`} onClick={()=> setTab('orders')} role="tab" aria-selected={tab==='orders'}>Orders</button>
           <button className={`seg ${tab==='meals'?'active':''}`} onClick={()=> setTab('meals')} role="tab" aria-selected={tab==='meals'}>Meals</button>
+          <button className={`seg ${tab==='souschef'?'active':''}`} onClick={()=> setTab('souschef')} role="tab" aria-selected={tab==='souschef'}>🧑‍🍳 Sous Chef</button>
         </div>
 
       {/* Content Sections */}
@@ -1166,6 +1339,157 @@ export default function ChefDashboard(){
           </div>
         </div>
       )}
+
+      {tab==='connections' && (
+        <div>
+          <SectionHeader
+            title="Client Connections"
+            subtitle="Review pending invitations and manage the customers who can access personalized offerings."
+            showAdd={false}
+          />
+          <div className="muted" style={{marginBottom:'.75rem'}}>
+            Accepted: {acceptedConnections.length} · Pending: {pendingConnections.length} · Total: {connections.length}
+          </div>
+          {(connectionRequestError || connectionRespondError) && (
+            <div className="alert alert-error" role="alert" style={{marginBottom:'1rem'}}>
+              <strong style={{display:'block', marginBottom:'.25rem'}}>We could not update one of your connections.</strong>
+              <span>{connectionRespondError?.response?.data?.detail || connectionRequestError?.response?.data?.detail || connectionRespondError?.message || connectionRequestError?.message || 'Please try again.'}</span>
+            </div>
+          )}
+          <div className="grid grid-2" style={{gap:'1.5rem'}}>
+            <div className="card">
+              <h3 style={{marginTop:0}}>Pending requests</h3>
+              {connectionsLoading ? (
+                <div className="muted">Loading connections…</div>
+              ) : pendingConnections.length === 0 ? (
+                <div className="muted">No pending requests right now.</div>
+              ) : (
+                <table className="table" style={{width:'100%', borderCollapse:'collapse'}}>
+                  <thead>
+                    <tr>
+                      <th style={{textAlign:'left', padding:'.5rem 0'}}>Customer</th>
+                      <th style={{textAlign:'left', padding:'.5rem 0'}}>Details</th>
+                      <th style={{textAlign:'left', padding:'.5rem 0'}}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pendingConnections.map(connection => {
+                      const key = connection?.id != null ? connection.id : `pending-${connection?.customerId || connection?.customer_id}`
+                      const busy = connectionMutating && String(connectionActionId) === String(connection?.id)
+                      return (
+                        <tr key={key}>
+                          <td style={{padding:'.5rem 0', fontWeight:600}}>{connectionDisplayName(connection, 'chef')}</td>
+                          <td style={{padding:'.5rem 0', fontSize:'.85rem'}}>
+                            <div>{connectionInitiatedCopy(connection) || 'Awaiting your response'}</div>
+                            <div className="muted">{formatConnectionStatus(connection.status)}</div>
+                          </td>
+                          <td style={{padding:'.5rem 0'}}>
+                            <div style={{display:'flex', gap:'.5rem', flexWrap:'wrap'}}>
+                              {connection.canAccept && (
+                                <button
+                                  type="button"
+                                  className="btn btn-primary btn-sm"
+                                  disabled={busy}
+                                  onClick={()=> handleConnectionAction(connection.id, 'accept')}
+                                >
+                                  {busy ? 'Updating…' : 'Accept'}
+                                  <span style={{display:'none'}}>Accept</span>
+                                </button>
+                              )}
+                              {connection.canDecline && (
+                                <button
+                                  type="button"
+                                  className="btn btn-outline btn-sm"
+                                  disabled={busy}
+                                  onClick={()=> handleConnectionAction(connection.id, 'decline')}
+                                >
+                                  Decline
+                                  <span style={{display:'none'}}>Decline</span>
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div className="card">
+              <h3 style={{marginTop:0}}>Accepted clients</h3>
+              {connectionsLoading ? (
+                <div className="muted">Loading connections…</div>
+              ) : acceptedConnections.length === 0 ? (
+                <div className="muted">You have not accepted any clients yet.</div>
+              ) : (
+                <table className="table" style={{width:'100%', borderCollapse:'collapse'}}>
+                  <thead>
+                    <tr>
+                      <th style={{textAlign:'left', padding:'.5rem 0'}}>Customer</th>
+                      <th style={{textAlign:'left', padding:'.5rem 0'}}>Status</th>
+                      <th style={{textAlign:'left', padding:'.5rem 0'}}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {acceptedConnections.map(connection => {
+                      const key = connection?.id != null ? connection.id : `accepted-${connection?.customerId || connection?.customer_id}`
+                      const busy = connectionMutating && String(connectionActionId) === String(connection?.id)
+                      return (
+                        <tr key={key}>
+                          <td style={{padding:'.5rem 0', fontWeight:600}}>{connectionDisplayName(connection, 'chef')}</td>
+                          <td style={{padding:'.5rem 0'}}>
+                            <span className="chip" style={{background:'rgba(16,185,129,.15)', color:'#0f7a54', fontSize:'.75rem'}}>
+                              {formatConnectionStatus(connection.status)}
+                            </span>
+                          </td>
+                          <td style={{padding:'.5rem 0'}}>
+                            <button
+                              type="button"
+                              className="btn btn-outline btn-sm"
+                              disabled={busy}
+                              onClick={()=> handleConnectionAction(connection.id, 'end')}
+                            >
+                              {busy ? 'Ending…' : 'End'}
+                              <span style={{display:'none'}}>End</span>
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+          <div className="card" style={{marginTop:'1.5rem'}}>
+            <h3 style={{marginTop:0}}>Recent updates</h3>
+            {connectionsLoading ? (
+              <div className="muted">Loading history…</div>
+            ) : declinedConnections.length === 0 && endedConnections.length === 0 ? (
+              <div className="muted">You have not declined or ended any connections yet.</div>
+            ) : (
+              <ul style={{margin:0, padding:0, listStyle:'none', display:'flex', flexDirection:'column', gap:'.5rem'}}>
+                {[...declinedConnections, ...endedConnections].slice(0,6).map(connection => {
+                  const key = connection?.id != null ? connection.id : `history-${connection?.customerId || connection?.customer_id}`
+                  return (
+                    <li key={key} style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                      <div>
+                        <div style={{fontWeight:600}}>{connectionDisplayName(connection, 'chef')}</div>
+                        <div className="muted" style={{fontSize:'.85rem'}}>{formatConnectionStatus(connection.status)}</div>
+                      </div>
+                      <span className="muted" style={{fontSize:'.8rem'}}>{connectionInitiatedCopy(connection)}</span>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
+
+
+      {tab==='clients' && <ChefAllClients />}
 
       {tab==='profile' && (
         <div className="grid grid-2">
@@ -1819,6 +2143,29 @@ export default function ChefDashboard(){
               </div>
               <div className="label">Notes</div>
               <textarea className="textarea" rows={2} value={serviceForm.notes} onChange={e=> setServiceForm(f=>({ ...f, notes:e.target.value }))} placeholder="Special requirements, supplies, etc." />
+              <div className="label">Target customers (optional)</div>
+              {acceptedCustomerOptions.length === 0 ? (
+                <div className="muted" style={{fontSize:'.85rem'}}>
+                  You do not have accepted connections yet. Leave this multiselect empty to publish a public offering.
+                </div>
+              ) : (
+                <select
+                  className="select"
+                  multiple
+                  value={serviceForm.targetCustomerIds}
+                  onChange={(event)=>{
+                    const values = Array.from(event.target.selectedOptions || []).map(option => option.value)
+                    setServiceForm(f => ({ ...f, targetCustomerIds: values }))
+                  }}
+                >
+                  {acceptedCustomerOptions.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              )}
+              <p className="muted" style={{margin:'0.35rem 0 0', fontSize:'.82rem'}}>
+                Use the multiselect to target accepted customers. Leave it blank to keep the service visible to everyone.
+              </p>
               {serviceErrorMessages.length>0 && (
                 <div style={{marginTop:'.5rem', color:'#b00020'}}>
                   <ul style={{margin:0, paddingLeft:'1rem'}}>
@@ -2224,7 +2571,58 @@ export default function ChefDashboard(){
         </div>
       )}
 
+      {/* Sous Chef AI Assistant Tab */}
+      {tab==='souschef' && (
+        <div className="sous-chef-tab">
+          <header style={{marginBottom:'1rem'}}>
+            <h1 style={{margin:'0 0 .25rem 0'}}>Sous Chef Assistant</h1>
+            <p className="muted">Your AI-powered kitchen assistant with family-specific context</p>
+          </header>
+          
+          <div className="sous-chef-layout">
+            {/* Family Selector */}
+            <div className="family-selector-wrapper" style={{marginBottom:'1rem'}}>
+              <label className="label" style={{marginBottom:'.5rem', display:'block'}}>Select a family to assist with:</label>
+              <FamilySelector
+                selectedFamilyId={selectedFamily.familyId}
+                selectedFamilyType={selectedFamily.familyType}
+                onFamilySelect={({ familyId, familyType, familyName }) => {
+                  setSelectedFamily({ familyId, familyType, familyName })
+                }}
+              />
+            </div>
+            
+            {/* Chat Interface */}
+            <div className="sous-chef-chat-wrapper" style={{
+              height: 'calc(100vh - 320px)',
+              minHeight: '500px',
+              border: '1px solid var(--border-color, #e5e7eb)',
+              borderRadius: '12px',
+              overflow: 'hidden'
+            }}>
+              <SousChefChat
+                familyId={selectedFamily.familyId}
+                familyType={selectedFamily.familyType}
+                familyName={selectedFamily.familyName}
+                chefEmoji={chef?.sous_chef_emoji}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       </main>
+
+      {/* Floating Sous Chef Widget - always visible */}
+      {chef && (
+        <SousChefWidget
+          sousChefEmoji={chef.sous_chef_emoji || '🧑‍🍳'}
+          onEmojiChange={(emoji) => {
+            setChef(prev => prev ? { ...prev, sous_chef_emoji: emoji } : prev)
+          }}
+        />
+      )}
     </div>
+    </SousChefNotificationProvider>
   )
 }

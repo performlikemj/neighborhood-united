@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api, buildErrorMessage } from '../api'
+import { useConnections } from '../hooks/useConnections.js'
 import { rememberServiceOrderId } from '../utils/serviceOrdersStorage.js'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useCart } from '../context/CartContext.jsx'
@@ -87,10 +88,56 @@ function getDefaultServiceTime(tier){
   return nextHalfHourTime()
 }
 
+function normalizeConnectionId(value){
+  if (value == null) return null
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string'){
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    const numeric = Number(trimmed)
+    return Number.isNaN(numeric) ? trimmed : numeric
+  }
+  return null
+}
+
+function pickChefConnectionId(chef){
+  if (!chef || typeof chef !== 'object') return null
+  const candidates = [
+    chef.id,
+    chef.chef_id,
+    chef.user_id,
+    chef?.user?.id,
+    chef?.user?.user_id,
+    chef?.profile?.id,
+    chef?.public_profile?.id
+  ]
+  for (const candidate of candidates){
+    const normalized = normalizeConnectionId(candidate)
+    if (normalized != null) return normalized
+  }
+  return null
+}
+
+function formatConnectionStatusLabel(status){
+  const normalized = String(status || '').toLowerCase()
+  if (!normalized) return 'Unknown'
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1)
+}
+
 export default function PublicChef(){
   const { username } = useParams()
   const { user: authUser, loading: authLoading } = useAuth()
   const { addToCart, openCart } = useCart()
+  const {
+    requestConnection,
+    requestStatus: connectionRequestStatus,
+    requestError: connectionRequestError,
+    respondToConnection: respondToServiceConnection,
+    respondStatus: connectionRespondStatus,
+    getConnectionForChef,
+    hasActiveConnectionForChef
+  } = useConnections('customer')
+  const [connectionAction, setConnectionAction] = useState(null)
   const [loading, setLoading] = useState(true)
   const [chef, setChef] = useState(null)
   const [events, setEvents] = useState([])
@@ -125,6 +172,91 @@ export default function PublicChef(){
     return String(chef?.user?.username || username || '').trim()
   }, [chef?.user?.username, username])
   const encodedChefSlug = useMemo(()=> encodeURIComponent(chefSlug || ''), [chefSlug])
+  const viewerCustomerId = useMemo(()=>{
+    if (!authUser) return null
+    return authUser?.id ?? authUser?.user_id ?? authUser?.user?.id ?? null
+  }, [authUser?.id, authUser?.user_id, authUser?.user?.id])
+  const chefConnectionId = useMemo(()=> pickChefConnectionId(chef), [chef])
+  const chefConnection = useMemo(()=>{
+    if (chefConnectionId == null) return null
+    return getConnectionForChef(chefConnectionId)
+  }, [chefConnectionId, getConnectionForChef])
+  const connectionStatus = useMemo(()=>{
+    return chefConnection ? formatConnectionStatusLabel(chefConnection.status) : null
+  }, [chefConnection])
+  const connectionPending = Boolean(chefConnection?.isPending)
+  const connectionAccepted = Boolean(chefConnection?.isAccepted)
+  const connectionViewerInitiated = Boolean(chefConnection?.viewerInitiated)
+  const canAcceptInvitation = Boolean(chefConnection?.canAccept)
+  const canDeclineInvitation = Boolean(chefConnection?.canDecline)
+  const requestingInvitation = connectionRequestStatus === 'pending'
+  const respondingInvitation = connectionRespondStatus === 'pending' && connectionAction != null
+  const viewerOwnChefProfile = useMemo(()=>{
+    if (!authUser?.id) return false
+    const candidates = [
+      chef?.user?.id,
+      chef?.id,
+      chef?.user_id
+    ]
+    return candidates.some(candidate => candidate != null && Number(candidate) === Number(authUser.id))
+  }, [authUser?.id, chef?.id, chef?.user?.id, chef?.user_id])
+  const canRequestInvitation = chefConnectionId != null && !viewerOwnChefProfile && !connectionAccepted && !connectionPending && !hasActiveConnectionForChef(chefConnectionId)
+
+  const handleRequestInvitation = async ()=>{
+    if (requestingInvitation || !canRequestInvitation) return
+    if (chefConnectionId == null){
+      try{
+        window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text:'We could not find this chef identifier. Please refresh and try again.', tone:'error' } }))
+      }catch{}
+      return
+    }
+    if (!authUser){
+      if (typeof window !== 'undefined'){
+        const next = `${window.location.pathname}${window.location.search}`
+        window.location.href = `/login?next=${encodeURIComponent(next)}`
+      }
+      return
+    }
+    if (viewerCustomerId == null){
+      try{
+        window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text:'We need your account details to send this request. Please refresh and try again.', tone:'error' } }))
+      }catch{}
+      return
+    }
+    setConnectionAction('request')
+    try{
+      await requestConnection({ chefId: chefConnectionId, customerId: viewerCustomerId })
+      try{
+        window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text:'Invitation request sent to the chef.', tone:'success' } }))
+      }catch{}
+    }catch(error){
+      const msg = error?.response?.data?.detail || 'Unable to send your invitation right now.'
+      try{
+        window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text: msg, tone:'error' } }))
+      }catch{}
+    } finally {
+      setConnectionAction(null)
+    }
+  }
+
+  const handleRespondInvitation = async (action)=>{
+    if (!chefConnection?.id || respondingInvitation) return
+    setConnectionAction(action)
+    try{
+      await respondToServiceConnection({ connectionId: chefConnection.id, action })
+      const msg = action === 'accept' ? 'Invitation accepted.' : 'Invitation declined.'
+      try{
+        window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text: msg, tone:'success' } }))
+      }catch{}
+    }catch(error){
+      const msg = error?.response?.data?.detail || 'We could not update this invitation. Please try again.'
+      try{
+        window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text: msg, tone:'error' } }))
+      }catch{}
+    } finally {
+      setConnectionAction(null)
+    }
+  }
 
   const handleGalleryPhotoClick = useCallback((photo, index)=>{
     if (!chefSlug) return
@@ -961,13 +1093,13 @@ export default function PublicChef(){
                 </div>
               )}
 
-              {/* Trust Badges */}
+              {/* Trust Badges - Critical for Stripe Connect approval */}
               <div className="trust-badges">
                 {/* Platform Verified - shows if email verified and profile meets basic requirements */}
                 {(chef?.user?.is_email_verified || chef?.is_verified || chef?.user?.is_active) && (
                   <div className="trust-badge">
                     <i className="fa-solid fa-shield-check"></i>
-                    <span>Platform Verified</span>
+                    <span>Identity Verified</span>
                   </div>
                 )}
                 
@@ -987,10 +1119,47 @@ export default function PublicChef(){
                   </div>
                 )}
                 
-                {/* Secure Payments - always shows since all payments go through Stripe */}
+                {/* Stripe Secure Payments - always shows since all payments go through Stripe */}
+                <div className="trust-badge stripe-badge">
+                  <i className="fa-brands fa-stripe"></i>
+                  <span>Stripe Verified</span>
+                </div>
+                
+                {/* Secure Checkout */}
                 <div className="trust-badge">
-                  <i className="fa-solid fa-lock"></i>
-                  <span>Secure Payments</span>
+                  <i className="fa-solid fa-credit-card"></i>
+                  <span>Secure Checkout</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Service Provider Banner - Critical for Stripe compliance */}
+          <div className="service-provider-banner">
+            <div className="service-provider-content">
+              <div className="service-provider-icon">
+                <i className="fa-solid fa-utensils"></i>
+              </div>
+              <div className="service-provider-info">
+                <h2>Personal Chef Services</h2>
+                <p>
+                  <strong>{chef?.user?.username || 'This chef'}</strong> is an independent personal chef 
+                  offering professional in-home cooking, meal preparation, and catering services. 
+                  All bookings are made directly with the chef through our secure platform.
+                </p>
+              </div>
+              <div className="service-provider-badges">
+                <div className="provider-badge">
+                  <i className="fa-solid fa-building"></i>
+                  <span>Independent Business</span>
+                </div>
+                <div className="provider-badge">
+                  <i className="fa-solid fa-file-contract"></i>
+                  <span>Service Agreement</span>
+                </div>
+                <div className="provider-badge">
+                  <i className="fa-solid fa-hand-holding-dollar"></i>
+                  <span>Direct Payments</span>
                 </div>
               </div>
             </div>
@@ -1022,6 +1191,75 @@ export default function PublicChef(){
                     </div>
                   )}
                 </div>
+              </div>
+            )}
+
+            {!viewerOwnChefProfile && (
+              <div className="chef-section">
+                <div className="card" style={{display:'flex', flexDirection:'column', gap:'.75rem'}}>
+                  <div>
+                    <h2 className="chef-section-title" style={{marginBottom:'.35rem'}}>
+                      <i className="fa-solid fa-user-group"></i>
+                      Personalized services
+                    </h2>
+                    <p className="chef-section-subtitle">Connections unlock invitations to private menus and tailored offerings.</p>
+                  </div>
+                  {connectionStatus ? (
+                    <div>
+                      <span className="chip" style={{background: connectionAccepted ? 'rgba(16,185,129,.15)' : 'rgba(59,130,246,.15)', color: connectionAccepted ? '#0f7a54' : '#1d4ed8', fontWeight:600}}>
+                        Status: {connectionStatus}
+                      </span>
+                      {connectionPending && (
+                        <p className="muted" style={{marginTop:'.35rem'}}>
+                          {connectionViewerInitiated
+                            ? 'Pending invitation — we’ll email you when the chef responds.'
+                            : 'Pending invitation from this chef. You can accept or decline below.'}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="muted">Request an invitation to see personalized services for your household.</div>
+                  )}
+                  {canAcceptInvitation && (
+                    <div style={{display:'flex', gap:'.5rem', flexWrap:'wrap'}}>
+                      <button
+                        className="btn btn-primary"
+                        disabled={respondingInvitation}
+                        onClick={()=> handleRespondInvitation('accept')}
+                      >
+                        {respondingInvitation && connectionAction === 'accept' ? 'Accepting…' : 'Accept Invitation'}
+                      </button>
+                      {canDeclineInvitation && (
+                        <button
+                          className="btn btn-outline"
+                          disabled={respondingInvitation}
+                          onClick={()=> handleRespondInvitation('decline')}
+                        >
+                          {respondingInvitation && connectionAction === 'decline' ? 'Declining…' : 'Decline'}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {canRequestInvitation && (
+                    <button
+                      className="btn btn-primary"
+                      disabled={requestingInvitation}
+                      onClick={handleRequestInvitation}
+                    >
+                      {requestingInvitation ? 'Requesting…' : 'Request Invitation'}
+                    </button>
+                  )}
+                  {connectionAccepted && (
+                    <div className="muted" style={{marginTop:'.35rem'}}>
+                      You’re connected! Personalized offerings from this chef will show up automatically.
+                    </div>
+                  )}
+                </div>
+                {connectionRequestError && (
+                  <div className="alert alert-error" role="alert" style={{marginTop:'1rem'}}>
+                    {connectionRequestError?.response?.data?.detail || 'We could not send your invitation. Please try again.'}
+                  </div>
+                )}
               </div>
             )}
 
@@ -1650,8 +1888,18 @@ export default function PublicChef(){
                   <strong>How are payments processed?</strong>
                 </div>
                 <div className="faq-answer">
-                  All payments are securely processed through Stripe. Your payment is authorized at booking and charged 
-                  after service completion. Major credit cards and digital wallets are accepted.
+                  <div className="payment-security-details">
+                    <p>
+                      All payments are securely processed through <strong>Stripe</strong>, a PCI-DSS Level 1 
+                      certified payment processor trusted by millions of businesses worldwide.
+                    </p>
+                    <ul>
+                      <li><i className="fa-solid fa-lock"></i> <strong>Bank-level encryption:</strong> Your card details are encrypted and never stored on our servers</li>
+                      <li><i className="fa-solid fa-shield-halved"></i> <strong>Fraud protection:</strong> Advanced fraud detection protects every transaction</li>
+                      <li><i className="fa-brands fa-cc-visa"></i> <i className="fa-brands fa-cc-mastercard"></i> <i className="fa-brands fa-cc-amex"></i> <i className="fa-brands fa-apple-pay"></i> <i className="fa-brands fa-google-pay"></i> <strong>Accepted:</strong> Major credit cards, Apple Pay, Google Pay</li>
+                      <li><i className="fa-solid fa-receipt"></i> <strong>Clear billing:</strong> Charges appear as "sautai" or the chef's business name</li>
+                    </ul>
+                  </div>
                 </div>
               </div>
 
@@ -1755,6 +2003,60 @@ export default function PublicChef(){
             </div>
           </div>
 
+          {/* Payment Security Section - Critical for Stripe compliance */}
+          <div className="payment-security-section">
+            <div className="payment-security-content">
+              <div className="payment-security-header">
+                <i className="fa-brands fa-stripe" style={{fontSize:'2rem'}}></i>
+                <div>
+                  <h3>Secure Payment Processing</h3>
+                  <p>All transactions are processed securely through Stripe</p>
+                </div>
+              </div>
+              <div className="payment-security-features">
+                <div className="security-feature">
+                  <i className="fa-solid fa-shield-halved"></i>
+                  <div>
+                    <strong>PCI-DSS Level 1</strong>
+                    <span>Highest security certification</span>
+                  </div>
+                </div>
+                <div className="security-feature">
+                  <i className="fa-solid fa-lock"></i>
+                  <div>
+                    <strong>256-bit Encryption</strong>
+                    <span>Bank-level data protection</span>
+                  </div>
+                </div>
+                <div className="security-feature">
+                  <i className="fa-solid fa-user-shield"></i>
+                  <div>
+                    <strong>Fraud Protection</strong>
+                    <span>AI-powered security</span>
+                  </div>
+                </div>
+                <div className="security-feature">
+                  <i className="fa-solid fa-rotate-left"></i>
+                  <div>
+                    <strong>Easy Refunds</strong>
+                    <span>Clear cancellation policy</span>
+                  </div>
+                </div>
+              </div>
+              <div className="accepted-payments">
+                <span className="accepted-label">Accepted payment methods:</span>
+                <div className="payment-icons">
+                  <i className="fa-brands fa-cc-visa" title="Visa"></i>
+                  <i className="fa-brands fa-cc-mastercard" title="Mastercard"></i>
+                  <i className="fa-brands fa-cc-amex" title="American Express"></i>
+                  <i className="fa-brands fa-cc-discover" title="Discover"></i>
+                  <i className="fa-brands fa-apple-pay" title="Apple Pay"></i>
+                  <i className="fa-brands fa-google-pay" title="Google Pay"></i>
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* Chef Profile Footer - Policy Links & Contact */}
           <div className="chef-profile-footer">
             <div className="chef-profile-footer-content">
@@ -1789,22 +2091,45 @@ export default function PublicChef(){
                 </div>
               </div>
 
-              <div className="footer-section">
+              <div className="footer-section policies-section">
                 <h3>Legal & Policies</h3>
-                <div className="footer-links">
-                  <Link to="/terms">Terms of Service</Link>
-                  <Link to="/privacy">Privacy Policy</Link>
-                  <Link to="/refund-policy">Cancellation & Refunds</Link>
-                  <a href="mailto:support@sautai.com">Report an Issue</a>
+                <p style={{fontSize:'0.85rem',color:'var(--muted)',marginBottom:'0.75rem'}}>
+                  Please review our policies before booking:
+                </p>
+                <div className="footer-links policy-links">
+                  <Link to="/terms" className="policy-link">
+                    <i className="fa-solid fa-file-contract"></i>
+                    Terms of Service
+                  </Link>
+                  <Link to="/privacy" className="policy-link">
+                    <i className="fa-solid fa-user-shield"></i>
+                    Privacy Policy
+                  </Link>
+                  <Link to="/refund-policy" className="policy-link">
+                    <i className="fa-solid fa-rotate-left"></i>
+                    Cancellation & Refund Policy
+                  </Link>
                 </div>
+                <a href="mailto:support@sautai.com" className="report-link">
+                  <i className="fa-solid fa-flag"></i>
+                  Report an Issue
+                </a>
               </div>
 
               <div className="footer-section">
-                <h3>Platform Info</h3>
+                <h3>Service Provider Disclosure</h3>
                 <p style={{fontSize:'0.9rem',color:'var(--muted)'}}>
-                  {chef?.user?.username || 'This chef'} is an independent contractor. 
-                  Services are provided directly by the chef. sautai facilitates bookings 
-                  and payments but is not the service provider.
+                  <strong>{chef?.user?.username || 'This chef'}</strong> is an independent service provider 
+                  operating their own personal chef business. sautai is a marketplace platform that:
+                </p>
+                <ul style={{fontSize:'0.85rem',color:'var(--muted)',marginTop:'0.5rem',paddingLeft:'1.25rem'}}>
+                  <li>Connects customers with independent chefs</li>
+                  <li>Facilitates secure payment processing via Stripe</li>
+                  <li>Provides booking and communication tools</li>
+                  <li>Does NOT employ the chefs or provide the services directly</li>
+                </ul>
+                <p style={{fontSize:'0.85rem',color:'var(--muted)',marginTop:'0.75rem'}}>
+                  By booking, you enter into a service agreement directly with the chef.
                 </p>
                 <p style={{fontSize:'0.85rem',color:'var(--muted)',marginTop:'0.75rem'}}>
                   © 2025 sautai. All rights reserved.

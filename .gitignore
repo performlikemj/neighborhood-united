@@ -1,4 +1,5 @@
 *.env
+/.sautai/
 *.sqlite3
 *.bk
 *.json

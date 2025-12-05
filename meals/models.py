@@ -1552,3 +1552,486 @@ class MealPlanBatchRequest(models.Model):
 
     def __str__(self):
         return f"BatchRequest(user={self.user_id}, status={self.status})"
+
+
+class SamplePlanPreview(models.Model):
+    """Cached sample meal plan preview for users without chef access.
+    
+    This stores a one-time generated sample meal plan that shows users
+    what their personalized meal plan could look like once a chef is available.
+    The plan is read-only and cannot be regenerated.
+    
+    Structure of plan_data:
+    {
+        "meals": [
+            {
+                "day": "Monday",
+                "meal_type": "Breakfast",
+                "meal_name": "Greek Yogurt Parfait",
+                "meal_description": "Creamy Greek yogurt layered with...",
+                "servings": 2
+            },
+            ...
+        ],
+        "generated_for": {
+            "dietary_preferences": ["Vegetarian"],
+            "allergies": ["Peanuts"],
+            "household_size": 2
+        },
+        "week_summary": "Your personalized week includes..."
+    }
+    """
+    user = models.OneToOneField(
+        'custom_auth.CustomUser',
+        on_delete=models.CASCADE,
+        related_name='sample_plan_preview'
+    )
+    plan_data = models.JSONField(
+        help_text="JSON structure containing the sample meal plan preview"
+    )
+    preferences_snapshot = models.JSONField(
+        blank=True,
+        null=True,
+        help_text="Snapshot of user preferences when plan was generated"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        verbose_name = 'Sample Plan Preview'
+        verbose_name_plural = 'Sample Plan Previews'
+
+    def __str__(self):
+        return f"SamplePlanPreview(user={self.user_id}, created={self.created_at})"
+
+
+# =============================================================================
+# Collaborative Meal Planning Models (Chef-Customer)
+# =============================================================================
+
+class ChefMealPlan(models.Model):
+    """Chef-created meal plan for a specific customer.
+    
+    Unlike user-generated MealPlan, this is created by the chef (with AI Sous Chef assistance)
+    and can be collaboratively edited through customer suggestions.
+    
+    The date range is flexible - not forced to be weekly. Chefs can create plans
+    for any date range based on their arrangement with the customer.
+    """
+    STATUS_DRAFT = 'draft'
+    STATUS_PUBLISHED = 'published'
+    STATUS_ARCHIVED = 'archived'
+    
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, 'Draft'),
+        (STATUS_PUBLISHED, 'Published'),
+        (STATUS_ARCHIVED, 'Archived'),
+    ]
+    
+    chef = models.ForeignKey(
+        Chef,
+        on_delete=models.CASCADE,
+        related_name='created_meal_plans'
+    )
+    customer = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name='chef_meal_plans'
+    )
+    
+    title = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Optional title for the plan (e.g., 'Holiday Week', 'Back to School')"
+    )
+    start_date = models.DateField()
+    end_date = models.DateField()
+    
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_DRAFT
+    )
+    
+    notes = models.TextField(
+        blank=True,
+        help_text="Chef's notes for the customer about this plan"
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    published_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['-start_date', '-created_at']
+        indexes = [
+            models.Index(fields=['chef', 'customer', 'status']),
+            models.Index(fields=['customer', 'status', '-start_date']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['chef', 'customer', 'start_date'],
+                name='unique_chef_customer_plan_start'
+            ),
+        ]
+    
+    def __str__(self):
+        title = self.title or f"Plan {self.start_date}"
+        return f"{title} for {self.customer.username} by Chef {self.chef.user.username}"
+    
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if self.start_date and self.end_date and self.start_date > self.end_date:
+            raise ValidationError({'end_date': 'End date must be after start date.'})
+    
+    def publish(self):
+        """Publish the plan to make it visible to the customer."""
+        self.status = self.STATUS_PUBLISHED
+        self.published_at = timezone.now()
+        self.save(update_fields=['status', 'published_at', 'updated_at'])
+        
+        # Update activity tracking on the connection
+        from chef_services.models import ChefCustomerConnection
+        ChefCustomerConnection.objects.filter(
+            chef=self.chef,
+            customer=self.customer,
+            status=ChefCustomerConnection.STATUS_ACCEPTED
+        ).update(last_plan_update_at=timezone.now())
+    
+    def archive(self):
+        """Archive the plan (typically after the date range has passed)."""
+        self.status = self.STATUS_ARCHIVED
+        self.save(update_fields=['status', 'updated_at'])
+    
+    @property
+    def pending_suggestions_count(self):
+        """Count of customer suggestions awaiting chef review."""
+        return self.suggestions.filter(status=MealPlanSuggestion.STATUS_PENDING).count()
+
+
+class ChefMealPlanDay(models.Model):
+    """Individual day in a chef-created meal plan.
+    
+    Days can be skipped for holidays, vacations, or other reasons.
+    This gives flexibility for real-world meal planning scenarios.
+    """
+    plan = models.ForeignKey(
+        ChefMealPlan,
+        on_delete=models.CASCADE,
+        related_name='days'
+    )
+    date = models.DateField()
+    is_skipped = models.BooleanField(
+        default=False,
+        help_text="Whether this day is skipped (holiday, vacation, etc.)"
+    )
+    skip_reason = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="Reason for skipping (e.g., 'Thanksgiving', 'Family vacation')"
+    )
+    notes = models.TextField(
+        blank=True,
+        help_text="Chef's notes for this specific day"
+    )
+    
+    class Meta:
+        ordering = ['date']
+        unique_together = ('plan', 'date')
+        indexes = [
+            models.Index(fields=['plan', 'date']),
+        ]
+    
+    def __str__(self):
+        if self.is_skipped:
+            return f"{self.date} (skipped: {self.skip_reason or 'no reason'})"
+        return f"{self.date}"
+
+
+class ChefMealPlanItem(models.Model):
+    """Individual meal within a day of a chef meal plan.
+    
+    This represents a specific meal (breakfast, lunch, dinner, snack)
+    that the chef has planned for the customer on a given day.
+    """
+    MEAL_TYPE_CHOICES = [
+        ('breakfast', 'Breakfast'),
+        ('lunch', 'Lunch'),
+        ('dinner', 'Dinner'),
+        ('snack', 'Snack'),
+    ]
+    
+    day = models.ForeignKey(
+        ChefMealPlanDay,
+        on_delete=models.CASCADE,
+        related_name='items'
+    )
+    meal_type = models.CharField(
+        max_length=20,
+        choices=MEAL_TYPE_CHOICES
+    )
+    
+    # Can link to an existing Meal or describe a custom meal
+    meal = models.ForeignKey(
+        'Meal',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='chef_plan_items',
+        help_text="Link to an existing meal from the chef's menu"
+    )
+    custom_name = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Custom meal name if not using an existing meal"
+    )
+    custom_description = models.TextField(
+        blank=True,
+        help_text="Description for custom meals not in the database"
+    )
+    
+    servings = models.PositiveIntegerField(
+        default=1,
+        help_text="Number of servings planned"
+    )
+    notes = models.TextField(
+        blank=True,
+        help_text="Chef's notes for this specific meal"
+    )
+    
+    class Meta:
+        ordering = ['meal_type']
+        indexes = [
+            models.Index(fields=['day', 'meal_type']),
+        ]
+    
+    def __str__(self):
+        name = self.meal.name if self.meal else self.custom_name or "Unnamed"
+        return f"{self.get_meal_type_display()}: {name}"
+    
+    @property
+    def display_name(self):
+        """Return the meal name for display."""
+        if self.meal:
+            return self.meal.name
+        return self.custom_name or "Unnamed Meal"
+    
+    @property
+    def display_description(self):
+        """Return the meal description for display."""
+        if self.meal:
+            return self.meal.description
+        return self.custom_description
+
+
+class MealPlanSuggestion(models.Model):
+    """Customer's suggested change to a chef-created meal plan.
+    
+    This enables collaborative planning where customers can propose changes
+    and chefs can approve, reject, or modify the suggestions.
+    """
+    STATUS_PENDING = 'pending'
+    STATUS_APPROVED = 'approved'
+    STATUS_REJECTED = 'rejected'
+    STATUS_MODIFIED = 'modified'
+    
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending Review'),
+        (STATUS_APPROVED, 'Approved'),
+        (STATUS_REJECTED, 'Rejected'),
+        (STATUS_MODIFIED, 'Approved with Modifications'),
+    ]
+    
+    SUGGESTION_TYPE_SWAP = 'swap_meal'
+    SUGGESTION_TYPE_SKIP = 'skip_day'
+    SUGGESTION_TYPE_ADD = 'add_day'
+    SUGGESTION_TYPE_DIETARY = 'dietary_note'
+    SUGGESTION_TYPE_GENERAL = 'general'
+    
+    SUGGESTION_TYPE_CHOICES = [
+        (SUGGESTION_TYPE_SWAP, 'Swap this meal for something else'),
+        (SUGGESTION_TYPE_SKIP, 'Skip this day'),
+        (SUGGESTION_TYPE_ADD, 'Add a day to the plan'),
+        (SUGGESTION_TYPE_DIETARY, 'Dietary concern/note'),
+        (SUGGESTION_TYPE_GENERAL, 'General feedback'),
+    ]
+    
+    plan = models.ForeignKey(
+        ChefMealPlan,
+        on_delete=models.CASCADE,
+        related_name='suggestions'
+    )
+    customer = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name='meal_plan_suggestions'
+    )
+    
+    # Target of the suggestion (optional - depends on type)
+    target_item = models.ForeignKey(
+        ChefMealPlanItem,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='suggestions',
+        help_text="The specific meal item this suggestion is about"
+    )
+    target_day = models.ForeignKey(
+        ChefMealPlanDay,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='suggestions',
+        help_text="The specific day this suggestion is about"
+    )
+    
+    suggestion_type = models.CharField(
+        max_length=20,
+        choices=SUGGESTION_TYPE_CHOICES
+    )
+    description = models.TextField(
+        help_text="Customer's explanation of their suggestion"
+    )
+    
+    # Chef's response
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING
+    )
+    chef_response = models.TextField(
+        blank=True,
+        help_text="Chef's response to the suggestion"
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['plan', 'status']),
+            models.Index(fields=['customer', '-created_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.get_suggestion_type_display()} by {self.customer.username} ({self.status})"
+    
+    def approve(self, response: str = ''):
+        """Approve the suggestion."""
+        self.status = self.STATUS_APPROVED
+        self.chef_response = response
+        self.reviewed_at = timezone.now()
+        self.save(update_fields=['status', 'chef_response', 'reviewed_at'])
+    
+    def reject(self, response: str):
+        """Reject the suggestion with a reason."""
+        self.status = self.STATUS_REJECTED
+        self.chef_response = response
+        self.reviewed_at = timezone.now()
+        self.save(update_fields=['status', 'chef_response', 'reviewed_at'])
+    
+    def approve_with_modifications(self, response: str):
+        """Approve the suggestion with modifications."""
+        self.status = self.STATUS_MODIFIED
+        self.chef_response = response
+        self.reviewed_at = timezone.now()
+        self.save(update_fields=['status', 'chef_response', 'reviewed_at'])
+
+
+class MealPlanGenerationJob(models.Model):
+    """Tracks async AI meal generation jobs.
+    
+    When a chef requests meal suggestions, a job is created and processed
+    in the background via Celery. The chef can continue working and check
+    back for results.
+    """
+    STATUS_PENDING = 'pending'
+    STATUS_PROCESSING = 'processing'
+    STATUS_COMPLETED = 'completed'
+    STATUS_FAILED = 'failed'
+    
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_PROCESSING, 'Processing'),
+        (STATUS_COMPLETED, 'Completed'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+    
+    MODE_FULL_WEEK = 'full_week'
+    MODE_FILL_EMPTY = 'fill_empty'
+    MODE_SINGLE_SLOT = 'single_slot'
+    
+    MODE_CHOICES = [
+        (MODE_FULL_WEEK, 'Generate Full Week'),
+        (MODE_FILL_EMPTY, 'Fill Empty Slots'),
+        (MODE_SINGLE_SLOT, 'Single Slot'),
+    ]
+    
+    plan = models.ForeignKey(
+        ChefMealPlan,
+        on_delete=models.CASCADE,
+        related_name='generation_jobs'
+    )
+    chef = models.ForeignKey(
+        'chefs.Chef',
+        on_delete=models.CASCADE,
+        related_name='meal_generation_jobs'
+    )
+    
+    mode = models.CharField(
+        max_length=20,
+        choices=MODE_CHOICES,
+        default=MODE_FILL_EMPTY
+    )
+    target_day = models.CharField(max_length=20, blank=True)
+    target_meal_type = models.CharField(max_length=20, blank=True)
+    custom_prompt = models.TextField(blank=True)
+    
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING
+    )
+    
+    # Results stored as JSON
+    suggestions = models.JSONField(default=list, blank=True)
+    error_message = models.TextField(blank=True)
+    
+    # Metadata
+    slots_requested = models.IntegerField(default=0)
+    slots_generated = models.IntegerField(default=0)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['plan', 'status']),
+            models.Index(fields=['chef', '-created_at']),
+        ]
+    
+    def __str__(self):
+        return f"Generation Job {self.id} for Plan {self.plan_id} ({self.status})"
+    
+    def mark_processing(self):
+        """Mark job as started."""
+        self.status = self.STATUS_PROCESSING
+        self.started_at = timezone.now()
+        self.save(update_fields=['status', 'started_at'])
+    
+    def mark_completed(self, suggestions: list):
+        """Mark job as completed with suggestions."""
+        self.status = self.STATUS_COMPLETED
+        self.suggestions = suggestions
+        self.slots_generated = len(suggestions)
+        self.completed_at = timezone.now()
+        self.save(update_fields=['status', 'suggestions', 'slots_generated', 'completed_at'])
+    
+    def mark_failed(self, error: str):
+        """Mark job as failed with error message."""
+        self.status = self.STATUS_FAILED
+        self.error_message = error
+        self.completed_at = timezone.now()
+        self.save(update_fields=['status', 'error_message', 'completed_at'])

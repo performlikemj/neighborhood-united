@@ -3,9 +3,12 @@ from django.utils import timezone
 from django.conf import settings
 from django.db.models import Q
 import os
+import logging
 
-from .models import Chef, ChefWaitlistSubscription, ChefWaitlistConfig
+from .models import Chef, ChefWaitlistSubscription, ChefWaitlistConfig, AreaWaitlist
 from meals.email_service import send_system_update_email
+
+logger = logging.getLogger(__name__)
 
 
 @shared_task
@@ -127,3 +130,289 @@ def notify_waitlist_subscribers_for_chef(chef_id: int) -> None:
     )
 
     return
+
+
+@shared_task
+def notify_area_waitlist_users(postal_code: str, country: str, chef_username: str) -> None:
+    """Notify users on the area waitlist that a chef is now available in their area.
+    
+    This is triggered when a verified chef adds a new postal code to their service area.
+    
+    Args:
+        postal_code: Normalized postal code
+        country: Country code (e.g., 'US', 'CA')
+        chef_username: Username of the chef who joined the area (for the email)
+    """
+    from shared.services.location_service import LocationService
+    
+    # Normalize the postal code using LocationService
+    normalized = LocationService.normalize(postal_code)
+    if not normalized:
+        return
+    
+    # Get users waiting in this area who haven't been notified yet
+    waiting_users = AreaWaitlist.get_waiting_users_for_area(normalized, country)
+    
+    user_ids = list(waiting_users.values_list('user_id', flat=True))
+    if not user_ids:
+        return
+    
+    base_url = os.getenv('STREAMLIT_URL') or ''
+    chef_profile_url = f"{base_url}/chefs/{chef_username}" if base_url else f"/chefs/{chef_username}"
+    discover_url = f"{base_url}/chefs" if base_url else "/chefs"
+    
+    subject = "A chef is now available in your area!"
+    message = (
+        f"Great news! Chef {chef_username} is now serving your area. "
+        f"Visit their profile to explore their offerings: {chef_profile_url}\n\n"
+        f"Or browse all available chefs: {discover_url}"
+    )
+    
+    try:
+        send_system_update_email.delay(
+            subject,
+            message,
+            user_ids=user_ids,
+            template_key='area_chef_available',
+            template_context={
+                'chef_username': chef_username,
+                'chef_profile_url': chef_profile_url,
+                'discover_url': discover_url,
+                'postal_code': postal_code,
+            },
+        )
+    except Exception:
+        # If queueing fails, don't update waitlist - allow retry
+        return
+    
+    now = timezone.now()
+    # Mark users as notified using the new FK-based query
+    AreaWaitlist.objects.filter(
+        location__code=normalized,
+        location__country=country,
+        notified=False,
+        user_id__in=user_ids
+    ).update(
+        notified=True,
+        notified_at=now
+    )
+    
+    return
+
+
+def _get_groq_client():
+    """Lazy Groq client factory - same pattern as meal_generation.py"""
+    try:
+        from groq import Groq
+        import os
+        api_key = getattr(settings, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
+        if api_key:
+            return Groq(api_key=api_key)
+    except Exception as e:
+        logger.warning(f"Failed to create Groq client: {e}")
+    return None
+
+
+@shared_task(bind=True, max_retries=2, default_retry_delay=30)
+def generate_meal_plan_suggestions_async(self, job_id: int) -> None:
+    """Generate AI meal suggestions asynchronously using Groq.
+    
+    This task runs in the background so chefs don't have to wait.
+    Results are stored in the MealPlanGenerationJob model.
+    
+    Args:
+        job_id: ID of the MealPlanGenerationJob to process
+    """
+    from datetime import timedelta
+    import json
+    
+    from meals.models import MealPlanGenerationJob, ChefMealPlan
+    
+    print(f"[CELERY TASK] Starting generate_meal_plan_suggestions_async for job_id={job_id}")
+    logger.info(f"[CELERY TASK] Starting generate_meal_plan_suggestions_async for job_id={job_id}")
+    
+    try:
+        job = MealPlanGenerationJob.objects.select_related(
+            'plan__customer', 'chef'
+        ).get(id=job_id)
+        print(f"[CELERY TASK] Job {job_id} loaded successfully")
+    except MealPlanGenerationJob.DoesNotExist:
+        print(f"[CELERY TASK] ERROR: Job {job_id} not found")
+        logger.error(f"Generation job {job_id} not found")
+        return
+    
+    # Mark as processing
+    print(f"[CELERY TASK] Marking job {job_id} as processing")
+    job.mark_processing()
+    
+    try:
+        plan = job.plan
+        customer = plan.customer
+        
+        # Build dietary context from customer
+        dietary_summary = []
+        
+        if customer:
+            # Get dietary preferences
+            dietary_prefs = list(customer.dietary_preferences.values_list('name', flat=True))
+            if dietary_prefs:
+                dietary_summary.append(f"Dietary preferences: {', '.join(dietary_prefs)}")
+            
+            # Get custom dietary preferences
+            custom_prefs = list(customer.custom_dietary_preferences.values_list('name', flat=True))
+            if custom_prefs:
+                dietary_summary.append(f"Custom dietary preferences: {', '.join(custom_prefs)}")
+            
+            # Get allergies
+            all_allergies = set((customer.allergies or []) + (customer.custom_allergies or []))
+            if all_allergies:
+                dietary_summary.append(f"Allergies (MUST AVOID): {', '.join(all_allergies)}")
+            
+            # Get household members
+            if hasattr(customer, 'household_members'):
+                members = customer.household_members.all()
+                if members.exists():
+                    members_desc = []
+                    for m in members:
+                        desc = m.name
+                        member_prefs = list(m.dietary_preferences.values_list('name', flat=True))
+                        if member_prefs:
+                            desc += f" ({', '.join(member_prefs)})"
+                        if m.age:
+                            desc += f", age {m.age}"
+                        members_desc.append(desc)
+                    dietary_summary.append(f"Household members: {', '.join(members_desc)}")
+        
+        dietary_text = '\n'.join(dietary_summary) if dietary_summary else 'No specific dietary requirements.'
+        print(f"[CELERY TASK] Dietary context built: {dietary_text[:100]}...")
+        
+        # Determine which slots need meals
+        slots_to_fill = []
+        meal_types = ['breakfast', 'lunch', 'dinner']
+        
+        # Build existing items map
+        existing_items = {}
+        for day in plan.days.all():
+            day_name = day.date.strftime('%A')
+            for item in day.items.all():
+                key = f"{day_name}_{item.meal_type}"
+                existing_items[key] = item
+        
+        # Calculate date range
+        num_days = (plan.end_date - plan.start_date).days + 1
+        
+        if job.mode == 'single_slot':
+            slots_to_fill.append({'day': job.target_day, 'meal_type': job.target_meal_type})
+        elif job.mode == 'fill_empty':
+            for i in range(min(num_days, 7)):
+                current_date = plan.start_date + timedelta(days=i)
+                day_name = current_date.strftime('%A')
+                for mt in meal_types:
+                    key = f"{day_name}_{mt}"
+                    if key not in existing_items:
+                        slots_to_fill.append({'day': day_name, 'meal_type': mt})
+        else:  # full_week
+            for i in range(min(num_days, 7)):
+                current_date = plan.start_date + timedelta(days=i)
+                day_name = current_date.strftime('%A')
+                for mt in meal_types:
+                    slots_to_fill.append({'day': day_name, 'meal_type': mt})
+        
+        if not slots_to_fill:
+            print(f"[CELERY TASK] No slots to fill, marking complete")
+            job.mark_completed([])
+            return
+        
+        # Update slots requested
+        job.slots_requested = len(slots_to_fill)
+        job.save(update_fields=['slots_requested'])
+        print(f"[CELERY TASK] Slots to fill: {len(slots_to_fill)}")
+        
+        # Generate meals using Groq (faster and uses OSS model)
+        print(f"[CELERY TASK] Creating Groq client...")
+        client = _get_groq_client()
+        if not client:
+            raise Exception("Groq client not available - check GROQ_API_KEY")
+        print(f"[CELERY TASK] Groq client created successfully")
+        
+        groq_model = getattr(settings, 'GROQ_MODEL', 'llama-3.1-70b-versatile')
+        
+        slots_text = '\n'.join([f"- {s['day']} {s['meal_type']}" for s in slots_to_fill])
+
+        system_prompt = f"""You are a professional chef assistant helping create personalized meal plans.
+        
+Family dietary context:
+{dietary_text}
+
+{f'Chef notes: {job.custom_prompt}' if job.custom_prompt else ''}
+
+Generate appropriate meal suggestions that:
+1. Respect ALL allergies (critical - never include allergens)
+2. Align with dietary preferences
+3. Provide variety across the week
+4. Are practical for home preparation
+5. Consider the whole household's needs
+
+Respond with a JSON object containing a "suggestions" array."""
+
+        user_prompt = f"""Generate meal suggestions for these slots:
+{slots_text}
+
+For each slot, provide:
+- day: the day name
+- meal_type: must be lowercase - one of: breakfast, lunch, dinner, snack
+- name: a clear, appetizing meal name
+- description: 1-2 sentence description
+- dietary_tags: relevant tags like "vegetarian", "gluten-free", etc.
+- household_notes: brief note on how this serves the household's needs
+
+Respond ONLY with a valid JSON object containing a "suggestions" array."""
+
+        print(f"[CELERY TASK] Calling Groq API with model {groq_model}...")
+        response = client.chat.completions.create(
+            model=groq_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.7,
+            max_tokens=4000  # Groq is fast, can handle more tokens
+        )
+        print(f"[CELERY TASK] Groq API response received")
+        
+        result_text = response.choices[0].message.content
+        print(f"[CELERY TASK] Response text: {result_text[:200]}...")
+        result_data = json.loads(result_text)
+        
+        # Handle various response formats - AI might use different keys
+        if isinstance(result_data, list):
+            suggestions = result_data
+        else:
+            # Try common keys the AI might use
+            suggestions = (
+                result_data.get('suggestions') or 
+                result_data.get('meals') or 
+                result_data.get('meal_suggestions') or
+                result_data.get('menu') or
+                []
+            )
+        print(f"[CELERY TASK] Result keys: {list(result_data.keys()) if isinstance(result_data, dict) else 'array'}")
+        
+        print(f"[CELERY TASK] Parsed {len(suggestions)} suggestions, marking complete")
+        job.mark_completed(suggestions)
+        print(f"[CELERY TASK] Job {job_id} marked complete")
+        logger.info(f"Generation job {job_id} completed with {len(suggestions)} suggestions")
+        
+    except Exception as e:
+        import traceback
+        error_traceback = traceback.format_exc()
+        print(f"[CELERY TASK] ERROR in job {job_id}: {e}")
+        print(f"[CELERY TASK] Traceback: {error_traceback}")
+        logger.error(f"Generation job {job_id} failed: {e}\n{error_traceback}")
+        job.mark_failed(str(e))
+        
+        # Retry on certain failures
+        if self.request.retries < self.max_retries:
+            print(f"[CELERY TASK] Retrying task (attempt {self.request.retries + 1})")
+            raise self.retry(exc=e)

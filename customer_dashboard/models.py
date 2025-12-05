@@ -360,3 +360,227 @@ class PreAuthenticationMessage(models.Model):
 
     def __str__(self):
         return f"Pending message for user {self.user.username} (Token: {self.auth_token.auth_token}) at {self.created_at.strftime('%Y-%m-%d %H:%M')}"
+
+
+class SousChefThread(models.Model):
+    """
+    Per-family conversation thread for chef's Sous Chef assistant.
+    
+    Each thread represents an ongoing conversation between a chef and the 
+    Sous Chef AI assistant about a specific family (either a platform customer
+    or an off-platform CRM lead).
+    """
+    chef = models.ForeignKey(
+        'chefs.Chef', 
+        on_delete=models.CASCADE, 
+        related_name='sous_chef_threads'
+    )
+    # Either a platform customer OR a CRM lead (mutually exclusive)
+    customer = models.ForeignKey(
+        'custom_auth.CustomUser', 
+        null=True, 
+        blank=True, 
+        on_delete=models.CASCADE,
+        related_name='sous_chef_threads',
+        help_text="Platform customer this conversation is about"
+    )
+    lead = models.ForeignKey(
+        'crm.Lead', 
+        null=True, 
+        blank=True, 
+        on_delete=models.CASCADE,
+        related_name='sous_chef_threads',
+        help_text="CRM lead this conversation is about"
+    )
+    title = models.CharField(max_length=255, default="Sous Chef Conversation")
+    latest_response_id = models.CharField(
+        max_length=255, 
+        null=True, 
+        blank=True,
+        help_text="OpenAI response ID for continuation"
+    )
+    openai_input_history = models.JSONField(
+        default=list, 
+        blank=True,
+        help_text="Conversation history for OpenAI context"
+    )
+    # AI-generated summary of older conversation for context preservation
+    conversation_summary = models.TextField(
+        blank=True, 
+        default='',
+        help_text="AI-generated summary of truncated conversation history"
+    )
+    summary_generated_at = models.DateTimeField(
+        null=True, 
+        blank=True,
+        help_text="When the conversation summary was last generated"
+    )
+    messages_summarized_count = models.IntegerField(
+        default=0,
+        help_text="Number of messages that have been summarized"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+        indexes = [
+            models.Index(fields=['chef', 'customer']),
+            models.Index(fields=['chef', 'lead']),
+            models.Index(fields=['chef', 'is_active']),
+        ]
+
+    def __str__(self):
+        family_name = "Unknown"
+        if self.customer:
+            family_name = f"{self.customer.first_name} {self.customer.last_name}".strip() or self.customer.username
+        elif self.lead:
+            family_name = f"{self.lead.first_name} {self.lead.last_name}".strip()
+        return f"Sous Chef Thread: Chef {self.chef_id} → {family_name}"
+
+    @property
+    def family_type(self):
+        """Return whether this thread is for a 'customer' or 'lead'."""
+        if self.customer_id:
+            return 'customer'
+        elif self.lead_id:
+            return 'lead'
+        return None
+
+    @property
+    def family_id(self):
+        """Return the ID of the associated family."""
+        return self.customer_id or self.lead_id
+
+    @property
+    def family_name(self):
+        """Return a display name for the family."""
+        if self.customer:
+            full = f"{self.customer.first_name} {self.customer.last_name}".strip()
+            return full if full else self.customer.username
+        elif self.lead:
+            return f"{self.lead.first_name} {self.lead.last_name}".strip()
+        return "Unknown Family"
+
+
+class SousChefMessage(models.Model):
+    """
+    Individual message within a Sous Chef conversation thread.
+    
+    Stores both chef messages and assistant responses for history/audit.
+    """
+    ROLE_CHOICES = [
+        ('chef', 'Chef'),
+        ('assistant', 'Assistant'),
+    ]
+
+    thread = models.ForeignKey(
+        SousChefThread, 
+        on_delete=models.CASCADE, 
+        related_name='messages'
+    )
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES)
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    # Metadata for tool calls
+    tool_calls = models.JSONField(
+        default=list, 
+        blank=True,
+        help_text="Tool calls made during this response"
+    )
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        preview = self.content[:50] + "..." if len(self.content) > 50 else self.content
+        return f"{self.role}: {preview}"
+
+
+class FamilyInsight(models.Model):
+    """
+    Persistent learnings about a family extracted from Sous Chef conversations.
+    
+    These insights survive conversation resets and are injected into new conversations
+    to maintain long-term context about a family's preferences and needs.
+    """
+    INSIGHT_TYPES = [
+        ('preference', 'Preference'),      # "Kids prefer milder spice"
+        ('tip', 'Useful Tip'),             # "Double portions on Mondays"
+        ('avoid', 'Things to Avoid'),      # "Don't suggest fish on Fridays"
+        ('success', 'What Worked Well'),   # "Thai curry was a big hit"
+    ]
+    
+    chef = models.ForeignKey(
+        'chefs.Chef', 
+        on_delete=models.CASCADE,
+        related_name='family_insights'
+    )
+    # Either a platform customer OR a CRM lead (mutually exclusive)
+    customer = models.ForeignKey(
+        'custom_auth.CustomUser', 
+        null=True, 
+        blank=True, 
+        on_delete=models.CASCADE,
+        related_name='chef_insights',
+        help_text="Platform customer this insight is about"
+    )
+    lead = models.ForeignKey(
+        'crm.Lead', 
+        null=True, 
+        blank=True, 
+        on_delete=models.CASCADE,
+        related_name='chef_insights',
+        help_text="CRM lead this insight is about"
+    )
+    
+    insight_type = models.CharField(max_length=20, choices=INSIGHT_TYPES)
+    content = models.TextField(
+        max_length=500,
+        help_text="The insight content (max 500 chars)"
+    )
+    source_thread = models.ForeignKey(
+        SousChefThread, 
+        null=True, 
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='insights',
+        help_text="The conversation thread where this insight was discovered"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Inactive insights won't be shown in context"
+    )
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['chef', 'customer']),
+            models.Index(fields=['chef', 'lead']),
+            models.Index(fields=['chef', 'is_active']),
+        ]
+
+    def __str__(self):
+        family = "Unknown"
+        if self.customer:
+            family = f"{self.customer.first_name} {self.customer.last_name}".strip() or self.customer.username
+        elif self.lead:
+            family = f"{self.lead.first_name} {self.lead.last_name}".strip()
+        return f"[{self.insight_type}] {family}: {self.content[:50]}..."
+
+    @property
+    def family_type(self):
+        """Return whether this insight is for a 'customer' or 'lead'."""
+        if self.customer_id:
+            return 'customer'
+        elif self.lead_id:
+            return 'lead'
+        return None
+
+    @property
+    def family_id(self):
+        """Return the ID of the associated family."""
+        return self.customer_id or self.lead_id

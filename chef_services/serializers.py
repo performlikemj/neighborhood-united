@@ -223,11 +223,19 @@ class PublicChefServiceOfferingSerializer(serializers.ModelSerializer):
 class ChefCustomerConnectionSerializer(serializers.ModelSerializer):
     chef_id = serializers.IntegerField(read_only=True)
     customer_id = serializers.IntegerField(read_only=True)
+    # Include partner names for display purposes
+    chef_username = serializers.CharField(source='chef.user.username', read_only=True)
+    customer_username = serializers.CharField(source='customer.username', read_only=True)
+    customer_first_name = serializers.CharField(source='customer.first_name', read_only=True)
+    customer_last_name = serializers.CharField(source='customer.last_name', read_only=True)
+    customer_email = serializers.EmailField(source='customer.email', read_only=True)
 
     class Meta:
         model = ChefCustomerConnection
         fields = [
             'id', 'chef_id', 'customer_id', 'status', 'initiated_by',
             'requested_at', 'responded_at', 'ended_at',
+            'chef_username', 'customer_username',
+            'customer_first_name', 'customer_last_name', 'customer_email',
         ]
         read_only_fields = fields

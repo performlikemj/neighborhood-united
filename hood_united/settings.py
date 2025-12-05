@@ -53,7 +53,7 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 # DEBUG = str_to_bool(os.getenv('DEBUG', 'False'))
-DEBUG = False
+DEBUG = True
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '').split(',')
 
@@ -84,7 +84,6 @@ INSTALLED_APPS = [
     'customer_dashboard',
     'local_chefs',
     'gamification',
-    'services',
     'crm',
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',
@@ -244,9 +243,11 @@ AUTH_PASSWORD_VALIDATORS = [
 # Rest framework settings
 # In development, support both Session and JWT auth to ease local testing.
 # In production, keep JWT-only.
+# NOTE: JWT must come first so API calls from the React frontend (which use JWT)
+# don't trigger CSRF enforcement from SessionAuthentication when browser has session cookies.
 _DEFAULT_AUTH_CLASSES = (
-    'rest_framework.authentication.SessionAuthentication',
     'rest_framework_simplejwt.authentication.JWTAuthentication',
+    'rest_framework.authentication.SessionAuthentication',
 ) if DEBUG else (
     'rest_framework_simplejwt.authentication.JWTAuthentication',
 )

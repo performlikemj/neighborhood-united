@@ -497,6 +497,298 @@ def generate_user_context(user):
     return user_preferences
 
 
+def generate_family_context_for_chef(chef, customer=None, lead=None):
+    """
+    Generate comprehensive family context for the Sous Chef assistant.
+    
+    This function creates a detailed context string about a family (either a 
+    platform customer or CRM lead) that helps the chef's AI assistant provide
+    personalized meal planning and preparation advice.
+    
+    Args:
+        chef: The Chef instance who is using the Sous Chef
+        customer: Optional CustomUser instance (platform customer)
+        lead: Optional Lead instance (off-platform contact from CRM)
+        
+    Returns:
+        str: A formatted context string with family information
+    """
+    from chef_services.models import ChefCustomerConnection, ChefServiceOrder
+    from meals.models import ChefMealEvent, ChefMealOrder
+    from crm.models import Lead, LeadInteraction, LeadHouseholdMember
+    from chefs.services import get_client_stats
+    from decimal import Decimal
+    
+    if not customer and not lead:
+        return "No family context available."
+    
+    context_parts = []
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PLATFORM CUSTOMER CONTEXT
+    # ═══════════════════════════════════════════════════════════════════════════
+    if customer:
+        # Basic family info
+        family_name = f"{customer.first_name} {customer.last_name}".strip() or customer.username
+        context_parts.append(f"## Family: {family_name}")
+        context_parts.append(f"- **Contact Email**: {customer.email}")
+        
+        # Household size
+        household_size = getattr(customer, 'household_member_count', 1)
+        context_parts.append(f"- **Household Size**: {household_size} members")
+        
+        # Primary contact dietary preferences
+        dietary_prefs = ', '.join([pref.name for pref in customer.dietary_preferences.all()]) if customer.dietary_preferences.exists() else "None specified"
+        context_parts.append(f"- **Primary Contact Dietary Preferences**: {dietary_prefs}")
+        
+        # Custom dietary preferences
+        custom_prefs = customer.custom_dietary_preferences.all()
+        if custom_prefs.exists():
+            custom_names = ', '.join([p.name for p in custom_prefs])
+            context_parts.append(f"- **Custom Dietary Preferences**: {custom_names}")
+        
+        # Allergies
+        combined_allergies = set((customer.allergies or []) + (customer.custom_allergies or []))
+        allergies_str = ', '.join(combined_allergies) if combined_allergies else "None reported"
+        context_parts.append(f"- **Allergies**: {allergies_str}")
+        
+        # Household members
+        if hasattr(customer, 'household_members'):
+            household_members = customer.household_members.all()
+            if household_members.exists():
+                context_parts.append("\n### Household Members")
+                for member in household_members:
+                    member_line = f"- **{member.name}**"
+                    if member.age:
+                        member_line += f" (Age: {member.age})"
+                    
+                    member_dietary = ', '.join([pref.name for pref in member.dietary_preferences.all()]) if member.dietary_preferences.exists() else None
+                    if member_dietary:
+                        member_line += f" — Dietary: {member_dietary}"
+                    
+                    if member.notes:
+                        member_line += f" — Notes: {member.notes}"
+                    
+                    context_parts.append(member_line)
+        
+        # Connection status with this chef
+        try:
+            connection = ChefCustomerConnection.objects.filter(
+                chef=chef,
+                customer=customer
+            ).first()
+            if connection:
+                context_parts.append(f"\n### Connection Status")
+                context_parts.append(f"- **Status**: {connection.get_status_display()}")
+                if connection.responded_at:
+                    context_parts.append(f"- **Connected Since**: {connection.responded_at.strftime('%B %d, %Y')}")
+                if connection.notes:
+                    context_parts.append(f"- **Connection Notes**: {connection.notes}")
+        except Exception:
+            pass
+        
+        # Order history and stats
+        try:
+            stats = get_client_stats(chef, customer)
+            context_parts.append(f"\n### Order History with You")
+            context_parts.append(f"- **Total Orders**: {stats.get('total_orders', 0)}")
+            total_spent = stats.get('total_spent', Decimal('0'))
+            context_parts.append(f"- **Total Spent**: ${total_spent:.2f}")
+            
+            if stats.get('last_order_date'):
+                context_parts.append(f"- **Last Order**: {stats['last_order_date'].strftime('%B %d, %Y')}")
+            
+            favorite_services = stats.get('favorite_services', [])
+            if favorite_services:
+                fav_names = ', '.join([f"{s['name']} ({s['order_count']} orders)" for s in favorite_services[:3]])
+                context_parts.append(f"- **Favorite Services**: {fav_names}")
+        except Exception:
+            pass
+        
+        # Recent interaction notes (from CRM Lead if linked)
+        try:
+            linked_lead = Lead.objects.filter(owner=chef.user, email=customer.email).first()
+            if linked_lead:
+                recent_notes = LeadInteraction.objects.filter(
+                    lead=linked_lead,
+                    is_deleted=False
+                ).order_by('-happened_at')[:5]
+                
+                if recent_notes.exists():
+                    context_parts.append(f"\n### Recent Notes")
+                    for note in recent_notes:
+                        note_date = note.happened_at.strftime('%m/%d/%Y')
+                        context_parts.append(f"- **{note.get_interaction_type_display()}** ({note_date}): {note.summary}")
+                        if note.next_steps:
+                            context_parts.append(f"  - Next steps: {note.next_steps}")
+        except Exception:
+            pass
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # CRM LEAD CONTEXT (Off-platform contact)
+    # ═══════════════════════════════════════════════════════════════════════════
+    elif lead:
+        family_name = f"{lead.first_name} {lead.last_name}".strip()
+        context_parts.append(f"## Family: {family_name}")
+        context_parts.append(f"- **Type**: Off-platform contact (CRM Lead)")
+        
+        if lead.email:
+            context_parts.append(f"- **Contact Email**: {lead.email}")
+        if lead.phone:
+            context_parts.append(f"- **Phone**: {lead.phone}")
+        
+        # Lead status and source
+        context_parts.append(f"- **Status**: {lead.get_status_display()}")
+        context_parts.append(f"- **Source**: {lead.get_source_display()}")
+        
+        # Household size
+        context_parts.append(f"- **Household Size**: {lead.household_size} members")
+        
+        # Dietary preferences
+        if lead.dietary_preferences:
+            prefs = ', '.join(lead.dietary_preferences)
+            context_parts.append(f"- **Dietary Preferences**: {prefs}")
+        else:
+            context_parts.append(f"- **Dietary Preferences**: None specified")
+        
+        # Allergies
+        all_allergies = list(lead.allergies or []) + list(lead.custom_allergies or [])
+        allergies_str = ', '.join(all_allergies) if all_allergies else "None reported"
+        context_parts.append(f"- **Allergies**: {allergies_str}")
+        
+        # Lead notes
+        if lead.notes:
+            context_parts.append(f"- **Notes**: {lead.notes}")
+        
+        # Household members
+        household_members = lead.household_members.all()
+        if household_members.exists():
+            context_parts.append(f"\n### Household Members")
+            for member in household_members:
+                member_line = f"- **{member.name}**"
+                if member.relationship:
+                    member_line += f" ({member.relationship})"
+                if member.age:
+                    member_line += f" — Age: {member.age}"
+                
+                if member.dietary_preferences:
+                    member_prefs = ', '.join(member.dietary_preferences)
+                    member_line += f" — Dietary: {member_prefs}"
+                
+                member_allergies = list(member.allergies or []) + list(member.custom_allergies or [])
+                if member_allergies:
+                    member_line += f" — Allergies: {', '.join(member_allergies)}"
+                
+                if member.notes:
+                    member_line += f" — Notes: {member.notes}"
+                
+                context_parts.append(member_line)
+        
+        # Interaction history
+        interactions = LeadInteraction.objects.filter(
+            lead=lead,
+            is_deleted=False
+        ).order_by('-happened_at')[:5]
+        
+        if interactions.exists():
+            context_parts.append(f"\n### Recent Interactions")
+            for interaction in interactions:
+                int_date = interaction.happened_at.strftime('%m/%d/%Y')
+                context_parts.append(f"- **{interaction.get_interaction_type_display()}** ({int_date}): {interaction.summary}")
+                if interaction.next_steps:
+                    context_parts.append(f"  - Next steps: {interaction.next_steps}")
+        
+        # Budget info
+        if lead.budget_cents:
+            budget = Decimal(lead.budget_cents) / 100
+            context_parts.append(f"\n- **Budget**: ${budget:.2f}")
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # COMBINED DIETARY SUMMARY
+    # ═══════════════════════════════════════════════════════════════════════════
+    context_parts.append("\n### Dietary Compliance Summary")
+    
+    # Aggregate all dietary restrictions and allergies across household
+    all_restrictions = set()
+    all_allergies = set()
+    
+    if customer:
+        all_restrictions.update(pref.name for pref in customer.dietary_preferences.all())
+        all_allergies.update(customer.allergies or [])
+        all_allergies.update(customer.custom_allergies or [])
+        
+        if hasattr(customer, 'household_members'):
+            for member in customer.household_members.all():
+                all_restrictions.update(pref.name for pref in member.dietary_preferences.all())
+    
+    elif lead:
+        all_restrictions.update(lead.dietary_preferences or [])
+        all_allergies.update(lead.allergies or [])
+        all_allergies.update(lead.custom_allergies or [])
+        
+        for member in lead.household_members.all():
+            all_restrictions.update(member.dietary_preferences or [])
+            all_allergies.update(member.allergies or [])
+            all_allergies.update(member.custom_allergies or [])
+    
+    if all_restrictions:
+        context_parts.append(f"- **All Dietary Restrictions**: {', '.join(sorted(all_restrictions))}")
+    else:
+        context_parts.append("- **All Dietary Restrictions**: None")
+    
+    if all_allergies:
+        context_parts.append(f"- **⚠️ All Allergies (MUST AVOID)**: {', '.join(sorted(all_allergies))}")
+    else:
+        context_parts.append("- **All Allergies**: None reported")
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # SAVED INSIGHTS (Persistent learnings about this family)
+    # ═══════════════════════════════════════════════════════════════════════════
+    try:
+        from customer_dashboard.models import FamilyInsight
+        
+        insight_filter = {'chef': chef, 'is_active': True}
+        if customer:
+            insight_filter['customer'] = customer
+            insight_filter['lead__isnull'] = True
+        elif lead:
+            insight_filter['lead'] = lead
+            insight_filter['customer__isnull'] = True
+        
+        insights = FamilyInsight.objects.filter(**insight_filter).order_by('-created_at')[:10]
+        
+        if insights.exists():
+            context_parts.append("\n### Saved Insights About This Family")
+            context_parts.append("*(Persistent learnings from previous conversations)*")
+            
+            # Group by type
+            by_type = {
+                'preference': [],
+                'tip': [],
+                'avoid': [],
+                'success': []
+            }
+            for insight in insights:
+                by_type[insight.insight_type].append(insight.content)
+            
+            type_labels = {
+                'preference': '🎯 Preferences',
+                'tip': '💡 Tips',
+                'avoid': '🚫 Things to Avoid',
+                'success': '✅ What Worked Well'
+            }
+            
+            for itype, label in type_labels.items():
+                if by_type[itype]:
+                    context_parts.append(f"\n**{label}**:")
+                    for content in by_type[itype]:
+                        context_parts.append(f"- {content}")
+    except Exception:
+        pass  # Insights are optional, don't fail context generation
+    
+    return '\n'.join(context_parts)
+
+
 def understand_dietary_choices(request):
     dietary_choices = Meal.dietary_preferences   
     return dietary_choices

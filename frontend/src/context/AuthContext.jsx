@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useRef, useState } from 'react'
+import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react'
 import { api, setTokens, clearTokens, blacklistRefreshToken } from '../api'
 import { jwtDecode } from 'jwt-decode'
 
@@ -13,33 +13,117 @@ export function AuthProvider({ children }){
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const hasFetchedOnce = useRef(false)
+  
+  // Chef Preview Mode: Track if user has access to chefs in their area
+  // null = not checked yet, true = chefs available, false = no chefs
+  const [hasChefAccess, setHasChefAccess] = useState(null)
+  const [chefAccessLoading, setChefAccessLoading] = useState(false)
+  const lastCheckedPostal = useRef(null)
+  
+  // Multi-chef support: Track connected chefs for customer
+  const [connectedChefs, setConnectedChefs] = useState([])
+  const [connectedChefsLoading, setConnectedChefsLoading] = useState(false)
+  const hasFetchedChefs = useRef(false)
+
+  // Check if any verified chef serves the user's area
+  const checkChefAvailability = useCallback(async (forceCheck = false) => {
+    const isDev = Boolean(import.meta?.env?.DEV)
+    
+    // Don't check if user is a chef (they always have "access")
+    if (user?.is_chef) {
+      setHasChefAccess(true)
+      return true
+    }
+    
+    // Get current postal code
+    const currentPostal = user?.address?.postalcode || user?.address?.input_postalcode || user?.postal_code || ''
+    const currentCountry = user?.address?.country || ''
+    
+    // Skip if no address info
+    if (!currentPostal || !currentCountry) {
+      if (isDev) console.debug('[Auth] checkChefAvailability: no postal/country, setting hasChefAccess=false')
+      setHasChefAccess(false)
+      return false
+    }
+    
+    // Skip if we already checked this postal code (unless forced)
+    const postalKey = `${currentPostal}:${currentCountry}`
+    if (!forceCheck && lastCheckedPostal.current === postalKey && hasChefAccess !== null) {
+      if (isDev) console.debug('[Auth] checkChefAvailability: already checked this postal code')
+      return hasChefAccess
+    }
+    
+    setChefAccessLoading(true)
+    try {
+      if (isDev) console.debug('[Auth] checkChefAvailability: checking', { postalKey })
+      const resp = await api.get('/chefs/api/availability/')
+      const data = resp?.data || {}
+      const available = Boolean(data?.has_chef)
+      
+      setHasChefAccess(available)
+      lastCheckedPostal.current = postalKey
+      
+      if (isDev) console.debug('[Auth] checkChefAvailability result:', { available, data })
+      return available
+    } catch (e) {
+      if (isDev) console.warn('[Auth] checkChefAvailability failed:', e?.response?.status)
+      // On error, assume no access (fail safe for preview mode)
+      setHasChefAccess(false)
+      return false
+    } finally {
+      setChefAccessLoading(false)
+    }
+  }, [user?.is_chef, user?.address?.postalcode, user?.address?.input_postalcode, user?.postal_code, user?.address?.country, hasChefAccess])
 
   async function fetchUserAndAddressOnce(){
-    if (hasFetchedOnce.current) return
+    const isDev = Boolean(import.meta?.env?.DEV)
+    if (isDev){
+      const stack = (new Error('fetchUserAndAddressOnce trace').stack || '')
+        .split('\n')
+        .slice(2, 7)
+        .map(line => line.trim())
+      console.debug('[Auth] fetchUserAndAddressOnce invoked', {
+        hasFetched: hasFetchedOnce.current,
+        stack
+      })
+    }
+    if (hasFetchedOnce.current){
+      if (isDev){
+        console.debug('[Auth] fetchUserAndAddressOnce skipped (already fetched once)')
+      }
+      return
+    }
     hasFetchedOnce.current = true
     try{
-      const [uRes, aRes] = await Promise.all([
-        api.get('/auth/api/user_details/'),
-        api.get('/auth/api/address_details/').catch(()=>null)
-      ])
+      if (isDev){
+        console.debug('[Auth] fetchUserAndAddressOnce issuing request')
+      }
+      // Single API call - address is now included in user_details response
+      const uRes = await api.get('/auth/api/user_details/')
       const base = uRes?.data || {}
+      
+      // Normalize address data for consistent frontend access
+      const address = base.address || null
+      const postal = address?.input_postalcode || address?.postalcode || ''
+      
       setUser(prev => {
         const role = pickRoleFromServerOrPrev(base?.current_role, prev)
-        const nextBase = {
+        return {
           ...prev,
           ...base,
           is_chef: Boolean(base?.is_chef),
           current_role: role,
-          household_member_count: Math.max(1, Number(base?.household_member_count || 1))
+          household_member_count: Math.max(1, Number(base?.household_member_count || 1)),
+          address: address ? { ...address, postalcode: postal } : null,
+          postal_code: postal
         }
-        return nextBase
       })
-      if (aRes?.data){
-        const a = aRes.data || {}
-        const postal = a.input_postalcode || a.postal_code || a.postalcode || ''
-        setUser(prev => ({ ...(prev||{}), address: { ...a, postalcode: postal }, postal_code: postal }))
-      }
     } finally {
+      if (isDev){
+        console.debug('[Auth] fetchUserAndAddressOnce completed', {
+          hasFetched: hasFetchedOnce.current
+        })
+      }
       setLoading(false)
     }
   }
@@ -53,6 +137,62 @@ export function AuthProvider({ children }){
     }catch{}
     fetchUserAndAddressOnce().catch((e)=>{ console.warn('[Auth] initial load failed', e?.response?.status); setLoading(false) })
   }, [])
+
+  // Check chef availability when user/address loads or changes
+  useEffect(() => {
+    // Only check if we have a user and we're done loading
+    if (loading || !user?.id) return
+    
+    // Check chef availability after user is loaded
+    const postal = user?.address?.postalcode || user?.address?.input_postalcode || user?.postal_code
+    if (postal) {
+      checkChefAvailability()
+    } else {
+      // No postal code = no chef access
+      setHasChefAccess(false)
+    }
+  }, [loading, user?.id, user?.address?.postalcode, user?.address?.input_postalcode, user?.postal_code, checkChefAvailability])
+
+  // Fetch connected chefs for customers
+  const fetchConnectedChefs = useCallback(async (forceRefresh = false) => {
+    const isDev = Boolean(import.meta?.env?.DEV)
+    
+    // Skip if user is a chef (chefs don't have "connected chefs")
+    if (user?.is_chef && user?.current_role === 'chef') {
+      setConnectedChefs([])
+      return []
+    }
+    
+    // Skip if already fetched (unless forced)
+    if (!forceRefresh && hasFetchedChefs.current && connectedChefs.length >= 0) {
+      return connectedChefs
+    }
+    
+    setConnectedChefsLoading(true)
+    try {
+      if (isDev) console.debug('[Auth] fetchConnectedChefs: fetching')
+      const resp = await api.get('/customer-dashboard/api/my-chefs/')
+      const chefs = resp?.data?.chefs || []
+      setConnectedChefs(chefs)
+      hasFetchedChefs.current = true
+      if (isDev) console.debug('[Auth] fetchConnectedChefs result:', { count: chefs.length })
+      return chefs
+    } catch (e) {
+      if (isDev) console.warn('[Auth] fetchConnectedChefs failed:', e?.response?.status)
+      setConnectedChefs([])
+      return []
+    } finally {
+      setConnectedChefsLoading(false)
+    }
+  }, [user?.is_chef, user?.current_role, connectedChefs])
+
+  // Fetch connected chefs when user loads and is a customer
+  useEffect(() => {
+    if (loading || !user?.id) return
+    if (user?.current_role !== 'chef') {
+      fetchConnectedChefs()
+    }
+  }, [loading, user?.id, user?.current_role, fetchConnectedChefs])
 
   const login = async (username, password) => {
     // Use URL-encoded form to avoid CORS preflight on Content-Type
@@ -83,6 +223,10 @@ export function AuthProvider({ children }){
     await blacklistRefreshToken()
     clearTokens()
     setUser(null)
+    setHasChefAccess(null)
+    lastCheckedPostal.current = null
+    setConnectedChefs([])
+    hasFetchedChefs.current = false
   }
 
   const register = async (payload) => {
@@ -100,12 +244,21 @@ export function AuthProvider({ children }){
 
   const refreshUser = async () => {
     try{
+      // Single API call - address is now included in user_details response
       const u = await api.get('/auth/api/user_details/')
+      const userData = u?.data || {}
+      
+      // Normalize address data for consistent frontend access
+      const address = userData.address || null
+      const postal = address?.input_postalcode || address?.postalcode || ''
+      
       setUser(prev => ({
         ...(prev||{}),
-        ...(u.data||{}),
-        is_chef: Boolean(u.data?.is_chef),
-        current_role: pickRoleFromServerOrPrev(u.data?.current_role, prev)
+        ...userData,
+        is_chef: Boolean(userData?.is_chef),
+        current_role: pickRoleFromServerOrPrev(userData?.current_role, prev),
+        address: address ? { ...address, postalcode: postal } : prev?.address || null,
+        postal_code: postal || prev?.postal_code
       }))
     }catch{}
   }
@@ -130,7 +283,26 @@ export function AuthProvider({ children }){
   }
 
   return (
-    <AuthContext.Provider value={{ user, setUser, login, logout, register, refreshUser, switchRole, loading }}>
+    <AuthContext.Provider value={{ 
+      user, 
+      setUser, 
+      login, 
+      logout, 
+      register, 
+      refreshUser, 
+      switchRole, 
+      loading,
+      // Chef Preview Mode
+      hasChefAccess,
+      chefAccessLoading,
+      checkChefAvailability,
+      // Multi-chef support (Client Portal)
+      connectedChefs,
+      connectedChefsLoading,
+      fetchConnectedChefs,
+      hasChefConnection: connectedChefs.length > 0,
+      singleChef: connectedChefs.length === 1 ? connectedChefs[0] : null,
+    }}>
       {children}
     </AuthContext.Provider>
   )

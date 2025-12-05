@@ -34,7 +34,11 @@ test('App routes include the customer orders page', () => {
 
 test('NavBar offers a link to the orders page for authenticated users', () => {
   const source = load(navPath)
-  assert.match(source, /\{ to:\'\/orders\'/, 'Expected NavBar more-menu items to include /orders link.')
+  assert.match(
+    source,
+    /\{\s*to:\s*['"]\/orders['"]/,
+    'Expected NavBar more-menu items to include /orders link.'
+  )
 })
 
 test('CustomerOrders renders the chef name as a link to their public profile', () => {

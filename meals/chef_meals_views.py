@@ -1035,8 +1035,8 @@ def api_chef_meal_events(request):
             postal_code = request.query_params.get('postal_code')
             if postal_code:
                 # Optional: filter events by chefs serving this postal code
-                from local_chefs.models import PostalCode
-                normalized = PostalCode.normalize_code(postal_code)
+                from shared.services.location_service import LocationService
+                normalized = LocationService.normalize(postal_code)
                 queryset = queryset.filter(chef__serving_postalcodes__code=normalized)
 
             if upcoming:

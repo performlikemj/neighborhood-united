@@ -563,12 +563,25 @@ class PantryItemSerializer(serializers.ModelSerializer):
         return instance
 
 class AddressSerializer(serializers.ModelSerializer):
+    """
+    Address serializer with backwards-compatible API field names.
+    
+    The Address model handles normalization via property setters, so the serializer
+    just needs to map the API field names to the model's property names.
+    """
     country = serializers.SerializerMethodField()
+    # Use input_postalcode as API field name for backwards compatibility
+    # The Address model property will handle normalization
+    input_postalcode = serializers.CharField(
+        source='input_postalcode',  # Uses the property setter
+        required=False,
+        allow_blank=True,
+        allow_null=True
+    )
     
     class Meta:
         model = Address
         fields = ['id', 'street', 'city', 'state', 'input_postalcode', 'country']
-        # display_postalcode is handled internally and not exposed to the API
 
     def get_country(self, obj):
         return {
@@ -578,47 +591,29 @@ class AddressSerializer(serializers.ModelSerializer):
     
     def to_representation(self, instance):
         """
-        Use the display_postalcode for showing to users if it exists, otherwise use input_postalcode
+        Use the original_postalcode (display version) for showing to users.
+        The property aliases ensure backwards compatibility.
         """
         representation = super().to_representation(instance)
-        # If we have a display version, use it for the API response
-        if instance.display_postalcode:
-            representation['input_postalcode'] = instance.display_postalcode
+        # Use the display version (original user input) for the API response
+        display_postal = instance.original_postalcode or instance.normalized_postalcode
+        if display_postal:
+            representation['input_postalcode'] = display_postal
         return representation
         
     def create(self, validated_data):
-        # Store the original input as display format before normalizing
-        if 'input_postalcode' in validated_data and validated_data['input_postalcode']:
-            # Save the display version
-            original_postal_code = validated_data['input_postalcode']
-            validated_data['display_postalcode'] = original_postal_code
-            
-            # Normalize the input_postalcode for storage
-            if 'country' in validated_data and validated_data['country']:
-                import re
-                validated_data['input_postalcode'] = re.sub(
-                    r'[^A-Z0-9]', '', 
-                    validated_data['input_postalcode'].upper()
-                )
-                
+        # The Address model's property setters handle normalization
+        # Just need to ensure original_postalcode is set for display
+        postal_code = validated_data.get('input_postalcode')
+        if postal_code:
+            validated_data['original_postalcode'] = postal_code
         return super().create(validated_data)
         
     def update(self, instance, validated_data):
-        # If postal code is being updated, save the display version
-        if 'input_postalcode' in validated_data and validated_data['input_postalcode']:
-            # Store new display format
-            original_postal_code = validated_data['input_postalcode']
-            validated_data['display_postalcode'] = original_postal_code
-            
-            # Normalize the input_postalcode
-            if 'country' in validated_data and validated_data['country'] or instance.country:
-                country = validated_data.get('country', instance.country)
-                import re
-                validated_data['input_postalcode'] = re.sub(
-                    r'[^A-Z0-9]', '', 
-                    validated_data['input_postalcode'].upper()
-                )
-                
+        # If postal code is being updated, the model's property setter handles normalization
+        postal_code = validated_data.get('input_postalcode')
+        if postal_code:
+            validated_data['original_postalcode'] = postal_code
         return super().update(instance, validated_data)
 
 # Full ChefMealEventSerializer now uses SimpleChefMealOrderSerializer for nesting

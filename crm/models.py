@@ -1,6 +1,41 @@
 from django.conf import settings
 from django.db import models
+from django.contrib.postgres.fields import ArrayField
 from django.utils import timezone
+
+
+# Reuse the same choices from CustomUser for consistency
+DIETARY_CHOICES = [
+    ('Vegan', 'Vegan'),
+    ('Vegetarian', 'Vegetarian'),
+    ('Pescatarian', 'Pescatarian'),
+    ('Gluten-Free', 'Gluten-Free'),
+    ('Keto', 'Keto'),
+    ('Paleo', 'Paleo'),
+    ('Halal', 'Halal'),
+    ('Kosher', 'Kosher'),
+    ('Low-Calorie', 'Low-Calorie'),
+    ('Low-Sodium', 'Low-Sodium'),
+    ('High-Protein', 'High-Protein'),
+    ('Dairy-Free', 'Dairy-Free'),
+    ('Nut-Free', 'Nut-Free'),
+    ('Diabetic-Friendly', 'Diabetic-Friendly'),
+    ('Everything', 'Everything'),
+]
+
+ALLERGY_CHOICES = [
+    ('Peanuts', 'Peanuts'),
+    ('Tree nuts', 'Tree nuts'),
+    ('Milk', 'Milk'),
+    ('Egg', 'Egg'),
+    ('Wheat', 'Wheat'),
+    ('Soy', 'Soy'),
+    ('Fish', 'Fish'),
+    ('Shellfish', 'Shellfish'),
+    ('Sesame', 'Sesame'),
+    ('Gluten', 'Gluten'),
+    ('None', 'None'),
+]
 
 
 class LeadQuerySet(models.QuerySet):
@@ -61,6 +96,32 @@ class Lead(models.Model):
     is_deleted = models.BooleanField(default=False)
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
+    
+    # Dietary tracking for the primary contact
+    dietary_preferences = ArrayField(
+        models.CharField(max_length=50, choices=DIETARY_CHOICES),
+        default=list,
+        blank=True,
+        help_text="Dietary preferences for this contact"
+    )
+    allergies = ArrayField(
+        models.CharField(max_length=50, choices=ALLERGY_CHOICES),
+        default=list,
+        blank=True,
+        help_text="Food allergies for this contact"
+    )
+    custom_allergies = ArrayField(
+        models.CharField(max_length=100),
+        default=list,
+        blank=True,
+        help_text="Custom allergies not in the standard list"
+    )
+    
+    # Household info
+    household_size = models.PositiveIntegerField(
+        default=1,
+        help_text="Total number of people in this household"
+    )
 
     objects = LeadQuerySet.as_manager()
 
@@ -120,3 +181,46 @@ class LeadInteraction(models.Model):
 
     def __str__(self):
         return f"{self.get_interaction_type_display()} on {self.happened_at:%Y-%m-%d}"
+
+
+class LeadHouseholdMember(models.Model):
+    """
+    Household members for off-platform contacts (Leads).
+    Similar to HouseholdMember but for manually tracked clients.
+    """
+    lead = models.ForeignKey(
+        Lead,
+        on_delete=models.CASCADE,
+        related_name="household_members"
+    )
+    name = models.CharField(max_length=100)
+    relationship = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text="Relationship to primary contact (spouse, child, parent, etc.)"
+    )
+    age = models.PositiveIntegerField(blank=True, null=True)
+    dietary_preferences = ArrayField(
+        models.CharField(max_length=50, choices=DIETARY_CHOICES),
+        default=list,
+        blank=True,
+    )
+    allergies = ArrayField(
+        models.CharField(max_length=50, choices=ALLERGY_CHOICES),
+        default=list,
+        blank=True,
+    )
+    custom_allergies = ArrayField(
+        models.CharField(max_length=100),
+        default=list,
+        blank=True,
+    )
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return f"{self.name} ({self.lead})"

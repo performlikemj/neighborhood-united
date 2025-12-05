@@ -138,17 +138,8 @@ export default function SousChefPage() {
 
       {/* Main Content */}
       <div className="page-content">
-        {/* Sidebar - Family Selector & Context */}
-        <aside className="sidebar">
-          <div className="sidebar-section">
-            <h3 className="sidebar-title">Select Client</h3>
-            <FamilySelector
-              selectedFamilyId={selectedFamily.familyId}
-              selectedFamilyType={selectedFamily.familyType}
-              onFamilySelect={handleFamilySelect}
-            />
-          </div>
-        </aside>
+        {/* Sidebar removed for full-width hero-style layout */}
+        <aside className="sidebar" aria-hidden="true" style={{ display: 'none' }} />
 
         {/* Chat Area - Full Width */}
         <main className="chat-main">
@@ -395,39 +386,13 @@ export default function SousChefPage() {
         /* Main Content Layout */
         .page-content {
           flex: 1;
-          display: flex;
-          gap: 1.5rem;
+          display: grid;
+          grid-template-columns: 1fr;
           padding: 1.5rem;
           min-height: 0;
           max-width: 1600px;
           margin: 0 auto;
           width: 100%;
-        }
-
-        /* Sidebar */
-        .sidebar {
-          width: 320px;
-          flex-shrink: 0;
-          display: flex;
-          flex-direction: column;
-          gap: 1rem;
-        }
-
-        .sidebar-section {
-          background: var(--surface, #fff);
-          border-radius: 12px;
-          padding: 1rem;
-          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-          border: 1px solid var(--border, transparent);
-        }
-
-        .sidebar-title {
-          font-size: 0.8rem;
-          font-weight: 600;
-          color: var(--muted, #6b7280);
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-          margin: 0 0 0.75rem 0;
         }
 
         /* Chat Main Area */
@@ -458,12 +423,12 @@ export default function SousChefPage() {
         }
 
         .placeholder-card {
-          width: min(620px, 100%);
+          width: min(520px, 100%);
           background: var(--surface, #fff);
           border: 1px solid var(--border, transparent);
-          border-radius: 14px;
-          padding: 1.25rem;
-          box-shadow: var(--shadow-sm, 0 4px 16px rgba(0,0,0,0.18));
+          border-radius: 18px;
+          padding: 1rem 1.25rem 1.35rem;
+          box-shadow: 0 18px 44px rgba(0,0,0,0.35);
           display: flex;
           flex-direction: column;
           gap: 0.75rem;
@@ -475,6 +440,7 @@ export default function SousChefPage() {
 
         .inline-family-selector {
           margin-top: 0.25rem;
+          max-width: 100%;
         }
 
         .chat-main .sous-chef-chat {

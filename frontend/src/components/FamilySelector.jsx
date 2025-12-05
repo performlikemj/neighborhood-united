@@ -386,16 +386,21 @@ export default function FamilySelector({
           background: var(--bg-card, #fff);
           border: 1px solid var(--border-color, #ddd);
           border-radius: 8px;
-          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+          box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
           z-index: 100;
-          max-height: 450px;
+          max-height: min(60vh, 520px);
           display: flex;
           flex-direction: column;
+          overflow: hidden;
         }
         
         .search-wrapper {
           padding: 0.75rem;
           border-bottom: 1px solid var(--border-color, #ddd);
+          position: sticky;
+          top: 0;
+          background: var(--bg-card, #fff);
+          z-index: 2;
         }
 
         .search-input {
@@ -416,7 +421,7 @@ export default function FamilySelector({
         
         .family-list {
           overflow-y: auto;
-          max-height: 380px;
+          max-height: 100%;
         }
         
         .group-header {

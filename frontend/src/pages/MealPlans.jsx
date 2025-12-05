@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api, newIdempotencyKey, refreshAccessToken } from '../api'
-import InstacartButton from '../components/InstacartButton.jsx'
+// InstacartButton removed - Instacart integration deprecated
 import { codeFromCountryName } from '../utils/geo.js'
 import Listbox from '../components/Listbox.jsx'
 import { EventSourcePolyfill } from 'event-source-polyfill'
@@ -1064,25 +1064,7 @@ export default function MealPlans(){
               {verifyingPaymentOrderId ? 'Verifying payment…' : (hasPendingOrders ? 'View Pending Orders' : 'Orders')}
             </button>
             <button className="btn btn-primary" onClick={()=> setTab('chefs')}>Browse Chef Meals →</button>
-            {(()=>{
-              try{
-                const rawCountry = user?.address?.country || ''
-                if (!instacartEligibility.eligible) return null
-                if (instacartError){
-                  return null
-                }
-                if (instacartUrl){
-                  return (
-                    <InstacartButton url={instacartUrl} text="Get Ingredients" />
-                  )
-                }
-                return (
-                  <button className="btn btn-outline" onClick={generateInstacartLink} disabled={instacartLoading}>
-                    {instacartLoading ? 'Generating…' : 'Generate Instacart list'}
-                  </button>
-                )
-              }catch{ return null }
-            })()}
+            {/* Instacart integration removed */}
           </div>
           {instacartHasChefMeals && (
             <div className="muted" style={{width:'100%'}}>
@@ -1133,15 +1115,7 @@ export default function MealPlans(){
                 </div>
               ) : (
                 <div style={{textAlign:'center'}}>
-                  {instacartEligibility.eligible && instacartUrl ? (
-                    <InstacartButton url={instacartUrl} text="Get Ingredients" />
-                  ) : instacartEligibility.eligible ? (
-                    <button className="btn btn-outline" onClick={generateInstacartLink} disabled={instacartLoading}>
-                      {instacartLoading ? 'Generating…' : 'Generate Instacart list'}
-                    </button>
-                  ) : (
-                    <div className="muted" style={{fontSize:'.9rem'}}>Instacart is available only in the United States and Canada.</div>
-                  )}
+                  {/* Instacart integration removed */}
                 </div>
               )}
             </div>

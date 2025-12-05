@@ -21,7 +21,7 @@ import ChefGallery from './pages/ChefGallery.jsx'
 import ChefsDirectory from './pages/ChefsDirectory.jsx'
 import PublicChef from './pages/PublicChef.jsx'
 import CustomerOrders from './pages/CustomerOrders.jsx'
-import HealthMetrics from './pages/HealthMetrics.jsx'
+// HealthMetrics removed - health tracking deprecated
 import Onboarding from './pages/Onboarding.jsx'
 import EmailAuth from './pages/EmailAuth.jsx'
 import VerifyEmail from './pages/VerifyEmail.jsx'
@@ -84,20 +84,9 @@ export default function App(){
             <Onboarding />
           </ProtectedRoute>
         } />
-        <Route path="/health-metrics" element={
-          <ProtectedRoute>
-            {FEATURES.CUSTOMER_HEALTH_TRACKING ? (
-              <HealthMetrics />
-            ) : (
-              <Navigate to="/profile" replace />
-            )}
-          </ProtectedRoute>
-        } />
-        
-        {/* Legacy Health route alias */}
-        <Route path="/health" element={
-          <Navigate to="/health-metrics" replace />
-        } />
+        {/* Health metrics removed - redirect to profile */}
+        <Route path="/health-metrics" element={<Navigate to="/profile" replace />} />
+        <Route path="/health" element={<Navigate to="/profile" replace />} />
         
         {/* Chef Preview Mode - for users without chef access */}
         <Route path="/get-ready" element={

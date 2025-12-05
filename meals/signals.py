@@ -3,7 +3,7 @@ from django.db.models.signals import post_save, m2m_changed, post_delete, pre_sa
 from django.dispatch import receiver
 from .models import Meal, MealPlan, ChefMealOrder, ChefMealEvent
 from django.db import transaction
-from customer_dashboard.models import GoalTracking, UserHealthMetrics, CalorieIntake, ChatThread, WeeklyAnnouncement, UserMessage
+from customer_dashboard.models import ChatThread, WeeklyAnnouncement, UserMessage
 from custom_auth.models import CustomUser
 from django.db import transaction
 import requests
@@ -85,37 +85,7 @@ def send_meal_plan_email(sender, instance, **kwargs):
             # Generate bulk prep and send by default
             generate_bulk_prep_instructions.delay(instance.id, send_via_assistant=True)
 
-@receiver(post_save, sender=GoalTracking)
-@receiver(post_save, sender=UserHealthMetrics)
-@receiver(post_save, sender=CalorieIntake)
-def handle_model_update(sender, instance, **kwargs):
-    # Check if the signal is post_save and whether the instance was just created
-    created = kwargs.get('created', False)
-
-    if hasattr(instance, 'user_id'):
-        user_id = instance.user_id
-    elif hasattr(instance, 'user'):
-        user_id = instance.user.id
-    else:
-        return  # Exit if no user is associated with the instance
-        
-    # Get the user object
-    try:
-        user = CustomUser.objects.get(id=user_id)
-    except CustomUser.DoesNotExist:
-        return
-        
-    if not user.email_confirmed:
-        return  # Skip if email is not confirmed
-        
-    print(f"Detected change for user with ID: {user_id}")
-    
-    # Use transaction.on_commit to ensure this runs after the transaction has committed
-    def trigger_summary_stale():
-        # Mark today's summary as stale and trigger regeneration
-        mark_summary_stale(user)
-
-    transaction.on_commit(trigger_summary_stale)
+# Health tracking signal handlers removed (GoalTracking, UserHealthMetrics, CalorieIntake)
 
 @receiver(post_save, sender=CustomUser)
 def create_meal_plan_on_user_registration(sender, instance, created, **kwargs):

@@ -1,7 +1,7 @@
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 from django.db import transaction
-from .models import GoalTracking, UserHealthMetrics, CalorieIntake, ChatThread
+from .models import ChatThread
 from .tasks import generate_chat_title
 from django.conf import settings
 import logging

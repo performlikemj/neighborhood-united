@@ -11,9 +11,7 @@ from datetime import timedelta
 from django.template.loader import render_to_string
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_http_methods
-from .models import (GoalTracking, ChatThread, UserHealthMetrics, CalorieIntake, 
-                     UserMessage, UserSummary, ToolCall, AssistantEmailToken, UserDailySummary, UserEmailSession)
-from .forms import GoalForm
+from .models import (ChatThread, UserMessage, UserSummary, ToolCall, AssistantEmailToken, UserDailySummary, UserEmailSession)
 import pytz
 from zoneinfo import ZoneInfo
 import json
@@ -37,7 +35,7 @@ from shared.utils import (get_user_info, post_review, update_review, delete_revi
                           analyze_nutritional_content, replace_meal_based_on_preferences, append_custom_dietary_preference)
 from local_chefs.views import chef_service_areas, service_area_chefs
 from django.core import serializers
-from .serializers import ChatThreadSerializer, GoalTrackingSerializer, UserHealthMetricsSerializer, CalorieIntakeSerializer
+from .serializers import ChatThreadSerializer
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.decorators import renderer_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -414,135 +412,6 @@ def api_user_summary(request):
     })
 
 
-@api_view(['PUT'])
-@permission_classes([IsAuthenticated, IsCustomer])
-def api_update_calorie_intake(request):
-    try:
-        record_id = request.data.record_id
-        calorie_record = CalorieIntake.objects.get(id=record_id, user=request.user)
-        serializer = CalorieIntakeSerializer(calorie_record, data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=200)
-        return Response(serializer.errors, status=400)
-    except CalorieIntake.DoesNotExist:
-        return Response({"error": "Record not found."}, status=404)
-    except Exception as e:
-        return Response({"error": str(e)}, status=400)
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated, IsCustomer])
-def api_get_calories(request):
-    try:
-        user = CustomUser.objects.get(id=request.user.id)
-        date_recorded = request.data.get('date')
-        # Using request.user.id to get the authenticated user's ID
-        calorie_records = CalorieIntake.objects.filter(user=user)
-        if date_recorded:
-            calorie_records = calorie_records.filter(date_recorded=date_recorded)
-        serializer = CalorieIntakeSerializer(calorie_records, many=True)
-        return Response(serializer.data)
-    except Exception as e:
-        traceback.print_exc()
-        return Response({"error": str(e)}, status=400)
-    
-
-@api_view(['POST'])  # This should only be a POST request
-@permission_classes([IsAuthenticated, IsCustomer])
-def api_add_calorie_intake(request):
-    try:
-        data = request.data.copy()  # Make a mutable copy of the data
-        data['user'] = request.user.id  # Add the user ID to the data
-        serializer = CalorieIntakeSerializer(data=data)  # Pass the data to the serializer
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=201)
-        return Response(serializer.errors, status=400)
-    except Exception as e:
-        # n8n traceback
-        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-        requests.post(n8n_traceback_url, json={"error": f"Exception in api_add_calorie_intake: {str(e)}", "source":"api_add_calorie_intake", "traceback": traceback.format_exc()})
-        return Response({"error": str(e)}, status=400)
-
-@api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
-def api_delete_calorie_intake(request, record_id):
-    try:
-        calorie_record = CalorieIntake.objects.get(id=record_id, user=request.user)
-        calorie_record.delete()
-        return Response({"message": "Calorie intake record deleted successfully."}, status=200)
-    except CalorieIntake.DoesNotExist:
-        return Response({"error": "Record not found."}, status=404)
-    except Exception as e:
-        # n8n traceback
-        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-        requests.post(n8n_traceback_url, json={"error": f"Exception in api_delete_calorie_intake: {str(e)}", "source":"api_delete_calorie_intake", "traceback": traceback.format_exc()})
-        return Response({"error": str(e)}, status=400)
-
-
-@api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated, IsCustomer])
-def api_user_metrics(request):
-    user = request.user
-
-    if request.method == 'GET':
-        user_metrics = UserHealthMetrics.objects.filter(user=user).order_by('-date_recorded')[:5]
-        serializer = UserHealthMetricsSerializer(user_metrics, many=True)
-        current_week_metrics = any(metric.is_current_week() for metric in user_metrics)
-        if not current_week_metrics:
-            return Response({"message": "Please update your health metrics for the current week."}, status=200)
-        return Response(serializer.data)
-
-    elif request.method == 'POST':
-        date_recorded = request.data.pop('date_recorded', None)
-        if date_recorded:
-            date_recorded = datetime.datetime.strptime(date_recorded, '%Y-%m-%d').date()  # convert string to date
-
-        # Remove 'id' from request.data
-        request.data.pop('id', None)
-
-        # Try to get the existing metric for the specified date
-        metric = UserHealthMetrics.objects.filter(user=user, date_recorded=date_recorded).first()
-
-        if metric:
-            # Update existing metric
-            for key, value in request.data.items():
-                setattr(metric, key, value)
-            metric.save()
-        else:
-            # Create a new metric
-            metric = UserHealthMetrics.objects.create(user=user, date_recorded=date_recorded, **request.data)
-
-        return Response({"message": "Health metric updated."})
-
-
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def api_user_goal_view(request):
-    # Fetch or create goal for the user
-    goal, created = GoalTracking.objects.get_or_create(user=request.user)
-    serializer = GoalTrackingSerializer(goal)
-    return Response(serializer.data)
-
-@api_view(['GET', 'POST'])
-@permission_classes([IsAuthenticated, IsCustomer])
-def api_goal_management(request):
-    if request.method == 'GET':
-        goal, created = GoalTracking.objects.get_or_create(user=request.user)
-        serializer = GoalTrackingSerializer(goal)
-        return Response(serializer.data)
-
-    elif request.method == 'POST':
-        goal, created = GoalTracking.objects.get_or_create(user=request.user)
-        serializer = GoalTrackingSerializer(goal, data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response({'success': True, 'message': 'Goal updated successfully'})
-        return Response(serializer.errors, status=400)
-
-
-
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_history_page(request):
@@ -808,11 +677,8 @@ def format_chat_history(messages):
 
     
 def create_openai_prompt(user_id):
-    try:
-        # Retrieve the user's goal
-        user_goal = GoalTracking.objects.get(user_id=user_id).goal_description
-    except GoalTracking.DoesNotExist:
-        user_goal = "improving my diet"  # A generic goal if the user hasn't set one
+    # Legacy function - health tracking removed
+    user_goal = "improving my diet"  # Generic goal as health tracking is removed
     
     # Construct the prompt with the user's goal
     OPENAI_PROMPT = (
@@ -963,10 +829,10 @@ def meal_plans(request):
 @login_required
 @user_passes_test(is_customer)
 def customer_dashboard(request):
+    """Legacy customer dashboard - health tracking removed."""
     current_date = timezone.now()
     start_week = current_date - timedelta(days=current_date.weekday())
     end_week = start_week + timedelta(days=6)
-    goal, created = GoalTracking.objects.get_or_create(user=request.user)
 
     week_shift = request.GET.get('week_shift', 0)
     try:
@@ -982,17 +848,7 @@ def customer_dashboard(request):
         order_date__range=[start_week, end_week]
     ).order_by('order_date')
 
-    # Handle form submission
-    if request.method == 'POST':
-        goal_form = GoalForm(request.POST, instance=goal)
-        if goal_form.is_valid():
-            goal_form.save()
-            return redirect('customer_dashboard')  # Use the name you have assigned in urls.py for the dashboard view
-    else:
-        goal_form = GoalForm(instance=goal)
-
     context = {
-        'goal_form': goal_form,
         'orders': orders,
         'previous_week': week_shift - 1,
         'next_week': week_shift + 1,
@@ -1007,25 +863,15 @@ def customer_dashboard(request):
 @login_required
 @user_passes_test(is_customer)
 def track_goals(request):
-    goals = GoalTracking.objects.filter(user=request.user).values(
-        'goal_name', 'goal_description'
-    )
-    data = list(goals)
-    return JsonResponse({'goals': data}, safe=False)
+    """Legacy endpoint - goal tracking removed."""
+    return JsonResponse({'goals': []}, safe=False)
 
 
 @login_required
 @user_passes_test(is_customer)
 def update_goal_api(request):
-    if request.method == 'POST':
-        goal, created = GoalTracking.objects.get_or_create(user=request.user)
-        form = GoalForm(request.POST, instance=goal)
-        if form.is_valid():
-            form.save()
-            return JsonResponse({'success': True, 'message': 'Goal updated successfully'})
-        else:
-            return JsonResponse({'success': False, 'errors': form.errors}, status=400)
-    return JsonResponse({'error': 'Invalid request'}, status=400)
+    """Legacy endpoint - goal tracking removed."""
+    return JsonResponse({'error': 'Goal tracking has been removed'}, status=410)
 
 @csrf_exempt
 @api_view(['POST'])

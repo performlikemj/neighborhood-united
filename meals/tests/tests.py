@@ -4,7 +4,6 @@ from django.test import TestCase
 from freezegun import freeze_time
 from datetime import datetime, timedelta
 from django.utils import timezone
-from customer_dashboard.models import GoalTracking
 from meals.models import PantryItem, CustomUser, MealPlan, MealPlanMeal
 from meals.meal_generation import (
     generate_and_create_meal,
@@ -16,15 +15,7 @@ class PantryManagementTests(TestCase):
     def setUp(self):
         # Create a test user
         self.user = CustomUser.objects.create(username="testuser", email="test@example.com")
-
-        # Create a goal for the user
-        self.goal = GoalTracking.objects.create(
-            user=self.user,
-            goal_description="Lose Weight",  # or any dummy text
-            goal_name="Weight Loss",
-        )
-        self.user.goal = self.goal
-        self.user.save()
+        # Note: GoalTracking has been removed - health tracking feature deprecated
 
     @freeze_time("2024-01-01")  # Starting point for the entire test
     def test_generate_meals_across_weeks_with_expiring_items(self):

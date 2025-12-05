@@ -30,7 +30,7 @@ from meals.pydantic_models import ShoppingList as ShoppingListSchema
 from meals.pantry_management import get_user_pantry_items, get_expiring_pantry_items
 from meals.meal_embedding import serialize_data
 from meals.serializers import MealPlanSerializer
-from customer_dashboard.models import GoalTracking, UserHealthMetrics, CalorieIntake, UserSummary, UserDailySummary
+from customer_dashboard.models import UserSummary, UserDailySummary
 from shared.utils import generate_user_context, _get_language_name
 from meals.meal_plan_service import is_chef_meal
 from django.template.loader import render_to_string
@@ -620,44 +620,14 @@ def generate_user_summary(user_id: int, summary_date=None) -> None:
         time_period_description = f"On {summary_date.strftime('%A, %B %d')}"
 
     # Get user data for the specified date range
-    goals = GoalTracking.objects.filter(user=user)
+    # Note: Health tracking (goals, metrics, calories) has been removed
     user = CustomUser.objects.get(id=user_id)
-    metrics = UserHealthMetrics.objects.filter(
-        user=user, 
-        date_recorded__gte=data_start_date,
-        date_recorded__lte=data_end_date
-    )
-    calories = CalorieIntake.objects.filter(
-        user=user, 
-        date_recorded__gte=data_start_date,
-        date_recorded__lte=data_end_date
-    )
 
     data_bundle = {
         "user_profile": user_context,
-        "goals": [
-            {"name": g.goal_name, "description": g.goal_description} for g in goals
-        ],
-        "health_metrics": [
-            {
-                "date": m.date_recorded.isoformat(timespec="seconds"),
-                "weight_kg": float(m.weight) if m.weight else None,
-                "weight_lbs": round(float(m.weight) * 2.20462, 1) if m.weight else None,
-                "bmi": m.bmi,
-                "mood": m.mood,
-                "energy_level": m.energy_level,
-            }
-            for m in metrics
-        ],
-        "calorie_intake": [
-            {
-                "meal": c.meal_name,
-                "description": c.meal_description,
-                "portion_size": c.portion_size,
-                "date": c.date_recorded.isoformat(timespec="seconds"),
-            }
-            for c in calories
-        ],
+        "goals": [],  # Health tracking removed
+        "health_metrics": [],  # Health tracking removed
+        "calorie_intake": [],  # Health tracking removed
     }
     
     # Calculate data hash for idempotency check

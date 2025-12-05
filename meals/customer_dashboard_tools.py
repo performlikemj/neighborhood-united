@@ -24,9 +24,8 @@ from custom_auth.serializers import CustomUserSerializer, AddressSerializer
 from meals.models import MealPlan, Order
 from meals.models import DietaryPreference, CustomDietaryPreference
 from meals.serializers import OrderSerializer
-from customer_dashboard.models import GoalTracking
-from customer_dashboard.serializers import GoalTrackingSerializer
 from customer_dashboard.models import UserSummary
+# Goal tracking removed - health tracking feature deprecated
 
 logger = logging.getLogger(__name__)
 
@@ -325,63 +324,24 @@ def reset_current_week(user_id: int) -> Dict[str, Any]:
 
 def update_goal(user_id: int, goal_name: str = None, goal_description: str = None) -> Dict[str, Any]:
     """
-    Create or update the user's goal tracking entry.
-    Fields not provided will be left unchanged.
+    Legacy function - goal tracking has been removed.
     """
-    try:
-        user = get_object_or_404(CustomUser, id=user_id)
-        role = get_object_or_404(UserRole, user=user)
-        if role.current_role == 'chef':
-            return {"status": "error", "message": "Chefs may not use this tool."}
-
-        goal, _ = GoalTracking.objects.get_or_create(
-            user=user,
-            defaults={"goal_name": "Default Goal", "goal_description": "Maintain a healthy diet"}
-        )
-
-        data = {}
-        if goal_name is not None:
-            data["goal_name"] = goal_name
-        if goal_description is not None:
-            data["goal_description"] = goal_description
-
-        serializer = GoalTrackingSerializer(goal, data=data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-
-        return {
-            "status": "success",
-            "message": "Goal updated successfully.",
-            "goal": serializer.data,
-            "current_time": timezone.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-    except Exception as e:
-        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
-        requests.post(n8n_traceback_url, json={"error": str(e), "source":"update_goal", "traceback": traceback.format_exc()})
-        return {"status": "error", "message": str(e)}
+    return {
+        "status": "error",
+        "message": "Goal tracking has been removed from this application.",
+        "current_time": timezone.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
 
 
 def get_goal(user_id: int) -> Dict[str, Any]:
     """
-    Retrieve the user's current goal tracking entry.
+    Legacy function - goal tracking has been removed.
     """
-    try:
-        user = get_object_or_404(CustomUser, id=user_id)
-        role = get_object_or_404(UserRole, user=user)
-        if role.current_role == 'chef':
-            return {"status": "error", "message": "Chefs may not use this tool."}
-
-        goal = get_object_or_404(GoalTracking, user=user)
-        serializer = GoalTrackingSerializer(goal)
-        return {
-            "status": "success",
-            "goal": serializer.data,
-            "current_time": timezone.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-    except Exception as e:
-        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
-        requests.post(n8n_traceback_url, json={"error": str(e), "source":"get_goal", "traceback": traceback.format_exc()})
-        return {"status": "error", "message": str(e)}
+    return {
+        "status": "error",
+        "message": "Goal tracking has been removed from this application.",
+        "current_time": timezone.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
 
 def access_past_orders(user_id: int) -> Dict[str, Any]:
     """

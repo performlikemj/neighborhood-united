@@ -1,16 +1,7 @@
 from django.contrib import admin
-from .models import GoalTracking, ChatThread, AssistantEmailToken, WeeklyAnnouncement, ChatSessionSummary, UserChatSummary, UserEmailSession, EmailAggregationSession, PreAuthenticationMessage
+from .models import ChatThread, AssistantEmailToken, WeeklyAnnouncement, ChatSessionSummary, UserChatSummary, UserEmailSession, EmailAggregationSession, PreAuthenticationMessage
 from django.utils import timezone
 
-# Admin class for GoalTracking
-class GoalTrackingAdmin(admin.ModelAdmin):
-    list_display = ('goal_name', 'goal_description', 'user')
-    search_fields = ('goal_name', 'user__username')
-    list_filter = ('user',)
-    readonly_fields = ('user',)
-
-# Register your models here
-admin.site.register(GoalTracking, GoalTrackingAdmin)
 
 # Admin class for ChatThread
 class ChatThreadAdmin(admin.ModelAdmin):

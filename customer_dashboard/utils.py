@@ -1,8 +1,8 @@
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from .serializers import GoalTrackingSerializer, ChatThreadSerializer
-from .models import GoalTracking, ChatThread
+from .serializers import ChatThreadSerializer
+from .models import ChatThread
 from custom_auth.serializers import CustomUserSerializer, AddressSerializer
 from custom_auth.models import Address, UserRole
 from meals.serializers import MealPlanSerializer, OrderSerializer
@@ -70,50 +70,22 @@ def api_adjust_current_week(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_update_goal(request):
-    user = CustomUser.objects.get(id=request.data.get('user_id'))
-    user_role = UserRole.objects.get(user=user)
-    
-    if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
-
-
-    serializer = GoalTrackingSerializer(data=request.data)
-    if serializer.is_valid():
-        goal, created = GoalTracking.objects.get_or_create(user=user)
-        goal.goal_name = serializer.validated_data.get('goal_name', goal.goal_name)
-        goal.goal_description = serializer.validated_data.get('goal_description', goal.goal_description)
-        goal.save()
-        return Response({
-            'status': 'success',
-            'message': 'Goal updated successfully.',
-            'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
-        })
-    return Response(serializer.errors, status=400)
+    """Legacy endpoint - goal tracking has been removed."""
+    return Response({
+        'status': 'error',
+        'message': 'Goal tracking has been removed from this application.',
+        'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+    }, status=410)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsCustomer])
 def api_get_goal(request):
-    user = CustomUser.objects.get(id=request.data.get('user_id'))
-    user_role = UserRole.objects.get(user=user)
-    
-    if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
-
-
-    try:
-        goal = user.goal
-        serializer = GoalTrackingSerializer(goal)
-        return Response({
-            'status': 'success',
-            'goal': serializer.data,
-            'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
-        })
-    except GoalTracking.DoesNotExist:
-        return Response({
-            'status': 'error',
-            'message': 'Goal not found.',
-            'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
-        })
+    """Legacy endpoint - goal tracking has been removed."""
+    return Response({
+        'status': 'error',
+        'message': 'Goal tracking has been removed from this application.',
+        'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+    }, status=410)
 
 
 @api_view(['GET'])
@@ -176,4 +148,3 @@ def api_access_past_orders(request):
         'orders': serialized_orders.data, 
         'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
     })
-

@@ -152,12 +152,27 @@ export default function SousChefPage() {
 
         {/* Chat Area - Full Width */}
         <main className="chat-main">
-          <SousChefChat
-            familyId={selectedFamily.familyId}
-            familyType={selectedFamily.familyType}
-            familyName={selectedFamily.familyName}
-            initialInput={draftInput}
-          />
+          {selectedFamily.familyId ? (
+            <SousChefChat
+              familyId={selectedFamily.familyId}
+              familyType={selectedFamily.familyType}
+              familyName={selectedFamily.familyName}
+              initialInput={draftInput}
+            />
+          ) : (
+            <div className="chat-placeholder">
+              <div className="placeholder-card">
+                <h3>Select a family to start</h3>
+                <p className="muted">Choose who you want Sous Chef to assist. Their context will load automatically.</p>
+                <FamilySelector
+                  selectedFamilyId={selectedFamily.familyId}
+                  selectedFamilyType={selectedFamily.familyType}
+                  onFamilySelect={handleFamilySelect}
+                  className="inline-family-selector"
+                />
+              </div>
+            </div>
+          )}
         </main>
       </div>
 
@@ -431,6 +446,35 @@ export default function SousChefPage() {
           --bg-page: var(--surface-2, #f3f4f6);
           --text-muted: var(--muted, #6b7280);
           --accent-color: var(--primary, #5cb85c);
+        }
+
+        .chat-placeholder {
+          flex: 1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 1.5rem;
+          background: var(--bg-card);
+        }
+
+        .placeholder-card {
+          width: min(620px, 100%);
+          background: var(--surface, #fff);
+          border: 1px solid var(--border, transparent);
+          border-radius: 14px;
+          padding: 1.25rem;
+          box-shadow: var(--shadow-sm, 0 4px 16px rgba(0,0,0,0.18));
+          display: flex;
+          flex-direction: column;
+          gap: 0.75rem;
+        }
+
+        .placeholder-card h3 {
+          margin: 0;
+        }
+
+        .inline-family-selector {
+          margin-top: 0.25rem;
         }
 
         .chat-main .sous-chef-chat {

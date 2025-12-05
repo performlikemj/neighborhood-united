@@ -36,7 +36,7 @@ except ImportError:
 from django.utils import timezone
 from django.utils.formats import date_format
 from django.forms.models import model_to_dict
-from customer_dashboard.models import GoalTracking, UserHealthMetrics, CalorieIntake
+# Health tracking models removed - GoalTracking, UserHealthMetrics, CalorieIntake
 from django.core.exceptions import ObjectDoesNotExist
 import base64
 import os
@@ -1046,48 +1046,25 @@ def recommend_follow_up(request, context):
 
 
 def provide_nutrition_advice(request, user_id):
+    """Legacy function - health tracking removed. Returns user dietary info only."""
     try:
-        print("Fetching user...")
         user = CustomUser.objects.get(id=user_id)
         user_role = UserRole.objects.get(user=user)
 
         if user_role.current_role == 'chef':
             return {'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'}
 
-        # Fetch the user's goal
-        try:
-            print("Fetching goal tracking...")
-            goal_tracking = GoalTracking.objects.get(user=user)
-            goal_info = {
-                'goal_name': goal_tracking.goal_name,
-                'goal_description': goal_tracking.goal_description
-            }
-        except GoalTracking.DoesNotExist:
-            goal_info = {'goal_name': 'None', 'goal_description': 'No goal set'}
-
-        # Fetch the user's latest health metrics
-        try:
-            print("Fetching latest metrics...")
-            latest_metrics = UserHealthMetrics.objects.filter(user=user).latest('date_recorded')
-            health_metrics = {
-                'weight': float(latest_metrics.weight) if latest_metrics.weight else None,
-                'bmi': float(latest_metrics.bmi) if latest_metrics.bmi else None,
-                'mood': latest_metrics.mood,
-                'energy_level': latest_metrics.energy_level
-            }
-        except UserHealthMetrics.DoesNotExist:
-            health_metrics = {'weight': 'None', 'bmi': 'None', 'mood': 'None', 'energy_level': 'None'}
-
-        
+        # Health tracking removed - return dietary preferences only
         return {
             'status': 'success',
-            'goal_info': goal_info,
-            'health_metrics': health_metrics,
+            'goal_info': {'goal_name': 'None', 'goal_description': 'Goal tracking removed'},
+            'health_metrics': {'weight': 'N/A', 'bmi': 'N/A', 'mood': 'N/A', 'energy_level': 'N/A'},
+            'dietary_preferences': list(user.dietary_preferences.values_list('name', flat=True)),
+            'allergies': user.allergies or [],
             'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
         }
 
     except CustomUser.DoesNotExist:
-        print("User does not exist.")
         return {'status': 'error', 'message': 'User not found.', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
     except Exception as e:
         return {'status': 'error', 'message': f'An unexpected error occurred: {e}', 'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -1107,66 +1084,12 @@ def check_allergy_alert(request, user_id):
     return {'Allergens': user.allergies}
 
 def update_health_metrics(request, user_id, weight=None, bmi=None, mood=None, energy_level=None):
-    user = CustomUser.objects.get(id=request.data.get('user_id'))
-    user_role = UserRole.objects.get(user=user)
-    
-    if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
-
-
-    try:
-        # Get the latest health metrics for the user
-        latest_metrics = UserHealthMetrics.objects.filter(user_id=user_id).latest('date_recorded')
-
-        # Update the fields with the new metrics
-        if weight is not None:
-            latest_metrics.weight = weight
-        if bmi is not None:
-            latest_metrics.bmi = bmi
-        if mood is not None:
-            latest_metrics.mood = mood
-        if energy_level is not None:
-            latest_metrics.energy_level = energy_level
-
-        # Save the updated health metrics
-        latest_metrics.save()
-
-        return "Health metrics updated successfully."
-    except ObjectDoesNotExist:
-        return "No health metrics found for this user."
+    """Legacy function - health tracking has been removed."""
+    return "Health tracking has been removed from this application."
 
 def get_unupdated_health_metrics(request, user_id):
-    user = CustomUser.objects.get(id=request.data.get('user_id'))
-    user_role = UserRole.objects.get(user=user)
-    
-    if user_role.current_role == 'chef':
-        return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
-
-
-    one_week_ago = timezone.now().date() - timedelta(days=7)
-    try:
-        latest_metrics = UserHealthMetrics.objects.filter(
-            user_id=user_id,
-            date_recorded__gte=one_week_ago
-        ).latest('date_recorded')
-
-        # Check which fields are not updated
-        fields_to_update = []
-        if latest_metrics.weight is None:
-            fields_to_update.append('weight')
-        if latest_metrics.bmi is None:
-            fields_to_update.append('bmi')
-        if latest_metrics.mood is None:
-            fields_to_update.append('mood')
-        if latest_metrics.energy_level is None:
-            fields_to_update.append('energy level')
-
-        if fields_to_update:
-            return f"Please update the following health metrics: {', '.join(fields_to_update)}."
-        else:
-            return "All health metrics are up to date for this week."
-    except UserHealthMetrics.DoesNotExist:
-        return "No health metrics recorded. Please update your health metrics."
+    """Legacy function - health tracking has been removed."""
+    return "Health tracking has been removed from this application."
 
 
 def adjust_week_shift(request, week_shift_increment):
@@ -1193,73 +1116,24 @@ def adjust_week_shift(request, week_shift_increment):
 
 
 def update_goal(request, goal_name, goal_description):
-    try:
-        user = CustomUser.objects.get(id=request.data.get('user_id'))
-        user_role = UserRole.objects.get(user=user)
-        
-        if user_role.current_role == 'chef':
-            return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
-
-
-        # Ensure goal_name and goal_description are not empty
-        if not goal_name or not goal_description:
-            return {
-                'status': 'error', 
-                'message': 'Both goal name and description are required.',
-                'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
-            }
-
-        # Get the current user's GoalTracking object or create a new one if it doesn't exist
-        goal, created = GoalTracking.objects.get_or_create(user=user)
-
-        # Update goal details
-        goal.goal_name = goal_name
-        goal.goal_description = goal_description
-        goal.save()
-
-        return {
-            'status': 'success', 
-            'message': 'Goal updated successfully.',
-            'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
-
-    except CustomUser.DoesNotExist:
-        return {
-            'status': 'error', 
-            'message': 'User not found.', 
-            'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
-    except Exception as e:
-        return {
-            'status': 'error', 
-            'message': f'An unexpected error occurred: {e}',
-            'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
+    """Legacy function - goal tracking has been removed."""
+    return {
+        'status': 'error', 
+        'message': 'Goal tracking has been removed from this application.',
+        'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
 
 
 def get_goal(request):
-    try:
-        user = CustomUser.objects.get(id=request.data.get('user_id'))
-        user_role = UserRole.objects.get(user=user)
-        
-        if user_role.current_role == 'chef':
-            return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
-
-
-        goal = user.goal
-        return {
-            'status': 'success',
-            'goal': model_to_dict(goal),
-            'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
-    except CustomUser.DoesNotExist:
-        return {
-            'status': 'error',
-            'message': 'User not found.',
-            'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
+    """Legacy function - goal tracking has been removed."""
+    return {
+        'status': 'error',
+        'message': 'Goal tracking has been removed from this application.',
+        'current_time': timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
 
 def get_user_info(request):
+    """Get basic user info - health/goal tracking removed."""
     try:
         user = CustomUser.objects.get(id=request.data.get('user_id'))
         user_role = UserRole.objects.get(user=user)
@@ -1289,7 +1163,7 @@ def get_user_info(request):
             'user_id': user.id,
             'dietary_preference': dietary_preferences,
             'week_shift': user.week_shift,
-            'user_goal': user.goal.goal_description if hasattr(user, 'goal') and user.goal else 'None',
+            'user_goal': 'Goal tracking removed',
             'postal_code': postal_code,
             'country': country,
             'allergies': allergies,  
@@ -1302,10 +1176,8 @@ def get_user_info(request):
 
 def update_user_info(request):
     """
-    Update the user's information.
+    Update the user's information (goal tracking removed).
     """
-    from customer_dashboard.models import GoalTracking
-
     try:
         data = json.loads(request._body)
         user_id = data.get('user_id')
@@ -1346,26 +1218,7 @@ def update_user_info(request):
         if allergies is not None:
             user.allergies = allergies
 
-
-        # Update user goal
-        user_goal = data.get('user_goal', None)
-        user_goal_name = data.get('user_goal_name', None)
-        if user_goal:
-            goal, created = GoalTracking.objects.get_or_create(goal_description=user_goal)
-            user.goal.goal_description = goal
-            # Use Groq to update the goal name
-            if not user_goal_name:
-                response = get_groq_client().chat.completions.create(
-                    model=settings.GROQ_MODEL,
-                    messages=[
-                        {"role": "system", "content": "Based on the user's goal description, generate a concise and descriptive goal name."},
-                        {"role": "user", "content": user_goal}
-                    ],
-                )
-                goal_name = response.choices[0].message.content
-                user.goal.goal_name = goal_name
-            else:
-                user.goal.goal_name = user_goal_name
+        # Note: Goal tracking has been removed from this application
 
         user.save()
         return {'status': 'success', 'message': 'User information updated successfully'}

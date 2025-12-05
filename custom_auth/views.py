@@ -9,7 +9,7 @@ from django.utils.encoding import force_bytes, force_str
 from django.core.mail import EmailMessage
 from .tokens import account_activation_token
 from .models import CustomUser, Address, UserRole, HouseholdMember, OnboardingSession
-from customer_dashboard.models import GoalTracking, AssistantEmailToken, UserEmailSession, EmailAggregationSession, AggregatedMessageContent, PreAuthenticationMessage
+from customer_dashboard.models import AssistantEmailToken, UserEmailSession, EmailAggregationSession, AggregatedMessageContent, PreAuthenticationMessage
 from chefs.models import ChefRequest, Chef
 from .forms import RegistrationForm, UserProfileForm, EmailChangeForm, AddressForm
 from django.urls import reverse
@@ -1026,10 +1026,9 @@ def login_api_view(request):
             if created:
                 logger.info(f"Created missing UserRole for user {user.username} during login")
 
-            # Fetch user goals
-            goal = GoalTracking.objects.filter(user=user).first()
-            goal_name = goal.goal_name if goal else ""
-            goal_description = goal.goal_description if goal else ""
+            # Goal tracking removed - health tracking feature deprecated
+            goal_name = ""
+            goal_description = ""
             # Convert the country to a string
             country = str(user.address.country) if hasattr(user, 'address') and user.address.country else None
 
@@ -1234,14 +1233,7 @@ def register_api_view(request):
                     # Non-fatal; keep serializer/model default
                     pass
 
-            # Handle goal data
-            goal_data = normalized.get('goal')
-            if goal_data:
-                GoalTracking.objects.create(
-                    user=user,
-                    goal_name=goal_data.get('goal_name', ''),
-                    goal_description=goal_data.get('goal_description', '')
-                )
+            # Note: Goal tracking has been removed - health tracking feature deprecated
 
             # Handle custom dietary preferences (duplicate block was here before, now handled above)
             # This block has been removed as it's redundant.
@@ -2023,13 +2015,7 @@ def onboarding_complete_registration(request):
                 else:
                     address_serializer.save()
             
-            # Handle goal data
-            if goal_data:
-                GoalTracking.objects.create(
-                    user=user,
-                    goal_name=goal_data.get('goal_name', ''),
-                    goal_description=goal_data.get('goal_description', '')
-                )
+            # Note: Goal tracking has been removed - health tracking feature deprecated
             
             # Send activation email (same as register_api_view)
             mail_subject = 'Activate your account.'

@@ -31,7 +31,7 @@ from meals.pydantic_models import BulkPrepInstructions, DailyTask
 from django.template.loader import render_to_string
 from meals.feature_flags import meal_plan_notifications_enabled, legacy_meal_plan_enabled
 from meals.macro_info_retrieval import get_meal_macro_information
-from meals.youtube_api_search import find_youtube_cooking_videos
+# YouTube integration removed
 import traceback
 from .celery_utils import handle_task_failure
 

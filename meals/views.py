@@ -5478,140 +5478,21 @@ def api_modify_meal_plan(request, meal_plan_id):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_generate_instacart_link(request):
-    """
-    API endpoint to generate an Instacart shopping list link for a meal plan.
-    
-    Request body:
-    {
-        "meal_plan_id": int,
-        "postal_code": str (optional - will use user's saved postal code if not provided),
-        "force_refresh": bool (optional - will generate a new link even if one exists)
-    }
-    
-    Returns:
-    {
-        "status": "success" or "error",
-        "instacart_url": string (if success),
-        "message": string,
-        "from_cache": bool (whether the URL was retrieved from database or newly generated),
-        "postal_code_used": bool (whether a postal code was used for location-based store selection),
-        "has_chef_meals": bool (whether the meal plan contains any chef-created meals)
-    }
-    """
-    try:
-        # Get meal_plan_id from request
-        meal_plan_id = request.data.get('meal_plan_id')
-        if not meal_plan_id:
-            return Response(
-                {"status": "error", "message": "meal_plan_id is required"}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Check if force_refresh is specified
-        force_refresh = request.data.get('force_refresh', False)
-        
-        # Get user ID from request
-        user_id = request.user.id
-        
-        # Get postal code - first check if provided in request, otherwise get from user's address
-        postal_code = request.data.get('postal_code')
-        if not postal_code:
-            postal_code = get_user_postal_code(request.user)
-            
-            if not postal_code:
-                logger.warning(f"No postal code found for user {user_id} when generating Instacart link")
-                # We'll continue without postal code, but log a warning
-        
-        # If force_refresh is True, clear any existing URL from the MealPlan
-        if force_refresh:
-            from meals.models import MealPlan
-            try:
-                meal_plan = MealPlan.objects.get(id=meal_plan_id, user=request.user)
-                if meal_plan.instacart_url:
-                    logger.info(f"Force refreshing Instacart URL for meal plan {meal_plan_id}")
-                    meal_plan.instacart_url = None
-                    meal_plan.save(update_fields=['instacart_url'])
-            except MealPlan.DoesNotExist:
-                return Response(
-                    {"status": "error", "message": "Meal plan not found or does not belong to you"}, 
-                    status=status.HTTP_404_NOT_FOUND
-                )
-        
-        # Call the function to generate the Instacart link
-        from .instacart_service import generate_instacart_link
-        result = generate_instacart_link(user_id, meal_plan_id, postal_code)
-        
-        # The service now includes a has_chef_meals flag; avoid recomputing here
-
-        # Add information about postal code to the response
-        if result.get('status') == 'success':
-            result['postal_code_used'] = postal_code is not None
-            
-            # Add additional context to the message
-            if result.get('from_cache', False):
-                result['message'] = f"Retrieved existing Instacart shopping list URL"
-            else:
-                result['message'] = f"Successfully generated Instacart shopping list URL"
-                
-            # Add postal code warning if applicable
-            if not postal_code:
-                result['message'] += " Note: No postal code was provided or found in your profile. For better store selection, please update your profile with a postal code."
-                
-            return Response(result, status=status.HTTP_200_OK)
-        else:
-            return Response(result, status=status.HTTP_400_BAD_REQUEST)
-    
-    except Exception as e:
-        logger.error(f"Error generating Instacart link: {str(e)}")
-        return Response(
-            {"status": "error", "message": f"Error generating Instacart link: {str(e)}"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+    """Legacy endpoint - Instacart integration has been removed."""
+    return Response(
+        {"status": "error", "message": "Instacart integration has been removed from this application."},
+        status=status.HTTP_410_GONE
+    )
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
-# @deprecated Legacy meal-plan endpoint guarded by LEGACY_MEAL_PLAN.
 def api_get_instacart_url(request, meal_plan_id):
-    """
-    API endpoint to get the Instacart URL for a meal plan if it exists.
-    
-    This is a lightweight endpoint for the frontend to quickly check if an 
-    Instacart URL is available without needing to generate one.
-    
-    Returns:
-    {
-        "status": "success" or "error",
-        "instacart_url": string or null,
-        "has_url": boolean
-    }
-    """
-    try:
-        # Get the meal plan
-        meal_plan = get_object_or_404(MealPlan, id=meal_plan_id, user=request.user)
-        
-        # Check if meal plan has an Instacart URL
-        if meal_plan.instacart_url:
-            return Response({
-                "status": "success",
-                "instacart_url": meal_plan.instacart_url,
-                "has_url": True
-            }, status=status.HTTP_200_OK)
-        else:
-            return Response({
-                "status": "success",
-                "instacart_url": None,
-                "has_url": False,
-                "message": "No Instacart URL available for this meal plan. Use the api_generate_instacart_link endpoint to create one."
-            }, status=status.HTTP_200_OK)
-    
-    except Exception as e:
-        logger.error(f"Error getting Instacart URL: {str(e)}")
-        return Response(
-            {"status": "error", "message": f"Error getting Instacart URL: {str(e)}"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+    """Legacy endpoint - Instacart integration has been removed."""
+    return Response(
+        {"status": "error", "message": "Instacart integration has been removed from this application.", "has_url": False},
+        status=status.HTTP_410_GONE
+    )
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])

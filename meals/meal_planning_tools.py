@@ -38,11 +38,10 @@ from shared.utils import (
 import uuid
 from meals.streaming_instructions import generate_streaming_instructions
 from meals.macro_info_retrieval import get_meal_macro_information
-from meals.youtube_api_search import find_youtube_cooking_videos, format_for_structured_output
-from meals.pydantic_models import MealMacroInfo, VideoRankings, YouTubeVideoResults  # schema validation
+from meals.pydantic_models import MealMacroInfo  # schema validation
 from pydantic import ValidationError
 from django.conf import settings
-from meals.instacart_service import generate_instacart_link as _util_generate_instacart_link
+# Removed: YouTube and Instacart integrations deprecated
 import traceback
 
 LEGACY_MEAL_PLAN = True
@@ -1073,87 +1072,13 @@ def get_meal_macro_info(meal_id: int) -> Dict[str, Any]:
         return {"status": "error", "message": f"Failed to get meal macro info"}
 
 def find_related_youtube_videos(meal_id: int, max_results: int = 5) -> Dict[str, Any]:
-    """
-    Find & rank relevant YouTube videos that teach how to cook the given meal.
-    
-    Args:
-        meal_id: ID of the Meal model instance
-        max_results: Maximum number of videos to return (default 5, max 10)
-        
-    Returns:
-        Dictionary containing ranked YouTube video information
-    """
-    try:
-        # Debug prints removed
-        # Ensure max_results is within bounds
-        max_results = min(max(1, max_results), 10)
-        
-        meal = Meal.objects.get(id=meal_id)
-        
-        # Check if we have cached video data in the meal model
-        if meal.youtube_videos:
-            logger.info(f"Using cached YouTube videos for meal {meal_id}")
-            videos = meal.youtube_videos
-            
-            # If we have more videos than requested, truncate the list
-            if "ranked_videos" in videos and len(videos["ranked_videos"]) > max_results:
-                videos["ranked_videos"] = videos["ranked_videos"][:max_results]
-                
-            return {"status": "success", "videos": videos}
-        
-        # If not cached, fetch from the API
-        raw = find_youtube_cooking_videos(
-            meal_name=meal.name,
-            meal_description=meal.description,
-            limit=max_results
-        )
-        
-        formatted = format_for_structured_output(raw)
-        
-        # Handle null from LLM
-        if formatted is None:
-            logger.warning(f"Formatted YouTube data is null for meal {meal_id}")
-            return {"status": "error", "message": "YouTube video search returned null."}
-        
-        # Validate
-        try:
-            validated = YouTubeVideoResults.model_validate(formatted)
-            validated_data = validated.model_dump()
-        except ValidationError as e:
-            logger.error(f"find_related_youtube_videos validation error: {e}")
-            if settings.TEST_MODE:
-                validated_data = formatted
-            return {"status": "error", "message": str(e)}
-        
-        # Cache the results in the meal model
-        meal.youtube_videos = validated_data
-        meal.save(update_fields=['youtube_videos'])
-        
-        return {"status": "success", "videos": validated_data}
-    except Meal.DoesNotExist:
-        return {"status": "error", "message": f"Meal {meal_id} not found."}
-    except Exception as e:
-        logger.error(f"find_related_youtube_videos error: {e}")
-        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
-        requests.post(n8n_traceback_url, json={"error": str(e), "source":"find_related_youtube_videos", "traceback": traceback.format_exc()})
-        return {"status": "error", "message": f"Failed to find related youtube videos"}
+    """Legacy function - YouTube integration has been removed."""
+    return {"status": "error", "message": "YouTube integration has been removed from this application."}
 
-# @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
+
 def generate_instacart_link_tool(user_id: int, meal_plan_id: int, postal_code: str = None) -> Dict[str, Any]:
-    """
-    Generate an Instacart shopping list link from the user's meal plan to buy ingredients
-    """
-    try:
-        logger.info(f"generate_instacart_link_tool called for user {user_id} and meal plan {meal_plan_id} with postal code {postal_code}")
-        # Call the service function directly with proper parameters
-        return _util_generate_instacart_link(user_id, meal_plan_id, postal_code)
-    except Exception as e:
-        logger.error(f"generate_instacart_link error: {e}")
-        n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-        # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
-        requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_instacart_link_tool", "traceback": traceback.format_exc()})
-        return {"status": "error", "message": f"Failed to generate instacart link"}
+    """Legacy function - Instacart integration has been removed."""
+    return {"status": "error", "message": "Instacart integration has been removed from this application."}
 
 # Function to get all meal planning tools
 # @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.

@@ -507,18 +507,10 @@ def generate_shopping_list(meal_plan_id):
             except Exception:
                 user_country_code = None
 
-            if user_country_code in ("US", "CA"):
-                postal_code = None
-                try:
-                    postal_code = getattr(user.address, 'input_postalcode', None) or getattr(user.address, 'postalcode', None)
-                except Exception:
-                    postal_code = None
-                from meals.instacart_service import generate_instacart_link as _generate_instacart_link
-                gen_result = _generate_instacart_link(user.id, meal_plan.id, postal_code)
-                if gen_result and gen_result.get('status') == 'success' and gen_result.get('instacart_url'):
-                    instacart_url = gen_result.get('instacart_url')
+            # Instacart integration removed - feature deprecated
+            pass
         except Exception as _insta_err:
-            logger.warning(f"Instacart link generation skipped or failed for user {user.id}: {_insta_err}")
+            logger.debug(f"Instacart integration removed: {_insta_err}")
 
         if not meal_plan_notifications_enabled():
             logger.info(

@@ -2,7 +2,7 @@ import json
 import logging
 from typing import Dict, List
 
-from shared.utils import get_openai_client
+from shared.utils import get_groq_client
 
 # Local fallback synonyms if the API fails
 LOCAL_SYNONYMS: Dict[str, str] = {
@@ -35,12 +35,12 @@ def normalize_ingredient(name: str) -> str:
     )
 
     try:
-        client = get_openai_client()
-        response = client.responses.create(
+        client = get_groq_client()
+        response = client.chat.completions.create(
             model="gpt-5-mini",
-            input=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": prompt}],
         )
-        canonical = response.output_text.strip().lower()
+        canonical = response.choices[0].message.content.strip().lower()
         if canonical:
             _normalization_cache[key] = canonical
             return canonical

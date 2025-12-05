@@ -19,9 +19,8 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db.models import F, Sum
 from jinja2 import Environment, FileSystemLoader
-from openai import OpenAI
 try:
-    from groq import Groq  # optional Groq client for inference
+    from groq import Groq  # Groq client for inference for inference
 except Exception:
     Groq = None
 from pydantic import ValidationError
@@ -32,7 +31,7 @@ from meals.pantry_management import get_user_pantry_items, get_expiring_pantry_i
 from meals.meal_embedding import serialize_data
 from meals.serializers import MealPlanSerializer
 from customer_dashboard.models import GoalTracking, UserHealthMetrics, CalorieIntake, UserSummary, UserDailySummary
-from shared.utils import generate_user_context, get_openai_client, _get_language_name
+from shared.utils import generate_user_context, _get_language_name
 from meals.meal_plan_service import is_chef_meal
 from django.template.loader import render_to_string
 from meals.feature_flags import meal_plan_notifications_enabled
@@ -249,108 +248,6 @@ def generate_shopping_list(meal_plan_id):
     if existing_shopping_list:
         logger.info(f"Shopping list already exists for MealPlan ID {meal_plan_id}. Sending existing list.")
         shopping_list = existing_shopping_list.items
-    else:
-        # Generate a new shopping list
-        try:
-            user_data_json = serialize_data(meal_plan_data)
-        except Exception as e:
-            logger.error(f"Serialization error: {e}")
-            return
-
-        try:
-            # NOTE: We assume `client` is already available in your environment.
-            # No need to import it here as requested.
-            from meals.pydantic_models import ShoppingCategory
-            shopping_category_list = [item.value for item in ShoppingCategory]
-            
-            # Format substitution information for prompt
-            if substitution_info:
-                substitution_str = "Ingredient substitution information:\n"
-                for sub in substitution_info:
-                    substitution_str += f"- In {sub['meal_name']}, replace {sub['original_ingredient']} with {', '.join(sub['substitutes'])}\n"
-            
-            # Add chef meal note if needed
-            chef_note = ""
-            if chef_meals_present:
-                chef_note = "IMPORTANT: Some meals in this plan are chef-created and must be prepared exactly as specified. Do not suggest substitutions for chef-created meals. Include all ingredients for chef meals without alternatives."
-            
-            developer_text = (
-                "You are a helpful assistant that generates shopping lists in JSON format.\n"
-                "If a meal contains a composed_dishes bundle (user-generated multi-dish meal), ensure the shopping list fully covers ingredients for all dishes in the bundle.\n"
-                "For such bundles, include the dish name in the 'notes' field for each relevant item (e.g., 'For baby puree' or 'Vegan dish').\n"
-                "Respect substitutions for non-chef meals.\n"
-                "When available, prefer structured meal_dishes (MealDish rows) over composed_dishes JSON.\n"
-                "Return one entry per unique ingredient and unit; if multiple meals require the same ingredient with the same unit, combine their quantities and list all meal names in `meal_names`.\n"
-            )
-            user_text = (
-                f"Answering in the user's preferred language: {_get_language_name(user_info.get('preferred_language', 'English'))},"
-                f"Generate a shopping list based on the following meals: {json.dumps(user_data_json)}. "
-                f"The user information is as follows: {user_context}. "
-                f"Bridging leftover info if user follows their meal plan: {bridging_leftover_str}. "
-                f"The leftover amounts are calculated based on the user's pantry items and the meals they plan to prepare. "
-                f"Based on the leftover amounts in relation to the required servings, the user may not need to purchase additional items. "
-                f"The user has the following items in their pantry: {', '.join(user_pantry_items)}. "
-                f"The user needs to serve {household_member_count} household members total. Pay special attention to individual household member dietary needs, preferences, allergies, and ages from the user context when adjusting quantities and recommending alternatives. Consider that different household members may have different portion requirements and dietary restrictions. "
-                f"Please ensure the quantities are as realistic as possible to grocery store quantities. "
-                f"The user has these pantry items expiring soon: {expiring_items_str}. "
-                f"Available shopping categories: {shopping_category_list}. "
-                f"Do not include these expiring items in the shopping list unless they truly need to be replenished for the sake of the meals. "
-                f"\n\n{substitution_str}\n"
-                f"{chef_note}\n"
-                f"IMPORTANT: For ingredients in non-chef meals that have substitution options, please include BOTH the original ingredient AND its substitutes in the shopping list, "
-                f"clearly marking them as alternatives to each other so the user can choose which one to buy. "
-                f"Format alternatives as separate items with a note like 'Alternative to X for [meal name]'."
-            )
-
-            # Prefer Groq structured output if available
-            groq_client = _get_groq_client()
-            if groq_client:
-                messages = [
-                    {"role": "system", "content": developer_text},
-                    {"role": "user", "content": user_text},
-                ]
-                groq_resp = groq_client.chat.completions.create(
-                    model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
-                    messages=messages,
-                    temperature=0.2,
-                    top_p=1,
-                    stream=False,
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "shopping_list",
-                            "schema": ShoppingListSchema.model_json_schema(),
-                        },
-                    },
-                )
-                shopping_list = groq_resp.choices[0].message.content
-            else:
-                response = get_openai_client().responses.create(
-                    model="o4-mini-2025-04-16",
-                    input=[
-                        {"role": "developer", "content": developer_text},
-                        {"role": "user", "content": user_text},
-                    ],
-                    text={
-                        "format": {
-                            'type': 'json_schema',
-                            'name': 'shopping_list',
-                            'schema': ShoppingListSchema.model_json_schema()
-                        }
-                    }
-                )
-                shopping_list = response.output_text
-
-            if hasattr(meal_plan, 'shopping_list'):
-                meal_plan.shopping_list.update_items(shopping_list)
-            else:
-                ShoppingListModel.objects.create(meal_plan=meal_plan, items=shopping_list)
-
-        except ValidationError as e:
-            logger.error(f"Error parsing shopping list: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error generating shopping list for meal plan {meal_plan_id}: {e}")
-
     # Attempt to parse the GPT JSON
     if not shopping_list:
         logger.error(f"Failed to generate shopping list for MealPlan ID {meal_plan_id}.")
@@ -674,7 +571,6 @@ def generate_user_summary(user_id: int, summary_date=None) -> None:
     from customer_dashboard.models import UserDailySummary
     from shared.utils import generate_user_context
     from django.utils import timezone
-    from openai import OpenAI, OpenAIError
     import hashlib
     import json
     
@@ -794,28 +690,17 @@ def generate_user_summary(user_id: int, summary_date=None) -> None:
         user_msg = (
             f"{time_period_description}, here is the relevant data:\n{data_bundle}"
         )
-        if groq_client:
-            groq_resp = groq_client.chat.completions.create(
-                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_msg},
-                ],
-                temperature=0.5,
-                top_p=1,
-                stream=False,
-            )
-            summary_text = groq_resp.choices[0].message.content
-        else:
-            resp = get_openai_client().responses.create(
-                model="o4-mini-2025-04-16",
-                input=[
-                    {"role": "developer", "content": system_prompt},
-                    {"role": "user", "content": user_msg},
-                ],
-            )
-            summary_text = resp.output_text
-
+        groq_resp = groq_client.chat.completions.create(
+            model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.5,
+            top_p=1,
+            stream=False,
+        )
+        summary_text = groq_resp.choices[0].message.content
         summary.summary = summary_text
         summary.status = UserDailySummary.COMPLETED
         
@@ -1045,7 +930,15 @@ def generate_emergency_supply_list(user_id):
         )
 
         groq_client = _get_groq_client()
-        if groq_client:
+
+
+        if not groq_client:
+
+
+            raise ValueError("Groq client not available - GROQ_API_KEY must be set")
+
+
+        
             groq_resp = groq_client.chat.completions.create(
                 model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
                 messages=[
@@ -1064,24 +957,6 @@ def generate_emergency_supply_list(user_id):
                 },
             )
             gpt_output_str = groq_resp.choices[0].message.content
-        else:
-            response = get_openai_client().responses.create(
-                model="o4-mini-2025-04-16",
-                input=[
-                    {"role": "developer", "content": developer_text},
-                    {"role": "user", "content": user_text},
-                ],
-                text={
-                    "format": {
-                        'type': 'json_schema',
-                        'name': 'emergency_supply_list',
-                        "schema": EmergencySupplyList.model_json_schema()
-                    }
-                }
-            )
-
-            gpt_output_str = response.output_text
-
         # Always validate with Pydantic schema. On failure: send error email and emit N8N traceback.
         emergency_list: list = []
         notes: str = ""

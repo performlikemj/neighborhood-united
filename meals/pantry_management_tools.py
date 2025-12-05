@@ -23,9 +23,9 @@ from meals.pantry_management import (
     get_expiring_pantry_items,
     determine_items_to_replenish,
 )
-from shared.utils import get_openai_client
+from shared.utils import get_groq_client
 try:
-    from groq import Groq  # optional Groq client
+    from groq import Groq  # Groq client for inference
 except Exception:
     Groq = None
 from django.conf import settings
@@ -583,7 +583,12 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
                         "original ingredient AND its substitutes, clearly marking them as alternatives."
         )
         groq_client = _get_groq_client()
-        if groq_client:
+
+        if not groq_client:
+
+            raise ValueError("Groq client not available - GROQ_API_KEY must be set")
+
+        
             groq_resp = groq_client.chat.completions.create(
                 model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
                 messages=[
@@ -602,22 +607,6 @@ def generate_shopping_list(user_id: int, meal_plan_id: int):
                 },
             )
             shopping_list_raw = groq_resp.choices[0].message.content or "{}"
-        else:
-            response = get_openai_client().responses.create(
-                model="gpt-5-mini",
-                input=[
-                    {"role": "developer", "content": developer_content},
-                    {"role": "user", "content": user_content},
-                ],
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": "shopping_list",
-                        "schema": ShoppingListSchema.model_json_schema(),
-                    }
-                },
-            )
-            shopping_list_raw = response.output_text
     except Exception as e:
         n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
         # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
@@ -734,7 +723,12 @@ def determine_items_to_replenish(user_id: int):
 
     try:
         groq_client = _get_groq_client()
-        if groq_client:
+
+        if not groq_client:
+
+            raise ValueError("Groq client not available - GROQ_API_KEY must be set")
+
+        
 
             groq_resp = groq_client.chat.completions.create(
                 model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
@@ -754,22 +748,6 @@ def determine_items_to_replenish(user_id: int):
                 },
             )
             raw = groq_resp.choices[0].message.content or "{}"
-        else:
-            response = get_openai_client().responses.create(
-                model="gpt-5-mini",
-                input=[
-                    {"role": "developer", "content": sys_prompt},
-                    {"role": "user", "content": usr_prompt},
-                ],
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": "replenish_items",
-                        "schema": ReplenishItemsSchema.model_json_schema(),
-                    }
-                },
-            )
-            raw = response.output_text
     except Exception as e:
         # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
         requests.post(n8n_traceback_url, json={"error": str(e), "source":"determine_items_to_replenish", "traceback": traceback.format_exc()})

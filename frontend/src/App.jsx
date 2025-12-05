@@ -39,6 +39,9 @@ import ChefHub from './pages/ChefHub.jsx'
 import MyMealPlan from './pages/MyMealPlan.jsx'
 import AllOrders from './pages/AllOrders.jsx'
 
+// Chef Pages
+import SousChefPage from './pages/SousChefPage.jsx'
+
 export default function App(){
   return (
     <>
@@ -186,6 +189,13 @@ export default function App(){
         <Route path="/chefs/dashboard" element={
           <ProtectedRoute requiredRole="chef">
             <ChefDashboard />
+          </ProtectedRoute>
+        } />
+        
+        {/* Sous Chef Full Page View */}
+        <Route path="/chefs/dashboard/sous-chef" element={
+          <ProtectedRoute requiredRole="chef">
+            <SousChefPage />
           </ProtectedRoute>
         } />
 

@@ -6779,11 +6779,75 @@ body.chef-gallery-modal-open {
     padding: 0.4rem;
   }
   
-  .preview-panel .meal-name {
-    font-size: 0.75rem;
+.preview-panel .meal-name {
+  font-size: 0.75rem;
+}
+
+.preview-panel .meal-desc {
+  display: none;
+}
+}
+
+/* Sous Chef Assistant (page tab) */
+.sous-chef-tab{
+  --bg-card: var(--surface);
+  --bg-page: var(--surface-2);
+  --border-color: var(--border);
+  --accent-color: var(--primary);
+  --accent-color-alpha: rgba(92,184,92,0.14);
+  max-width: 1120px;
+  margin: 0 auto 2rem;
+  padding: 0 1rem;
+}
+.sous-chef-header{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:1rem;
+  margin-bottom:1.25rem;
+}
+.sous-chef-header h1{
+  margin:.1rem 0 .35rem;
+  font-size:1.75rem;
+}
+.sous-chef-header .eyebrow{
+  text-transform:uppercase;
+  letter-spacing:.16em;
+  font-weight:700;
+  font-size:.72rem;
+  color:var(--muted);
+  margin:0;
+}
+.sous-chef-meta{
+  display:flex;
+  gap:.4rem;
+  align-items:center;
+}
+.sous-chef-grid{
+  display:grid;
+  grid-template-columns: 1fr;
+  gap:1rem;
+}
+@media (min-width: 960px){
+  .sous-chef-grid{
+    grid-template-columns: minmax(280px, 360px) 1fr;
+    align-items:start;
   }
-  
-  .preview-panel .meal-desc {
-    display: none;
-  }
+}
+.sous-chef-card{
+  background:var(--bg-card);
+  border:1px solid var(--border-color);
+  border-radius:14px;
+  padding:1rem;
+  box-shadow: var(--shadow-sm);
+}
+.sous-chef-chat-shell{
+  background:var(--bg-card);
+  border:1px solid var(--border-color);
+  border-radius:16px;
+  min-height:520px;
+  height: calc(100vh - 300px);
+  max-height: 900px;
+  overflow:hidden;
+  box-shadow: var(--shadow-md);
 }

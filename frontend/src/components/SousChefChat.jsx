@@ -35,10 +35,12 @@ export default function SousChefChat({
   familyName,
   chefEmoji: chefEmojiProp,
   initialContext,  // Pre-populated context from notifications
-  onContextHandled // Callback when context has been used
+  onContextHandled, // Callback when context has been used
+  initialInput,     // Pre-populated input text (from widget expansion)
+  externalInputRef  // External ref to access the input element
 }) {
   const [messages, setMessages] = useState([])
-  const [input, setInput] = useState('')
+  const [input, setInput] = useState(initialInput || '')
   const [isStreaming, setIsStreaming] = useState(false)
   const [activeTools, setActiveTools] = useState([])
   const [error, setError] = useState(null)
@@ -53,6 +55,7 @@ export default function SousChefChat({
   const endRef = useRef(null)
   const abortRef = useRef(null)
   const inputRef = useRef(null)
+  const isInitialLoadRef = useRef(true)
 
   // Track the initial context prePrompt to detect new contexts
   const initialPrePromptRef = useRef(null)
@@ -103,6 +106,7 @@ export default function SousChefChat({
     let mounted = true
     
     async function loadData() {
+      isInitialLoadRef.current = true  // Reset for new family
       setHistoryLoading(true)
       setMessages([])
       setFamilyContext(null)
@@ -145,9 +149,20 @@ export default function SousChefChat({
     return () => { mounted = false }
   }, [familyId, familyType])
 
-  // Auto-scroll
+  // Auto-scroll - use instant on initial load, smooth for new messages
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    if (isInitialLoadRef.current) {
+      // Use instant scroll for initial load to avoid "spazzing" effect
+      endRef.current?.scrollIntoView({ behavior: 'instant', block: 'end' })
+      // Mark initial load as complete after a short delay
+      const timer = setTimeout(() => {
+        isInitialLoadRef.current = false
+      }, 500)
+      return () => clearTimeout(timer)
+    } else {
+      // Use smooth scroll for new messages
+      endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    }
   }, [messages, activeTools])
 
   // Focus input when not streaming
@@ -424,7 +439,10 @@ export default function SousChefChat({
       {/* Input Area */}
       <div className="composer">
         <textarea
-          ref={inputRef}
+          ref={(el) => {
+            inputRef.current = el
+            if (externalInputRef) externalInputRef.current = el
+          }}
           className="composer-input"
           rows={1}
           placeholder={`Ask about ${familyName || 'this family'}...`}

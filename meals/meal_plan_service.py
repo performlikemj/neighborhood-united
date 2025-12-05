@@ -20,9 +20,8 @@ from meals.celery_utils import handle_task_failure
 from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
-from openai import OpenAI, OpenAIError
 try:
-    from groq import Groq  # optional Groq client for inference
+    from groq import Groq  # Groq client for inference
 except Exception:
     Groq = None
 from custom_auth.models import CustomUser
@@ -34,7 +33,7 @@ from meals.pydantic_models import (MealsToReplaceSchema, BulkPrepInstructions,
                                   AllergenAnalysis, IngredientSubstitution)
 from meals.meal_modification_parser import parse_modification_request
 from shared.utils import (generate_user_context, get_embedding, cosine_similarity, replace_meal_in_plan,
-                          remove_meal_from_plan, get_openai_client)
+                          remove_meal_from_plan)
 from django.db import transaction
 from pydantic import BaseModel, Field, ConfigDict
 from utils.groq_rate_limit import groq_call_with_retry
@@ -189,48 +188,36 @@ def analyze_meal_compatibility(meal, dietary_preference):
             }
         ]
 
-        # Make API call (prefer Groq structured JSON)
+        # Make API call using Groq
         groq_client = _get_groq_client()
-        if groq_client:
-            groq_messages = [
-                {"role": ("system" if m.get("role") == "developer" else m.get("role")), "content": m.get("content")}
-                for m in input
-            ]
-            raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
-            if raw_create:
-                raw_create = groq_client.chat.completions.with_raw_response.create
-            groq_resp = groq_call_with_retry(
-                raw_create_fn=raw_create,
-                create_fn=groq_client.chat.completions.create,
-                desc='meal_plan_service.analyze_meal_compatibility',
-                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
-                messages=groq_messages,
-                temperature=0.2,
-                top_p=1,
-                stream=False,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "dietary_compatibility",
-                        "schema": DietaryCompatibilityResponse.model_json_schema(),
-                    },
+        if not groq_client:
+            raise ValueError("Groq client not available - GROQ_API_KEY must be set")
+        
+        groq_messages = [
+            {"role": ("system" if m.get("role") == "developer" else m.get("role")), "content": m.get("content")}
+            for m in input
+        ]
+        raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
+        if raw_create:
+            raw_create = groq_client.chat.completions.with_raw_response.create
+        groq_resp = groq_call_with_retry(
+            raw_create_fn=raw_create,
+            create_fn=groq_client.chat.completions.create,
+            desc='meal_plan_service.analyze_meal_compatibility',
+            model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+            messages=groq_messages,
+            temperature=0.2,
+            top_p=1,
+            stream=False,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "dietary_compatibility",
+                    "schema": DietaryCompatibilityResponse.model_json_schema(),
                 },
-            )
-            raw_json = groq_resp.choices[0].message.content or "{}"
-        else:
-            response = get_openai_client().responses.create(
-                model="gpt-5-mini",
-                input=input,
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": "dietary_compatibility",
-                        "schema": DietaryCompatibilityResponse.model_json_schema(),
-                        "strict": True
-                    }
-                }
-            )
-            raw_json = response.output_text
+            },
+        )
+        raw_json = groq_resp.choices[0].message.content or "{}"
 
         # Parse response (be robust to array- or string-wrapped JSON)
         result = json.loads(raw_json)
@@ -581,46 +568,34 @@ def create_meal_plan_for_user(
                 }
             ]
             groq_client = _get_groq_client()
-            if groq_client:
-                groq_messages = [
-                    {"role": ("system" if m.get("role") == "developer" else m.get("role")), "content": m.get("content")}
-                    for m in input
-                ]
-                raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
-                if raw_create:
-                    raw_create = groq_client.chat.completions.with_raw_response.create
-                groq_resp = groq_call_with_retry(
-                    raw_create_fn=raw_create,
-                    create_fn=groq_client.chat.completions.create,
-                    desc='meal_plan_service.parse_prompt',
-                    model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
-                    messages=groq_messages,
-                    temperature=0.2,
-                    top_p=1,
-                    stream=False,
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "meal_map",
-                            "schema": PromptMealMap.model_json_schema(),
-                        },
+            if not groq_client:
+                raise ValueError("Groq client not available - GROQ_API_KEY must be set")
+            
+            groq_messages = [
+                {"role": ("system" if m.get("role") == "developer" else m.get("role")), "content": m.get("content")}
+                for m in input
+            ]
+            raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
+            if raw_create:
+                raw_create = groq_client.chat.completions.with_raw_response.create
+            groq_resp = groq_call_with_retry(
+                raw_create_fn=raw_create,
+                create_fn=groq_client.chat.completions.create,
+                desc='meal_plan_service.parse_prompt',
+                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                messages=groq_messages,
+                temperature=0.2,
+                top_p=1,
+                stream=False,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "meal_map",
+                        "schema": PromptMealMap.model_json_schema(),
                     },
-                )
-                raw_json = groq_resp.choices[0].message.content or "{}"
-            else:
-                call = get_openai_client().responses.create(
-                    model="gpt-5-mini",
-                    input=input,
-                    text={
-                        "format": {
-                            "type": "json_schema",
-                            "name": "meal_map",
-                            "schema": PromptMealMap.model_json_schema(),
-                            "strict": True
-                        }
-                    }
-                )
-                raw_json = call.output_text
+                },
+            )
+            raw_json = groq_resp.choices[0].message.content or "{}"
             parsed = PromptMealMap.model_validate_json(raw_json)
             allowed_map = {(s.day, s.meal_type.value): True for s in parsed.slots}
                 
@@ -1331,48 +1306,34 @@ def analyze_and_replace_meals(user, meal_plan, meal_types, request_id=None):
         #store=True,
         #metadata={'tag': 'meal-plan-analysis'}
         groq_client = _get_groq_client()
-        if groq_client:
+        if not groq_client:
+            raise ValueError("Groq client not available - GROQ_API_KEY must be set")
 
-            groq_messages = [
-                {"role": ("system" if m.get("role") == "developer" else m.get("role")), "content": m.get("content")}
-                for m in input
-            ]
-            raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
-            if raw_create:
-                raw_create = groq_client.chat.completions.with_raw_response.create
-            groq_resp = groq_call_with_retry(
-                raw_create_fn=raw_create,
-                create_fn=groq_client.chat.completions.create,
-                desc='meal_plan_service.analyze_and_replace_meals',
-                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
-                messages=groq_messages,
-                temperature=0.2,
-                top_p=1,
-                stream=False,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "meals_to_replace",
-                        "schema": MealsToReplaceSchema.model_json_schema(),
-                    },
+        groq_messages = [
+            {"role": ("system" if m.get("role") == "developer" else m.get("role")), "content": m.get("content")}
+            for m in input
+        ]
+        raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
+        if raw_create:
+            raw_create = groq_client.chat.completions.with_raw_response.create
+        groq_resp = groq_call_with_retry(
+            raw_create_fn=raw_create,
+            create_fn=groq_client.chat.completions.create,
+            desc='meal_plan_service.analyze_and_replace_meals',
+            model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+            messages=groq_messages,
+            temperature=0.2,
+            top_p=1,
+            stream=False,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "meals_to_replace",
+                    "schema": MealsToReplaceSchema.model_json_schema(),
                 },
-            )
-            assistant_message = groq_resp.choices[0].message.content or "{}"
-        else:
-            response = get_openai_client().responses.create(
-                model="gpt-5-mini",
-                input=input,
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": "meals_to_replace",
-                        "schema": MealsToReplaceSchema.model_json_schema(),
-                        "strict": True
-                    }
-                }
-            )
-
-            assistant_message = response.output_text
+            },
+        )
+        assistant_message = groq_resp.choices[0].message.content or "{}"
 
         try:
             # Step 1: Deserialize the string into a Python dictionary (robust to wrapping)
@@ -1890,59 +1851,40 @@ def guess_meal_ingredients_gpt(meal_name: str, meal_description: str) -> List[st
     
     try:
         groq_client = _get_groq_client()
-        if groq_client:
-            raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
-            if raw_create:
-                raw_create = groq_client.chat.completions.with_raw_response.create
-            groq_resp = groq_call_with_retry(
-                raw_create_fn=raw_create,
-                create_fn=groq_client.chat.completions.create,
-                desc='meal_plan_service.guess_meal_ingredients_gpt',
-                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
-                messages=[
-                    {"role": "system", "content": prompt_messages[0]["content"]},
-                    {"role": "user", "content": prompt_messages[1]["content"]},
-                ],
-                temperature=0.2,
-                top_p=1,
-                stream=False,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "likely_ingredients",
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "likely_ingredients": {"type": "array", "items": {"type": "string"}}
-                            },
-                            "required": ["likely_ingredients"],
-                            "additionalProperties": False
+        if not groq_client:
+            raise ValueError("Groq client not available - GROQ_API_KEY must be set")
+        
+        raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
+        if raw_create:
+            raw_create = groq_client.chat.completions.with_raw_response.create
+        groq_resp = groq_call_with_retry(
+            raw_create_fn=raw_create,
+            create_fn=groq_client.chat.completions.create,
+            desc='meal_plan_service.guess_meal_ingredients_gpt',
+            model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+            messages=[
+                {"role": "system", "content": prompt_messages[0]["content"]},
+                {"role": "user", "content": prompt_messages[1]["content"]},
+            ],
+            temperature=0.2,
+            top_p=1,
+            stream=False,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "likely_ingredients",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "likely_ingredients": {"type": "array", "items": {"type": "string"}}
                         },
+                        "required": ["likely_ingredients"],
+                        "additionalProperties": False
                     },
                 },
-            )
-            raw = groq_resp.choices[0].message.content or "{}"
-        else:
-            response = get_openai_client().responses.create(
-                model="gpt-5-mini",
-                input=prompt_messages,
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": "likely_ingredients",
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "likely_ingredients": {"type": "array", "items": {"type": "string"}}
-                            },
-                            "required": ["likely_ingredients"],
-                            "additionalProperties": False
-                        },
-                        "strict": True
-                    }
-                }
-            )
-            raw = response.output_text
+            },
+        )
+        raw = groq_resp.choices[0].message.content or "{}"
         # Be robust to array- or string-wrapped JSON
         data = json.loads(raw)
         if isinstance(data, list):
@@ -2192,70 +2134,45 @@ def check_meal_for_allergens_gpt(meal, user) -> Tuple[bool, List[str], Dict[str,
     
     try:
         groq_client = _get_groq_client()
-        if groq_client:
-            raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
-            if raw_create:
-                raw_create = groq_client.chat.completions.with_raw_response.create
-            groq_resp = groq_call_with_retry(
-                raw_create_fn=raw_create,
-                create_fn=groq_client.chat.completions.create,
-                desc='meal_plan_service.check_meal_for_allergens_gpt',
-                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
-                messages=[
-                    {"role": "system", "content": prompt_messages[0]["content"]},
-                    {"role": "user", "content": prompt_messages[1]["content"]},
-                ],
-                temperature=0.2,
-                top_p=1,
-                stream=False,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "allergen_analysis",
-                        "schema": AllergenAnalysis.model_json_schema(),
-                    },
+        if not groq_client:
+            raise ValueError("Groq client not available - GROQ_API_KEY must be set")
+        
+        raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
+        if raw_create:
+            raw_create = groq_client.chat.completions.with_raw_response.create
+        groq_resp = groq_call_with_retry(
+            raw_create_fn=raw_create,
+            create_fn=groq_client.chat.completions.create,
+            desc='meal_plan_service.check_meal_for_allergens_gpt',
+            model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+            messages=[
+                {"role": "system", "content": prompt_messages[0]["content"]},
+                {"role": "user", "content": prompt_messages[1]["content"]},
+            ],
+            temperature=0.2,
+            top_p=1,
+            stream=False,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "allergen_analysis",
+                    "schema": AllergenAnalysis.model_json_schema(),
                 },
+            },
+        )
+        raw = groq_resp.choices[0].message.content or "{}"
+        # Use Pydantic validation for robust parsing
+        try:
+            data = AllergenAnalysis.model_validate_json(raw)
+        except Exception as e:
+            logger.error(f"Failed to parse Groq response as AllergenAnalysis: {e}. Raw (first 500 chars): {raw[:500]}")
+            # Fallback to safe defaults
+            data = AllergenAnalysis(
+                is_safe=False,
+                flagged_ingredients=[],
+                substitutions=[],
+                reasoning="Unable to parse allergen analysis response"
             )
-            raw = groq_resp.choices[0].message.content or "{}"
-            # Use Pydantic validation for robust parsing
-            try:
-                data = AllergenAnalysis.model_validate_json(raw)
-            except Exception as e:
-                logger.error(f"Failed to parse Groq response as AllergenAnalysis: {e}. Raw (first 500 chars): {raw[:500]}")
-                # Fallback to safe defaults
-                data = AllergenAnalysis(
-                    is_safe=False,
-                    flagged_ingredients=[],
-                    substitutions=[],
-                    reasoning="Unable to parse allergen analysis response"
-                )
-        else:
-            schema = AllergenAnalysis.model_json_schema()
-            response = get_openai_client().responses.create(
-                model="gpt-5-mini",
-                input=prompt_messages,
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": "allergen_analysis",
-                        "schema": schema,
-                        "strict": True
-                    }
-                }
-            )
-            raw = response.output_text
-            # Use Pydantic validation for robust parsing
-            try:
-                data = AllergenAnalysis.model_validate_json(raw)
-            except Exception as e:
-                logger.error(f"Failed to parse OpenAI response as AllergenAnalysis: {e}. Raw (first 500 chars): {raw[:500]}")
-                # Fallback to safe defaults
-                data = AllergenAnalysis(
-                    is_safe=False,
-                    flagged_ingredients=[],
-                    substitutions=[],
-                    reasoning="Unable to parse allergen analysis response"
-                )
         
         is_safe = data.is_safe
         gpt_flagged = data.flagged_ingredients
@@ -2406,44 +2323,33 @@ def get_substitution_suggestions(flagged_ingredients, user_allergies, meal_name)
         ]
         
         groq_client = _get_groq_client()
-        if groq_client:
-            raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
-            if raw_create:
-                raw_create = groq_client.chat.completions.with_raw_response.create
-            groq_resp = groq_call_with_retry(
-                raw_create_fn=raw_create,
-                create_fn=groq_client.chat.completions.create,
-                desc='meal_plan_service.get_substitution_suggestions',
-                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
-                messages=[
-                    {"role": "system", "content": prompt_messages[0]["content"]},
-                    {"role": "user", "content": prompt_messages[1]["content"]},
-                ],
-                temperature=0.2,
-                top_p=1,
-                stream=False,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "ingredient_substitutions",
-                        "schema": IngredientSubstitutions.model_json_schema(),
-                    },
+        if not groq_client:
+            raise ValueError("Groq client not available - GROQ_API_KEY must be set")
+        
+        raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
+        if raw_create:
+            raw_create = groq_client.chat.completions.with_raw_response.create
+        groq_resp = groq_call_with_retry(
+            raw_create_fn=raw_create,
+            create_fn=groq_client.chat.completions.create,
+            desc='meal_plan_service.get_substitution_suggestions',
+            model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+            messages=[
+                {"role": "system", "content": prompt_messages[0]["content"]},
+                {"role": "user", "content": prompt_messages[1]["content"]},
+            ],
+            temperature=0.2,
+            top_p=1,
+            stream=False,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "ingredient_substitutions",
+                    "schema": IngredientSubstitutions.model_json_schema(),
                 },
-            )
-            raw = groq_resp.choices[0].message.content or "{}"
-        else:
-            response = get_openai_client().responses.create(
-                model="gpt-5-mini",
-                input=prompt_messages,
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": "ingredient_substitutions",
-                        "schema": IngredientSubstitutions.model_json_schema()
-                    }
-                }
-            )
-            raw = response.output_text
+            },
+        )
+        raw = groq_resp.choices[0].message.content or "{}"
         
         # Parse response and convert to a simple mapping (robust to wrapping)
         result = json.loads(raw)
@@ -2793,45 +2699,33 @@ def apply_substitutions_to_meal(meal, substitutions, user):
         ]
         
         groq_client = _get_groq_client()
-        if groq_client:
-            raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
-            if raw_create:
-                raw_create = groq_client.chat.completions.with_raw_response.create
-            groq_resp = groq_call_with_retry(
-                raw_create_fn=raw_create,
-                create_fn=groq_client.chat.completions.create,
-                desc='meal_plan_service.apply_substitutions_to_meal',
-                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
-                messages=[
-                    {"role": "system", "content": prompt_messages[0]["content"]},
-                    {"role": "user", "content": prompt_messages[1]["content"]},
-                ],
-                temperature=0.3,
-                top_p=1,
-                stream=False,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "modified_meal",
-                        "schema": ModifiedMealSchema.model_json_schema(),
-                    },
+        if not groq_client:
+            raise ValueError("Groq client not available - GROQ_API_KEY must be set")
+        
+        raw_create = getattr(getattr(groq_client.chat, 'completions', None), 'with_raw_response', None)
+        if raw_create:
+            raw_create = groq_client.chat.completions.with_raw_response.create
+        groq_resp = groq_call_with_retry(
+            raw_create_fn=raw_create,
+            create_fn=groq_client.chat.completions.create,
+            desc='meal_plan_service.apply_substitutions_to_meal',
+            model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+            messages=[
+                {"role": "system", "content": prompt_messages[0]["content"]},
+                {"role": "user", "content": prompt_messages[1]["content"]},
+            ],
+            temperature=0.3,
+            top_p=1,
+            stream=False,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "modified_meal",
+                    "schema": ModifiedMealSchema.model_json_schema(),
                 },
-            )
-            raw = groq_resp.choices[0].message.content or "{}"
-        else:
-            response = get_openai_client().responses.create(
-                model="gpt-5-mini",  # Using more capable model for recipe adaptation
-                input=prompt_messages,
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": "modified_meal",
-                        "schema": ModifiedMealSchema.model_json_schema(),
-                        "strict": True
-                    }
-                }
-            )
-            raw = response.output_text
+            },
+        )
+        raw = groq_resp.choices[0].message.content or "{}"
         
         try:
             data = json.loads(raw)

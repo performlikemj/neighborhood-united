@@ -291,38 +291,38 @@ export default function ChefAllClients() {
     primaryBtn: { background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', color: 'white', border: 'none', padding: '.75rem 1.5rem', borderRadius: '12px', fontWeight: 600, fontSize: '.95rem', cursor: 'pointer', boxShadow: '0 4px 14px rgba(16, 185, 129, 0.3)', transition: 'all 0.2s ease', whiteSpace: 'nowrap' },
     secondaryBtn: { background: 'var(--surface-2)', color: 'var(--text)', border: '1.5px solid var(--border)', padding: '.5rem 1rem', borderRadius: '8px', fontWeight: 500, fontSize: '.9rem', cursor: 'pointer' },
     dangerBtn: { background: 'rgba(220, 38, 38, 0.1)', color: '#dc2626', border: 'none', padding: '.5rem 1rem', borderRadius: '8px', fontSize: '.85rem', fontWeight: 500, cursor: 'pointer' },
-    formCard: { background: 'var(--surface-1)', borderRadius: '16px', padding: 'clamp(1rem, 3vw, 1.5rem)', marginBottom: '1.5rem', border: '1px solid var(--border)', boxShadow: '0 4px 20px rgba(0,0,0,0.05)' },
+    formCard: { background: 'var(--surface)', borderRadius: '16px', padding: 'clamp(1rem, 3vw, 1.5rem)', marginBottom: '1.5rem', border: '1px solid var(--border)', boxShadow: '0 4px 20px rgba(0,0,0,0.05)' },
     formTitle: { margin: '0 0 1.25rem 0', fontSize: '1.25rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '.5rem' },
     formGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' },
     formGroup: { display: 'flex', flexDirection: 'column', gap: '.4rem' },
     formLabel: { fontSize: '.85rem', fontWeight: 500, color: 'var(--text)' },
-    formInput: { padding: '.75rem 1rem', borderRadius: '10px', border: '1.5px solid var(--border)', fontSize: '1rem', background: 'var(--background)', width: '100%', boxSizing: 'border-box' },
-    textarea: { padding: '.75rem 1rem', borderRadius: '10px', border: '1.5px solid var(--border)', fontSize: '1rem', background: 'var(--background)', resize: 'vertical', minHeight: '80px', fontFamily: 'inherit', width: '100%', boxSizing: 'border-box' },
+    formInput: { padding: '.75rem 1rem', borderRadius: '10px', border: '1.5px solid var(--border)', fontSize: '1rem', background: 'var(--surface)', color: 'var(--text)', width: '100%', boxSizing: 'border-box' },
+    textarea: { padding: '.75rem 1rem', borderRadius: '10px', border: '1.5px solid var(--border)', fontSize: '1rem', background: 'var(--surface)', color: 'var(--text)', resize: 'vertical', minHeight: '80px', fontFamily: 'inherit', width: '100%', boxSizing: 'border-box' },
     chipContainer: { display: 'flex', flexWrap: 'wrap', gap: '.4rem', marginTop: '.25rem' },
     chip: { padding: '.4rem .75rem', borderRadius: '20px', fontSize: '.8rem', fontWeight: 500, cursor: 'pointer', border: '1.5px solid var(--border)', background: 'var(--surface-2)', transition: 'all 0.15s ease', userSelect: 'none' },
     statsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '1rem', marginBottom: '1.5rem' },
     statCard: { background: 'var(--surface-1)', borderRadius: '16px', padding: 'clamp(.75rem, 2vw, 1.25rem)', textAlign: 'center', cursor: 'pointer', border: '2px solid transparent', transition: 'all 0.2s ease', boxShadow: '0 2px 10px rgba(0,0,0,0.04)' },
     statNumber: { fontSize: 'clamp(1.75rem, 5vw, 2.5rem)', fontWeight: 700, lineHeight: 1, marginBottom: '.25rem' },
     statLabel: { fontSize: 'clamp(.75rem, 2vw, .9rem)', color: 'var(--muted)', fontWeight: 500 },
-    glanceCard: { background: 'var(--surface-1)', borderRadius: '16px', padding: '1rem 1.25rem', marginBottom: '1rem', border: '1px solid var(--border)' },
+    glanceCard: { background: 'var(--surface)', borderRadius: '16px', padding: '1rem 1.25rem', marginBottom: '1rem', border: '1px solid var(--border)' },
     glanceTitle: { margin: '0 0 .75rem 0', fontSize: '.8rem', fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.05em' },
-    filterBar: { background: 'var(--surface-1)', borderRadius: '16px', padding: '1rem', marginBottom: '1rem', border: '1px solid var(--border)' },
+    filterBar: { background: 'var(--surface)', borderRadius: '16px', padding: '1rem', marginBottom: '1rem', border: '1px solid var(--border)' },
     filterRow: { display: 'flex', flexWrap: 'wrap', gap: '.75rem', alignItems: 'center' },
-    searchInput: { flex: '1 1 250px', minWidth: '150px', padding: '.75rem 1rem', paddingLeft: '2.5rem', borderRadius: '10px', border: '1.5px solid var(--border)', fontSize: '.95rem', background: 'var(--background)', backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239ca3af'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: '.75rem center', backgroundSize: '1.25rem' },
-    select: { padding: '.75rem 2rem .75rem 1rem', borderRadius: '10px', border: '1.5px solid var(--border)', fontSize: '.9rem', background: 'var(--background)', cursor: 'pointer', appearance: 'none', backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236b7280'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right .75rem center', backgroundSize: '1rem', minWidth: '130px' },
+    searchInput: { flex: '1 1 250px', minWidth: '150px', padding: '.75rem 1rem', paddingLeft: '2.5rem', borderRadius: '10px', border: '1.5px solid var(--border)', fontSize: '.95rem', background: 'var(--surface)', color: 'var(--text)', backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239ca3af'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: '.75rem center', backgroundSize: '1.25rem' },
+    select: { padding: '.75rem 2rem .75rem 1rem', borderRadius: '10px', border: '1.5px solid var(--border)', fontSize: '.9rem', background: 'var(--surface)', color: 'var(--text)', cursor: 'pointer', appearance: 'none', backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236b7280'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right .75rem center', backgroundSize: '1rem', minWidth: '130px' },
     mainGrid: { display: 'grid', gridTemplateColumns: '1fr', gap: '1rem' },
-    clientListCard: { background: 'var(--surface-1)', borderRadius: '16px', border: '1px solid var(--border)', overflow: 'hidden' },
+    clientListCard: { background: 'var(--surface)', borderRadius: '16px', border: '1px solid var(--border)', overflow: 'hidden' },
     clientListHeader: { padding: '1rem 1.25rem', borderBottom: '1px solid var(--border)', background: 'var(--surface-2)', position: 'sticky', top: 0, zIndex: 10 },
     clientListTitle: { margin: 0, fontSize: '1rem', fontWeight: 600 },
     clientListContent: { padding: '.75rem', maxHeight: '60vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '.5rem' },
-    clientCard: { padding: '1rem', borderRadius: '12px', border: '1.5px solid var(--border)', cursor: 'pointer', transition: 'all 0.15s ease', background: 'var(--background)' },
-    clientCardSelected: { borderColor: 'var(--accent)', background: 'rgba(16, 185, 129, 0.05)', boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.1)' },
+    clientCard: { padding: '1rem', borderRadius: '12px', border: '1.5px solid var(--border)', cursor: 'pointer', transition: 'all 0.15s ease', background: 'var(--surface)', color: 'var(--text)' },
+    clientCardSelected: { borderColor: 'var(--accent)', background: 'color-mix(in oklab, var(--surface) 85%, var(--accent) 15%)', boxShadow: '0 0 0 3px rgba(16, 185, 129, 0.1)' },
     clientName: { fontWeight: 600, fontSize: '1rem', margin: 0, display: 'flex', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap' },
     badge: { padding: '.2rem .6rem', borderRadius: '6px', fontSize: '.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.03em' },
     badgePlatform: { background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)', color: 'white' },
     badgeManual: { background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)', color: 'white' },
     householdBadge: { background: 'var(--surface-2)', padding: '.2rem .5rem', borderRadius: '6px', fontSize: '.75rem', fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: '.25rem' },
-    detailPanel: { background: 'var(--surface-1)', borderRadius: '16px', border: '1px solid var(--border)', overflow: 'hidden' },
+    detailPanel: { background: 'var(--surface)', borderRadius: '16px', border: '1px solid var(--border)', overflow: 'hidden' },
     detailContent: { padding: '1.25rem', maxHeight: '60vh', overflowY: 'auto' },
     detailEmpty: { textAlign: 'center', padding: '3rem 1.5rem', color: 'var(--muted)' },
     detailEmptyIcon: { fontSize: '3.5rem', marginBottom: '1rem', opacity: 0.5 },
@@ -648,7 +648,7 @@ export default function ChefAllClients() {
   }
 
   return (
-    <div style={styles.container}>
+    <div className="clients-page" style={styles.container}>
       {/* Header */}
       <header style={styles.header}>
         <div>
@@ -734,6 +734,21 @@ export default function ChefAllClients() {
           // Optionally refresh client data
         }}
       />
+
+      <style>{`
+        .clients-page input::placeholder,
+        .clients-page textarea::placeholder {
+          color: var(--muted, #666);
+        }
+        .clients-page select option {
+          color: var(--text, #333);
+          background: var(--surface, #fff);
+        }
+        .clients-page .client-card:hover {
+          border-color: var(--accent, #10b981);
+          background: color-mix(in oklab, var(--surface) 80%, var(--accent) 12%);
+        }
+      `}</style>
     </div>
   )
 }

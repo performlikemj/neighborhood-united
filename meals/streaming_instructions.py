@@ -13,8 +13,10 @@ import logging
 from django.core.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404
 from django.conf import settings
-from openai import OpenAI
-from openai import BadRequestError
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
 from pydantic import BaseModel, Field
 from meals.models import MealPlan, MealPlanMeal, Meal
 from meals.pydantic_models import Instructions as InstructionsSchema
@@ -23,8 +25,8 @@ from shared.utils import generate_user_context
 
 logger = logging.getLogger(__name__)
 
-# Set up OpenAI client
-client = OpenAI(api_key=settings.OPENAI_KEY)
+# Set up Groq client
+client = Groq(api_key=getattr(settings, "GROQ_API_KEY", None) or os.getenv("GROQ_API_KEY"))
 
 
 def generate_streaming_instructions(
@@ -225,93 +227,47 @@ def _generate_daily_instructions(meal_plan_meals) -> str:
     meals_json = json.dumps(meals_data)
     
     try:
-        # Call OpenAI to generate instructions
-        response = client.responses.create(
-            model="gpt-5-mini",
-            input=[
-                {
-                    "role": "developer",
-                    "content": (
-                        
-                        f"Generate clear, step-by-step cooking instructions based on provided meal data and user context in the specified language of {user_preferred_language}. "
-                        """
-                        Use the following schema to structure the instructions.
+        system_content = (
+            f"Generate clear, step-by-step cooking instructions based on provided meal data and user context in the specified language of {user_preferred_language}. "
+            """
+            Use the following schema to structure the instructions.
 
-                        # Steps
+            # Steps
 
-                        1. Analyze the meal data and user context to understand the recipe and any user-specific considerations.
-                        2. Break down the recipe into clear, manageable steps to guide the user through the cooking process.
-                        3. Assign a sequential step number to each instruction to maintain a logical order.
-                        4. Provide a brief description for each step, ensuring it is easy to understand and implement.
-                        5. Estimate the duration of each step and include it, or default to 'N/A' if it can't be determined.
+            1. Analyze the meal data and user context to understand the recipe and any user-specific considerations.
+            2. Break down the recipe into clear, manageable steps to guide the user through the cooking process.
+            3. Assign a sequential step number to each instruction to maintain a logical order.
+            4. Provide a brief description for each step, ensuring it is easy to understand and implement.
+            5. Estimate the duration of each step and include it, or default to 'N/A' if it can't be determined.
 
-                        # Output Format
+            # Output Format
 
-                        ```JSON
-                        {
-                            "steps": [
-                                {
-                                    "step_number": int,
-                                    "description": "string",
-                                    "duration": "string or 'N/A'"
-                                },
-                                ...
-                            ]
-                        }
-                        ```
+            ```JSON
+            {
+                "steps": [
+                    {
+                        "step_number": int,
+                        "description": "string",
+                        "duration": "string or 'N/A'"
+                    },
+                    ...
+                ]
+            }
+            ```
 
-                        # Examples
+            # Notes
 
-                        **Example 1:**
-                        - *Input:* Data for making pasta and user prefers instructions in Spanish.
-                        - *Output:*
-                        ```JSON
-                        {
-                            "steps": [
-                                {
-                                    "step_number": 1,
-                                    "description": "Hierva agua en una olla grande.",
-                                    "duration": "10 minutos"
-                                },
-                                {
-                                    "step_number": 2,
-                                    "description": "Añada la pasta y cocine según las instrucciones del paquete.",
-                                    "duration": "10-12 minutos"
-                                },
-                                ...
-                            ]
-                        }
-                        ```
-
-                        **Example 2:**
-                        - *Input:* Data for making pancakes and user prefers instructions in English.
-                        - *Output:*
-                        ```JSON
-                        {
-                            "steps": [
-                                {
-                                    "step_number": 1,
-                                    "description": "Mix flour, sugar, and baking powder in a bowl.",
-                                    "duration": "5 minutes"
-                                },
-                                {
-                                    "step_number": 2,
-                                    "description": "Pour milk and melted butter into the mixture.",
-                                    "duration": "2 minutes"
-                                },
-                                ...
-                            ]
-                        }
-                        ```
-
-                        # Notes
-
-                        - Duration is important to manage user's time expectations. Provide your best estimate or use 'N/A' if it can't be determined.
-                        - Ensure instructions are concise to maintain user engagement.
-                        - Translate the instructions accurately into the user's preferred language.
-                        """
-                    )
-                },
+            - Duration is important to manage user's time expectations. Provide your best estimate or use 'N/A' if it can't be determined.
+            - Ensure instructions are concise to maintain user engagement.
+            - Translate the instructions accurately into the user's preferred language.
+            """
+        )
+        
+        # Call Groq to generate instructions
+        response = client.chat.completions.create(
+            model=getattr(settings, 'GROQ_MODEL', 'llama-3.3-70b-versatile'),
+            messages=[
+                {"role": "system", "content": system_content},
                 {
                     "role": "user",
                     "content": (
@@ -324,16 +280,16 @@ def _generate_daily_instructions(meal_plan_meals) -> str:
                     )
                 }
             ],
-            text={
-                "format": {
-                'type': 'json_schema',
-                'name': 'get_instructions',
-                'schema': InstructionsSchema.model_json_schema()
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "get_instructions",
+                    "schema": InstructionsSchema.model_json_schema()
                 }
             }
         )
         
-        instructions = response.output_text
+        instructions = response.choices[0].message.content
         return instructions
         
     except BadRequestError as e:
@@ -400,12 +356,12 @@ def _generate_bulk_prep_instructions(meal_plan) -> str:
     meals_json = json.dumps(meals_data)
     
     try:
-        # Call OpenAI to generate instructions
-        response = client.responses.create(
-            model="gpt-5-mini",
-            input=[
+        # Call Groq to generate instructions
+        response = client.chat.completions.create(
+            model=getattr(settings, 'GROQ_MODEL', 'llama-3.3-70b-versatile'),
+            messages=[
                 {
-                    "role": "developer",
+                    "role": "system",
                     "content": (
                         f"You are a helpful assistant that generates bulk meal preparation instructions in {user_preferred_language} based on the provided meal data and user context. Create practical, efficient instructions for preparing multiple meals at once."
                     )
@@ -423,16 +379,16 @@ def _generate_bulk_prep_instructions(meal_plan) -> str:
                     )
                 }
             ],
-            text={
-                "format": {
-                'type': 'json_schema',
-                'name': 'get_instructions',
-                'schema': InstructionsSchema.model_json_schema()
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "get_instructions",
+                    "schema": InstructionsSchema.model_json_schema()
                 }
             }
         )
         
-        instructions = response.output_text
+        instructions = response.choices[0].message.content
         return instructions
         
     except BadRequestError as e:

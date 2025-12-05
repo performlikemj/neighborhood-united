@@ -14,7 +14,6 @@ from typing import Dict, List, Optional, Any, Union
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404
 from django.db.models import Q
-from openai import OpenAI, BadRequestError, OpenAIError
 from custom_auth.models import CustomUser
 from meals.models import DietaryPreference, Meal, CustomDietaryPreference
 from meals.serializers import DietaryPreferenceSerializer, MealSerializer
@@ -23,7 +22,7 @@ from django.conf import settings
 import traceback
 from shared.utils import (
     check_allergy_alert as _util_check_allergy_alert,
-    get_openai_client
+    get_groq_client
 )
 import re
 
@@ -422,9 +421,9 @@ def check_meal_compatibility(user_id: int, meal_id: int) -> dict:
         }
 
         # === 3. Call Responses API with JSON-mode + schema =================
-        response = get_openai_client().responses.create(
+        response = get_groq_client().chat.completions.create(
             model="gpt-5-nano",
-            input=[{"role": "developer", "content": system_message},
+            messages=[{"role": "system", "content": system_message},
                    {"role": "user",   "content": json.dumps(user_payload)}],
             text={
                 "format": {
@@ -436,7 +435,7 @@ def check_meal_compatibility(user_id: int, meal_id: int) -> dict:
         )
 
         # Parse JSON then load into the Pydantic model so we can use attribute access
-        result_data = json.loads(response.output_text)
+        result_data = json.loads(response.choices[0].message.content)
         if isinstance(result_data, list):
             candidate = next((item for item in result_data if isinstance(item, dict)), None)
             if candidate is None and result_data:
@@ -645,7 +644,7 @@ def check_allergy_alert(user_id: int, description: str = None) -> dict:
 
         # Check the description of the meal and cross-reference it with the user's allergies
         if description:
-            response = get_openai_client().responses.create(
+            response = get_groq_client().chat.completions.create(
                 model="gpt-5-nano",
                 input= (
                 """
@@ -720,7 +719,7 @@ def check_allergy_alert(user_id: int, description: str = None) -> dict:
                 """
                 )
             )
-            check = response.output_text
+            check = response.choices[0].message.content
             return {
                 "status": "success",
                 "message": check

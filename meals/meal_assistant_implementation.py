@@ -10,29 +10,17 @@ from django.conf import settings
 from django.conf.locale import LANG_INFO  # Add this import
 from utils.redis_client import get, set, delete
 from django.utils import timezone
-from openai import OpenAI
 try:
-    from groq import Groq  # Optional: used when GROQ_API_KEY is set
+    from groq import Groq  # Groq client for AI inference
 except Exception:  # pragma: no cover
     Groq = None
-from openai.types.responses import (
-    # high‑level lifecycle events
-    ResponseCreatedEvent,
-    ResponseInProgressEvent,
-    ResponseCompletedEvent,
-    # assistant message streaming
-    ResponseOutputMessage,
-    ResponseOutputItemAddedEvent,
-    ResponseOutputItemDoneEvent,
-    ResponseContentPartAddedEvent,
-    ResponseTextDeltaEvent,
-    ResponseTextDoneEvent,
-    # function‑calling events
-    ResponseFunctionToolCall,
-    ResponseFunctionCallArgumentsDeltaEvent,
-    ResponseFunctionCallArgumentsDoneEvent,
-)
-from openai import BadRequestError
+
+try:
+    from openai import OpenAI  # OpenAI client for responses API (structured output, streaming)
+except Exception:  # pragma: no cover
+    OpenAI = None
+
+# Note: Using OpenAI responses API for complex features, Groq for simpler calls
 from django_countries.fields import Country
 import decimal as _decimal
 import datetime as _dt
@@ -1179,16 +1167,23 @@ class MealPlanningAssistant:
     """sautai meal‑planning assistant with guest/auth modes and parallel‑tool support."""
 
     def __init__(self, user_id: Optional[Union[int, str]] = None):
-        self.client = OpenAI(api_key=settings.OPENAI_KEY)
-        # Optional Groq client for structured JSON and simple inference
-        self.groq = None
-        try:
-            groq_key = getattr(settings, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
-            if groq_key and Groq is not None:
-                self.groq = Groq(api_key=groq_key)
-
-        except Exception:
+        # Initialize Groq client for simpler AI calls
+        groq_key = getattr(settings, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
+        if groq_key and Groq is not None:
+            self.groq = Groq(api_key=groq_key)
+        else:
             self.groq = None
+        
+        # Initialize OpenAI client for responses API (structured output, streaming with tools)
+        openai_key = getattr(settings, 'OPENAI_KEY', None) or os.getenv('OPENAI_KEY')
+        if openai_key and OpenAI is not None:
+            self.client = OpenAI(api_key=openai_key)
+        else:
+            self.client = None
+            
+        # Ensure at least one client is available
+        if self.client is None and self.groq is None:
+            raise ValueError("No AI client available - either OPENAI_KEY or GROQ_API_KEY must be set")
         # Better detection of numeric user IDs (authenticated users)
         if user_id is not None:
             if isinstance(user_id, numbers.Number) or (isinstance(user_id, str) and user_id.isdigit()):

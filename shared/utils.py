@@ -30,6 +30,10 @@ import os
 import openai
 from openai import OpenAI
 from openai import OpenAIError
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
 from django.utils import timezone
 from django.utils.formats import date_format
 from django.forms.models import model_to_dict
@@ -104,11 +108,20 @@ def safe_parse_groq_response(
         raise
 
 def get_openai_client():
-    """Get OpenAI client with lazy initialization."""
+    """Get OpenAI client with lazy initialization. Used only for embeddings."""
     api_key = os.getenv('OPENAI_KEY')
     if not api_key:
         raise ValueError("OPENAI_KEY not found in settings")
     return OpenAI(api_key=api_key)
+
+def get_groq_client():
+    """Get Groq client with lazy initialization for AI text generation."""
+    api_key = os.getenv('GROQ_API_KEY')
+    if not api_key:
+        raise ValueError("GROQ_API_KEY not found in settings")
+    if Groq is None:
+        raise ImportError("groq package is not installed")
+    return Groq(api_key=api_key)
 
 # Helper function to get language name
 def _get_language_name(language_code):
@@ -308,19 +321,19 @@ def find_nearby_supermarkets(request):
         try:
             from shared.pydantic_models import GeoCoordinates
             user_address_string = f"The user's postal code is {address.input_postalcode} in the country of {address.country}"
-            response = get_openai_client().responses.create(
-                model="gpt-5-mini",
-                input=[
+            response = get_groq_client().chat.completions.create(
+                model=settings.GROQ_MODEL,
+                messages=[
                     {
-                        "role": "developer",
+                        "role": "system",
                         "content": """
                             Provide the approximate latitude and longitude coordinates for a given user's address.
 
                             # Steps
 
                             1. Analyze the given address to ensure it is properly formatted and complete.
-                            2. Use a geolocation API or database to convert the address into latitude and longitude coordinates.
-                            3. Verify the accuracy of the coordinates obtained if possible.
+                            2. Use your knowledge to provide approximate latitude and longitude coordinates.
+                            3. Provide reasonable estimates based on the postal code and country.
 
                             # Output Format
 
@@ -335,7 +348,7 @@ def find_nearby_supermarkets(request):
 
                             # Notes
 
-                            - If the address is incomplete or cannot be geolocated, return a message indicating the issue.
+                            - If the address is incomplete or cannot be geolocated, provide the best estimate for the region.
                             - Ensure privacy and data protection when handling user addresses.
                         """
                     },
@@ -344,16 +357,15 @@ def find_nearby_supermarkets(request):
                         "content": user_address_string
                     }
                 ],
-                tools=[{"type": "web_search_preview"}],
-                text={
-                    "format": {
-                        'type': 'json_schema',
-                        'name': 'GeoCoordinates',
-                        'schema': GeoCoordinates.model_json_schema()
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "GeoCoordinates",
+                        "schema": GeoCoordinates.model_json_schema()
                     }
                 }
             )
-            geo_string = response.output_text # Get the JSON string
+            geo_string = response.choices[0].message.content  # Get the JSON string
             
             # Parse the JSON string into a Python dictionary
             geo_data = json.loads(geo_string) 
@@ -845,11 +857,11 @@ def is_question_relevant(question):
     - Access information on healthy meal options and ingredients.
     """
 
-    response = get_openai_client().chat.completions.create(
-        model="gpt-5-nano",
+    response = get_groq_client().chat.completions.create(
+        model=settings.GROQ_MODEL,
         messages=[
             {
-                "role": "developer",
+                "role": "system",
                 "content": """
                     Determine if a given question is relevant to the application's functionalities related to food delivery, meal planning, health, nutrition, and diet, and return 'True' for relevant or 'False' for non-relevant questions.
 
@@ -903,14 +915,13 @@ def is_question_relevant(question):
             }
         ],
         response_format={
-            'type': 'json_schema',
-            'json_schema': 
-                {
-                    "name": "Instructions", 
-                    "schema": RelevantSchema.model_json_schema()
-                }
+            "type": "json_schema",
+            "json_schema": {
+                "name": "Instructions", 
+                "schema": RelevantSchema.model_json_schema()
             }
-        )
+        }
+    )
 
     # Interpret the model's response
     response_content = response.choices[0].message.content
@@ -998,11 +1009,11 @@ def recommend_follow_up(request, context):
         """
 
     try:
-        response = get_openai_client().responses.create(
-            model="gpt-5-nano",
-            input=[
+        response = get_groq_client().chat.completions.create(
+            model=settings.GROQ_MODEL,
+            messages=[
                 {
-                    "role": "developer",
+                    "role": "system",
                     "content": (
                         "Analyze the full context of the message so far. "
                         "Given the library of tools available, suggest recommended follow-up questions to ask the meal planning assistant. "
@@ -1019,16 +1030,16 @@ def recommend_follow_up(request, context):
                     )
                 }
             ],
-            text={
-                "format": {
-                    'type': 'json_schema',
-                    'name': 'follow_up',
-                    'schema': FollowUpSchema.model_json_schema()
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "follow_up",
+                    "schema": FollowUpSchema.model_json_schema()
                 }
             }
-            )
-# Correct way to access the response content
-        response_content = response.output_text
+        )
+        # Get the response content from Groq
+        response_content = response.choices[0].message.content
         return response_content.strip().split('\n')
 
     except Exception as e:
@@ -1343,14 +1354,16 @@ def update_user_info(request):
         if user_goal:
             goal, created = GoalTracking.objects.get_or_create(goal_description=user_goal)
             user.goal.goal_description = goal
-            # Use responses API to update the goal name
+            # Use Groq to update the goal name
             if not user_goal_name:
-                response = get_openai_client().responses.create(
-                    model="gpt-5-nano",
-                    instructions="Based on the user's goal description, generate a concise and descriptive goal name.",
-                    input=[{"role":"user","content":user_goal}],
+                response = get_groq_client().chat.completions.create(
+                    model=settings.GROQ_MODEL,
+                    messages=[
+                        {"role": "system", "content": "Based on the user's goal description, generate a concise and descriptive goal name."},
+                        {"role": "user", "content": user_goal}
+                    ],
                 )
-                goal_name = response.output_text
+                goal_name = response.choices[0].message.content
                 user.goal.goal_name = goal_name
             else:
                 user.goal.goal_name = user_goal_name
@@ -1496,14 +1509,14 @@ def generate_review_summary(object_id, category):
     for review in reviews:
         formatted_summaries += f" - {review.content}\n"
 
-    # Step 3: Feed the formatted string into GPT-3.5-turbo-1106 to generate the overall summary
+    # Step 3: Feed the formatted string into Groq to generate the overall summary
     try:
-        response = get_openai_client().chat.completions.create(
-            model="gpt-5-mini",
+        response = get_groq_client().chat.completions.create(
+            model=settings.GROQ_MODEL,
             messages=[{"role": "user", "content": formatted_summaries}],
         )
-        overall_summary = response['choices'][0]['message']['content']
-    except OpenAIError as e:
+        overall_summary = response.choices[0].message.content
+    except Exception as e:
         return {"message": f"An error occurred: {str(e)}", "current_time": timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
 
     # Step 4: Store the overall summary in the database
@@ -1518,11 +1531,11 @@ def generate_review_summary(object_id, category):
 # Function to generate a summarized title
 def generate_summary_title(question):
     try:
-        response = get_openai_client().responses.create(
-            model="gpt-5-nano",
+        response = get_groq_client().chat.completions.create(
+            model=settings.GROQ_MODEL,
             messages=[
                 {
-                    "role": "developer",
+                    "role": "system",
                     "content": "You are a helpful assistant that generates concise titles for chat conversations."
                 },
                 {
@@ -1531,9 +1544,9 @@ def generate_summary_title(question):
                 }
             ],
         )
-        summary = response.output_text
+        summary = response.choices[0].message.content
         return summary
-    except OpenAIError as e:
+    except Exception as e:
         return question[:254]  # Fallback to truncating the question if an error occurs
 
 
@@ -1854,11 +1867,11 @@ def create_meal(request=None, user_id=None, name=None, dietary_preferences=None,
                     else 'No specific goals'
                 )
                 try:
-                    response = get_openai_client().chat.completions.create(
-                        model="gpt-5-mini",
+                    response = get_groq_client().chat.completions.create(
+                        model=settings.GROQ_MODEL,
                         messages=[
                             {
-                                "role": "developer",
+                                "role": "system",
                                 "content": "You are a helpful assistant that generates a meal, its description, and dietary preferences based on information about the user."
                             },
                             {
@@ -1872,12 +1885,11 @@ def create_meal(request=None, user_id=None, name=None, dietary_preferences=None,
                             }
                         ],
                         response_format={
-                            'type': 'json_schema',
-                            'json_schema': 
-                                {
-                                    "name": "Meal", 
-                                    "schema": MealOutputSchema.model_json_schema()
-                                }
+                            "type": "json_schema",
+                            "json_schema": {
+                                "name": "Meal", 
+                                "schema": MealOutputSchema.model_json_schema()
+                            }
                         }
                     )
 

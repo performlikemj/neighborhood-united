@@ -8,7 +8,10 @@ from custom_auth.models import CustomUser
 from django.db import transaction
 import requests
 from django.core.files.base import ContentFile
-from openai import OpenAI
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
 from django.conf import settings
 from rest_framework.test import APIRequestFactory
 from meals.email_service import generate_shopping_list, generate_user_summary, mark_summary_stale

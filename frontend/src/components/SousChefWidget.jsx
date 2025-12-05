@@ -8,16 +8,61 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { CHEF_EMOJIS } from '../utils/emojis.js'
 import FamilySelector from './FamilySelector.jsx'
 import SousChefChat from './SousChefChat.jsx'
 import { api } from '../api.js'
 import { useSousChefNotifications } from '../contexts/SousChefNotificationContext.jsx'
 
+// Resize configuration
+const MIN_WIDTH = 320
+const MIN_HEIGHT = 400
+const DEFAULT_WIDTH = 380
+const DEFAULT_HEIGHT = 520
+
+// Dynamic threshold calculation based on screen size
+function getExpandThresholds() {
+  const screenWidth = window.innerWidth
+  const screenHeight = window.innerHeight
+  
+  // Phone (< 640px): expand at 90% of screen
+  if (screenWidth < 640) {
+    return {
+      width: Math.floor(screenWidth * 0.9),
+      height: Math.floor(screenHeight * 0.7)
+    }
+  }
+  
+  // Tablet (640px - 1024px): expand at 70% of screen
+  if (screenWidth < 1024) {
+    return {
+      width: Math.floor(screenWidth * 0.7),
+      height: Math.floor(screenHeight * 0.65)
+    }
+  }
+  
+  // Small desktop (1024px - 1440px): expand at 50% of screen
+  if (screenWidth < 1440) {
+    return {
+      width: Math.floor(screenWidth * 0.5),
+      height: Math.floor(screenHeight * 0.6)
+    }
+  }
+  
+  // Large desktop (>= 1440px): fixed thresholds
+  return {
+    width: 700,
+    height: 750
+  }
+}
+
 export default function SousChefWidget({ 
   sousChefEmoji = '🧑‍🍳',
   onEmojiChange
 }) {
+  const navigate = useNavigate()
+  
   // Notification context
   let notifications = null
   try {
@@ -39,9 +84,34 @@ export default function SousChefWidget({
   const [toastNotification, setToastNotification] = useState(null)
   const [pendingContext, setPendingContext] = useState(null)
   
+  // Resize state
+  const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH)
+  const [panelHeight, setPanelHeight] = useState(DEFAULT_HEIGHT)
+  const [isResizing, setIsResizing] = useState(false)
+  const [resizeDirection, setResizeDirection] = useState(null)
+  const [expandThresholds, setExpandThresholds] = useState(getExpandThresholds)
+  const [isExpanding, setIsExpanding] = useState(false)
+  
+  // Update thresholds on window resize
+  useEffect(() => {
+    const handleWindowResize = () => {
+      setExpandThresholds(getExpandThresholds())
+    }
+    
+    window.addEventListener('resize', handleWindowResize)
+    return () => window.removeEventListener('resize', handleWindowResize)
+  }, [])
+  
+  // Calculate how close we are to threshold (for visual feedback)
+  const widthProgress = Math.min((panelWidth - MIN_WIDTH) / (expandThresholds.width - MIN_WIDTH), 1)
+  const heightProgress = Math.min((panelHeight - MIN_HEIGHT) / (expandThresholds.height - MIN_HEIGHT), 1)
+  const expandProgress = Math.max(widthProgress, heightProgress)
+  const isNearThreshold = expandProgress > 0.7
+  
   const widgetRef = useRef(null)
   const emojiPickerRef = useRef(null)
   const prevUnreadCount = useRef(0)
+  const resizeStartRef = useRef({ x: 0, y: 0, width: 0, height: 0 })
 
   // Sync emoji from props
   useEffect(() => {
@@ -147,6 +217,110 @@ export default function SousChefWidget({
     setShowEmojiPicker(false)
   }, [notifications])
 
+  // Get the current draft input from the SousChefChat component
+  const chatInputRef = useRef(null)
+  
+  // Navigate to full page when threshold is exceeded (with smooth transition)
+  const navigateToFullPage = useCallback(() => {
+    // Start expansion animation
+    setIsExpanding(true)
+    
+    // Capture the current draft input before navigating
+    const draftInput = chatInputRef.current?.value || ''
+    
+    // Wait for animation to complete before navigating
+    setTimeout(() => {
+      const params = new URLSearchParams()
+      if (selectedFamily.familyId) {
+        params.set('familyId', selectedFamily.familyId)
+        params.set('familyType', selectedFamily.familyType)
+        if (selectedFamily.familyName) {
+          params.set('familyName', selectedFamily.familyName)
+        }
+      }
+      const queryString = params.toString()
+      // Pass draft input via router state
+      navigate(`/chefs/dashboard/sous-chef${queryString ? `?${queryString}` : ''}`, {
+        state: { draftInput }
+      })
+    }, 300) // Match animation duration
+  }, [navigate, selectedFamily])
+
+  // Resize handlers
+  const handleResizeStart = useCallback((e, direction) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsResizing(true)
+    setResizeDirection(direction)
+    resizeStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      width: panelWidth,
+      height: panelHeight
+    }
+  }, [panelWidth, panelHeight])
+
+  const handleResizeMove = useCallback((e) => {
+    if (!isResizing) return
+    
+    const { x: startX, y: startY, width: startWidth, height: startHeight } = resizeStartRef.current
+    const deltaX = startX - e.clientX  // Inverted because panel grows to left/top
+    const deltaY = startY - e.clientY
+    
+    let newWidth = startWidth
+    let newHeight = startHeight
+    
+    // Calculate new dimensions based on resize direction
+    if (resizeDirection.includes('w')) {
+      newWidth = Math.max(MIN_WIDTH, startWidth + deltaX)
+    }
+    if (resizeDirection.includes('n')) {
+      newHeight = Math.max(MIN_HEIGHT, startHeight + deltaY)
+    }
+    if (resizeDirection.includes('e')) {
+      newWidth = Math.max(MIN_WIDTH, startWidth - deltaX)
+    }
+    if (resizeDirection.includes('s')) {
+      newHeight = Math.max(MIN_HEIGHT, startHeight - deltaY)
+    }
+    
+    // Check if we've exceeded the threshold to expand to full page (using dynamic thresholds)
+    if (newWidth >= expandThresholds.width || newHeight >= expandThresholds.height) {
+      setIsResizing(false)
+      setResizeDirection(null)
+      navigateToFullPage()
+      return
+    }
+    
+    setPanelWidth(newWidth)
+    setPanelHeight(newHeight)
+  }, [isResizing, resizeDirection, navigateToFullPage, expandThresholds])
+
+  const handleResizeEnd = useCallback(() => {
+    setIsResizing(false)
+    setResizeDirection(null)
+  }, [])
+
+  // Attach global mouse events for resize
+  useEffect(() => {
+    if (isResizing) {
+      document.addEventListener('mousemove', handleResizeMove)
+      document.addEventListener('mouseup', handleResizeEnd)
+      // Prevent text selection while resizing
+      document.body.style.userSelect = 'none'
+      document.body.style.cursor = resizeDirection === 'nw' ? 'nwse-resize' : 
+                                   resizeDirection === 'ne' ? 'nesw-resize' :
+                                   resizeDirection === 'n' ? 'ns-resize' :
+                                   resizeDirection === 'w' ? 'ew-resize' : 'default'
+      return () => {
+        document.removeEventListener('mousemove', handleResizeMove)
+        document.removeEventListener('mouseup', handleResizeEnd)
+        document.body.style.userSelect = ''
+        document.body.style.cursor = ''
+      }
+    }
+  }, [isResizing, resizeDirection, handleResizeMove, handleResizeEnd])
+
   const unreadCount = notifications?.unreadCount || 0
 
   return (
@@ -171,7 +345,38 @@ export default function SousChefWidget({
 
       {/* Expanded Chat Panel */}
       {isOpen && (
-        <div className="sous-chef-panel">
+        <div 
+          className={`sous-chef-panel ${isResizing ? 'resizing' : ''} ${isResizing && isNearThreshold ? 'near-threshold' : ''} ${isExpanding ? 'expanding' : ''}`}
+          style={{ width: panelWidth, height: panelHeight }}
+        >
+          {/* Resize Handles */}
+          <div 
+            className="resize-handle resize-n" 
+            onMouseDown={(e) => handleResizeStart(e, 'n')}
+          />
+          <div 
+            className="resize-handle resize-w" 
+            onMouseDown={(e) => handleResizeStart(e, 'w')}
+          />
+          <div 
+            className="resize-handle resize-nw" 
+            onMouseDown={(e) => handleResizeStart(e, 'nw')}
+          />
+          
+          {/* Resize hint indicator */}
+          {!isResizing && (
+            <div className="resize-hint" title="Drag to resize, expand for full view">
+              <span className="resize-hint-icon">⤡</span>
+            </div>
+          )}
+          
+          {/* Expand threshold indicator */}
+          {isResizing && isNearThreshold && (
+            <div className="expand-indicator">
+              <span className="expand-text">Release to expand</span>
+            </div>
+          )}
+
           {/* Panel Header */}
           <div className="panel-header">
             <div className="header-left">
@@ -201,6 +406,14 @@ export default function SousChefWidget({
                   🗑️
                 </button>
               )}
+              <button 
+                className="expand-btn" 
+                onClick={navigateToFullPage}
+                aria-label="Expand to full page"
+                title="Open full view"
+              >
+                ⛶
+              </button>
               <button 
                 className="close-btn" 
                 onClick={toggleWidget}
@@ -254,6 +467,7 @@ export default function SousChefWidget({
               familyName={selectedFamily.familyName}
               initialContext={pendingContext}
               onContextHandled={() => setPendingContext(null)}
+              externalInputRef={chatInputRef}
             />
           </div>
         </div>
@@ -437,8 +651,6 @@ export default function SousChefWidget({
           position: absolute;
           bottom: 70px;
           right: 0;
-          width: 380px;
-          height: 520px;
           background: var(--surface);
           border-radius: 16px;
           box-shadow: 0 8px 40px rgba(0, 0, 0, 0.25);
@@ -455,6 +667,144 @@ export default function SousChefWidget({
           --accent-color: var(--primary, #5cb85c);
           --accent-color-alpha: rgba(92, 184, 92, 0.14);
           --accent-gradient: linear-gradient(135deg, var(--primary, #5cb85c), var(--primary-700, #3E8F3E));
+        }
+
+        .sous-chef-panel.resizing {
+          transition: none;
+          user-select: none;
+        }
+
+        .sous-chef-panel.near-threshold {
+          box-shadow: 0 8px 40px rgba(0, 0, 0, 0.25), 
+                      0 0 0 2px var(--primary, #5cb85c),
+                      0 0 20px rgba(92, 184, 92, 0.3);
+        }
+
+        /* Expanding to full page animation */
+        .sous-chef-panel.expanding {
+          animation: expandToFullPage 0.3s ease-out forwards;
+          pointer-events: none;
+        }
+
+        @keyframes expandToFullPage {
+          0% {
+            opacity: 1;
+            transform: scale(1);
+          }
+          50% {
+            opacity: 1;
+            transform: scale(1.02);
+            box-shadow: 0 12px 60px rgba(0, 0, 0, 0.3),
+                        0 0 0 3px var(--primary, #5cb85c),
+                        0 0 40px rgba(92, 184, 92, 0.4);
+          }
+          100% {
+            opacity: 0;
+            transform: scale(1.05) translateY(-10px);
+            box-shadow: 0 20px 80px rgba(0, 0, 0, 0.2),
+                        0 0 60px rgba(92, 184, 92, 0.5);
+          }
+        }
+
+        /* Also fade out the FAB button during expansion */
+        .sous-chef-widget-container:has(.expanding) .sous-chef-fab {
+          animation: fadeOutFab 0.3s ease-out forwards;
+        }
+
+        @keyframes fadeOutFab {
+          0% { opacity: 1; transform: scale(1); }
+          100% { opacity: 0; transform: scale(0.8); }
+        }
+
+        /* Resize Handles */
+        .resize-handle {
+          position: absolute;
+          z-index: 20;
+        }
+
+        .resize-handle.resize-n {
+          top: 0;
+          left: 16px;
+          right: 16px;
+          height: 8px;
+          cursor: ns-resize;
+        }
+
+        .resize-handle.resize-w {
+          top: 16px;
+          left: 0;
+          bottom: 16px;
+          width: 8px;
+          cursor: ew-resize;
+        }
+
+        .resize-handle.resize-nw {
+          top: 0;
+          left: 0;
+          width: 16px;
+          height: 16px;
+          cursor: nwse-resize;
+        }
+
+        .resize-handle:hover {
+          background: rgba(92, 184, 92, 0.15);
+        }
+
+        /* Resize Hint */
+        .resize-hint {
+          position: absolute;
+          top: 4px;
+          left: 4px;
+          width: 20px;
+          height: 20px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: rgba(0, 0, 0, 0.1);
+          border-radius: 4px;
+          opacity: 0;
+          transition: opacity 0.2s;
+          z-index: 15;
+          pointer-events: none;
+        }
+
+        .sous-chef-panel:hover .resize-hint {
+          opacity: 0.6;
+        }
+
+        .resize-hint-icon {
+          font-size: 12px;
+          color: var(--muted);
+          transform: rotate(45deg);
+        }
+
+        /* Expand Threshold Indicator */
+        .expand-indicator {
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          background: linear-gradient(135deg, var(--primary, #5cb85c), var(--primary-700, #3E8F3E));
+          color: white;
+          padding: 12px 24px;
+          border-radius: 24px;
+          font-size: 0.9rem;
+          font-weight: 600;
+          z-index: 30;
+          box-shadow: 0 4px 20px rgba(92, 184, 92, 0.4);
+          animation: pulseGlow 1s ease-in-out infinite;
+          pointer-events: none;
+        }
+
+        @keyframes pulseGlow {
+          0%, 100% {
+            box-shadow: 0 4px 20px rgba(92, 184, 92, 0.4);
+            transform: translate(-50%, -50%) scale(1);
+          }
+          50% {
+            box-shadow: 0 6px 30px rgba(92, 184, 92, 0.6);
+            transform: translate(-50%, -50%) scale(1.02);
+          }
         }
 
         @keyframes slideUp {
@@ -581,6 +931,28 @@ export default function SousChefWidget({
 
         .close-btn:hover {
           background: rgba(255, 255, 255, 0.3);
+        }
+
+        .expand-btn {
+          background: rgba(255, 255, 255, 0.2);
+          border: none;
+          color: white;
+          width: 28px;
+          height: 28px;
+          border-radius: 50%;
+          cursor: pointer;
+          font-size: 0.9rem;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.15s;
+          opacity: 0.8;
+        }
+
+        .expand-btn:hover {
+          background: rgba(255, 255, 255, 0.3);
+          opacity: 1;
+          transform: scale(1.1);
         }
 
         /* Emoji Picker */
@@ -780,8 +1152,8 @@ export default function SousChefWidget({
           }
 
           .sous-chef-panel {
-            width: calc(100vw - 32px);
-            height: calc(100vh - 100px);
+            width: calc(100vw - 32px) !important;
+            height: calc(100vh - 100px) !important;
             max-height: 600px;
             right: -8px;
           }
@@ -789,6 +1161,12 @@ export default function SousChefWidget({
           .sous-chef-fab {
             width: 52px;
             height: 52px;
+          }
+
+          /* Hide resize handles on mobile */
+          .resize-handle,
+          .resize-hint {
+            display: none;
           }
         }
       `}</style>

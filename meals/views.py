@@ -49,7 +49,10 @@ from rest_framework.views import APIView
 import stripe
 import json
 import decimal
-from openai import OpenAI
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
 from utils.redis_client import get, set, delete
 from django.db import transaction
 import uuid
@@ -97,8 +100,8 @@ class EventStreamRenderer(renderers.BaseRenderer):
     def render(self, data, accepted_media_type=None, renderer_context=None):
         return data
 
-OPENAI_API_KEY = settings.OPENAI_KEY
-client = OpenAI(api_key=OPENAI_API_KEY)
+GROQ_API_KEY = getattr(settings, "GROQ_API_KEY", None) or os.getenv("GROQ_API_KEY")
+client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY and Groq else None
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 

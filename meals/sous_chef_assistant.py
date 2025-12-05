@@ -17,7 +17,6 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.utils import timezone
-from openai import OpenAI
 from pydantic import BaseModel, Field
 
 
@@ -55,6 +54,11 @@ try:
     from groq import Groq
 except Exception:
     Groq = None
+
+try:
+    from openai import OpenAI
+except Exception:
+    OpenAI = None
 
 from customer_dashboard.models import SousChefThread, SousChefMessage
 from chefs.models import Chef
@@ -210,17 +214,21 @@ class SousChefAssistant:
         self.family_id = family_id
         self.family_type = family_type
         
-        # Initialize OpenAI client
-        self.client = OpenAI(api_key=settings.OPENAI_KEY)
+        # Initialize Groq client for AI inference
+        groq_key = getattr(settings, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
+        if not groq_key or Groq is None:
+            raise ValueError("Groq client not available - GROQ_API_KEY must be set")
+        self.groq = Groq(api_key=groq_key)
+        # Alias for backward compatibility
+        self.client = self.groq
         
-        # Optional Groq client
-        self.groq = None
-        try:
-            groq_key = getattr(settings, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
-            if groq_key and Groq is not None:
-                self.groq = Groq(api_key=groq_key)
-        except Exception:
-            pass
+        # Initialize OpenAI client for structured outputs (Groq doesn't support beta.parse)
+        openai_key = getattr(settings, 'OPENAI_KEY', None) or os.getenv('OPENAI_KEY')
+        if openai_key and OpenAI is not None:
+            self.openai_client = OpenAI(api_key=openai_key)
+        else:
+            self.openai_client = None
+            logger.warning("OpenAI client not available - structured outputs will use fallback")
         
         # Load chef and family
         self.chef = Chef.objects.select_related('user').get(id=chef_id)
@@ -694,8 +702,36 @@ Conversation:
         # Save user message
         self._save_message(thread, 'chef', message)
         
-        current_history = history.copy()
+        # Convert history to Groq chat format
+        chat_messages = []
+        
+        # Add system message with instructions
+        chat_messages.append({"role": "system", "content": self.instructions})
+        
+        # Convert history to chat format, filtering out OpenAI-specific formats
+        for msg in history:
+            role = msg.get("role")
+            content = msg.get("content", "")
+            msg_type = msg.get("type")
+            
+            if msg_type == "function_call":
+                # Skip OpenAI-format function calls, they'll be handled differently
+                continue
+            elif msg_type == "function_call_output":
+                # Convert to Groq tool response format
+                chat_messages.append({
+                    "role": "tool",
+                    "content": msg.get("output", ""),
+                    "tool_call_id": msg.get("call_id", "")
+                })
+            elif role in ("user", "assistant", "system"):
+                chat_messages.append({"role": role, "content": content})
+        
+        # Add the new user message
+        chat_messages.append({"role": "user", "content": message})
+        
         final_response_id = None
+        response_text = ""
         max_iterations = 10
         iteration = 0
         
@@ -703,24 +739,40 @@ Conversation:
             iteration += 1
             
             try:
-                resp = self.client.responses.create(
+                # Use Groq chat completions API
+                resp = self.groq.chat.completions.create(
                     model=model,
-                    input=current_history,
-                    instructions=self.instructions,
+                    messages=chat_messages,
                     tools=self._get_tools(),
-                    parallel_tool_calls=True,
                 )
                 
-                final_response_id = resp.id
+                final_response_id = resp.id if hasattr(resp, 'id') else None
+                choice = resp.choices[0] if resp.choices else None
                 
-                # Check for tool calls
-                tool_calls = [item for item in getattr(resp, "output", []) if getattr(item, 'type', None) == "function_call"]
+                if not choice:
+                    break
                 
-                # Extract text response
-                response_text = self._extract_text(resp)
+                assistant_message = choice.message
+                response_text = assistant_message.content or ""
+                tool_calls = assistant_message.tool_calls or []
                 
+                # Add assistant response to history
                 if response_text:
-                    current_history.append({"role": "assistant", "content": response_text})
+                    chat_messages.append({"role": "assistant", "content": response_text})
+                elif tool_calls:
+                    # If there are tool calls but no text, add assistant message with tool calls
+                    chat_messages.append({
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {"name": tc.function.name, "arguments": tc.function.arguments}
+                            }
+                            for tc in tool_calls
+                        ]
+                    })
                 
                 # If no tool calls, we're done
                 if not tool_calls:
@@ -728,17 +780,9 @@ Conversation:
                 
                 # Execute tool calls
                 for tool_call in tool_calls:
-                    call_id = getattr(tool_call, 'call_id', None)
-                    name = getattr(tool_call, 'name', None)
-                    arguments = getattr(tool_call, 'arguments', '{}')
-                    
-                    # Add function call to history
-                    current_history.append({
-                        "type": "function_call",
-                        "name": name,
-                        "arguments": arguments,
-                        "call_id": call_id
-                    })
+                    call_id = tool_call.id
+                    name = tool_call.function.name
+                    arguments = tool_call.function.arguments
                     
                     # Execute the tool
                     try:
@@ -754,16 +798,19 @@ Conversation:
                         logger.error(f"Tool call error: {e}")
                         result = {"status": "error", "message": str(e)}
                     
-                    # Add result to history
-                    current_history.append({
-                        "type": "function_call_output",
-                        "call_id": call_id,
-                        "output": json.dumps(result)
+                    # Add tool result to history (Groq format)
+                    chat_messages.append({
+                        "role": "tool",
+                        "content": json.dumps(result),
+                        "tool_call_id": call_id
                     })
                 
             except Exception as e:
-                logger.error(f"Error in send_message: {e}")
+                logger.error(f"Error in send_message: {e}\n{traceback.format_exc()}")
                 return {"status": "error", "message": str(e)}
+        
+        # Convert chat_messages back to storage format for thread history
+        current_history = chat_messages
         
         # Save assistant response
         if response_text:
@@ -831,8 +878,13 @@ Example response structure:
         self._save_message(thread, 'chef', message)
         
         try:
-            # Use structured output with Pydantic model
-            completion = self.client.beta.chat.completions.parse(
+            # Check if OpenAI client is available for structured outputs
+            if self.openai_client is None:
+                # Fallback: Use Groq with JSON mode and manual parsing
+                return self._send_message_structured_fallback(thread, chat_messages, message)
+            
+            # Use OpenAI structured output with Pydantic model
+            completion = self.openai_client.beta.chat.completions.parse(
                 model=model,
                 messages=chat_messages,
                 response_format=SousChefResponse,
@@ -883,6 +935,73 @@ Example response structure:
                 "thread_id": thread.id
             }
 
+    def _send_message_structured_fallback(
+        self,
+        thread: 'SousChefThread',
+        chat_messages: List[Dict],
+        message: str
+    ) -> Dict[str, Any]:
+        """
+        Fallback method using Groq with JSON mode when OpenAI is not available.
+        Manually parses the JSON response into our structured format.
+        """
+        try:
+            # Use Groq with JSON mode
+            completion = self.groq.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=chat_messages,
+                response_format={"type": "json_object"},
+            )
+            
+            response_content = completion.choices[0].message.content
+            
+            # Parse JSON response
+            try:
+                parsed = json.loads(response_content)
+                # Validate it has the expected structure
+                if "blocks" not in parsed:
+                    # Wrap in blocks structure if needed
+                    parsed = {"blocks": [{"type": "text", "content": response_content}]}
+                
+                response_json = json.dumps(parsed)
+                
+                # Save to thread history
+                chat_messages.append({"role": "assistant", "content": response_json})
+                thread.openai_input_history = chat_messages
+                thread.save(update_fields=['openai_input_history', 'updated_at'])
+                
+                # Save message to database
+                self._save_message(thread, 'assistant', response_json)
+                
+                return {
+                    "status": "success",
+                    "content": parsed,
+                    "thread_id": thread.id
+                }
+            except json.JSONDecodeError:
+                # If JSON parsing fails, wrap as text block
+                fallback_content = {"blocks": [{"type": "text", "content": response_content}]}
+                response_json = json.dumps(fallback_content)
+                
+                chat_messages.append({"role": "assistant", "content": response_json})
+                thread.openai_input_history = chat_messages
+                thread.save(update_fields=['openai_input_history', 'updated_at'])
+                self._save_message(thread, 'assistant', response_json)
+                
+                return {
+                    "status": "success",
+                    "content": fallback_content,
+                    "thread_id": thread.id
+                }
+                
+        except Exception as e:
+            logger.error(f"Error in structured fallback: {e}\n{traceback.format_exc()}")
+            return {
+                "status": "error",
+                "message": str(e),
+                "thread_id": thread.id
+            }
+
     def stream_message(self, message: str) -> Generator[Dict[str, Any], None, None]:
         """Stream a message response."""
         thread = self._get_or_create_thread()
@@ -918,20 +1037,30 @@ Example response structure:
         history: List[Dict[str, Any]],
         thread: SousChefThread
     ) -> Generator[Dict[str, Any], None, None]:
-        """Core streaming logic."""
-        from openai.types.responses import (
-            ResponseCreatedEvent,
-            ResponseCompletedEvent,
-            ResponseTextDeltaEvent,
-            ResponseTextDoneEvent,
-            ResponseFunctionToolCall,
-            ResponseFunctionCallArgumentsDeltaEvent,
-            ResponseFunctionCallArgumentsDoneEvent,
-            ResponseOutputItemAddedEvent,
-            ResponseOutputItemDoneEvent,
-        )
+        """Core streaming logic using Groq's streaming API."""
+        # Convert history to Groq chat format
+        chat_messages = []
         
-        current_history = history[:]
+        # Add system message with instructions
+        chat_messages.append({"role": "system", "content": self.instructions})
+        
+        # Convert history to chat format
+        for msg in history:
+            role = msg.get("role")
+            content = msg.get("content", "")
+            msg_type = msg.get("type")
+            
+            if msg_type == "function_call":
+                continue
+            elif msg_type == "function_call_output":
+                chat_messages.append({
+                    "role": "tool",
+                    "content": msg.get("output", ""),
+                    "tool_call_id": msg.get("call_id", "")
+                })
+            elif role in ("user", "assistant", "system"):
+                chat_messages.append({"role": role, "content": content})
+        
         final_response_id = None
         max_iterations = 10
         iteration = 0
@@ -939,169 +1068,148 @@ Example response structure:
         while iteration < max_iterations:
             iteration += 1
             
-            stream = self.client.responses.create(
-                model=model,
-                input=current_history,
-                instructions=self.instructions,
-                tools=self._get_tools(),
-                stream=True,
-                parallel_tool_calls=True,
-            )
-            
-            buf = ""
-            calls: List[Dict[str, Any]] = []
-            wrapper_to_call: Dict[str, str] = {}
-            response_completed = False
-            
-            for ev in stream:
-                # Response created
-                if isinstance(ev, ResponseCreatedEvent):
-                    final_response_id = ev.response.id
-                    yield {"type": "response_id", "id": final_response_id}
-                    continue
+            try:
+                stream = self.groq.chat.completions.create(
+                    model=model,
+                    messages=chat_messages,
+                    tools=self._get_tools(),
+                    stream=True,
+                )
                 
-                # Response completed
-                if isinstance(ev, ResponseCompletedEvent):
-                    response_completed = True
-                    break
+                buf = ""
+                tool_calls_data: Dict[int, Dict] = {}  # index -> {id, name, arguments}
                 
-                # Text delta
-                if isinstance(ev, ResponseTextDeltaEvent):
-                    if ev.delta:
-                        buf += ev.delta
-                        yield {"type": "text", "content": ev.delta}
-                    continue
-                
-                if isinstance(ev, ResponseTextDoneEvent):
-                    if ev.text and not buf:
-                        buf = ev.text
-                        yield {"type": "text", "content": ev.text}
-                    continue
-                
-                # Function call arguments delta
-                if isinstance(ev, ResponseFunctionCallArgumentsDeltaEvent):
-                    if ev.item_id not in wrapper_to_call and getattr(ev, "item", None):
-                        cid = getattr(ev.item, "call_id", None)
-                        if cid:
-                            wrapper_to_call[ev.item_id] = cid
-                    real_id = wrapper_to_call.get(ev.item_id, ev.item_id)
-                    
-                    tgt = next((c for c in calls if c["id"] == real_id), None)
-                    if not tgt:
-                        tgt = {"id": real_id, "name": None, "args": ""}
-                        calls.append(tgt)
-                    tgt["args"] += ev.delta
-                    continue
-                
-                # Function call arguments done
-                if isinstance(ev, ResponseFunctionCallArgumentsDoneEvent):
-                    real_id = wrapper_to_call.get(ev.item_id, ev.item_id)
-                    entry = next((c for c in calls if c["id"] == real_id), None)
-                    if not entry:
+                for chunk in stream:
+                    if not chunk.choices:
                         continue
                     
-                    args_json = entry["args"]
-                    args_obj = json.loads(args_json) if args_json else {}
+                    choice = chunk.choices[0]
+                    delta = choice.delta
+                    
+                    # Check for response ID
+                    if hasattr(chunk, 'id') and chunk.id and not final_response_id:
+                        final_response_id = chunk.id
+                        yield {"type": "response_id", "id": final_response_id}
+                    
+                    # Handle text content
+                    if delta.content:
+                        buf += delta.content
+                        yield {"type": "text", "content": delta.content}
+                    
+                    # Handle tool calls
+                    if delta.tool_calls:
+                        for tc_delta in delta.tool_calls:
+                            idx = tc_delta.index
+                            if idx not in tool_calls_data:
+                                tool_calls_data[idx] = {"id": None, "name": None, "arguments": ""}
+                            
+                            if tc_delta.id:
+                                tool_calls_data[idx]["id"] = tc_delta.id
+                            if tc_delta.function:
+                                if tc_delta.function.name:
+                                    tool_calls_data[idx]["name"] = tc_delta.function.name
+                                    yield {
+                                        "type": "response.tool",
+                                        "tool_call_id": tool_calls_data[idx].get("id", f"call_{idx}"),
+                                        "name": tc_delta.function.name,
+                                        "output": None,
+                                    }
+                                if tc_delta.function.arguments:
+                                    tool_calls_data[idx]["arguments"] += tc_delta.function.arguments
+                    
+                    # Check for finish reason
+                    if choice.finish_reason:
+                        break
+                
+                # Process any accumulated text
+                if buf:
+                    chat_messages.append({"role": "assistant", "content": buf.strip()})
+                    yield {
+                        "type": "tool_result",
+                        "tool_call_id": "render_1",
+                        "name": "response.render",
+                        "output": {"markdown": buf},
+                    }
+                
+                # If no tool calls, we're done
+                if not tool_calls_data:
+                    if buf:
+                        self._save_message(thread, 'assistant', buf)
+                        thread.openai_input_history = chat_messages
+                        thread.latest_response_id = final_response_id
+                        thread.save(update_fields=['openai_input_history', 'latest_response_id', 'updated_at'])
+                    yield {"type": "response.completed"}
+                    break
+                
+                # Add assistant message with tool calls to history
+                chat_messages.append({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": tc["id"] or f"call_{idx}",
+                            "type": "function",
+                            "function": {"name": tc["name"], "arguments": tc["arguments"]}
+                        }
+                        for idx, tc in sorted(tool_calls_data.items())
+                    ]
+                })
+                
+                # Execute tool calls and emit events
+                for idx, call in sorted(tool_calls_data.items()):
+                    call_id = call["id"] or f"call_{idx}"
+                    args_json = call["arguments"]
+                    
+                    try:
+                        args_obj = json.loads(args_json) if args_json else {}
+                    except json.JSONDecodeError:
+                        args_obj = {}
                     
                     yield {
                         "type": "response.function_call",
-                        "name": entry["name"],
+                        "name": call["name"],
                         "arguments": args_obj,
-                        "call_id": real_id,
+                        "call_id": call_id,
                     }
                     
-                    current_history.append({
-                        "type": "function_call",
-                        "name": entry["name"],
-                        "arguments": args_json,
-                        "call_id": real_id
-                    })
-                    continue
-                
-                # Function call header
-                if isinstance(ev, ResponseOutputItemAddedEvent) and isinstance(ev.item, ResponseFunctionToolCall):
-                    item = ev.item
-                    wrapper_to_call[item.id] = item.call_id
-                    calls.append({"id": item.call_id, "name": item.name, "args": ""})
+                    try:
+                        from .sous_chef_tools import handle_sous_chef_tool_call
+                        result = handle_sous_chef_tool_call(
+                            name=call["name"],
+                            arguments=args_json,
+                            chef=self.chef,
+                            customer=self.customer,
+                            lead=self.lead
+                        )
+                    except Exception as e:
+                        logger.error(f"Tool call error: {e}")
+                        result = {"status": "error", "message": str(e)}
                     
                     yield {
-                        "type": "response.tool",
-                        "tool_call_id": item.call_id,
-                        "name": item.name,
-                        "output": None,
+                        "type": "tool_result",
+                        "tool_call_id": call_id,
+                        "name": call["name"],
+                        "output": result,
                     }
-                    continue
-            
-            # Flush buffered text
-            if buf:
-                current_history.append({"role": "assistant", "content": buf.strip()})
+                    
+                    # Add tool result to history
+                    chat_messages.append({
+                        "role": "tool",
+                        "content": _safe_json_dumps(result),
+                        "tool_call_id": call_id
+                    })
                 
-                # Emit render payload
-                yield {
-                    "type": "tool_result",
-                    "tool_call_id": "render_1",
-                    "name": "response.render",
-                    "output": {"markdown": buf},
-                }
-            
-            # If completed with text and no calls, we're done
-            if response_completed and buf and not calls:
-                # Save to DB
-                self._save_message(thread, 'assistant', buf)
-                thread.openai_input_history = current_history
-                thread.latest_response_id = final_response_id
-                thread.save(update_fields=['openai_input_history', 'latest_response_id', 'updated_at'])
+                # Reset tool_calls_data for next iteration
+                tool_calls_data = {}
                 
-                yield {"type": "response.completed"}
+            except Exception as e:
+                logger.error(f"Error in streaming: {e}\n{traceback.format_exc()}")
+                yield {"type": "error", "message": str(e)}
                 break
-            
-            # If no calls, we're done
-            if not calls:
-                if buf:
-                    self._save_message(thread, 'assistant', buf)
-                    thread.openai_input_history = current_history
-                    thread.latest_response_id = final_response_id
-                    thread.save(update_fields=['openai_input_history', 'latest_response_id', 'updated_at'])
-                yield {"type": "response.completed"}
-                break
-            
-            # Execute tool calls
-            for call in calls:
-                call_id = call["id"]
-                args_obj = json.loads(call["args"] or "{}")
-                
-                try:
-                    from .sous_chef_tools import handle_sous_chef_tool_call
-                    result = handle_sous_chef_tool_call(
-                        name=call["name"],
-                        arguments=json.dumps(args_obj),
-                        chef=self.chef,
-                        customer=self.customer,
-                        lead=self.lead
-                    )
-                except Exception as e:
-                    logger.error(f"Tool call error: {e}")
-                    result = {"status": "error", "message": str(e)}
-                
-                yield {
-                    "type": "tool_result",
-                    "tool_call_id": call_id,
-                    "name": call["name"],
-                    "output": result,
-                }
-                
-                current_history.append({
-                    "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": _safe_json_dumps(result),
-                })
-            
-            # Clear calls for next iteration
-            calls = []
         
-        # Final save if we exited the loop
+        # Final save
         if buf:
-            thread.openai_input_history = current_history
+            thread.openai_input_history = chat_messages
             thread.latest_response_id = final_response_id
             thread.save(update_fields=['openai_input_history', 'latest_response_id', 'updated_at'])
 

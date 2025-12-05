@@ -17,16 +17,15 @@ from django.conf import settings
 from django.core.cache import cache
 from collections import defaultdict
 from pydantic import ValidationError
-from openai import OpenAI, OpenAIError
 try:
-    from groq import Groq  # optional Groq client
+    from groq import Groq  # Groq client for inference
 except Exception:
     Groq = None
 from meals.models import MealPlanMeal, MealPlan, MealPlanInstruction, Instruction, Meal
 from meals.pydantic_models import Instructions as InstructionsSchema
 from meals.serializers import MealPlanMealSerializer
 from custom_auth.models import CustomUser
-from shared.utils import generate_user_context, get_openai_client, build_age_safety_note
+from shared.utils import generate_user_context, build_age_safety_note
 from meals.pantry_management import get_expiring_pantry_items
 from meals.pydantic_models import BulkPrepInstructions, DailyTask
 from django.template.loader import render_to_string
@@ -509,42 +508,27 @@ def generate_instructions(meal_plan_meal_ids, send_via_assistant: bool = False):
                     f"- **Substitutions**: {substitution_str.strip()}\n"
                     f"- **Chef note**: {chef_note.strip()}\n"
                 )
-                if groq_client:
-                    groq_resp = groq_client.chat.completions.create(
-                        model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
-                        messages=[
-                            {"role": "system", "content": developer_content},
-                            {"role": "user", "content": user_content},
-                        ],
-                        temperature=0.2,
-                        top_p=1,
-                        stream=False,
-                        response_format={
-                            "type": "json_schema",
-                            "json_schema": {
-                                "name": "get_instructions",
-                                "schema": InstructionsSchema.model_json_schema(),
-                            },
+                if not groq_client:
+                    raise ValueError("Groq client not available - GROQ_API_KEY must be set")
+                
+                groq_resp = groq_client.chat.completions.create(
+                    model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                    messages=[
+                        {"role": "system", "content": developer_content},
+                        {"role": "user", "content": user_content},
+                    ],
+                    temperature=0.2,
+                    top_p=1,
+                    stream=False,
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "get_instructions",
+                            "schema": InstructionsSchema.model_json_schema(),
                         },
-                    )
-                    instructions_content = groq_resp.choices[0].message.content or "{}"
-                else:
-                    response = get_openai_client().responses.create(
-                        model="gpt-5-mini",
-                        input=[
-                            {"role": "developer", "content": developer_content},
-                            {"role": "user", "content": user_content},
-                        ],
-                        text={
-                            "format": {
-                                'type': 'json_schema',
-                                'name': 'get_instructions',
-                                'schema': InstructionsSchema.model_json_schema()
-                            }
-                        },
-                    )
-
-                    instructions_content = response.output_text
+                    },
+                )
+                instructions_content = groq_resp.choices[0].message.content or "{}"
                 logger.info(f"Generated instructions for MealPlanMeal ID {meal_plan_meal.id}")
 
                 # Save the newly generated instruction (Using the imported Instruction model)
@@ -554,8 +538,8 @@ def generate_instructions(meal_plan_meal_ids, send_via_assistant: bool = False):
                     # Add any other fields if your Instruction model requires them
                 )
 
-            except OpenAIError as e:
-                # n8n traceback
+            except ValueError as e:
+                # Groq client unavailable
                 n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
                 requests.post(n8n_traceback_url, json={"error": str(e), "source":"generate_instructions", "traceback": traceback.format_exc()})
                 continue # Skip this meal
@@ -962,47 +946,30 @@ def generate_bulk_prep_instructions(meal_plan_id, send_via_assistant: bool = Tru
                 )
             }
         ]
-        # Generate the bulk prep instructions using Groq if available, else OpenAI
+        # Generate the bulk prep instructions using Groq
         groq_client = _get_groq_client()
-        generated_instructions_text = None
-        if groq_client:
-
-            groq_messages = [
-                {"role": ("system" if m.get("role") == "developer" else m.get("role")), "content": m.get("content")}
-                for m in messages
-            ]
-            groq_resp = groq_client.chat.completions.create(
-                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
-                messages=groq_messages,
-                temperature=0.3,
-                top_p=1,
-                stream=False,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "bulk_prep_instructions",
-                        "schema": BulkPrepInstructions.model_json_schema(),
-                    },
+        if not groq_client:
+            raise ValueError("Groq client not available - GROQ_API_KEY must be set")
+        
+        groq_messages = [
+            {"role": ("system" if m.get("role") == "developer" else m.get("role")), "content": m.get("content")}
+            for m in messages
+        ]
+        groq_resp = groq_client.chat.completions.create(
+            model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+            messages=groq_messages,
+            temperature=0.3,
+            top_p=1,
+            stream=False,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "bulk_prep_instructions",
+                    "schema": BulkPrepInstructions.model_json_schema(),
                 },
-            )
-            generated_instructions_text = (groq_resp.choices[0].message.content or "").strip()
-
-        else:
-            response = get_openai_client().responses.create(
-                model="gpt-5-mini", # Or gpt-4-turbo if more complexity needed
-                input=messages,
-                text={
-                    "format": {
-                    'type': 'json_schema',
-                    'name': 'bulk_prep_instructions',
-                    'schema': BulkPrepInstructions.model_json_schema()
-                    }
-                }
-            )
-
-            # Check if the response was successful
-            if response and response.output_text:
-                generated_instructions_text = response.output_text
+            },
+        )
+        generated_instructions_text = (groq_resp.choices[0].message.content or "").strip()
 
         if generated_instructions_text:
             # Create a new MealPlanInstruction

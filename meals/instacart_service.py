@@ -14,14 +14,13 @@ from typing import Dict, List, Optional, Any, Union
 from django.conf import settings
 from utils.redis_client import get, set, delete
 from meals.pydantic_models import Ingredient
-from openai import OpenAI
 try:
-    from groq import Groq  # optional groq client
+    from groq import Groq  # Groq client for inference
 except Exception:
     Groq = None
 from django.conf import settings
 import traceback
-from shared.utils import get_openai_client
+# Note: No OpenAI imports needed - using Groq only
 
 LEGACY_MEAL_PLAN = True
 
@@ -49,7 +48,12 @@ def normalize_lines(lines: list[str]) -> dict:
     # Prefer Groq structured output to directly produce a ShoppingList payload
     try:
         groq_client = _get_groq_client()
-        if groq_client:
+
+        if not groq_client:
+
+            raise ValueError("Groq client not available - GROQ_API_KEY must be set")
+
+        
             # Use ShoppingList schema for a proper top-level 'items' list
             from meals.pydantic_models import ShoppingList as ShoppingListSchema
             groq_resp = groq_client.chat.completions.create(
@@ -82,35 +86,8 @@ def normalize_lines(lines: list[str]) -> dict:
                 parsed = candidate or {}
             return parsed
     except Exception as _groq_err:
-        logger.debug(f"normalize_lines: Groq path failed or unavailable: {_groq_err}")
-
-    # Fallback to existing OpenAI responses client
-    r = get_openai_client().responses.create(
-        model="gpt-5-nano",
-        input=[{"role": "user", "content": prompt}],
-        text={
-            "format": {
-                'type': 'json_schema',
-                'name': 'normalized_ingredient_list',
-                'schema': Ingredient.model_json_schema()
-            }
-        }
-    )
-    # OpenAI responses returns JSON‑text; convert to dict
-    parsed = json.loads(r.output_text)
-    if isinstance(parsed, list):
-        candidate = next((item for item in parsed if isinstance(item, dict)), None)
-        if candidate is None and parsed:
-            first = parsed[0]
-            if isinstance(first, str):
-                try:
-                    inner = json.loads(first)
-                    if isinstance(inner, dict):
-                        candidate = inner
-                except Exception:
-                    pass
-        parsed = candidate or {}
-    return parsed
+        logger.error(f"normalize_lines: Groq call failed: {_groq_err}")
+        raise ValueError("Groq client not available or failed - GROQ_API_KEY must be set")
 
 
 # Don't initialize the API key at module level to avoid issues if settings aren't loaded yet

@@ -1,6 +1,5 @@
 from django.core.management.base import BaseCommand
 from meals.models import Meal, Dish, Ingredient
-from openai import OpenAI
 from django.conf import settings
 from meals.meal_embedding import update_embeddings
 

@@ -8,9 +8,8 @@ import numpy as np
 from celery import shared_task
 from django.db.models import Q
 from django.utils import timezone
-from openai import OpenAI
 try:
-    from groq import Groq  # optional Groq client
+    from groq import Groq  # Groq client for inference
 except Exception:
     Groq = None
 import uuid
@@ -22,9 +21,8 @@ from custom_auth.models import CustomUser
 from meals.models import Meal, MealPlan, MealPlanMeal, PantryItem, MealPlanMealPantryUsage, MealCompatibility
 from meals.pydantic_models import SanitySchema, UsageList
 from shared.utils import (generate_user_context, create_meal,
-                          get_embedding, cosine_similarity, get_openai_client)
+                          get_embedding, cosine_similarity)
 from meals.pantry_management import get_expiring_pantry_items, compute_effective_available_items
-from openai import OpenAIError, BadRequestError
 
 logger = logging.getLogger(__name__)
 
@@ -495,52 +493,27 @@ def perform_openai_sanity_check(meal, user):
         Meal dietary tags: {meal.dietary_preferences.all()} {meal.custom_dietary_preferences.all()}
         """
         groq_client = _get_groq_client()
-        if groq_client:
-            groq_resp = groq_client.chat.completions.create(
-                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
-                messages=[
-                    {"role": "system", "content": "You are a dietary-compliance checker. Return ONLY the JSON object that passes the provided schema; no prose."},
-                    {"role": "user", "content": checker_prompt},
-                ],
-                temperature=0.2,
-                top_p=1,
-                stream=False,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "sanity_check",
-                        "schema": SanitySchema.model_json_schema(),
-                    },
+        if not groq_client:
+            raise ValueError("Groq client not available - GROQ_API_KEY must be set")
+        
+        groq_resp = groq_client.chat.completions.create(
+            model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+            messages=[
+                {"role": "system", "content": "You are a dietary-compliance checker. Return ONLY the JSON object that passes the provided schema; no prose."},
+                {"role": "user", "content": checker_prompt},
+            ],
+            temperature=0.2,
+            top_p=1,
+            stream=False,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "sanity_check",
+                    "schema": SanitySchema.model_json_schema(),
                 },
-            )
-            gpt_output = groq_resp.choices[0].message.content or "{}"
-        else:
-            response = get_openai_client().responses.create(
-                model="gpt-5-mini",
-                input=[
-                    {
-                        "role": "developer",
-                        "content": (
-                            # Stable meta-instruction
-                            "You are a dietary-compliance checker. "
-                            "Return ONLY the JSON object that passes the provided schema; no prose."
-                        )
-                    },
-                    {
-                        "role": "user",
-                        "content": checker_prompt,
-                    }
-                ],
-                text={
-                    "format": {
-                        'type': 'json_schema',
-                        'name': 'sanity_check',
-                        'schema': SanitySchema.model_json_schema()
-                    }
-                }
-            )
-
-            gpt_output = response.output_text
+            },
+        )
+        gpt_output = groq_resp.choices[0].message.content or "{}"
         # Robustly parse and access JSON fields
         _parsed = json.loads(gpt_output)
         if isinstance(_parsed, list):
@@ -797,42 +770,27 @@ def generate_meal_details(
                     "additionalProperties": False,
                 }
                 groq_client = _get_groq_client()
-                if groq_client:
-                    groq_resp = groq_client.chat.completions.create(
-                        model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
-                        messages=[
-                            {"role": "system", "content": static_rules + "\n\nOutput must include a 'composed_dishes' array that covers all household members: at minimum provide dishes for babies (<2 years) as baby-safe, vegans if present, and a general dish for unrestricted members. Reuse one dish to cover multiple groups when possible (e.g., a vegan-general dish). Each dish object must match the ComposedDish schema in MealData: name, dietary_tags, target_groups, optional notes and ingredients, and include is_chef_dish. The meal 'name' MUST reference at least the primary composed dish (e.g., include that dish’s name)."},
-                            {"role": "user", "content": base_prompt},
-                        ],
-                        temperature=0.4,
-                        top_p=1,
-                        stream=False,
-                        response_format={
-                            "type": "json_schema",
-                            "json_schema": {
-                                "name": "meal_details",
-                                "schema": meal_json_schema,
-                            },
+                if not groq_client:
+                    raise ValueError("Groq client not available - GROQ_API_KEY must be set")
+                
+                groq_resp = groq_client.chat.completions.create(
+                    model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+                    messages=[
+                        {"role": "system", "content": static_rules + "\n\nOutput must include a 'composed_dishes' array that covers all household members: at minimum provide dishes for babies (<2 years) as baby-safe, vegans if present, and a general dish for unrestricted members. Reuse one dish to cover multiple groups when possible (e.g., a vegan-general dish). Each dish object must match the ComposedDish schema in MealData: name, dietary_tags, target_groups, optional notes and ingredients, and include is_chef_dish. The meal 'name' MUST reference at least the primary composed dish (e.g., include that dish’s name)."},
+                        {"role": "user", "content": base_prompt},
+                    ],
+                    temperature=0.4,
+                    top_p=1,
+                    stream=False,
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "meal_details",
+                            "schema": meal_json_schema,
                         },
-                    )
-                    gpt_output = groq_resp.choices[0].message.content or "{}"
-                else:
-                    response = get_openai_client().responses.create(
-                        model="gpt-5-mini",
-                        input=[
-                            {"role": "developer", "content": static_rules + "\n\nOutput must include a 'composed_dishes' array that covers all household members: at minimum provide dishes for babies (<2 years) as baby-safe, vegans if present, and a general dish for unrestricted members. Reuse one dish to cover multiple groups when possible (e.g., a vegan-general dish). Each dish object must match the ComposedDish schema in MealData: name, dietary_tags, target_groups, optional notes and ingredients, and include is_chef_dish. The meal 'name' MUST reference at least the primary composed dish (e.g., include that dish’s name)."},
-                            {"role": "user", "content": base_prompt}
-                        ],
-                        text={
-                            "format": {
-                                'type': 'json_schema',
-                                'name': 'meal_details',
-                                'schema': meal_json_schema
-                            }
-                        }
-                    )
-
-                    gpt_output = response.output_text
+                    },
+                )
+                gpt_output = groq_resp.choices[0].message.content or "{}"
                 logger.info(f"[{request_id}] [DEBUG] GPT output: {gpt_output}")
                 meal_data = json.loads(gpt_output)
                 if isinstance(meal_data, list):
@@ -1032,41 +990,27 @@ def determine_usage_for_meal(
 
     try:
         groq_client = _get_groq_client()
-        if groq_client:
-            groq_resp = groq_client.chat.completions.create(
-                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
-                messages=[
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": user_msg},
-                ],
-                temperature=0.2,
-                top_p=1,
-                stream=False,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "meal_usage",
-                        "schema": UsageList.model_json_schema(),
-                    },
+        if not groq_client:
+            raise ValueError("Groq client not available - GROQ_API_KEY must be set")
+        
+        groq_resp = groq_client.chat.completions.create(
+            model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.2,
+            top_p=1,
+            stream=False,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "meal_usage",
+                    "schema": UsageList.model_json_schema(),
                 },
-            )
-            usage_json = groq_resp.choices[0].message.content or "{}"
-        else:
-            response = get_openai_client().responses.create(
-                model="gpt-5-mini",
-                input=[
-                    {"role": "developer", "content": system_msg},
-                    {"role": "user", "content": user_msg}
-                ],
-                text={
-                    "format": {
-                        'type': 'json_schema',
-                        'name': 'meal_usage',
-                        'schema': UsageList.model_json_schema()
-                    }
-                }
-            )
-            usage_json = response.output_text
+            },
+        )
+        usage_json = groq_resp.choices[0].message.content or "{}"
     except Exception as e:
         logger.error(f"Error calling GPT for usage (MealPlanMeal {meal_plan_meal_id}): {e}")
         return

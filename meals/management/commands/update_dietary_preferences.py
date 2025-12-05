@@ -5,17 +5,27 @@ from django.conf import settings
 from meals.models import Meal, DietaryPreference
 from meals.pydantic_models import DietaryPreferencesSchema
 import logging
-import openai
+import os
 import time
 import json
+
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
 
 logger = logging.getLogger(__name__)
 
 class Command(BaseCommand):
-    help = 'Update dietary preferences for all existing meals using OpenAI API.'
+    help = 'Update dietary preferences for all existing meals using Groq API.'
 
     def handle(self, *args, **options):
-        client = openai.Client(api_key=settings.OPENAI_KEY)
+        groq_key = getattr(settings, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
+        if not groq_key or Groq is None:
+            logger.error("Groq API key not found. Cannot update dietary preferences.")
+            return
+        
+        client = Groq(api_key=groq_key)
         meals = Meal.objects.all()
         total_meals = meals.count()
         logger.info(f"Starting update of dietary preferences for {total_meals} meals.")
@@ -27,19 +37,19 @@ class Command(BaseCommand):
             messages = self.generate_messages(meal)
 
             try:
-                response = client.responses.create(
-                    model="gpt-5-mini",
-                    input=messages,
-                    text={
-                        "format": {
-                            'type': 'json_schema',
-                            'name': 'dietary_preferences',
-                            'schema': DietaryPreferencesSchema.model_json_schema()
+                response = client.chat.completions.create(
+                    model=getattr(settings, 'GROQ_MODEL', 'llama-3.3-70b-versatile'),
+                    messages=messages,
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "dietary_preferences",
+                            "schema": DietaryPreferencesSchema.model_json_schema()
                         }
                     }
                 )
 
-                dietary_prefs_text = response.output_text
+                dietary_prefs_text = response.choices[0].message.content
                 dietary_prefs = self.parse_dietary_preferences(dietary_prefs_text)
                 # Clear existing dietary preferences
                 meal.dietary_preferences.clear()

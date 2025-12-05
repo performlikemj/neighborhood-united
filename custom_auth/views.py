@@ -1732,7 +1732,7 @@ def normalize_user_inputs_to_english(stored_data):
     Use GPT to translate user dietary preferences and allergies from any language to English using structured output.
     Uses the same approach as meal compatibility checking with Pydantic v2 schemas.
     """
-    from shared.utils import get_openai_client
+    from shared.utils import get_groq_client
     from utils.redis_client import get as redis_get, set as redis_set
     from pydantic import BaseModel, Field
     import json
@@ -1802,9 +1802,9 @@ Return the translated and categorized items in the specified JSON structure."""
         }
         
         # Call Responses API with JSON-mode + schema
-        response = get_openai_client().responses.create(
+        response = get_groq_client().chat.completions.create(
             model="gpt-5-nano",
-            input=[{"role": "developer", "content": system_message},
+            messages=[{"role": "system", "content": system_message},
                    {"role": "user", "content": json.dumps(user_payload)}],
             text={
                 "format": {
@@ -1816,7 +1816,7 @@ Return the translated and categorized items in the specified JSON structure."""
         )
         
         # Parse JSON then load into the Pydantic model
-        result_data = json.loads(response.output_text)
+        result_data = json.loads(response.choices[0].message.content)
         
         try:
             result = NormalizedUserInputs(**result_data)

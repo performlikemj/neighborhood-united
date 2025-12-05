@@ -16,7 +16,11 @@ from typing import Dict, List, Optional, Any, Union
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from django.conf import settings
-from openai import OpenAI
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
+from django.conf import settings as django_settings
 import stripe
 from custom_auth.models import CustomUser
 from meals.models import ChefMealOrder, Order
@@ -272,11 +276,11 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
         order.stripe_session_id = session.id
         order.save(update_fields=["stripe_session_id"])
 
-        api_key = settings.OPENAI_KEY
-        client = OpenAI(api_key=api_key)
-        output = client.responses.create(
+        api_key = getattr(django_settings, "GROQ_API_KEY", None) or os.getenv("GROQ_API_KEY")
+        client = Groq(api_key=api_key)
+        response = client.chat.completions.create(
             model="gpt-5-mini",
-            input=[
+            messages=[
                 {"role": "developer", "content": (
                     """
                     Transform Stripe session checkout data into a structured response containing payment information, checkout URL, and an HTML button to facilitate payment.
@@ -332,7 +336,7 @@ def generate_payment_link(user_id: int, order_id: int) -> Dict[str, Any]:
                 }
             }
         )
-        payment_info = json.loads(output.output_text)
+        payment_info = json.loads(response.choices[0].message.content)
         if isinstance(payment_info, list):
             candidate = next((item for item in payment_info if isinstance(item, dict)), None)
             if candidate is None and payment_info:

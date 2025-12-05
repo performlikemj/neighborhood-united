@@ -5,12 +5,15 @@ import json
 import logging
 from celery import shared_task
 from django.conf import settings
-from openai import OpenAI, OpenAIError
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
 from pydantic import ValidationError
 import traceback
 from meals.models import Meal, DietaryPreference, CustomDietaryPreference
 from meals.pydantic_models import DietaryPreferenceDetail, DietaryPreferencesSchema
-from shared.utils import create_or_update_dietary_preference, get_dietary_preference_info, get_openai_client
+from shared.utils import create_or_update_dietary_preference, get_dietary_preference_info, get_groq_client
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
@@ -25,11 +28,11 @@ def handle_custom_dietary_preference(custom_prefs):
         if custom_pref and not get_dietary_preference_info(custom_pref):
             try:
                 # Step 4: Use OpenAI to generate structured JSON
-                response = get_openai_client().responses.create(
+                response = get_groq_client().chat.completions.create(
                     model="gpt-5-mini",
-                    input=[
+                    messages=[
                         {
-                            "role": "developer",
+                            "role": "system",
                             "content": (
                                 """
                                 Define a new dietary preference using the provided schema.
@@ -112,7 +115,7 @@ def handle_custom_dietary_preference(custom_prefs):
 
 
                 # Parse GPT response
-                gpt_output = response.output_text
+                gpt_output = response.choices[0].message.content
                 new_pref_data = json.loads(gpt_output)
                 if isinstance(new_pref_data, list):
                     candidate = next((item for item in new_pref_data if isinstance(item, dict)), None)
@@ -182,7 +185,7 @@ def assign_dietary_preferences(meal_id: int, gpt_tags: Optional[List[str]] = Non
         # 2. If no tags yet, ask GPT to classify
         if not tags:
             messages = meal.generate_messages()
-            response = get_openai_client().responses.create(
+            response = get_groq_client().chat.completions.create(
                 model="gpt-5-mini",
                 input=messages,
                 text={
@@ -193,7 +196,7 @@ def assign_dietary_preferences(meal_id: int, gpt_tags: Optional[List[str]] = Non
                     }
                 },
             )
-            assistant_json = response.output_text.strip()
+            assistant_json = response.choices[0].message.content.strip()
             tags = meal.parse_dietary_preferences(assistant_json)
 
         # 3. Persist

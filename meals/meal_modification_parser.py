@@ -5,15 +5,14 @@ import os
 import requests
 import traceback
 from typing import List
-from openai import OpenAI
 try:
-    from groq import Groq  # optional Groq client
+    from groq import Groq  # Groq client for inference
 except Exception:
     Groq = None
 from django.conf import settings
 from meals.models import MealPlan, MealPlanMeal
 from meals.pydantic_models import MealPlanModificationRequest
-from shared.utils import get_openai_client
+from shared.utils import get_groq_client
 logger = logging.getLogger(__name__)
 
 def _get_groq_client():
@@ -87,7 +86,12 @@ def parse_modification_request(
         # 3. Call LLM with Structured Outputs (prefer Groq if configured)
         try:
             groq_client = _get_groq_client()
-            if groq_client:
+
+            if not groq_client:
+
+                raise ValueError("Groq client not available - GROQ_API_KEY must be set")
+
+            
                 groq_messages = [
                     {"role": ("system" if m.get("role") == "developer" else m.get("role")), "content": m.get("content")}
                     for m in messages
@@ -107,19 +111,6 @@ def parse_modification_request(
                     },
                 )
                 raw_json = groq_resp.choices[0].message.content or "{}"
-            else:
-                resp = get_openai_client().responses.create(
-                    model=model,
-                    input=messages,
-                    text={
-                        "format": {
-                            "type": "json_schema",
-                            "name": "meal_plan_mod_request_v2",
-                            "schema": schema,
-                        }
-                    },
-                )
-                raw_json = resp.output_text
         except Exception as e:
             # n8n traceback
             n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")

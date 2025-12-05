@@ -1,24 +1,32 @@
 """
-Module for finding relevant YouTube cooking videos for meals using OpenAI Responses API.
+Module for finding relevant YouTube cooking videos for meals.
+Note: Web search functionality requires OpenAI API. This module generates search queries
+which can be used with the YouTube Data API (see youtube_api_search.py).
 """
 import json
 import logging
+import os
 import traceback
 from typing import Dict, List, Optional, Any
 
 from django.conf import settings
-from openai import OpenAI, OpenAIError
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
 from pydantic import ValidationError
 
 from meals.pydantic_models import YouTubeVideoResults
 
 logger = logging.getLogger(__name__)
-OPENAI_API_KEY = settings.OPENAI_KEY
-client = OpenAI(api_key=OPENAI_API_KEY)
+GROQ_API_KEY = getattr(settings, "GROQ_API_KEY", None) or os.getenv("GROQ_API_KEY")
+client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY and Groq else None
 
 def find_youtube_cooking_videos(meal_name: str, meal_description: str, limit: int = 3) -> Dict[str, Any]:
     """
-    Use OpenAI Responses API with web search tool to find relevant YouTube cooking videos.
+    Generate a search query for YouTube cooking videos.
+    Note: This uses Groq for query generation. For actual video search,
+    use youtube_api_search.py which uses the YouTube Data API.
     
     Args:
         meal_name: Name of the meal
@@ -26,42 +34,39 @@ def find_youtube_cooking_videos(meal_name: str, meal_description: str, limit: in
         limit: Maximum number of videos to return
         
     Returns:
-        Dictionary containing YouTube video information
+        Dictionary containing search query and empty videos list
+        (Use youtube_api_search.py for actual video results)
     """
     try:
-        # First, generate an optimal search query using OpenAI
-        query_response = client.responses.create(
-            model="gpt-5-mini",
-            input=f"""
-            Create the best YouTube search query to find a cooking tutorial for this meal:
-            
-            Meal: {meal_name}
-            Description: {meal_description}
-            
-            Return only the search query text, nothing else.
-            """,
-            max_output_tokens=100
+        if not client:
+            logger.warning("Groq client not available for YouTube search query generation")
+            return {"videos": [], "search_query": f"{meal_name} recipe cooking tutorial"}
+        
+        # Generate an optimal search query using Groq
+        query_response = client.chat.completions.create(
+            model=getattr(settings, 'GROQ_MODEL', 'llama-3.3-70b-versatile'),
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"""
+                    Create the best YouTube search query to find a cooking tutorial for this meal:
+                    
+                    Meal: {meal_name}
+                    Description: {meal_description}
+                    
+                    Return only the search query text, nothing else.
+                    """
+                }
+            ],
+            max_tokens=100
         )
         
-        search_query = query_response.output_text.strip()
+        search_query = query_response.choices[0].message.content.strip()
         logger.info(f"Generated search query for '{meal_name}': {search_query}")
         
-        # Now use the web search tool to find YouTube videos
-        video_response = client.responses.create(
-            model="gpt-5-mini",
-            tools=[{"type": "web_search_preview"}],
-            input=f"Find {limit} YouTube cooking videos for: {search_query} site:youtube.com",
-            text={
-                "format": {
-                    'type': 'json_schema',
-                    'name': 'youtube_videos',
-                    'schema': YouTubeVideoResults.model_json_schema()
-                }
-            }
-        )
-        
-        # Parse the structured output
-        video_data = json.loads(video_response.output_text)
+        # Note: Web search requires OpenAI API. Return search query for use with YouTube API
+        # For actual video search, use youtube_api_search.find_youtube_cooking_videos()
+        video_data = {"videos": []}
         
         # Handle null from LLM
         if video_data is None:

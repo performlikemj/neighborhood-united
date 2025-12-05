@@ -14,7 +14,7 @@ from meals.pydantic_models import PantryItemSchema
 from django.conf import settings
 from openai import OpenAI
 from pydantic import BaseModel, Field
-from shared.utils import get_openai_client
+from shared.utils import get_openai_client, get_groq_client
 logger = logging.getLogger(__name__)
 
 def transcribe_audio(audio_file) -> str:
@@ -73,12 +73,12 @@ def extract_pantry_item_info(transcription: str) -> Dict[str, Any]:
         - weight_per_unit: decimal or None
         - weight_unit: str or None
     """
-    # Use GPT to extract structured information from the transcription
+    # Use Groq to extract structured information from the transcription
     try:
-        response = get_openai_client().responses.create(
-            model="gpt-5-mini",
-            input=[
-                {"role": "developer", "content": ("""
+        response = get_groq_client().chat.completions.create(
+            model=settings.GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": ("""
                  # Identity
 
                     You are an assistant that helps the user convert the user's audio input into pantry item information. Identify the weight and the corresponding unit, then convert the unit into a standardized format using specific mappings.
@@ -124,17 +124,17 @@ def extract_pantry_item_info(transcription: str) -> Dict[str, Any]:
                 """)},
                 {"role": "user", "content": transcription}
             ],
-            text={
-                "format": {
-                    'type': 'json_schema',
-                    'name': 'pantry_item',
-                    'schema': PantryItemSchema.model_json_schema()
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "pantry_item",
+                    "schema": PantryItemSchema.model_json_schema()
                 }
             }
         )
         
         # Parse the response to extract information
-        content = response.output_text
+        content = response.choices[0].message.content
         import json
         data = json.loads(content)
         if isinstance(data, list):

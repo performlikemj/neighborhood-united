@@ -387,16 +387,15 @@ LOGIN_REDIRECT_URL = 'custom_auth:profile'
 LOGIN_URL = 'custom_auth:login'
 
 
-# OpenAI / Groq API keys
-# OpenAI
-OPENAI_KEY = os.getenv('OPENAI_KEY')
-# Groq
+# AI API Configuration
+# Primary AI Provider: Groq
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 GROQ_MODEL = os.getenv('GROQ_MODEL', 'openai/gpt-oss-120b')
-SPOONACULAR_API_KEY = os.getenv('SPOONACULAR_API_KEY')
 
-# OpenAI prompt
-OPENAI_PROMPT = os.getenv('OPENAI_PROMPT')
+# OpenAI (used only for embeddings and Whisper audio transcription)
+OPENAI_KEY = os.getenv('OPENAI_KEY')
+
+SPOONACULAR_API_KEY = os.getenv('SPOONACULAR_API_KEY')
 
 # Stripe API keys
 STRIPE_PUBLIC_KEY = os.getenv('STRIPE_PUBLIC_KEY')

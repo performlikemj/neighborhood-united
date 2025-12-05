@@ -2574,14 +2574,21 @@ export default function ChefDashboard(){
       {/* Sous Chef AI Assistant Tab */}
       {tab==='souschef' && (
         <div className="sous-chef-tab">
-          <header style={{marginBottom:'1rem'}}>
-            <h1 style={{margin:'0 0 .25rem 0'}}>Sous Chef Assistant</h1>
-            <p className="muted">Your AI-powered kitchen assistant with family-specific context</p>
+          <header className="sous-chef-header">
+            <div>
+              <p className="eyebrow">AI Workspace</p>
+              <h1>Sous Chef Assistant</h1>
+              <p className="muted">Your AI-powered kitchen assistant with family-specific context.</p>
+            </div>
+            <div className="sous-chef-meta">
+              <span className="chip soft">Live</span>
+              <span className="chip soft">Family-aware</span>
+            </div>
           </header>
           
-          <div className="sous-chef-layout">
+          <div className="sous-chef-grid">
             {/* Family Selector */}
-            <div className="family-selector-wrapper" style={{marginBottom:'1rem'}}>
+            <div className="sous-chef-card">
               <label className="label" style={{marginBottom:'.5rem', display:'block'}}>Select a family to assist with:</label>
               <FamilySelector
                 selectedFamilyId={selectedFamily.familyId}
@@ -2593,13 +2600,7 @@ export default function ChefDashboard(){
             </div>
             
             {/* Chat Interface */}
-            <div className="sous-chef-chat-wrapper" style={{
-              height: 'calc(100vh - 320px)',
-              minHeight: '500px',
-              border: '1px solid var(--border-color, #e5e7eb)',
-              borderRadius: '12px',
-              overflow: 'hidden'
-            }}>
+            <div className="sous-chef-chat-shell">
               <SousChefChat
                 familyId={selectedFamily.familyId}
                 familyType={selectedFamily.familyType}

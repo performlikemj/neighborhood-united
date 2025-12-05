@@ -1,4 +1,7 @@
-import openai
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
 from celery import shared_task
 from django.conf import settings
 import logging
@@ -19,7 +22,7 @@ from meals.meal_assistant_implementation import MealPlanningAssistant
 from meals.enhanced_email_processor import process_email_with_enhanced_formatting
 from customer_dashboard.tool_specific_formatters_instacart_compliant import ToolSpecificFormatterManager
 from utils.translate_html import translate_paragraphs, _get_language_name
-from shared.utils import get_openai_client
+from shared.utils import get_groq_client
 from django.template.loader import render_to_string
 import re
 
@@ -69,18 +72,18 @@ def generate_chat_title(thread_id):
 
         logger.debug(f"Found first user message for ChatThread {thread_id}: '{first_user_message_content[:50]}...'")
         try:
-            client = openai.OpenAI(api_key=settings.OPENAI_KEY)
+            client = Groq(api_key=getattr(settings, "GROQ_API_KEY", None) or os.getenv("GROQ_API_KEY"))
             prompt = f"Generate a very short, concise title (max 5 words) for a chat conversation that starts with this user message: '{first_user_message_content}'. Do not use quotes in the title."
-            response = client.responses.create(
+            response = client.chat.completions.create(
                 model="gpt-5-nano",
-                input=[
-                    {"role": "developer", "content": "You are a helpful assistant that creates concise chat titles based on the user's message."},
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that creates concise chat titles based on the user's message."},
                     {"role": "user", "content": prompt}
                 ],
                 stream=False
             )
 
-            new_title = response.output_text
+            new_title = response.choices[0].message.content
             if new_title:
                 ChatThread.objects.filter(pk=thread_id).update(title=new_title)
             else:
@@ -267,11 +270,11 @@ def generate_chat_session_summary(summary_id):
             return f"No dialogue to summarize for summary {summary_id}"
         
         # Call OpenAI API for summarization
-        client = openai.OpenAI(api_key=settings.OPENAI_KEY)
+        client = Groq(api_key=getattr(settings, "GROQ_API_KEY", None) or os.getenv("GROQ_API_KEY"))
         
         input_messages = [
             {
-                "role": "developer",
+                "role": "system",
                 "content": """
                 Summarize the interactions between the user and assistant, focusing on key details that will be beneficial in future conversations. Emphasize information relevant to the goals of helping the user with meal planning and finding local chefs in their area to prepare meals.
 
@@ -322,13 +325,13 @@ def generate_chat_session_summary(summary_id):
         ]
         
         try:
-            response = client.responses.create(
+            response = client.chat.completions.create(
                 model="gpt-5-mini",
                 input=input_messages,
                 stream=False
             )
             
-            summary_text = response.output_text.strip()
+            summary_text = response.choices[0].message.content.strip()
             
             # Update the summary
             summary_obj.summary = summary_text
@@ -452,11 +455,11 @@ def generate_consolidated_user_summary(user_id):
             return f"No content in summaries for user {user_id}"
         
         # Call OpenAI API for consolidation
-        client = openai.OpenAI(api_key=settings.OPENAI_KEY)
+        client = Groq(api_key=getattr(settings, "GROQ_API_KEY", None) or os.getenv("GROQ_API_KEY"))
         
         input_messages = [
             {
-                "role": "developer",
+                "role": "system",
                 "content": """
                 Distill and deduplicate summaries to produce a consolidated summary of interactions between the user and assistant, eliminating repeated details and focusing exclusively on essential information.
 
@@ -506,13 +509,13 @@ def generate_consolidated_user_summary(user_id):
         ]
         
         try:
-            response = client.responses.create(
+            response = client.chat.completions.create(
                 model="gpt-5-mini",
                 input=input_messages,
                 stream=False
             )
             
-            consolidated_summary = response.output_text.strip()
+            consolidated_summary = response.choices[0].message.content.strip()
             
             # Update the user summary
             user_summary.summary = consolidated_summary
@@ -693,7 +696,7 @@ def process_aggregated_emails(self, session_identifier_str, use_enhanced_formatt
                 logger.info(f"Starting enhanced processing for session {session_identifier_str}")
                 
                 # Use intent analysis but with Django formatter instead of tool-specific override
-                openai_client = get_openai_client()
+                openai_client = get_groq_client()
                 assistant = MealPlanningAssistant(str(session.user.id))
                 
                 # Prepare user context for intent analysis

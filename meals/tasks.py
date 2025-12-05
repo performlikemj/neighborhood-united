@@ -20,7 +20,10 @@ from .models import ChefMealEvent, ChefMealOrder, PaymentLog, STATUS_COMPLETED
 import pytz
 from zoneinfo import ZoneInfo
 from customer_dashboard.models import CustomUser
-from openai import OpenAI
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
 import time
 from .celery_utils import handle_task_failure
 import requests
@@ -635,7 +638,7 @@ def generate_user_chat_summaries():
                 continue
                 
             # Create a prompt for OpenAI to consolidate these summaries
-            client = OpenAI(api_key=settings.OPENAI_KEY)
+            client = Groq(api_key=getattr(settings, "GROQ_API_KEY", None) or os.getenv("GROQ_API_KEY"))
             
             # Create a prompt that asks to create a consolidated user summary
             prompt = (
@@ -648,9 +651,9 @@ def generate_user_chat_summaries():
             
             # Call OpenAI API to generate consolidated summary
             try:
-                response = client.responses.create(
+                response = client.chat.completions.create(
                     model="gpt-5-mini",
-                    input=[
+                    messages=[
                         {"role": "system", "content": "You are an assistant that creates concise user summaries from chat data."},
                         {"role": "user", "content": prompt}
                     ],
@@ -711,7 +714,10 @@ def generate_chat_session_summaries():
     """
     from customer_dashboard.models import ChatSessionSummary, ChatThread, UserMessage
     from django.db.models import Max, Q
-    from openai import OpenAI
+    try:
+        from groq import Groq
+    except ImportError:
+        Groq = None
     import time
     from datetime import timedelta
     
@@ -734,7 +740,7 @@ def generate_chat_session_summaries():
     summaries_created = 0
     errors = 0
     
-    client = OpenAI(api_key=settings.OPENAI_KEY)
+    client = Groq(api_key=getattr(settings, "GROQ_API_KEY", None) or os.getenv("GROQ_API_KEY"))
     
     for thread in chat_threads:
         try:
@@ -783,9 +789,9 @@ def generate_chat_session_summaries():
             
             # Call OpenAI API
             try:
-                response = client.responses.create(
+                response = client.chat.completions.create(
                     model="gpt-5-mini", # Use a smaller model for summaries
-                    input=[
+                    messages=[
                         {"role": "system", "content": "You are an assistant that summarizes conversations accurately and concisely."},
                         {"role": "user", "content": prompt}
                     ],

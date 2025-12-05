@@ -10,11 +10,14 @@ import logging
 from typing import Dict, List, Optional, Any, Literal
 from dataclasses import dataclass
 from pydantic import BaseModel, Field, ConfigDict
-from openai import OpenAI
 try:
-    from groq import Groq  # optional Groq client for inference
+    from groq import Groq  # Groq client for inference for inference
 except Exception:
     Groq = None
+try:
+    from openai import OpenAI
+except Exception:
+    OpenAI = None
 from django.conf import settings
 import os
 import re
@@ -313,53 +316,37 @@ USER CONTEXT:
 Provide detailed intent analysis following the EmailIntent schema."""
 
         try:
-            # Clean schema for OpenAI compatibility
+            # Clean schema for API compatibility
             schema = self._clean_schema_for_openai(EmailIntent.model_json_schema())
             
-            # Prefer Groq structured output if configured
-            if getattr(self, 'groq', None):
-                groq_resp = self.groq.chat.completions.create(
-                    model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    temperature=0.2,
-                    top_p=1,
-                    stream=False,
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": "email_intent",
-                            "schema": schema,
-                        },
+            # Use Groq or any client that supports chat.completions
+            client = getattr(self, 'groq', None) or self.client
+            if client is None:
+                raise ValueError("No AI client available for intent analysis")
+            
+            response = client.chat.completions.create(
+                model=getattr(settings, 'GROQ_MODEL', 'llama-3.3-70b-versatile'),
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.2,
+                top_p=1,
+                stream=False,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "email_intent",
+                        "schema": schema,
                     },
-                )
-                content = groq_resp.choices[0].message.content or "{}"
-                intent = _safe_load_and_validate(EmailIntent, content)
-            else:
-                response = self.client.responses.create(
-                    model="gpt-5-mini",
-                    input=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    stream=False,
-                    text={
-                        "format": {
-                            'type': 'json_schema',
-                            'name': 'email_intent',
-                            'schema': schema
-                        }
-                    }
-                )
-                
-                # Parse and validate the response
-                intent = _safe_load_and_validate(EmailIntent, response.output_text)
+                },
+            )
+            content = response.choices[0].message.content or "{}"
+            intent = _safe_load_and_validate(EmailIntent, content)
             return intent
             
         except Exception as e:
-            logger.error(f"Error getting intent from OpenAI: {str(e)}")
+            logger.error(f"Error getting intent from AI: {str(e)}")
             raise
     
     def _validate_and_enhance_intent(self, intent: EmailIntent, email_content: str) -> EmailIntent:
@@ -536,12 +523,11 @@ def get_predicted_tools_for_intent(intent: str) -> List[str]:
 # Example usage and testing
 if __name__ == "__main__":
     # Example usage
-    from openai import OpenAI
     import os
-    
+
     client = OpenAI(api_key=os.getenv("OPENAI_KEY"))
     analyzer = EmailIntentAnalyzer(client)
-    
+
     # Test cases
     test_emails = [
         "Hi, can you create a meal plan for this week? I'm vegetarian and allergic to nuts.",
@@ -550,11 +536,11 @@ if __name__ == "__main__":
         "Are there any local chefs in my area? I'd like to order some fresh meals.",
         "I need to pay for my order #12345. Can you send me the payment link?"
     ]
-    
+
     for i, email in enumerate(test_emails):
         print(f"\n--- Test Email {i+1} ---")
         print(f"Content: {email}")
-        
+
         result = analyzer.analyze_intent(email)
         print(f"Intent: {result.intent.primary_intent}")
         print(f"Confidence: {result.intent.confidence}")

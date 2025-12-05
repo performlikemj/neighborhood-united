@@ -2,39 +2,14 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.conf import settings
 from .models import Chef
-from openai import OpenAI
-import requests
-from django.core.files.base import ContentFile
 from django.utils import timezone
 from meals.models import ChefMealEvent, STATUS_SCHEDULED, STATUS_OPEN
 from local_chefs.models import ChefPostalCode
 
 from .tasks import notify_waitlist_subscribers_for_chef, notify_area_waitlist_users
 
-@receiver(post_save, sender=Chef)
-def create_chef_image(sender, instance, created, **kwargs):
-    if created and not instance.profile_pic:
-        # Logic to call DALL-E API and save the image
-        image_url = generate_chef_image()  # Function to call DALL-E API
-        response = requests.get(image_url)
-        if response.status_code == 200:
-            image_name = f'{instance.user.username}_chef_placeholder.png'
-            instance.profile_pic.save(image_name, ContentFile(response.content), save=True)
-
-def generate_chef_image():
-    OPENAI_API_KEY = settings.OPENAI_KEY
-    client = OpenAI(api_key=OPENAI_API_KEY)
-    prompt = "A gender-neutral chef in a professional kitchen with their back to the camera as if they're preparing a dish."
-    response = client.images.generate(
-        model="dall-e-3",
-        prompt=prompt,
-        size="1024x1024",
-        quality="standard",
-        n=1,
-    )
-    image_url = response.data[0].url
-    return image_url
-
+# Note: DALL-E image generation for chef profile pics has been removed.
+# Chefs should upload their own profile pictures.
 
 @receiver(post_save, sender=ChefMealEvent)
 def on_meal_event_saved(sender, instance: ChefMealEvent, created, **kwargs):

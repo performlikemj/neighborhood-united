@@ -3,7 +3,6 @@ from django.dispatch import receiver
 from django.db import transaction
 from .models import GoalTracking, UserHealthMetrics, CalorieIntake, ChatThread
 from .tasks import generate_chat_title
-import openai
 from django.conf import settings
 import logging
 

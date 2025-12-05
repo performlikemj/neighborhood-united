@@ -14,8 +14,6 @@ from django.views.decorators.http import require_http_methods
 from .models import (GoalTracking, ChatThread, UserHealthMetrics, CalorieIntake, 
                      UserMessage, UserSummary, ToolCall, AssistantEmailToken, UserDailySummary, UserEmailSession)
 from .forms import GoalForm
-import openai
-from openai import NotFoundError, OpenAI, OpenAIError
 import pytz
 from zoneinfo import ZoneInfo
 import json
@@ -266,11 +264,8 @@ def api_recommend_follow_up(request):
     except ChatThread.DoesNotExist:
         return Response({'error': 'No active chat thread found.'}, status=404)
 
-    # Step 2: Fetch the chat history using the response_id (stored in openai_thread_id field)
+    # Step 2: Fetch the chat history from the database
     try:
-        OPENAI_API_KEY = settings.OPENAI_KEY
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        
         # Get a valid response ID using our helper function
         response_id = get_response_id_from_thread(chat_thread)
         
@@ -280,8 +275,7 @@ def api_recommend_follow_up(request):
         # Now we have a string response_id, not a list
         chat_history = []
         if response_id.startswith("resp_"):
-            # ── New Responses API workflow
-            # We already stored the full turn‑by‑turn JSON in the DB, so use that
+            # Load from stored history in the DB
             raw_history = chat_thread.openai_input_history or []
             for item in raw_history:
                 role = item.get("role")
@@ -292,9 +286,8 @@ def api_recommend_follow_up(request):
                     "content": item.get("content", "")
                 })
         elif response_id.startswith("thread_"):
-            # Fallback: legacy threads, not changed here
-            response = client.responses.retrieve(response_id)
-            chat_history = api_format_chat_history_from_response(response)
+            # Legacy threads are no longer supported
+            return Response({'error': 'Legacy threads are no longer supported.'}, status=400)
     except Exception as e:
         logger.error(f"Error fetching conversation history: {str(e)}")
         return Response({'error': f'Failed to fetch chat history'})
@@ -666,15 +659,9 @@ def api_thread_detail_view(request, openai_thread_id):
                         'created_at': base_ts + idx
                     })
         elif openai_thread_id.startswith('thread_'):
-            # ── Fallback path: legacy threads created before we stored JSON
-            try:
-                client = OpenAI(api_key=settings.OPENAI_KEY)
-                messages = client.beta.threads.messages.list(openai_thread_id)
-                # Format and return the messages as per your requirement
-                chat_history = api_format_chat_history_from_response(messages)
-            except Exception as e:
-                logger.error(f"Responses API fallback failed: {str(e)}")
-                return Response({'error': 'Unable to load legacy thread.'}, status=400)
+            # Legacy threads are no longer supported (OpenAI Assistants API removed)
+            logger.warning(f"Legacy thread requested: {openai_thread_id} - no longer supported")
+            return Response({'error': 'Legacy threads are no longer supported. Please start a new conversation.'}, status=400)
 
         thread.is_active = True
         thread.save()
@@ -784,11 +771,31 @@ def history_page(request):
 @login_required
 @user_passes_test(is_customer)
 def thread_detail(request, openai_thread_id):
-    OPENAI_API_KEY = settings.OPENAI_KEY
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    """View thread details from database. Legacy OpenAI threads are no longer supported."""
     try:
-        messages = client.beta.threads.messages.list(openai_thread_id)
-        chat_history = format_chat_history(messages)
+        # Try to find thread in database
+        thread = ChatThread.objects.filter(
+            user=request.user,
+            latest_response_id=openai_thread_id
+        ).first()
+        
+        if not thread:
+            thread = ChatThread.objects.filter(
+                user=request.user,
+                openai_thread_id__contains=openai_thread_id
+            ).first()
+        
+        if not thread:
+            return render(request, 'customer_dashboard/error.html', 
+                         {'message': 'Thread not found. Legacy threads are no longer supported.'})
+        
+        # Format chat history from stored data
+        raw_history = thread.openai_input_history or []
+        chat_history = "\n\n".join([
+            f"{item.get('role', 'unknown').upper()}: {item.get('content', '')}"
+            for item in raw_history if item.get('role') not in (None, 'system')
+        ])
+        
         return render(request, 'customer_dashboard/thread_detail.html', {'chat_history': chat_history})
     except Exception as e:
         # Handle exceptions, possibly showing an error message

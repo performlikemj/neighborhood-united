@@ -10,17 +10,20 @@ from typing import Dict, List, Optional, Any
 from django.conf import settings
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from openai import OpenAI
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
 from django.conf import settings
 import os
 from meals.pydantic_models import VideoRankings, YouTubeVideoResults
 
 logger = logging.getLogger(__name__)
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
-OPENAI_API_KEY = settings.OPENAI_KEY
+GROQ_API_KEY = getattr(settings, "GROQ_API_KEY", None) or os.getenv("GROQ_API_KEY")
 
-# Initialize the OpenAI client
-client = OpenAI(api_key=OPENAI_API_KEY)
+# Initialize the Groq client
+client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY and Groq else None
 
 def find_youtube_cooking_videos(meal_name: str, meal_description: str, limit: int = 5) -> Dict[str, Any]:
     """
@@ -168,32 +171,37 @@ def _rank_videos_with_openai(meal_name: str, meal_description: str, videos: List
         # Get the schema for the VideoRankings model
         schema = VideoRankings.model_json_schema()
         
-        # Call OpenAI Responses API to analyze and rank videos
-        response = client.responses.create(
-            model="gpt-5-mini",
-            input=f"""
-            Analyze these YouTube cooking videos and rank them based on relevance to this meal:
-            
-            Meal: {meal_name}
-            Description: {meal_description}
-            
-            Videos:
-            {json.dumps(video_info_for_analysis, indent=2)}
-            
-            Provide relevance scores (0-10) for each video, explain why, and indicate if it's recommended.
-            Identify matching ingredients and cooking techniques when possible.
-            """,
-            text={
-                "format": {
-                    'type': 'json_schema',
-                    'name': 'video_rankings',
-                    'schema': schema
+        # Call Groq to analyze and rank videos
+        response = client.chat.completions.create(
+            model=getattr(settings, 'GROQ_MODEL', 'llama-3.3-70b-versatile'),
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"""
+                    Analyze these YouTube cooking videos and rank them based on relevance to this meal:
+                    
+                    Meal: {meal_name}
+                    Description: {meal_description}
+                    
+                    Videos:
+                    {json.dumps(video_info_for_analysis, indent=2)}
+                    
+                    Provide relevance scores (0-10) for each video, explain why, and indicate if it's recommended.
+                    Identify matching ingredients and cooking techniques when possible.
+                    """
+                }
+            ],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "video_rankings",
+                    "schema": schema
                 }
             }
         )
         
         # Parse the structured output
-        ranking_data = json.loads(response.output_text)
+        ranking_data = json.loads(response.choices[0].message.content)
         
         # Merge ranking information with original video data
         ranked_video_ids = [v["video_id"] for v in ranking_data["ranked_videos"]]

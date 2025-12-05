@@ -6,7 +6,7 @@ import json
 import logging
 import traceback
 from typing import List, Dict, Any
-from shared.utils import get_openai_client
+from shared.utils import get_groq_client
 import os
 import requests
 logger = logging.getLogger(__name__)
@@ -44,10 +44,10 @@ def get_macro_info(meal_name: str, meal_description: str, ingredients: List[str]
         """
         
         # Call OpenAI API
-        response = get_openai_client().chat.completions.create(
-            model="gpt-5-mini",
+        response = get_groq_client().chat.completions.create(
+            model=settings.GROQ_MODEL,
             messages=[
-                {"role": "developer", "content": "You are a nutritionist who provides accurate macro information for meals."},
+                {"role": "system", "content": "You are a nutritionist who provides accurate macro information for meals."},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"}
@@ -128,10 +128,10 @@ def find_youtube_videos(meal_name: str, meal_description: str) -> Dict[str, Any]
         """
         
         # Call OpenAI API
-        response = get_openai_client().chat.completions.create(
-            model="gpt-5-mini",
+        response = get_groq_client().chat.completions.create(
+            model=settings.GROQ_MODEL,
             messages=[
-                {"role": "developer", "content": "You are a helpful assistant that finds cooking videos."},
+                {"role": "system", "content": "You are a helpful assistant that finds cooking videos."},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"}

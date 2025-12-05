@@ -6,14 +6,13 @@ import logging
 import traceback
 from typing import Dict, List, Optional, Any, ClassVar
 from django.conf import settings
-from openai import OpenAI, OpenAIError
 try:
-    from groq import Groq  # optional Groq client
+    from groq import Groq  # Groq client for inference
 except Exception:
     Groq = None
 import os
 from pydantic import ValidationError
-from shared.utils import get_openai_client
+from shared.utils import get_groq_client
 from meals.pydantic_models import MealMacroInfo
 
 logger = logging.getLogger(__name__)
@@ -55,41 +54,24 @@ def get_meal_macro_information(meal_name: str, meal_description: str, ingredient
             
             Provide accurate nutritional estimates based on standard serving sizes.
         """
-        if groq_client:
-            groq_resp = groq_client.chat.completions.create(
-                model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
-                messages=[
-                    {"role": "system", "content": "Return only JSON matching the provided schema."},
-                    {"role": "user", "content": user_text},
-                ],
-                temperature=0.2,
-                top_p=1,
-                stream=False,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "meal_macros",
-                        "schema": MealMacroInfo.model_json_schema(),
-                    },
+        groq_resp = groq_client.chat.completions.create(
+            model=getattr(settings, 'GROQ_MODEL', 'openai/gpt-oss-120b'),
+            messages=[
+                {"role": "system", "content": "Return only JSON matching the provided schema."},
+                {"role": "user", "content": user_text},
+            ],
+            temperature=0.2,
+            top_p=1,
+            stream=False,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "meal_macros",
+                    "schema": MealMacroInfo.model_json_schema(),
                 },
-            )
-            macro_data = json.loads(groq_resp.choices[0].message.content or "{}")
-        else:
-            response = get_openai_client().responses.create(
-                model="gpt-5-mini",
-                input=user_text,
-                text={
-                    "format": {
-                        'type': 'json_schema',
-                        'name': 'meal_macros',
-                        'schema': MealMacroInfo.model_json_schema()
-                    }
-                }
-            )
-            
-            # Parse the structured output
-            macro_data = json.loads(response.output_text)
-        
+            },
+        )
+        macro_data = json.loads(groq_resp.choices[0].message.content or "{}")
         # Handle null from LLM
         if macro_data is None:
             logger.warning(f"LLM returned null for macro info for '{meal_name}'")

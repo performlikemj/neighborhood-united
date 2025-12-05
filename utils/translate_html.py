@@ -4,15 +4,21 @@ import os
 import redis
 from bs4 import BeautifulSoup
 import logging
+from django.conf import settings
 from django.conf.locale import LANG_INFO
 import requests
 import traceback
-from openai import OpenAI
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 logger = logging.getLogger(__name__)
 
-client = OpenAI(api_key=os.environ.get("OPENAI_KEY"))
+# Initialize Groq client
+_groq_api_key = os.environ.get("GROQ_API_KEY")
+client = Groq(api_key=_groq_api_key) if _groq_api_key and Groq else None
 
 VAR_RX = re.compile(r"({{.*?}}|{%.*?%})", re.S)
 
@@ -199,11 +205,11 @@ def translate_paragraphs(html: str, target_lang: str) -> str:
                 
             batch_text = "\n\n".join(batch_contents)
             
-            # Call OpenAI API with the batch
+            # Call Groq API with the batch
             try:
-                response = client.responses.create(
-                    model="gpt-5-nano", 
-                    input=[
+                response = client.chat.completions.create(
+                    model=getattr(settings, 'GROQ_MODEL', 'llama-3.3-70b-versatile'),
+                    messages=[
                         {
                             "role": "system",
                             "content": (
@@ -217,7 +223,7 @@ def translate_paragraphs(html: str, target_lang: str) -> str:
                     ]
                 )
                 
-                translated_text = response.output_text
+                translated_text = response.choices[0].message.content
                 
                 # Process each block separately
                 for idx, p in enumerate(batch):

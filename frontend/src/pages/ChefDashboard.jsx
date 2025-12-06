@@ -5,8 +5,8 @@ import { createOffering } from '../api/servicesClient.js'
 import { useConnections } from '../hooks/useConnections.js'
 
 import ChefAllClients from '../components/ChefAllClients.jsx'
-import FamilySelector from '../components/FamilySelector.jsx'
-import SousChefChat from '../components/SousChefChat.jsx'
+import ChefPrepPlanning from '../components/ChefPrepPlanning.jsx'
+import ChefPaymentLinks from '../components/ChefPaymentLinks.jsx'
 import SousChefWidget from '../components/SousChefWidget.jsx'
 import { SousChefNotificationProvider } from '../contexts/SousChefNotificationContext.jsx'
 
@@ -315,20 +315,21 @@ function FileSelect({ label, accept, onChange }){
 // Icon components (inline SVG)
 const DashboardIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
 const ProfileIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-const PhotosIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" y="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+const PhotosIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
 const KitchenIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2M7 2v20M21 15V2v0a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/></svg>
-const ServicesIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/></svg>
-const ConnectionsIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 9a4 4 0 1 0-4-4 4 4 0 0 0 4 4Z"/><path d="M16 21a4 4 0 1 0-4-4 4 4 0 0 0 4 4Z"/><path d="M11 7c.5 2.5 2.5 4 5 4h2a3 3 0 0 1 3 3v1"/><path d="M13 17c-.5-2.5-2.5-4-5-4H6a3 3 0 0 1-3-3V9"/></svg>
+const ClientsIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+const ServicesIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+const ConnectionsIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="5" cy="6" r="3"/><circle cx="19" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><path d="M5 9v3a4 4 0 0 0 4 4h2"/><path d="M19 9v3a4 4 0 0 1-4 4h-2"/></svg>
 const EventsIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
 const OrdersIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
+const MealsIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>
+const PrepPlanIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="m9 14 2 2 4-4"/></svg>
+const PaymentLinksIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/><path d="M7 15h4"/><path d="M15 15h2"/></svg>
 
 export default function ChefDashboard(){
   const [tab, setTab] = useState('dashboard')
   const [notice, setNotice] = useState(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
-
-  // Sous Chef state (family selection for AI assistant)
-  const [selectedFamily, setSelectedFamily] = useState({ familyId: null, familyType: 'customer', familyName: null })
 
   // Stripe Connect status
   const [payouts, setPayouts] = useState({ loading: true, has_account:false, is_active:false, needs_onboarding:false, account_id:null, continue_onboarding_url:null, disabled_reason:null, diagnostic:null })
@@ -1078,36 +1079,23 @@ export default function ChefDashboard(){
         </div>
         <nav className="chef-nav" role="navigation" aria-label="Chef dashboard sections">
           <NavItem value="dashboard" label="Dashboard" icon={DashboardIcon} />
+          <NavItem value="prep" label="Prep Planning" icon={PrepPlanIcon} />
           <NavItem value="profile" label="Profile" icon={ProfileIcon} />
           <NavItem value="photos" label="Photos" icon={PhotosIcon} />
           <NavItem value="kitchen" label="Kitchen" icon={KitchenIcon} />
           <NavItem value="connections" label="Connections" icon={ConnectionsIcon} />
-          
-          <NavItem value="clients" label="Clients" icon={ProfileIcon} />
+          <NavItem value="clients" label="Clients" icon={ClientsIcon} />
+          <NavItem value="payments" label="Payment Links" icon={PaymentLinksIcon} />
           <NavItem value="services" label="Services" icon={ServicesIcon} />
           <NavItem value="events" label="Events" icon={EventsIcon} />
           <NavItem value="orders" label="Orders" icon={OrdersIcon} />
+          <NavItem value="meals" label="Meals" icon={MealsIcon} />
         </nav>
       </aside>
 
       {/* Main Content */}
       <main className="chef-main-content">
         {notice && <div className="card" style={{borderColor:'#f0d000', marginBottom:'1rem'}}>{notice}</div>}
-
-        <div className="seg-control seg-scroll" role="tablist" aria-label="Chef dashboard sections">
-          <button className={`seg ${tab==='dashboard'?'active':''}`} onClick={()=> setTab('dashboard')} role="tab" aria-selected={tab==='dashboard'}>Overview</button>
-          <button className={`seg ${tab==='profile'?'active':''}`} onClick={()=> setTab('profile')} role="tab" aria-selected={tab==='profile'}>Profile</button>
-          <button className={`seg ${tab==='photos'?'active':''}`} onClick={()=> setTab('photos')} role="tab" aria-selected={tab==='photos'}>Photos</button>
-          <button className={`seg ${tab==='kitchen'?'active':''}`} onClick={()=> setTab('kitchen')} role="tab" aria-selected={tab==='kitchen'}>Kitchen</button>
-          <button className={`seg ${tab==='connections'?'active':''}`} onClick={()=> setTab('connections')} role="tab" aria-selected={tab==='connections'}>Client Connections</button>
-          
-                    <button className={`seg ${tab==='clients'?'active':''}`} onClick={()=> setTab('clients')} role="tab" aria-selected={tab==='clients'}>Clients</button>
-          <button className={`seg ${tab==='services'?'active':''}`} onClick={()=> setTab('services')} role="tab" aria-selected={tab==='services'}>Services</button>
-          <button className={`seg ${tab==='events'?'active':''}`} onClick={()=> setTab('events')} role="tab" aria-selected={tab==='events'}>Events</button>
-          <button className={`seg ${tab==='orders'?'active':''}`} onClick={()=> setTab('orders')} role="tab" aria-selected={tab==='orders'}>Orders</button>
-          <button className={`seg ${tab==='meals'?'active':''}`} onClick={()=> setTab('meals')} role="tab" aria-selected={tab==='meals'}>Meals</button>
-          <button className={`seg ${tab==='souschef'?'active':''}`} onClick={()=> setTab('souschef')} role="tab" aria-selected={tab==='souschef'}>🧑‍🍳 Sous Chef</button>
-        </div>
 
       {/* Content Sections */}
       {tab==='dashboard' && (
@@ -1490,6 +1478,10 @@ export default function ChefDashboard(){
 
 
       {tab==='clients' && <ChefAllClients />}
+
+      {tab==='payments' && <ChefPaymentLinks />}
+
+      {tab==='prep' && <ChefPrepPlanning />}
 
       {tab==='profile' && (
         <div className="grid grid-2">
@@ -2567,47 +2559,6 @@ export default function ChefDashboard(){
                 ))}
               </ul>
             )}
-          </div>
-        </div>
-      )}
-
-      {/* Sous Chef AI Assistant Tab */}
-      {tab==='souschef' && (
-        <div className="sous-chef-tab">
-          <header className="sous-chef-header">
-            <div>
-              <p className="eyebrow">AI Workspace</p>
-              <h1>Sous Chef Assistant</h1>
-              <p className="muted">Your AI-powered kitchen assistant with family-specific context.</p>
-            </div>
-            <div className="sous-chef-meta">
-              <span className="chip soft">Live</span>
-              <span className="chip soft">Family-aware</span>
-            </div>
-          </header>
-          
-          <div className="sous-chef-grid">
-            {/* Family Selector */}
-            <div className="sous-chef-card">
-              <label className="label" style={{marginBottom:'.5rem', display:'block'}}>Select a family to assist with:</label>
-              <FamilySelector
-                selectedFamilyId={selectedFamily.familyId}
-                selectedFamilyType={selectedFamily.familyType}
-                onFamilySelect={({ familyId, familyType, familyName }) => {
-                  setSelectedFamily({ familyId, familyType, familyName })
-                }}
-              />
-            </div>
-            
-            {/* Chat Interface */}
-            <div className="sous-chef-chat-shell">
-              <SousChefChat
-                familyId={selectedFamily.familyId}
-                familyType={selectedFamily.familyType}
-                familyName={selectedFamily.familyName}
-                chefEmoji={chef?.sous_chef_emoji}
-              />
-            </div>
           </div>
         </div>
       )}

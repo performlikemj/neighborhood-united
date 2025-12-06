@@ -134,10 +134,10 @@ export default function App(){
         {/* Customer-specific routes */}
         {/* =================================================================== */}
         
-        {/* Unified Orders page (all chefs) */}
+        {/* Unified Orders page (all chefs) - shows both service orders and meal orders */}
         <Route path="/orders" element={
           <ProtectedRoute requiredRole="customer">
-            <AllOrders />
+            <CustomerOrders />
           </ProtectedRoute>
         } />
         

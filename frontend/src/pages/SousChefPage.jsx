@@ -85,31 +85,44 @@ export default function SousChefPage() {
 
   return (
     <div className={`sous-chef-page ${isMinimizing ? 'minimizing' : ''}`}>
-      {/* Page Header */}
+      {/* Compact Header Bar */}
       <header className="page-header">
-        <div className="header-inner">
+        <div className="header-content">
           <div className="header-left">
-            <div 
-              className="emoji-trigger"
+            <button 
+              className="emoji-btn"
               onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-              title="Click to customize your Sous Chef icon"
+              title="Customize icon"
             >
-              <span className="emoji">{currentEmoji}</span>
-              <span className="edit-hint">✎</span>
-            </div>
-            <div className="header-text">
+              {currentEmoji}
+            </button>
+            <div className="header-title">
               <h1>Sous Chef</h1>
-              <span className="subtitle">Your AI kitchen assistant</span>
+              {selectedFamily.familyName && (
+                <span className="current-family">with {selectedFamily.familyName}</span>
+              )}
             </div>
           </div>
-          <div className="header-actions">
+          
+          <div className="header-right">
+            {/* Family selector in header when family is selected */}
+            {selectedFamily.familyId && (
+              <div className="header-family-selector">
+                <FamilySelector
+                  selectedFamilyId={selectedFamily.familyId}
+                  selectedFamilyType={selectedFamily.familyType}
+                  onFamilySelect={handleFamilySelect}
+                  compact
+                />
+              </div>
+            )}
             <button 
-              className="btn btn-outline minimize-btn"
+              className="minimize-btn"
               onClick={handleMinimize}
               title="Return to dashboard"
             >
               <span className="minimize-icon">↙</span>
-              <span className="minimize-text">Minimize</span>
+              <span className="minimize-label">Minimize</span>
             </button>
           </div>
         </div>
@@ -117,14 +130,14 @@ export default function SousChefPage() {
 
       {/* Emoji Picker Popover */}
       {showEmojiPicker && (
-        <div className="emoji-picker-overlay" onClick={() => setShowEmojiPicker(false)}>
+        <div className="emoji-overlay" onClick={() => setShowEmojiPicker(false)}>
           <div className="emoji-picker" onClick={(e) => e.stopPropagation()}>
-            <div className="picker-header">Choose your Sous Chef</div>
+            <div className="picker-title">Choose your Sous Chef</div>
             <div className="emoji-grid">
               {CHEF_EMOJIS.map((emoji, idx) => (
                 <button
                   key={idx}
-                  className={`emoji-option ${emoji === currentEmoji ? 'selected' : ''}`}
+                  className={`emoji-item ${emoji === currentEmoji ? 'selected' : ''}`}
                   onClick={() => handleEmojiSelect(emoji)}
                   disabled={savingEmoji}
                 >
@@ -136,92 +149,89 @@ export default function SousChefPage() {
         </div>
       )}
 
-      {/* Main Content */}
-      <div className="page-content">
-        {/* Sidebar removed for full-width hero-style layout */}
-        <aside className="sidebar" aria-hidden="true" style={{ display: 'none' }} />
-
-        {/* Chat Area - Full Width */}
-        <main className="chat-main">
-          {selectedFamily.familyId ? (
+      {/* Main Content Area */}
+      <main className="page-main">
+        {selectedFamily.familyId ? (
+          <div className="chat-container">
             <SousChefChat
               familyId={selectedFamily.familyId}
               familyType={selectedFamily.familyType}
               familyName={selectedFamily.familyName}
               initialInput={draftInput}
             />
-          ) : (
-            <div className="chat-placeholder">
-              <div className="placeholder-card">
-                <h3>Select a family to start</h3>
-                <p className="muted">Choose who you want Sous Chef to assist. Their context will load automatically.</p>
+          </div>
+        ) : (
+          <div className="empty-state">
+            <div className="empty-card">
+              <div className="empty-icon">{currentEmoji}</div>
+              <h2>Welcome to Sous Chef</h2>
+              <p>Select a client to get started. I'll have full context about their dietary needs, allergies, and history.</p>
+              <div className="empty-selector">
                 <FamilySelector
                   selectedFamilyId={selectedFamily.familyId}
                   selectedFamilyType={selectedFamily.familyType}
                   onFamilySelect={handleFamilySelect}
-                  className="inline-family-selector"
                 />
               </div>
             </div>
-          )}
-        </main>
-      </div>
+          </div>
+        )}
+      </main>
 
       <style>{`
         .sous-chef-page {
           min-height: calc(100vh - 60px);
           display: flex;
           flex-direction: column;
-          background: var(--bg-page, var(--surface-2, #f3f4f6));
-          color: var(--text, #1f2937);
-          animation: pageSlideIn 0.35s ease-out;
-          /* Dark mode CSS variable overrides */
+          background: var(--surface-2, var(--bg-page, #f5f5f5));
+          color: var(--text, #1a1a1a);
+          animation: pageEnter 0.3s ease-out;
+          
+          /* Ensure CSS variables cascade properly */
           --bg-card: var(--surface, #fff);
-          --border-color: var(--border, #e5e7eb);
-          --text-muted: var(--muted, #6b7280);
+          --border-color: var(--border, #e0e0e0);
+          --text-muted: var(--muted, #666);
+          --accent-color: var(--primary, #5cb85c);
+          --accent-color-alpha: rgba(92, 184, 92, 0.12);
         }
 
-        @keyframes pageSlideIn {
-          0% {
+        @keyframes pageEnter {
+          from {
             opacity: 0;
-            transform: scale(0.98) translateY(10px);
+            transform: translateY(8px);
           }
-          100% {
+          to {
             opacity: 1;
-            transform: scale(1) translateY(0);
+            transform: translateY(0);
           }
         }
 
         .sous-chef-page.minimizing {
-          animation: pageSlideOut 0.25s ease-in forwards;
+          animation: pageExit 0.25s ease-in forwards;
           pointer-events: none;
         }
 
-        @keyframes pageSlideOut {
-          0% {
-            opacity: 1;
-            transform: scale(1) translateY(0);
-          }
-          100% {
+        @keyframes pageExit {
+          to {
             opacity: 0;
-            transform: scale(0.96) translateY(20px);
+            transform: scale(0.98) translateY(12px);
           }
         }
 
-        /* Page Header */
+        /* ============================================
+           HEADER
+           ============================================ */
         .page-header {
-          position: relative;
-          padding: 0.85rem 1rem;
-          background: linear-gradient(135deg,
-            color-mix(in oklab, var(--primary, #5cb85c) 72%, var(--surface, #0f1511) 28%),
-            color-mix(in oklab, var(--primary-700, #3E8F3E) 70%, var(--surface, #0f1511) 20%)
-          );
-          color: white;
-          box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25);
+          background: linear-gradient(135deg, var(--primary, #5cb85c) 0%, var(--primary-700, #449d44) 100%);
+          padding: 0.75rem 1rem;
+          position: sticky;
+          top: 0;
+          z-index: 100;
+          box-shadow: 0 2px 12px rgba(0,0,0,0.15);
         }
 
-        .header-inner {
-          max-width: 1240px;
+        .header-content {
+          max-width: 1400px;
           margin: 0 auto;
           display: flex;
           align-items: center;
@@ -232,319 +242,458 @@ export default function SousChefPage() {
         .header-left {
           display: flex;
           align-items: center;
-          gap: 1rem;
-        }
-
-        .emoji-trigger {
-          position: relative;
-          width: 56px;
-          height: 56px;
-          background: rgba(255, 255, 255, 0.2);
-          border-radius: 14px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          cursor: pointer;
-          transition: background 0.15s;
-        }
-
-        .emoji-trigger:hover {
-          background: rgba(255, 255, 255, 0.3);
-        }
-
-        .emoji-trigger .emoji {
-          font-size: 2rem;
-        }
-
-        .emoji-trigger .edit-hint {
-          position: absolute;
-          bottom: -2px;
-          right: -2px;
-          width: 22px;
-          height: 22px;
-          background: white;
-          color: var(--primary, #5cb85c);
-          border-radius: 50%;
-          font-size: 12px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          opacity: 0;
-          transition: opacity 0.15s;
-        }
-
-        .emoji-trigger:hover .edit-hint {
-          opacity: 1;
-        }
-
-        .header-text h1 {
-          margin: 0;
-          font-size: 1.25rem;
-          font-weight: 700;
-        }
-
-        .header-text .subtitle {
-          font-size: 0.8rem;
-          opacity: 0.92;
-        }
-
-        .header-actions {
-          display: flex;
           gap: 0.75rem;
+        }
+
+        .emoji-btn {
+          width: 42px;
+          height: 42px;
+          border: none;
+          border-radius: 10px;
+          background: rgba(255,255,255,0.2);
+          font-size: 1.5rem;
+          cursor: pointer;
+          transition: all 0.15s;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .emoji-btn:hover {
+          background: rgba(255,255,255,0.3);
+          transform: scale(1.05);
+        }
+
+        .header-title {
+          color: white;
+        }
+
+        .header-title h1 {
+          margin: 0;
+          font-size: 1.125rem;
+          font-weight: 600;
+          line-height: 1.2;
+        }
+
+        .current-family {
+          font-size: 0.75rem;
+          opacity: 0.85;
+        }
+
+        .header-right {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+        }
+
+        .header-family-selector {
+          max-width: 220px;
+        }
+
+        .header-family-selector .family-selector-trigger {
+          background: rgba(255,255,255,0.15);
+          border-color: rgba(255,255,255,0.2);
+          color: white;
+          padding: 0.4rem 0.75rem;
+          font-size: 0.8rem;
+        }
+
+        .header-family-selector .family-selector-trigger:hover {
+          background: rgba(255,255,255,0.25);
         }
 
         .minimize-btn {
           display: flex;
           align-items: center;
-          gap: 0.5rem;
-          background: rgba(255, 255, 255, 0.2);
-          border-color: rgba(255, 255, 255, 0.3);
+          gap: 0.4rem;
+          padding: 0.5rem 0.875rem;
+          background: rgba(255,255,255,0.15);
+          border: 1px solid rgba(255,255,255,0.25);
+          border-radius: 8px;
           color: white;
+          font-size: 0.8rem;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.15s;
         }
 
         .minimize-btn:hover {
-          background: rgba(255, 255, 255, 0.3);
-          border-color: rgba(255, 255, 255, 0.4);
+          background: rgba(255,255,255,0.25);
         }
 
         .minimize-icon {
-          font-size: 1.1rem;
+          font-size: 1rem;
         }
 
-        /* Emoji Picker */
-        .emoji-picker-overlay {
+        /* ============================================
+           EMOJI PICKER
+           ============================================ */
+        .emoji-overlay {
           position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          background: rgba(0, 0, 0, 0.3);
+          inset: 0;
+          background: rgba(0,0,0,0.4);
           display: flex;
           align-items: flex-start;
           justify-content: flex-start;
-          padding: 5rem 0 0 6rem;
+          padding: 4.5rem 1rem 1rem 1rem;
           z-index: 1000;
+          animation: fadeIn 0.15s ease;
+        }
+
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
         }
 
         .emoji-picker {
           background: var(--surface, #fff);
           border-radius: 12px;
-          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
           padding: 1rem;
-          animation: fadeIn 0.15s ease;
-          border: 1px solid var(--border, #e5e7eb);
+          box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+          border: 1px solid var(--border, #e0e0e0);
+          animation: slideDown 0.2s ease;
         }
 
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(-10px); }
+        @keyframes slideDown {
+          from { opacity: 0; transform: translateY(-8px); }
           to { opacity: 1; transform: translateY(0); }
         }
 
-        .picker-header {
-          font-size: 0.9rem;
+        .picker-title {
+          font-size: 0.85rem;
           font-weight: 600;
-          color: var(--muted);
-          margin-bottom: 0.75rem;
+          color: var(--muted, #666);
           text-align: center;
+          margin-bottom: 0.75rem;
         }
 
         .emoji-grid {
           display: grid;
           grid-template-columns: repeat(6, 1fr);
-          gap: 6px;
+          gap: 4px;
         }
 
-        .emoji-option {
-          width: 44px;
-          height: 44px;
+        .emoji-item {
+          width: 40px;
+          height: 40px;
           border: 2px solid transparent;
-          border-radius: 10px;
-          background: var(--surface-2, var(--bg-page, #f3f4f6));
+          border-radius: 8px;
+          background: var(--surface-2, #f5f5f5);
+          font-size: 1.25rem;
           cursor: pointer;
-          font-size: 1.5rem;
+          transition: all 0.15s;
           display: flex;
           align-items: center;
           justify-content: center;
-          transition: all 0.15s;
         }
 
-        .emoji-option:hover {
-          background: var(--surface-3, var(--border, #e5e7eb));
+        .emoji-item:hover {
+          background: var(--surface-3, #eee);
           transform: scale(1.1);
         }
 
-        .emoji-option.selected {
-          border-color: var(--primary);
-          background: rgba(92, 184, 92, 0.15);
+        .emoji-item.selected {
+          border-color: var(--primary, #5cb85c);
+          background: rgba(92,184,92,0.15);
         }
 
-        .emoji-option:disabled {
+        .emoji-item:disabled {
           opacity: 0.5;
           cursor: not-allowed;
         }
 
-        /* Main Content Layout */
-        .page-content {
+        /* ============================================
+           MAIN CONTENT
+           ============================================ */
+        .page-main {
           flex: 1;
-          display: grid;
-          grid-template-columns: 1fr;
-          padding: 1.5rem;
+          display: flex;
+          flex-direction: column;
+          padding: 1rem;
           min-height: 0;
-          max-width: 1600px;
-          margin: 0 auto;
-          width: 100%;
         }
 
-        /* Chat Main Area */
-        .chat-main {
+        .chat-container {
           flex: 1;
-          min-width: 0;
           display: flex;
           flex-direction: column;
           background: var(--surface, #fff);
           border-radius: 12px;
-          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
           overflow: hidden;
-          border: 1px solid var(--border, transparent);
-          /* Pass theme tokens to child components */
-          --bg-card: var(--surface, #fff);
-          --bg-page: var(--surface-2, #f3f4f6);
-          --text-muted: var(--muted, #6b7280);
-          --accent-color: var(--primary, #5cb85c);
+          box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+          max-width: 1200px;
+          width: 100%;
+          margin: 0 auto;
         }
 
-        .chat-placeholder {
+        .chat-container .sous-chef-chat {
+          flex: 1;
+          height: 100%;
+        }
+
+        /* ============================================
+           EMPTY STATE (No family selected)
+           ============================================ */
+        .empty-state {
           flex: 1;
           display: flex;
           align-items: center;
           justify-content: center;
-          padding: 1.5rem;
-          background: var(--bg-card);
+          padding: 2rem;
         }
 
-        .placeholder-card {
-          width: min(520px, 100%);
+        .empty-card {
           background: var(--surface, #fff);
-          border: 1px solid var(--border, transparent);
-          border-radius: 18px;
-          padding: 1rem 1.25rem 1.35rem;
-          box-shadow: 0 18px 44px rgba(0,0,0,0.35);
-          display: flex;
-          flex-direction: column;
-          gap: 0.75rem;
+          border-radius: 16px;
+          padding: 2rem 2.5rem;
+          text-align: center;
+          max-width: 420px;
+          width: 100%;
+          box-shadow: 0 4px 24px rgba(0,0,0,0.12);
+          border: 1px solid var(--border, #e5e5e5);
         }
 
-        .placeholder-card h3 {
-          margin: 0;
+        .empty-icon {
+          font-size: 3.5rem;
+          margin-bottom: 1rem;
         }
 
-        .inline-family-selector {
-          margin-top: 0.25rem;
-          max-width: 100%;
+        .empty-card h2 {
+          margin: 0 0 0.5rem 0;
+          font-size: 1.25rem;
+          font-weight: 600;
+          color: var(--text, #1a1a1a);
         }
 
-        .chat-main .sous-chef-chat {
-          height: 100%;
-          border-radius: 0;
+        .empty-card p {
+          margin: 0 0 1.5rem 0;
+          color: var(--muted, #666);
+          font-size: 0.9rem;
+          line-height: 1.5;
         }
 
-        /* Override SousChefChat styles for full-page view */
-        .chat-main .context-panel {
+        .empty-selector {
+          text-align: left;
+        }
+
+        /* ============================================
+           CHAT OVERRIDES FOR FULL PAGE
+           ============================================ */
+        .chat-container .context-panel {
           display: block;
         }
 
-        .chat-main .chat-header {
+        .chat-container .chat-header {
           display: flex;
-          padding: 1rem;
+          padding: 1rem 1.25rem;
         }
 
-        .chat-main .messages-container {
-          padding: 1.5rem;
+        .chat-container .messages-container {
+          padding: 1.25rem;
         }
 
-        .chat-main .bubble {
-          max-width: 75%;
-          font-size: 0.95rem;
+        .chat-container .bubble {
+          max-width: 80%;
         }
 
-        .chat-main .bubble.assistant {
-          max-width: 85%;
+        .chat-container .bubble.assistant {
+          max-width: 90%;
         }
 
-        /* Better table visibility in full page */
-        .chat-main .bubble.assistant table {
+        .chat-container .composer {
+          padding: 1rem 1.25rem;
+        }
+
+        /* ============================================
+           FAMILY SELECTOR DARK MODE FIXES
+           ============================================ */
+        .sous-chef-page .family-selector-trigger {
+          background: var(--surface, #fff);
+          border-color: var(--border, #e0e0e0);
+          color: var(--text, #1a1a1a);
+        }
+
+        .sous-chef-page .family-selector-trigger:hover {
+          border-color: var(--primary, #5cb85c);
+        }
+
+        .sous-chef-page .family-selector-trigger.open {
+          border-color: var(--primary, #5cb85c);
+          box-shadow: 0 0 0 3px rgba(92, 184, 92, 0.15);
+        }
+
+        .sous-chef-page .family-selector-dropdown {
+          background: var(--surface, #fff);
+          border-color: var(--border, #e0e0e0);
+          box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+        }
+
+        .sous-chef-page .search-wrapper {
+          background: var(--surface, #fff);
+          border-bottom-color: var(--border, #e0e0e0);
+        }
+
+        .sous-chef-page .search-input {
+          background: var(--surface-2, #f5f5f5);
+          border-color: var(--border, #e0e0e0);
+          color: var(--text, #1a1a1a);
+        }
+
+        .sous-chef-page .search-input::placeholder {
+          color: var(--muted, #888);
+        }
+
+        .sous-chef-page .search-input:focus {
+          border-color: var(--primary, #5cb85c);
+          box-shadow: 0 0 0 3px rgba(92, 184, 92, 0.15);
+        }
+
+        .sous-chef-page .group-header {
+          background: var(--surface-2, #f5f5f5);
+          color: var(--muted, #888);
+          border-bottom-color: var(--border, #e0e0e0);
+        }
+
+        .sous-chef-page .family-option {
+          border-bottom-color: var(--border, #e0e0e0);
+          color: var(--text, #1a1a1a);
+        }
+
+        .sous-chef-page .family-option:hover {
+          background: var(--surface-2, #f5f5f5);
+        }
+
+        .sous-chef-page .family-option.selected {
+          background: rgba(92, 184, 92, 0.1);
+        }
+
+        .sous-chef-page .type-badge {
+          font-size: 0.6rem;
+          padding: 0.1rem 0.35rem;
+          border-radius: 3px;
+          font-weight: 600;
+        }
+
+        /* Badge colors - enhanced for visibility */
+        .sous-chef-page .type-badge.badge-platform {
+          background: rgba(16, 185, 129, 0.18);
+          color: #059669;
+        }
+
+        .sous-chef-page .type-badge.badge-manual {
+          background: rgba(139, 92, 246, 0.18);
+          color: #7c3aed;
+        }
+
+        .sous-chef-page .family-meta,
+        .sous-chef-page .family-dietary,
+        .sous-chef-page .family-stats {
+          color: var(--muted, #888);
+        }
+
+        .sous-chef-page .no-results {
+          color: var(--muted, #888);
+        }
+
+        /* Header family selector special styling */
+        .header-family-selector .family-selector-trigger {
+          background: rgba(255,255,255,0.12) !important;
+          border-color: rgba(255,255,255,0.2) !important;
+          color: white !important;
+          padding: 0.4rem 0.7rem;
+          min-width: 180px;
+        }
+
+        .header-family-selector .family-selector-trigger:hover {
+          background: rgba(255,255,255,0.2) !important;
+        }
+
+        .header-family-selector .family-selector-trigger .chevron {
+          color: rgba(255,255,255,0.7);
+        }
+
+        .header-family-selector .family-selector-trigger .family-name {
+          font-size: 0.85rem;
+        }
+
+        .header-family-selector .family-selector-trigger .family-meta {
+          font-size: 0.7rem;
+          color: rgba(255,255,255,0.75);
+        }
+
+        .header-family-selector .family-selector-trigger .family-avatar {
+          width: 28px;
+          height: 28px;
           font-size: 0.9rem;
         }
 
-        .chat-main .welcome-content {
-          max-width: 500px;
+        .header-family-selector .type-badge {
+          display: none;
         }
 
-        .chat-main .quick-actions {
-          gap: 0.75rem;
-        }
-
-        .chat-main .quick-action-btn {
-          padding: 0.6rem 1.25rem;
-          font-size: 0.9rem;
-        }
-
-        .chat-main .composer {
-          padding: 1rem 1.5rem;
-        }
-
-        .chat-main .composer-input {
-          padding: 0.875rem 1rem;
-          font-size: 0.95rem;
-        }
-
-        /* Responsive */
-        @media (max-width: 1024px) {
-          .page-content {
-            flex-direction: column;
-            padding: 1rem;
-          }
-
-          .sidebar {
-            width: 100%;
-          }
-
-          .chat-main {
-            min-height: 500px;
-          }
-        }
-
-        @media (max-width: 640px) {
+        /* ============================================
+           RESPONSIVE
+           ============================================ */
+        @media (max-width: 768px) {
           .page-header {
-            padding: 0.75rem 1rem;
+            padding: 0.625rem 0.75rem;
           }
 
-          .header-inner {
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 0.5rem;
+          .header-content {
+            flex-wrap: wrap;
           }
 
-          .header-text h1 {
-            font-size: 1.25rem;
-          }
-
-          .emoji-trigger {
-            width: 48px;
-            height: 48px;
-          }
-
-          .emoji-trigger .emoji {
-            font-size: 1.5rem;
-          }
-
-          .minimize-text {
+          .header-family-selector {
             display: none;
           }
 
-          .page-content {
+          .minimize-label {
+            display: none;
+          }
+
+          .minimize-btn {
+            padding: 0.5rem 0.625rem;
+          }
+
+          .emoji-btn {
+            width: 38px;
+            height: 38px;
+            font-size: 1.25rem;
+          }
+
+          .header-title h1 {
+            font-size: 1rem;
+          }
+
+          .page-main {
             padding: 0.75rem;
-            gap: 0.75rem;
+          }
+
+          .empty-card {
+            padding: 1.5rem;
+          }
+
+          .empty-icon {
+            font-size: 2.5rem;
+          }
+
+          .empty-card h2 {
+            font-size: 1.1rem;
+          }
+        }
+
+        @media (max-width: 480px) {
+          .page-main {
+            padding: 0.5rem;
+          }
+
+          .chat-container {
+            border-radius: 8px;
+          }
+
+          .empty-card {
+            padding: 1.25rem;
+            border-radius: 12px;
           }
         }
       `}</style>

@@ -9,8 +9,13 @@
 
 {% block branding %}
   <div class="hu-branding">
-    <h1 class="hu-site-name"><a href="{% url 'admin:index' %}">Hood United Admin</a></h1>
-    <div class="hu-tagline">Live better. Eat smarter.</div>
+    <div class="hu-brand-row">
+      <img src="{% static 'admin/logo.svg' %}" alt="Hood United" class="hu-logo" width="36" height="36">
+      <div class="hu-brand-text">
+        <h1 class="hu-site-name"><a href="{% url 'admin:index' %}">Hood United</a></h1>
+        <div class="hu-tagline">Live better. Eat smarter.</div>
+      </div>
+    </div>
   </div>
 {% endblock %}
 
@@ -25,7 +30,6 @@
       <a class="hu-tab{% if '/admin/chefs/chef/' in request.path %} active{% endif %}" href="{% url 'admin:chefs_chef_changelist' %}">Chefs</a>
       <a class="hu-tab{% if '/admin/custom_auth/customuser/' in request.path %} active{% endif %}" href="{% url 'admin:custom_auth_customuser_changelist' %}">Customers</a>
       <a class="hu-tab{% if '/admin/reviews/review/' in request.path %} active{% endif %}" href="{% url 'admin:reviews_review_changelist' %}">Reviews</a>
-      <a class="hu-tab{% if '/admin/gamification/' in request.path %} active{% endif %}" href="{% url 'admin:gamification_userprofile_changelist' %}">Gamification</a>
       <a class="hu-tab{% if '/admin/meals/systemupdate/' in request.path %} active{% endif %}" href="{% url 'admin:meals_systemupdate_changelist' %}">Ops</a>
     </div>
     <div class="hu-nav-right">

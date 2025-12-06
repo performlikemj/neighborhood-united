@@ -9,6 +9,8 @@ from chefs.api import unified_clients as unified_api
 from chefs.api import sous_chef as sous_chef_api
 from chefs.api import availability as availability_api
 from chefs.api import meal_plans as meal_plans_api
+from chefs.api import payment_links as payment_links_api
+from chefs.resource_planning import views as prep_plan_api
 from . import views
 
 
@@ -77,6 +79,22 @@ urlpatterns = [
     path('api/me/leads/<int:lead_id>/household/', leads_api.lead_household_members, name='chef_lead_household'),
     path('api/me/leads/<int:lead_id>/household/<int:member_id>/', leads_api.lead_household_member_detail, name='chef_lead_household_detail'),
     
+    # Email Verification for Manual Contacts
+    path('api/me/leads/<int:lead_id>/send-verification/', leads_api.send_email_verification, name='chef_lead_send_verification'),
+    path('api/me/leads/<int:lead_id>/verification-status/', leads_api.check_email_verification_status, name='chef_lead_verification_status'),
+    
+    # Public email verification endpoint
+    path('api/verify-email/<str:token>/', leads_api.verify_email_token, name='verify_email_token'),
+    
+    # ==========================================================================
+    # Chef Payment Links API
+    # ==========================================================================
+    
+    path('api/me/payment-links/', payment_links_api.payment_link_list, name='chef_payment_links'),
+    path('api/me/payment-links/stats/', payment_links_api.payment_link_stats, name='chef_payment_link_stats'),
+    path('api/me/payment-links/<int:link_id>/', payment_links_api.payment_link_detail, name='chef_payment_link_detail'),
+    path('api/me/payment-links/<int:link_id>/send/', payment_links_api.send_payment_link, name='chef_send_payment_link'),
+    
     # Unified Clients View (All Clients - Platform + Manual)
     path('api/me/all-clients/', unified_api.unified_client_list, name='chef_all_clients'),
     path('api/me/all-clients/<str:client_id>/', unified_api.unified_client_detail, name='chef_all_client_detail'),
@@ -135,4 +153,26 @@ urlpatterns = [
     
     # Chef's saved dishes
     path('api/me/dishes/', meal_plans_api.chef_dishes, name='chef_dishes'),
+    
+    # ==========================================================================
+    # Chef Resource Planning / Prep Plan API
+    # ==========================================================================
+    
+    # Prep Plan CRUD
+    path('api/me/prep-plans/', prep_plan_api.prep_plan_list, name='chef_prep_plans'),
+    path('api/me/prep-plans/<int:plan_id>/', prep_plan_api.prep_plan_detail, name='chef_prep_plan_detail'),
+    path('api/me/prep-plans/<int:plan_id>/regenerate/', prep_plan_api.prep_plan_regenerate, name='chef_prep_plan_regenerate'),
+    
+    # Shopping List
+    path('api/me/prep-plans/<int:plan_id>/shopping-list/', prep_plan_api.prep_plan_shopping_list, name='chef_prep_plan_shopping'),
+    path('api/me/prep-plans/<int:plan_id>/mark-purchased/', prep_plan_api.mark_items_purchased, name='chef_mark_purchased'),
+    path('api/me/prep-plans/<int:plan_id>/unmark-purchased/', prep_plan_api.unmark_items_purchased, name='chef_unmark_purchased'),
+    
+    # Batch Suggestions
+    path('api/me/prep-plans/<int:plan_id>/batch-suggestions/', prep_plan_api.prep_plan_batch_suggestions, name='chef_batch_suggestions'),
+    
+    # Utility Endpoints
+    path('api/me/ingredients/shelf-life/', prep_plan_api.shelf_life_lookup, name='chef_shelf_life'),
+    path('api/me/prep-plans/quick-generate/', prep_plan_api.quick_generate_prep_plan, name='chef_quick_prep_plan'),
+    path('api/me/prep-plans/summary/', prep_plan_api.prep_plan_summary, name='chef_prep_plan_summary'),
 ]

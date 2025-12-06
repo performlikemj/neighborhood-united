@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useTheme } from '../context/ThemeContext.jsx'
 import { FEATURES } from '../config/features.js'
@@ -22,6 +22,7 @@ export default function NavBar(){
   const { user, logout, switchRole, hasChefAccess } = useAuth()
   const { theme, toggleTheme } = useTheme()
   const nav = useNavigate()
+  const location = useLocation()
   const [switching, setSwitching] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
@@ -29,6 +30,12 @@ export default function NavBar(){
   const onBrandError = ()=> setBrandSrc('/sautai_logo_transparent_800.png')
   const isAuthed = Boolean(user)
   const inChef = user?.current_role === 'chef'
+  
+  // Detect if we're in the Chef Dashboard context for streamlined navbar
+  const isChefDashboard = inChef && (
+    location.pathname.startsWith('/chefs/dashboard') || 
+    location.pathname.startsWith('/chefs/')
+  )
   
   // Track connected chefs for adaptive nav text
   const [connectedChefCount, setConnectedChefCount] = useState(0)
@@ -77,7 +84,7 @@ export default function NavBar(){
   }
 
   return (
-    <div className="navbar">
+    <div className={`navbar${isChefDashboard ? ' navbar--chef-context' : ''}`}>
       <div className="navbar-inner container">
         <div className="brand">
           <Link to="/" onClick={closeMenu} style={{display:'inline-flex', alignItems:'center', gap:'.5rem', textDecoration:'none'}}>
@@ -99,10 +106,11 @@ export default function NavBar(){
         </button>
 
         <div id="site-menu" className={"nav-links" + (menuOpen ? " open" : "") }>
-          <Link to="/" onClick={closeMenu} className="btn btn-outline">Home</Link>
+          {/* Home link - subtle text style in chef context */}
+          <Link to="/" onClick={closeMenu} className={isChefDashboard ? "nav-text-link" : "btn btn-outline"}>Home</Link>
           
-          {/* Chef Dashboard link for chefs */}
-          {(inChef && isAuthed) && (
+          {/* Chef Dashboard link for chefs - hidden when already in chef dashboard */}
+          {(inChef && isAuthed && !isChefDashboard) && (
             <Link to="/chefs/dashboard" onClick={closeMenu} className="btn btn-outline">Chef Dashboard</Link>
           )}
           
@@ -133,7 +141,8 @@ export default function NavBar(){
             <Link to="/chefs" onClick={closeMenu} className="btn btn-outline">Chefs</Link>
           )}
           
-          {isAuthed && (
+          {/* More dropdown - hidden in chef dashboard context (sidebar handles nav) */}
+          {isAuthed && !isChefDashboard && (
             (()=>{
               const items = []
               
@@ -174,9 +183,9 @@ export default function NavBar(){
               )
             })()
           )}
-          {/* History removed */}
+          {/* Role toggle - compact in chef dashboard context */}
           {user?.is_chef && (
-            <div className="role-toggle" role="group" aria-label="Select role">
+            <div className={`role-toggle${isChefDashboard ? ' role-toggle--compact' : ''}`} role="group" aria-label="Select role">
               <button
                 type="button"
                 className={`seg ${user?.current_role !== 'chef' ? 'active' : ''}`}
@@ -185,7 +194,7 @@ export default function NavBar(){
                 title="Use app as Customer"
                 onClick={()=>selectRole('customer')}
               >
-                {switching && user?.current_role === 'chef' ? '…' : '🥣 Customer'}
+                {switching && user?.current_role === 'chef' ? '…' : (isChefDashboard ? '🥣' : '🥣 Customer')}
               </button>
               <button
                 type="button"
@@ -195,21 +204,24 @@ export default function NavBar(){
                 title="Use app as Chef"
                 onClick={()=>selectRole('chef')}
               >
-                {switching && user?.current_role !== 'chef' ? '…' : '👨‍🍳 Chef'}
+                {switching && user?.current_role !== 'chef' ? '…' : (isChefDashboard ? '👨‍🍳' : '👨‍🍳 Chef')}
               </button>
             </div>
           )}
           {!user && <Link to="/login" onClick={closeMenu} className="btn btn-primary">Login</Link>}
           {!user && <Link to="/register" onClick={closeMenu} className="btn btn-outline">Register</Link>}
-          {user && <button onClick={doLogout} className="btn btn-primary">Logout</button>}
+          {user && <button onClick={doLogout} className={isChefDashboard ? "nav-text-link" : "btn btn-primary"}>Logout</button>}
           <button
             type="button"
-            className="btn btn-outline"
+            className={isChefDashboard ? "theme-toggle-icon" : "btn btn-outline"}
             onClick={toggleTheme}
             title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} mode`}
             aria-label={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} mode`}
           >
-            {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
+            {isChefDashboard 
+              ? (theme === 'dark' ? '☀️' : '🌙')
+              : (theme === 'dark' ? '☀️ Light' : '🌙 Dark')
+            }
           </button>
         </div>
       </div>

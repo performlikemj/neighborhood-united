@@ -2,7 +2,6 @@ import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx'
 import { api } from '../api'
-import Carousel from '../components/Carousel.jsx'
 
 export default function Home(){
   const { user } = useAuth()
@@ -11,41 +10,24 @@ export default function Home(){
   const [submitting, setSubmitting] = useState(false)
   const [applyMsg, setApplyMsg] = useState(null)
 
-  const FeatureRow = ({ image, title, bullets, reverse=false }) => (
-    <div className={"media" + (reverse ? " reverse" : "")}>
-      <div className="media-image">
-        <img src={image} alt={title} className="image-rounded" />
-      </div>
-      <div className="media-body card">
-        <h3 style={{marginTop:0}}>{title}</h3>
-        <ul className="list">
-          {bullets.map((b, i)=> <li key={i} dangerouslySetInnerHTML={{__html: b}} />)}
-        </ul>
-      </div>
-    </div>
-  )
-
   return (
     <div className="page-home">
-      {/* Hero */}
+      {/* Hero - Chef Focused */}
       <section className="section">
         <div className="hero hero-split">
           <div className="hero-content">
-            <div className="eyebrow">Community • Food • AI</div>
-            <h1 className="display"><span className="text-gradient">Connect With Local Chefs</span></h1>
-            <p>We link you with talented cooks in your community — from chefs preserving family recipes to those creating new flavors. Our AI simply helps plan your meals.</p>
+            <div className="eyebrow">Chef CRM • Client Management • Growth</div>
+            <h1 className="display"><span className="text-gradient">Grow Your Culinary Business</span></h1>
+            <p>The all-in-one platform for independent chefs. Manage clients, services, and bookings — focus on cooking while we handle the business side.</p>
             <div className="hero-actions">
-              {!user && <Link to="/register" className="btn btn-primary">Get Started Today 🍽️</Link>}
-              {!user && <Link to="/chefs" className="btn btn-outline">Explore as Guest</Link>}
-              {user ? (
-                 user?.is_chef ? null : <button className="btn btn-outline" onClick={()=> setApplyOpen(true)}>Become a Chef</button>
-              ) : (
-                <Link to="/login?next=/profile?applyChef=1" className="btn btn-outline">Become a Chef</Link>
-              )}
+              {!user && <Link to="/register" className="btn btn-primary">Start Your Chef Profile</Link>}
+              {user?.is_chef && <Link to="/chefs/dashboard" className="btn btn-primary">Go to Chef Hub</Link>}
+              {user && !user?.is_chef && <button className="btn btn-primary" onClick={()=> setApplyOpen(true)}>Become a Chef</button>}
+              {!user && <Link to="/chefs" className="btn btn-outline">Looking for a Chef?</Link>}
             </div>
           </div>
           <div className="hero-image">
-            <img src="https://live.staticflickr.com/65535/54548860874_7569d1dbdc_b.jpg" alt="Community chefs" className="image-rounded" />
+            <img src="https://live.staticflickr.com/65535/54548860874_7569d1dbdc_b.jpg" alt="Professional chef at work" className="image-rounded" />
           </div>
         </div>
       </section>
@@ -107,90 +89,59 @@ export default function Home(){
         </>
       )}
 
-      {/* Intro cards */}
+      {/* Chef Value Props */}
       <section className="section" aria-labelledby="why">
-        <h2 id="why" className="section-title">Why sautai?</h2>
+        <h2 id="why" className="section-title">Everything You Need to Run Your Business</h2>
+        <p className="section-sub">From managing clients to getting paid — sautai handles the business so you can focus on the food.</p>
         <div className="intro-cards" style={{marginTop:'.75rem'}}>
           <div className="card">
-            <h3>🥘 Local Connection</h3>
-            <p>Discover chefs in your neighborhood who prepare traditional favorites and exciting new meals while keeping culinary traditions alive.</p>
+            <h3>👥 Client Management</h3>
+            <p>Keep track of families, dietary restrictions, allergies, and preferences. Build lasting relationships with organized client profiles.</p>
           </div>
           <div className="card">
-            <h3>🧠 AI Meal Planning</h3>
-            <p>Let our AI suggest balanced meal plans so you can focus on enjoying food and community.</p>
+            <h3>📋 Services & Booking</h3>
+            <p>Create service offerings with custom pricing tiers. Let clients book directly and manage your schedule effortlessly.</p>
           </div>
           <div className="card">
-            <h3>🥦 Health Tracking</h3>
-            <p>Monitor your progress, track calories, and watch your health metrics improve with every meal.</p>
+            <h3>💳 Payments & Revenue</h3>
+            <p>Get paid seamlessly with Stripe integration. Track your earnings, send invoices, and watch your business grow.</p>
           </div>
         </div>
       </section>
 
       <div className="divider" />
 
-      {/* Features with images (carousel on mobile) */}
-      <section className="section" aria-labelledby="how">
-        <h2 id="how" className="section-title">How sautai works for you</h2>
-        <div className="feature-carousel" style={{ marginTop: '.5rem' }}>
-          <Carousel
-            ariaLabel="How sautai works carousel"
-            autoPlay
-            intervalMs={5500}
-            pauseOnHover
-            pauseOnTouch
-            items={[
-              (
-                <FeatureRow
-                  image="https://live.staticflickr.com/65535/54550764768_d565973881_b.jpg"
-                  title="Effortless Meal Planning"
-                  bullets={[
-                    "<b>Customized Weekly Plans</b> – Meals tailored to your diet and preferences",
-                    "<b>Ingredient Awareness</b> – Avoid allergens and disliked foods automatically",
-                    "<b>One‑Click Adjustments</b> – Swap meals in seconds",
-                    "<b>Chef Connections</b> – Connect with local chefs for preparation",
-                  ]}
-                />
-              ),
-              (
-                <FeatureRow
-                  image="https://live.staticflickr.com/65535/54550711849_2ac8954256_b.jpg"
-                  title="Simple Health Monitoring"
-                  bullets={[
-                    "<b>Calorie & Nutrition Tracking</b> – Log and monitor daily intake",
-                    "<b>Progress Visualization</b> – Clear, intuitive charts",
-                    "<b>Mood & Energy Monitoring</b> – See how foods affect you",
-                    "<b>Goal Setting</b> – Set targets and reach them",
-                  ]}
-                />
-              ),
-              (
-                <FeatureRow
-                  image="https://live.staticflickr.com/65535/54549653432_73f6b0bdfd_b.jpg"
-                  title="Ongoing Support"
-                  bullets={[
-                    "<b>AI Nutrition Assistant</b> – Answers to all your nutrition questions",
-                    "<b>Personalized Recommendations</b> – Suggestions that improve over time",
-                    "<b>Emergency Supply Planning</b> – Healthy options for the unexpected",
-                    "<b>Community Connection</b> – Learn from others on similar journeys",
-                  ]}
-                />
-              ),
-            ]}
-          />
+      {/* Chef Hub Preview */}
+      <section className="section" aria-labelledby="hub">
+        <h2 id="hub" className="section-title">Your Chef Hub — All in One Place</h2>
+        <p className="section-sub">A professional dashboard designed for how you work. Everything organized, nothing overlooked.</p>
+        <div className="intro-cards" style={{marginTop:'.75rem'}}>
+          <div className="card">
+            <h3>📊 Dashboard Overview</h3>
+            <p>See your revenue, active clients, upcoming orders, and events at a glance. Know exactly where your business stands.</p>
+          </div>
+          <div className="card">
+            <h3>🍳 Kitchen & Menu</h3>
+            <p>Manage your dishes, ingredients, and complete meals. Showcase your culinary creations to potential clients.</p>
+          </div>
+          <div className="card">
+            <h3>📅 Events & Orders</h3>
+            <p>Track service orders, schedule events, and never miss a booking. Stay organized with your calendar view.</p>
+          </div>
         </div>
       </section>
 
       <div className="divider" />
 
-      {/* Steps */}
+      {/* Steps for Chefs */}
       <section className="section" aria-labelledby="steps">
-        <h2 id="steps" className="section-title">Simple Steps to Better Health</h2>
+        <h2 id="steps" className="section-title">Get Started in Minutes</h2>
         <div className="steps-grid" style={{marginTop:'.5rem'}}>
           {[
-            ["1", "Sign Up", "Create your profile and tell us about your dietary needs and health goals."],
-            ["2", "Get Your Plan", "Receive customized meal plans that match your preferences and nutritional requirements."],
-            ["3", "Track Progress", "Log your meals and health metrics to monitor your journey toward better health."],
-            ["4", "Adjust & Improve", "Refine your plans based on what works for you with the help of our AI assistant."],
+            ["1", "Create Your Profile", "Set up your chef profile with your bio, photos, cuisine specialties, and service areas."],
+            ["2", "Define Your Services", "Create service offerings with pricing tiers — weekly meal prep, private dinners, cooking classes, and more."],
+            ["3", "Connect with Clients", "Local families discover you and request your services. Build your client base organically."],
+            ["4", "Grow Your Business", "Manage orders, track revenue, and expand your culinary business with powerful tools."],
           ].map(([num, title, desc]) => (
             <div key={title} className="card step">
               <div className="num" aria-hidden>{num}</div>
@@ -205,17 +156,34 @@ export default function Home(){
 
       <div className="divider" />
 
-      {/* CTA */}
+      {/* Customer Section */}
+      <section className="section" aria-labelledby="customers">
+        <div className="cta">
+          <div className="card" style={{background:'linear-gradient(135deg, color-mix(in oklab, var(--primary) 8%, var(--surface)) 0%, var(--surface) 100%)'}}>
+            <h2 id="customers" style={{marginTop:0}}>Looking for a Personal Chef?</h2>
+            <p>Discover talented chefs in your area who specialize in home cooking, meal prep, private dinners, and more. From family recipes to modern cuisine — find the perfect chef for your household.</p>
+            <div style={{display:'flex', gap:'.6rem', flexWrap:'wrap', marginTop:'1rem'}}>
+              <Link to="/chefs" className="btn btn-primary">Browse Local Chefs</Link>
+              {!user && <Link to="/register" className="btn btn-outline">Create Account</Link>}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div className="divider" />
+
+      {/* Final CTA */}
       <section className="section" aria-labelledby="cta">
         <div className="cta">
           <div className="card">
-            <h2 id="cta" style={{marginTop:0}}>Ready to Transform Your Relationship with Food?</h2>
-            <p>Join a community that celebrates local chefs, from family recipes passed down through generations to brand new creations. Our AI-powered meal planning keeps things simple while you focus on sharing real food with real people.</p>
-            <p style={{marginBottom:0}}>Start your journey to connected, tradition-rich meals today!</p>
+            <h2 id="cta" style={{marginTop:0}}>Ready to Get Started?</h2>
+            <p>Whether you're a chef looking to grow your business or a family searching for delicious home-cooked meals — sautai connects you with your community.</p>
           </div>
           <div className="actions">
-            {!user && <Link to="/register" className="btn btn-primary" style={{textAlign:'center'}}>Create Free Account</Link>}
-            {!user && <Link to="/chefs" className="btn btn-outline" style={{textAlign:'center'}}>Explore as Guest</Link>}
+            {!user && <Link to="/register" className="btn btn-primary" style={{textAlign:'center'}}>Create Chef Profile</Link>}
+            {user?.is_chef && <Link to="/chefs/dashboard" className="btn btn-primary" style={{textAlign:'center'}}>Go to Chef Hub</Link>}
+            {user && !user?.is_chef && <button className="btn btn-primary" style={{textAlign:'center'}} onClick={()=> setApplyOpen(true)}>Become a Chef</button>}
+            <Link to="/chefs" className="btn btn-outline" style={{textAlign:'center'}}>Find a Chef</Link>
           </div>
         </div>
       </section>

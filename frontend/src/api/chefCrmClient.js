@@ -197,6 +197,32 @@ export async function deleteHouseholdMember(leadId, memberId) {
 }
 
 // =============================================================================
+// Email Verification
+// =============================================================================
+
+/**
+ * Send email verification to a contact.
+ */
+export async function sendEmailVerification(leadId) {
+  const response = await api.post(`${CRM_BASE}/leads/${leadId}/send-verification/`, {}, {
+    skipUserId: true,
+    withCredentials: true
+  })
+  return response?.data
+}
+
+/**
+ * Check email verification status for a contact.
+ */
+export async function getEmailVerificationStatus(leadId) {
+  const response = await api.get(`${CRM_BASE}/leads/${leadId}/verification-status/`, {
+    skipUserId: true,
+    withCredentials: true
+  })
+  return response?.data
+}
+
+// =============================================================================
 // Revenue & Analytics
 // =============================================================================
 
@@ -259,6 +285,8 @@ export default {
   addHouseholdMember,
   updateHouseholdMember,
   deleteHouseholdMember,
+  sendEmailVerification,
+  getEmailVerificationStatus,
   getRevenueBreakdown,
   getUpcomingOrders,
   DIETARY_OPTIONS,

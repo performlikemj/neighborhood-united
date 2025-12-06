@@ -490,6 +490,10 @@ def create_order(request):
     offering = get_object_or_404(ChefServiceOffering, id=offering_id, active=True)
     chef = offering.chef
 
+    # Prevent chefs from ordering their own services (money laundering risk)
+    if chef.user_id == customer.id:
+        return Response({"error": "Chefs cannot order their own services"}, status=400)
+
     # Resolve tier
     tier = None
     if tier_id:

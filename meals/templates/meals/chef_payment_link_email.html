@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Payment Request from {{ chef_name }}</title>
+    <style>
+        body { font-family: Arial, sans-serif; color: #333333; margin: 0; padding: 0; background-color: #f4f4f4; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; background-color: #ffffff; }
+        .logo img { max-width: 200px; height: auto; }
+        h2 { color: #555; border-bottom: 1px solid #dddddd; padding-bottom: 10px; margin-bottom: 20px; }
+        .button {
+            display: inline-block;
+            padding: 16px 32px;
+            margin: 20px 0;
+            background-color: #007BFF;
+            color: #ffffff !important;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 18px;
+        }
+        .button:visited {
+            color: #ffffff !important;
+        }
+        .amount-box {
+            background-color: #f8f9fa;
+            border: 2px solid #007BFF;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 25px 0;
+            text-align: center;
+        }
+        .amount {
+            font-size: 36px;
+            font-weight: bold;
+            color: #007BFF;
+            margin: 0;
+        }
+        .description-box {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 20px 0;
+        }
+        .secure-badge {
+            display: inline-block;
+            background-color: #28a745;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            margin-top: 10px;
+        }
+        .footer { text-align: center; color: #777; font-size: 12px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; }
+        .footer a { color: #007BFF; text-decoration: none; }
+        .expires-note { color: #666; font-size: 13px; margin-top: 15px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo" style="text-align: center; margin-bottom: 20px;">
+            <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautai Logo">
+        </div>
+
+        <h2>Payment Request from {{ chef_name }}</h2>
+        
+        <p>Hi {{ recipient_name }},</p>
+        
+        <p>
+            <strong>{{ chef_name }}</strong> has sent you a payment request for their culinary services.
+        </p>
+        
+        <div class="amount-box">
+            <p style="margin: 0 0 10px 0; color: #666; font-size: 14px;">Amount Due</p>
+            <p class="amount">{{ amount_display }}</p>
+        </div>
+        
+        <div class="description-box">
+            <p style="margin: 0; color: #666; font-size: 13px;">Service Description:</p>
+            <p style="margin: 10px 0 0 0; font-size: 16px;"><strong>{{ description }}</strong></p>
+        </div>
+        
+        <div style="text-align: center;">
+            <a href="{{ payment_url }}" class="button" style="color: #ffffff;">Pay {{ amount_display }} Now</a>
+            <br>
+            <span class="secure-badge">Secure Payment via Stripe</span>
+        </div>
+        
+        <p class="expires-note" style="text-align: center;">
+            This payment link expires on <strong>{{ expires_at }}</strong>.
+        </p>
+        
+        <p style="margin-top: 25px; font-size: 14px; color: #666;">
+            If the button doesn't work, copy and paste this link into your browser:<br>
+            <a href="{{ payment_url }}" style="color: #007BFF; word-break: break-all;">{{ payment_url }}</a>
+        </p>
+        
+        <div style="background-color: #e7f3ff; padding: 15px; border-radius: 6px; margin-top: 25px;">
+            <p style="margin: 0; font-size: 14px; color: #0056b3;">
+                <strong>Need help?</strong> Contact {{ chef_name }} directly if you have any questions 
+                about this payment request.
+            </p>
+        </div>
+        
+        <div class="footer">
+            <p>This payment request was sent by {{ chef_name }} via sautai.</p>
+            <p>Your payment is processed securely by Stripe. We never store your card details.</p>
+            <p style="margin-top: 15px; color: #999; font-size: 11px;">
+                sautai - Personal Chef Services Platform
+            </p>
+        </div>
+    </div>
+</body>
+</html>

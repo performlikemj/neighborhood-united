@@ -277,6 +277,10 @@ class ChefServiceOrder(models.Model):
     def clean(self):
         errors = {}
 
+        # Prevent chefs from ordering their own services (money laundering risk)
+        if self.chef and self.customer and self.chef.user_id == self.customer_id:
+            errors["customer"] = "Chefs cannot order from themselves."
+
         # Ensure tier belongs to offering and chef matches
         if self.tier and self.offering and self.tier.offering_id != self.offering_id:
             errors["tier"] = "Selected tier does not belong to the offering."

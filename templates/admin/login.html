@@ -7,67 +7,75 @@
   {{ form.media }}
 {% endblock %}
 
-{% block bodyclass %}{{ block.super }} login{% endblock %}
+{% block bodyclass %}{{ block.super }} login hu-login-page{% endblock %}
 
-{# Keep user tools area empty on login to match Django defaults #}
+{# Hide ALL navigation elements on login page for security #}
 {% block usertools %}{% endblock %}
-
-{# The sidebar is not useful before authentication, so hide it #}
 {% block nav-sidebar %}{% endblock %}
-
+{% block nav-global %}{% endblock %}
 {% block content_title %}{% endblock %}
-
 {% block nav-breadcrumbs %}{% endblock %}
+{% block breadcrumbs %}{% endblock %}
 
 {% block content %}
-<div class="hu-login">
-  <div class="hu-hero">
-    <div class="hu-hero-title">Welcome back</div>
-    <div class="hu-hero-sub">Stewarding healthy meals and habits.</div>
-  </div>
+<div class="hu-login-container">
+  <div class="hu-login-card">
+    <div class="hu-login-header">
+      <img src="{% static 'admin/logo.svg' %}" alt="Hood United" class="hu-login-logo" width="56" height="56">
+      <h1 class="hu-login-title">Hood United</h1>
+      <p class="hu-login-subtitle">Admin Portal</p>
+    </div>
 
-  {% if form.errors and not form.non_field_errors %}
-    <p class="errornote">
-      {% blocktranslate count counter=form.errors.items|length %}Please correct the error below.{% plural %}Please correct the errors below.{% endblocktranslate %}
-    </p>
-  {% endif %}
+    {% if form.errors and not form.non_field_errors %}
+      <div class="hu-login-error">
+        {% blocktranslate count counter=form.errors.items|length %}Please correct the error below.{% plural %}Please correct the errors below.{% endblocktranslate %}
+      </div>
+    {% endif %}
 
-  {% if form.non_field_errors %}
-    {% for error in form.non_field_errors %}
-      <p class="errornote">{{ error }}</p>
-    {% endfor %}
-  {% endif %}
+    {% if form.non_field_errors %}
+      {% for error in form.non_field_errors %}
+        <div class="hu-login-error">{{ error }}</div>
+      {% endfor %}
+    {% endif %}
 
-  <div id="content-main">
     {% if user.is_authenticated %}
-      <p class="errornote">
+      <div class="hu-login-error">
         {% blocktranslate trimmed %}
           You are authenticated as {{ username }}, but are not authorized to
           access this page. Would you like to login to a different account?
         {% endblocktranslate %}
-      </p>
+      </div>
     {% endif %}
 
-    <form action="{{ app_path }}" method="post" id="login-form">{% csrf_token %}
-      <div class="form-row">
-        {{ form.username.errors }}
-        {{ form.username.label_tag }} {{ form.username }}
+    <form action="{{ app_path }}" method="post" id="login-form" class="hu-login-form">
+      {% csrf_token %}
+      <div class="hu-form-group">
+        <label for="id_username">{% translate 'Username' %}</label>
+        {{ form.username }}
+        {% if form.username.errors %}
+          <span class="hu-field-error">{{ form.username.errors.0 }}</span>
+        {% endif %}
       </div>
-      <div class="form-row">
-        {{ form.password.errors }}
-        {{ form.password.label_tag }} {{ form.password }}
+      <div class="hu-form-group">
+        <label for="id_password">{% translate 'Password' %}</label>
+        {{ form.password }}
         <input type="hidden" name="next" value="{{ next }}">
+        {% if form.password.errors %}
+          <span class="hu-field-error">{{ form.password.errors.0 }}</span>
+        {% endif %}
       </div>
       {% url 'admin_password_reset' as password_reset_url %}
       {% if password_reset_url %}
-        <div class="password-reset-link">
-          <a href="{{ password_reset_url }}">{% translate 'Forgotten your password or username?' %}</a>
+        <div class="hu-forgot-password">
+          <a href="{{ password_reset_url }}">{% translate 'Forgot password?' %}</a>
         </div>
       {% endif %}
-      <div class="submit-row">
-        <input type="submit" value="{% translate 'Log in' %}">
-      </div>
+      <button type="submit" class="hu-login-button">{% translate 'Sign In' %}</button>
     </form>
+  </div>
+  
+  <div class="hu-login-footer">
+    <p>&copy; {% now "Y" %} Hood United. All rights reserved.</p>
   </div>
 </div>
 {% endblock %}

@@ -243,6 +243,94 @@ SOUS_CHEF_TOOLS = [
             "properties": {},
             "required": []
         }
+    },
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # PREP PLANNING TOOLS
+    # ═══════════════════════════════════════════════════════════════════════════════
+    {
+        "type": "function",
+        "name": "get_prep_plan_summary",
+        "description": "Get a summary of your current prep planning status including active plans, items to purchase today, and overdue items. Use this to understand your upcoming shopping and prep needs.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "type": "function",
+        "name": "generate_prep_plan",
+        "description": "Generate a new prep plan for an upcoming date range. This will analyze your upcoming meal events and service orders, then create an optimized shopping list with timing suggestions based on ingredient shelf life.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "Number of days to plan for (default: 7, max: 30)",
+                    "default": 7
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_shopping_list",
+        "description": "Get your current shopping list from the active prep plan, organized by purchase date or storage category. Shows what to buy when, considering ingredient shelf life and when each ingredient will be used.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "group_by": {
+                    "type": "string",
+                    "enum": ["date", "category"],
+                    "description": "How to organize the list: 'date' groups by when to buy, 'category' groups by storage type (refrigerated, frozen, pantry, counter)",
+                    "default": "date"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_batch_cooking_suggestions",
+        "description": "Get AI-powered batch cooking suggestions to optimize your prep and reduce food waste. Identifies ingredients that appear in multiple meals and can be prepped together.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "type": "function",
+        "name": "check_ingredient_shelf_life",
+        "description": "Look up the shelf life and recommended storage for specific ingredients. Useful for planning when to purchase items.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ingredients": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of ingredient names to check"
+                }
+            },
+            "required": ["ingredients"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_upcoming_commitments",
+        "description": "Get all your upcoming meal events and service orders for the next few days. Useful for understanding what you need to prepare for.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "Number of days ahead to look (default: 7)",
+                    "default": 7
+                }
+            },
+            "required": []
+        }
     }
 ]
 
@@ -293,6 +381,13 @@ def handle_sous_chef_tool_call(
         "get_household_members": _get_household_members,
         "save_family_insight": _save_family_insight,
         "get_family_insights": _get_family_insights,
+        # Prep planning tools
+        "get_prep_plan_summary": _get_prep_plan_summary,
+        "generate_prep_plan": _generate_prep_plan,
+        "get_shopping_list": _get_shopping_list,
+        "get_batch_cooking_suggestions": _get_batch_cooking_suggestions,
+        "check_ingredient_shelf_life": _check_ingredient_shelf_life,
+        "get_upcoming_commitments": _get_upcoming_commitments_tool,
     }
     
     handler = tool_map.get(name)
@@ -970,4 +1065,365 @@ def _get_family_insights(
             "things_to_avoid": grouped["avoid"],
             "successes": grouped["success"]
         }
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PREP PLANNING TOOL IMPLEMENTATIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _get_prep_plan_summary(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """Get summary of chef's prep planning status."""
+    from datetime import date
+    from chefs.resource_planning.models import ChefPrepPlan, ChefPrepPlanItem
+    
+    today = date.today()
+    
+    # Active plans
+    active_plans = ChefPrepPlan.objects.filter(
+        chef=chef,
+        plan_end_date__gte=today,
+        status__in=['generated', 'in_progress']
+    )
+    active_count = active_plans.count()
+    
+    # Items to purchase today
+    items_today = ChefPrepPlanItem.objects.filter(
+        prep_plan__chef=chef,
+        prep_plan__status__in=['generated', 'in_progress'],
+        suggested_purchase_date=today,
+        is_purchased=False
+    ).count()
+    
+    # Overdue items
+    items_overdue = ChefPrepPlanItem.objects.filter(
+        prep_plan__chef=chef,
+        prep_plan__status__in=['generated', 'in_progress'],
+        suggested_purchase_date__lt=today,
+        is_purchased=False
+    ).count()
+    
+    # Get latest active plan summary
+    latest_plan = active_plans.order_by('-plan_start_date').first()
+    latest_plan_info = None
+    if latest_plan:
+        latest_plan_info = {
+            "id": latest_plan.id,
+            "date_range": f"{latest_plan.plan_start_date} to {latest_plan.plan_end_date}",
+            "total_meals": latest_plan.total_meals,
+            "total_servings": latest_plan.total_servings,
+            "unique_ingredients": latest_plan.unique_ingredients,
+            "status": latest_plan.status
+        }
+    
+    return {
+        "status": "success",
+        "active_plans_count": active_count,
+        "items_to_purchase_today": items_today,
+        "items_overdue": items_overdue,
+        "latest_plan": latest_plan_info,
+        "recommendation": (
+            "You have overdue shopping items!" if items_overdue > 0
+            else f"You have {items_today} items to purchase today." if items_today > 0
+            else "Your prep planning is up to date!" if active_count > 0
+            else "No active prep plans. Generate one to optimize your shopping."
+        )
+    }
+
+
+def _generate_prep_plan(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """Generate a new prep plan for the chef."""
+    from datetime import date, timedelta
+    from chefs.resource_planning.services import generate_prep_plan
+    
+    days = min(max(args.get("days", 7), 1), 30)  # Clamp between 1-30
+    
+    today = date.today()
+    end_date = today + timedelta(days=days - 1)
+    
+    try:
+        prep_plan = generate_prep_plan(
+            chef=chef,
+            start_date=today,
+            end_date=end_date,
+            notes=""
+        )
+        
+        return {
+            "status": "success",
+            "message": f"Generated prep plan for {days} days",
+            "plan_id": prep_plan.id,
+            "date_range": f"{prep_plan.plan_start_date} to {prep_plan.plan_end_date}",
+            "total_meals": prep_plan.total_meals,
+            "total_servings": prep_plan.total_servings,
+            "unique_ingredients": prep_plan.unique_ingredients,
+            "items_count": prep_plan.items.count(),
+            "tip": "Use get_shopping_list to see what to buy and when."
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to generate prep plan: {e}")
+        return {
+            "status": "error",
+            "message": f"Failed to generate prep plan: {str(e)}"
+        }
+
+
+def _get_shopping_list(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """Get shopping list from the active prep plan."""
+    from datetime import date
+    from chefs.resource_planning.models import ChefPrepPlan
+    from chefs.resource_planning.services import get_shopping_list_by_date, get_shopping_list_by_category
+    
+    group_by = args.get("group_by", "date")
+    today = date.today()
+    
+    # Get latest active plan
+    prep_plan = ChefPrepPlan.objects.filter(
+        chef=chef,
+        plan_end_date__gte=today,
+        status__in=['generated', 'in_progress']
+    ).order_by('-plan_start_date').first()
+    
+    if not prep_plan:
+        return {
+            "status": "error",
+            "message": "No active prep plan found. Use generate_prep_plan to create one."
+        }
+    
+    if group_by == "category":
+        shopping_list = get_shopping_list_by_category(prep_plan)
+    else:
+        shopping_list = get_shopping_list_by_date(prep_plan)
+    
+    # Count items and summarize
+    total_items = sum(len(items) for items in shopping_list.values())
+    unpurchased = sum(
+        1 for items in shopping_list.values() 
+        for item in items 
+        if not item.get('is_purchased')
+    )
+    
+    # Format for readability
+    formatted_list = {}
+    for key, items in shopping_list.items():
+        formatted_list[key] = [
+            {
+                "ingredient": item['ingredient'],
+                "quantity": f"{item['quantity']} {item.get('unit', 'units')}",
+                "shelf_life": f"{item.get('shelf_life_days', '?')} days",
+                "storage": item.get('storage', 'refrigerated'),
+                "timing_status": item.get('timing_status', 'unknown'),
+                "purchased": item.get('is_purchased', False)
+            }
+            for item in items
+        ]
+    
+    return {
+        "status": "success",
+        "plan_id": prep_plan.id,
+        "date_range": f"{prep_plan.plan_start_date} to {prep_plan.plan_end_date}",
+        "grouped_by": group_by,
+        "total_items": total_items,
+        "unpurchased_items": unpurchased,
+        "shopping_list": formatted_list,
+        "tip": (
+            "Items are organized by suggested purchase date based on shelf life." if group_by == "date"
+            else "Items are organized by storage type (refrigerated, frozen, pantry, counter)."
+        )
+    }
+
+
+def _get_batch_cooking_suggestions(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """Get batch cooking suggestions from the active prep plan."""
+    from datetime import date
+    from chefs.resource_planning.models import ChefPrepPlan
+    
+    today = date.today()
+    
+    # Get latest active plan
+    prep_plan = ChefPrepPlan.objects.filter(
+        chef=chef,
+        plan_end_date__gte=today,
+        status__in=['generated', 'in_progress']
+    ).order_by('-plan_start_date').first()
+    
+    if not prep_plan:
+        return {
+            "status": "error",
+            "message": "No active prep plan found. Use generate_prep_plan to create one."
+        }
+    
+    batch_data = prep_plan.batch_suggestions or {}
+    suggestions = batch_data.get('suggestions', [])
+    tips = batch_data.get('general_tips', [])
+    
+    return {
+        "status": "success",
+        "plan_id": prep_plan.id,
+        "date_range": f"{prep_plan.plan_start_date} to {prep_plan.plan_end_date}",
+        "batch_suggestions": [
+            {
+                "ingredient": s.get('ingredient'),
+                "total_quantity": f"{s.get('total_quantity', 0)} {s.get('unit', 'units')}",
+                "suggestion": s.get('suggestion'),
+                "prep_day": s.get('prep_day'),
+                "meals_covered": s.get('meals_covered', [])
+            }
+            for s in suggestions
+        ],
+        "general_tips": tips,
+        "summary": f"Found {len(suggestions)} batch cooking opportunities to save time and reduce waste."
+    }
+
+
+def _check_ingredient_shelf_life(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """Look up shelf life for ingredients."""
+    from chefs.resource_planning.shelf_life import get_ingredient_shelf_lives, get_default_shelf_life
+    
+    ingredients = args.get("ingredients", [])
+    
+    if not ingredients:
+        return {"status": "error", "message": "No ingredients provided"}
+    
+    if len(ingredients) > 20:
+        ingredients = ingredients[:20]  # Limit to 20
+    
+    try:
+        response = get_ingredient_shelf_lives(ingredients)
+        
+        results = []
+        for ing in response.ingredients:
+            results.append({
+                "ingredient": ing.ingredient_name,
+                "shelf_life_days": ing.shelf_life_days,
+                "storage": ing.storage_type,
+                "notes": ing.notes
+            })
+        
+        return {
+            "status": "success",
+            "ingredients": results,
+            "tip": "Shelf life assumes proper storage. Refrigerated items should be kept at 35-40°F."
+        }
+        
+    except Exception as e:
+        # Fallback to defaults
+        logger.warning(f"Shelf life API failed, using defaults: {e}")
+        results = []
+        for name in ingredients:
+            defaults = get_default_shelf_life(name)
+            results.append({
+                "ingredient": name,
+                "shelf_life_days": defaults['shelf_life_days'],
+                "storage": defaults['storage_type'],
+                "notes": "Estimated based on ingredient category"
+            })
+        
+        return {
+            "status": "success",
+            "ingredients": results,
+            "note": "Using estimated shelf life data"
+        }
+
+
+def _get_upcoming_commitments_tool(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """Get upcoming meal commitments including client meal plans, events, and services."""
+    from datetime import date, timedelta
+    from chefs.resource_planning.services import get_upcoming_commitments
+    
+    days = min(max(args.get("days", 7), 1), 30)
+    
+    today = date.today()
+    end_date = today + timedelta(days=days - 1)
+    
+    commitments = get_upcoming_commitments(chef, today, end_date)
+    
+    # Count by type
+    type_counts = {'client_meal_plan': 0, 'meal_event': 0, 'service_order': 0}
+    formatted = []
+    for c in commitments:
+        type_counts[c.commitment_type] = type_counts.get(c.commitment_type, 0) + 1
+        
+        type_labels = {
+            'client_meal_plan': 'Client Meal Plan',
+            'meal_event': 'Meal Event',
+            'service_order': 'Service'
+        }
+        
+        formatted.append({
+            "type": type_labels.get(c.commitment_type, c.commitment_type),
+            "date": c.service_date.isoformat(),
+            "meal_name": c.meal_name,
+            "servings": c.servings,
+            "customer": c.customer_name or None,
+            "dishes_count": len(c.dishes)
+        })
+    
+    # Group by date
+    by_date = {}
+    for c in formatted:
+        date_key = c["date"]
+        if date_key not in by_date:
+            by_date[date_key] = []
+        by_date[date_key].append(c)
+    
+    total_servings = sum(c.servings for c in commitments)
+    
+    # Build detailed summary
+    summary_parts = []
+    if type_counts['client_meal_plan'] > 0:
+        summary_parts.append(f"{type_counts['client_meal_plan']} client meal plan meals")
+    if type_counts['meal_event'] > 0:
+        summary_parts.append(f"{type_counts['meal_event']} meal events")
+    if type_counts['service_order'] > 0:
+        summary_parts.append(f"{type_counts['service_order']} service appointments")
+    
+    if summary_parts:
+        summary = f"Over the next {days} days, you have: {', '.join(summary_parts)} ({total_servings} total servings)."
+    else:
+        summary = f"No commitments scheduled for the next {days} days."
+    
+    return {
+        "status": "success",
+        "date_range": f"{today} to {end_date}",
+        "total_commitments": len(commitments),
+        "total_servings": total_servings,
+        "breakdown": {
+            "client_meal_plans": type_counts['client_meal_plan'],
+            "meal_events": type_counts['meal_event'],
+            "service_orders": type_counts['service_order']
+        },
+        "commitments_by_date": by_date,
+        "summary": summary
     }

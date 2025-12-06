@@ -787,6 +787,26 @@ def stripe_webhook(request):
                     )
                     return Response({"error": str(svc_err)}, status=400)
 
+            # Handle chef payment link payments
+            if metadata.get('type') == 'chef_payment_link' and metadata.get('payment_link_id'):
+                try:
+                    from chefs.webhooks import handle_payment_link_completed
+                    handle_payment_link_completed(session)
+                    logger.info(
+                        "Processed chef payment link via webhook",
+                        extra={
+                            "payment_link_id": metadata.get('payment_link_id'),
+                            "session_id": getattr(session, 'id', None),
+                        },
+                    )
+                    return Response({"status": "success"})
+                except Exception as pl_err:
+                    logger.error(
+                        f"Chef payment link webhook handling failed: {pl_err}",
+                        exc_info=True,
+                    )
+                    return Response({"error": str(pl_err)}, status=400)
+
             # Handle chef meal payments via parent Order
             if metadata.get('order_type') == 'chef_meal':
                 from meals.models import Order

@@ -150,9 +150,10 @@ export default function FamilySelector({
 
   const getTypeBadge = (family) => {
     if (family.type === 'customer') {
-      return { label: 'Platform', color: '#10b981', bg: 'rgba(16, 185, 129, 0.1)' }
+      // Use CSS classes instead of inline styles for better theme support
+      return { label: 'Platform', className: 'badge-platform' }
     }
-    return { label: 'Manual', color: '#8b5cf6', bg: 'rgba(139, 92, 246, 0.1)' }
+    return { label: 'Manual', className: 'badge-manual' }
   }
 
   if (loading) {
@@ -199,10 +200,7 @@ export default function FamilySelector({
             <div className="family-info">
               <div className="family-name">
                 {formatFamilyName(selectedFamily)}
-                <span className="type-badge" style={{
-                  background: getTypeBadge(selectedFamily).bg,
-                  color: getTypeBadge(selectedFamily).color
-                }}>
+                <span className={`type-badge ${getTypeBadge(selectedFamily).className}`}>
                   {getTypeBadge(selectedFamily).label}
                 </span>
               </div>
@@ -356,6 +354,16 @@ export default function FamilySelector({
           border-radius: 4px;
           font-weight: 600;
           text-transform: uppercase;
+        }
+        
+        .type-badge.badge-platform {
+          background: rgba(16, 185, 129, 0.15);
+          color: #059669;
+        }
+        
+        .type-badge.badge-manual {
+          background: rgba(139, 92, 246, 0.15);
+          color: #7c3aed;
         }
         
         .family-meta {
@@ -536,7 +544,7 @@ function FamilyOption({
       <div className="family-details">
         <div className="family-name">
           {formatFamilyName(family)}
-          <span className="type-badge" style={{ background: badge.bg, color: badge.color }}>
+          <span className={`type-badge ${badge.className}`}>
             {badge.label}
           </span>
         </div>

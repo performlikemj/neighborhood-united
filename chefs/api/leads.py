@@ -1,16 +1,20 @@
 """
 Chef Lead Pipeline API endpoints.
 
-Provides CRM lead management endpoints for tracking potential customers.
+Provides CRM lead management endpoints for tracking potential customers,
+including email verification for off-platform client communications.
 """
 
 import logging
+import os
 
+from django.conf import settings
 from django.shortcuts import get_object_or_404
+from django.template.loader import render_to_string
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import NotFound
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 
@@ -504,4 +508,270 @@ def lead_household_member_detail(request, lead_id, member_id):
             status=500
         )
 
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def send_email_verification(request, lead_id):
+    """
+    POST /api/chefs/me/leads/{lead_id}/send-verification/
+    
+    Sends an email verification link to the lead's email address.
+    The lead must have a valid email address to receive verification.
+    
+    Response:
+    ```json
+    {
+        "status": "success",
+        "message": "Verification email sent to john@example.com"
+    }
+    ```
+    
+    Errors:
+    - 400: No email address on lead
+    - 400: Email already verified
+    - 404: Lead not found
+    - 429: Verification email sent too recently (wait 5 minutes)
+    """
+    chef, error_response = _get_chef_or_403(request)
+    if error_response:
+        return error_response
+    
+    try:
+        lead = Lead.objects.get(id=lead_id, owner=chef.user, is_deleted=False)
+    except Lead.DoesNotExist:
+        return Response({"error": "Contact not found."}, status=404)
+    
+    try:
+        # Validate email exists
+        if not lead.email:
+            return Response(
+                {"error": "This contact does not have an email address."},
+                status=400
+            )
+        
+        # Check if already verified
+        if lead.email_verified:
+            return Response(
+                {"error": "This email address has already been verified."},
+                status=400
+            )
+        
+        # Rate limiting: prevent spam (5 minute cooldown)
+        if lead.email_verification_sent_at:
+            from datetime import timedelta
+            cooldown = timedelta(minutes=5)
+            if timezone.now() - lead.email_verification_sent_at < cooldown:
+                remaining = (lead.email_verification_sent_at + cooldown - timezone.now()).seconds // 60
+                return Response(
+                    {"error": f"Please wait {remaining + 1} minute(s) before requesting another verification email."},
+                    status=429
+                )
+        
+        # Generate token
+        token = lead.generate_verification_token()
+        
+        # Build verification URL
+        frontend_url = os.getenv('STREAMLIT_URL', 'http://localhost:8501')
+        verification_url = f"{frontend_url}/verify-email/{token}"
+        
+        # Send verification email
+        _send_verification_email(lead, chef, verification_url)
+        
+        logger.info(f"Email verification sent to {lead.email} for lead {lead.id} by chef {chef.id}")
+        
+        return Response({
+            "status": "success",
+            "message": f"Verification email sent to {lead.email}"
+        })
+        
+    except Exception as e:
+        logger.exception(f"Error sending email verification for lead {lead_id}: {e}")
+        return Response(
+            {"error": "Failed to send verification email. Please try again."},
+            status=500
+        )
+
+
+def _send_verification_email(lead, chef, verification_url):
+    """
+    Send the email verification email using the notification assistant.
+    """
+    try:
+        from meals.meal_assistant_implementation import MealPlanningAssistant
+        
+        chef_name = chef.user.get_full_name() or chef.user.username
+        recipient_name = f"{lead.first_name} {lead.last_name}".strip() or "there"
+        
+        message_content = (
+            f"Please send an email verification message to {recipient_name}. "
+            f"Chef {chef_name} has added them as a client and wants to send them "
+            f"payment links and invoices. They need to verify their email address first. "
+            f"The verification link is: {verification_url} "
+            f"The link expires in 72 hours. "
+            f"Make it clear this is from {chef_name} via the sautai platform."
+        )
+        
+        result = MealPlanningAssistant.send_notification_via_assistant(
+            user_id=None,  # Lead is not a platform user
+            message_content=message_content,
+            subject=f"Verify your email for {chef_name}",
+            template_key='client_email_verification',
+            template_context={
+                'recipient_name': recipient_name,
+                'chef_name': chef_name,
+                'verification_url': verification_url,
+            },
+            recipient_email=lead.email,
+        )
+        
+        if result.get('status') != 'success':
+            logger.error(f"Failed to send verification email: {result}")
+            raise Exception("Email service returned error")
+            
+    except Exception as e:
+        logger.exception(f"Error in _send_verification_email: {e}")
+        # Fall back to simple email if MealPlanningAssistant fails
+        _send_simple_verification_email(lead, chef, verification_url)
+
+
+def _send_simple_verification_email(lead, chef, verification_url):
+    """
+    Fallback simple email sender for verification.
+    """
+    import requests
+    
+    n8n_webhook_url = os.getenv('N8N_EMAIL_WEBHOOK_URL')
+    if not n8n_webhook_url:
+        logger.warning("N8N_EMAIL_WEBHOOK_URL not configured, skipping fallback email")
+        return
+    
+    chef_name = chef.user.get_full_name() or chef.user.username
+    recipient_name = f"{lead.first_name} {lead.last_name}".strip() or "there"
+    
+    html_body = render_to_string('meals/client_email_verification.html', {
+        'recipient_name': recipient_name,
+        'chef_name': chef_name,
+        'verification_url': verification_url,
+    })
+    
+    email_data = {
+        'to': lead.email,
+        'subject': f"Verify your email for {chef_name}",
+        'html_body': html_body,
+    }
+    
+    try:
+        requests.post(n8n_webhook_url, json=email_data, timeout=10)
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to send fallback verification email: {e}")
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def verify_email_token(request, token):
+    """
+    GET /api/verify-email/{token}/
+    
+    Public endpoint to verify an email address using the token sent via email.
+    
+    Response on success:
+    ```json
+    {
+        "status": "success",
+        "message": "Your email has been verified successfully!"
+    }
+    ```
+    
+    Response on error:
+    ```json
+    {
+        "status": "error",
+        "message": "Invalid or expired verification link."
+    }
+    ```
+    """
+    if not token or len(token) < 32:
+        return Response({
+            "status": "error",
+            "message": "Invalid verification link."
+        }, status=400)
+    
+    try:
+        # Find lead with this token
+        lead = Lead.objects.filter(
+            email_verification_token=token,
+            is_deleted=False
+        ).first()
+        
+        if not lead:
+            return Response({
+                "status": "error",
+                "message": "Invalid or expired verification link."
+            }, status=400)
+        
+        # Verify the token
+        if lead.verify_email(token):
+            logger.info(f"Email verified for lead {lead.id}: {lead.email}")
+            return Response({
+                "status": "success",
+                "message": "Your email has been verified successfully! You can now receive payment links and invoices."
+            })
+        else:
+            return Response({
+                "status": "error",
+                "message": "This verification link has expired. Please request a new one."
+            }, status=400)
+            
+    except Exception as e:
+        logger.exception(f"Error verifying email token: {e}")
+        return Response({
+            "status": "error",
+            "message": "An error occurred. Please try again later."
+        }, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def check_email_verification_status(request, lead_id):
+    """
+    GET /api/chefs/me/leads/{lead_id}/verification-status/
+    
+    Check the email verification status of a lead.
+    
+    Response:
+    ```json
+    {
+        "has_email": true,
+        "email": "john@example.com",
+        "email_verified": true,
+        "email_verified_at": "2024-03-15T10:30:00Z",
+        "verification_sent_at": "2024-03-14T10:30:00Z",
+        "can_resend": false
+    }
+    ```
+    """
+    chef, error_response = _get_chef_or_403(request)
+    if error_response:
+        return error_response
+    
+    try:
+        lead = Lead.objects.get(id=lead_id, owner=chef.user, is_deleted=False)
+    except Lead.DoesNotExist:
+        return Response({"error": "Contact not found."}, status=404)
+    
+    # Check if can resend (5 minute cooldown)
+    can_resend = True
+    if lead.email_verification_sent_at:
+        from datetime import timedelta
+        cooldown = timedelta(minutes=5)
+        can_resend = timezone.now() - lead.email_verification_sent_at >= cooldown
+    
+    return Response({
+        "has_email": bool(lead.email),
+        "email": lead.email or None,
+        "email_verified": lead.email_verified,
+        "email_verified_at": lead.email_verified_at.isoformat() if lead.email_verified_at else None,
+        "verification_sent_at": lead.email_verification_sent_at.isoformat() if lead.email_verification_sent_at else None,
+        "can_resend": can_resend and not lead.email_verified and bool(lead.email),
+    })
 

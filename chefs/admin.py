@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.utils.html import format_html
 from meals.models import Meal  
 from .models import (
     Chef,
@@ -11,6 +12,7 @@ from .models import (
     ChefWaitlistConfig,
     ChefWaitlistSubscription,
     ChefAvailabilityState,
+    ChefPaymentLink,
 )
 from custom_auth.models import UserRole
 from django.contrib import messages
@@ -225,3 +227,68 @@ class ChefWaitlistSubscriptionAdmin(admin.ModelAdmin):
     list_display = ('user', 'chef', 'active', 'last_notified_epoch', 'last_notified_at', 'created_at')
     list_filter = ('active',)
     search_fields = ('user__username', 'user__email', 'chef__user__username')
+
+
+@admin.register(ChefPaymentLink)
+class ChefPaymentLinkAdmin(admin.ModelAdmin):
+    list_display = (
+        'id', 'chef', 'recipient_display', 'amount_display', 
+        'status', 'email_sent_at', 'paid_at', 'created_at'
+    )
+    list_filter = ('status', 'chef', 'created_at')
+    search_fields = (
+        'chef__user__username', 'lead__first_name', 'lead__last_name',
+        'lead__email', 'customer__email', 'customer__username', 'description'
+    )
+    readonly_fields = (
+        'stripe_payment_link_id', 'stripe_payment_link_url', 'stripe_price_id',
+        'stripe_product_id', 'stripe_checkout_session_id', 'stripe_payment_intent_id',
+        'paid_at', 'paid_amount_cents', 'email_sent_at', 'email_send_count',
+        'created_at', 'updated_at'
+    )
+    raw_id_fields = ('chef', 'lead', 'customer')
+    date_hierarchy = 'created_at'
+    
+    fieldsets = (
+        (None, {
+            'fields': ('chef', 'status')
+        }),
+        ('Recipient', {
+            'fields': ('lead', 'customer', 'recipient_email')
+        }),
+        ('Payment Details', {
+            'fields': ('amount_cents', 'currency', 'description', 'expires_at')
+        }),
+        ('Stripe Integration', {
+            'fields': (
+                'stripe_payment_link_id', 'stripe_payment_link_url',
+                'stripe_price_id', 'stripe_product_id',
+                'stripe_checkout_session_id', 'stripe_payment_intent_id'
+            ),
+            'classes': ('collapse',)
+        }),
+        ('Email Tracking', {
+            'fields': ('email_sent_at', 'email_send_count'),
+            'classes': ('collapse',)
+        }),
+        ('Payment Completion', {
+            'fields': ('paid_at', 'paid_amount_cents'),
+            'classes': ('collapse',)
+        }),
+        ('Notes', {
+            'fields': ('internal_notes',)
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def recipient_display(self, obj):
+        return obj.get_recipient_name()
+    recipient_display.short_description = 'Recipient'
+    
+    def amount_display(self, obj):
+        amount = obj.amount_cents / 100
+        return format_html('<strong>${:,.2f}</strong>', amount)
+    amount_display.short_description = 'Amount'

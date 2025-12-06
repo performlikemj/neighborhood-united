@@ -8,48 +8,98 @@
 
   <div class="hu-dashboard">
     <div class="hu-hero">
-      <div class="hu-hero-title">Wellness Operations Dashboard</div>
-      <div class="hu-hero-sub">Meal planning today, holistic health tomorrow.</div>
+      <div class="hu-hero-title">Welcome back</div>
+      <div class="hu-hero-sub">Hood United Admin — Manage your wellness platform.</div>
     </div>
 
+    <!-- Primary KPIs -->
+    <div class="hu-section-label">Chef Services Overview</div>
     <div class="hu-cards">
-      <a class="hu-card" href="{% url 'admin:custom_auth_customuser_changelist' %}">
-        <div class="hu-card-kpi">{{ metrics.users_total }}</div>
-        <div class="hu-card-label">Users</div>
+      <a class="hu-card" href="{% url 'admin:chefs_chef_changelist' %}?is_verified__exact=1">
+        <div class="hu-card-kpi">{{ metrics.chefs_active }}</div>
+        <div class="hu-card-label">Active Chefs</div>
       </a>
-      {% if legacy_meal_plan_enabled %}
-        <a class="hu-card" href="{% url 'admin:meals_mealplan_changelist' %}?is_approved__exact=1">
-          <div class="hu-card-kpi">{{ metrics.meal_plans_active }}</div>
-          <div class="hu-card-label">Active Meal Plans</div>
-        </a>
-        <a class="hu-card" href="{% url 'admin:meals_mealplan_changelist' %}?has_changes__exact=1&is_approved__exact=0">
-          <div class="hu-card-kpi">{{ metrics.approvals_pending }}</div>
-          <div class="hu-card-label">Plan Approvals</div>
-        </a>
-      {% endif %}
-      <a class="hu-card" href="{% url 'admin:meals_order_changelist' %}">
-        <div class="hu-card-kpi">{{ metrics.orders_today }}</div>
-        <div class="hu-card-label">Orders Today</div>
+      <a class="hu-card" href="{% url 'admin:chef_services_chefcustomerconnection_changelist' %}?status__exact=accepted">
+        <div class="hu-card-kpi">{{ metrics.connections_active }}</div>
+        <div class="hu-card-label">Client Connections</div>
       </a>
-      <a class="hu-card" href="{% url 'admin:chefs_chef_changelist' %}">
-        <div class="hu-card-kpi">{{ metrics.chefs_total }}</div>
-        <div class="hu-card-label">Chefs</div>
+      <a class="hu-card" href="{% url 'admin:crm_lead_changelist' %}">
+        <div class="hu-card-kpi">{{ metrics.leads_total }}</div>
+        <div class="hu-card-label">Total Leads</div>
       </a>
-      <a class="hu-card" href="{% url 'admin:reviews_review_changelist' %}">
-        <div class="hu-card-kpi">{{ metrics.reviews_week }}</div>
-        <div class="hu-card-label">New Reviews (7d)</div>
+      <a class="hu-card" href="{% url 'admin:chef_services_chefserviceorder_changelist' %}">
+        <div class="hu-card-kpi">{{ metrics.service_orders_month }}</div>
+        <div class="hu-card-label">Orders (30d)</div>
       </a>
     </div>
 
+    <!-- Pipeline Section -->
+    <div class="hu-section-label">Pipeline</div>
+    <div class="hu-pipeline">
+      <a class="hu-pipeline-stage hu-stage-new" href="{% url 'admin:crm_lead_changelist' %}?status__exact=new">
+        <div class="hu-stage-count">{{ metrics.leads_new }}</div>
+        <div class="hu-stage-label">New Leads</div>
+      </a>
+      <div class="hu-pipeline-arrow">→</div>
+      <a class="hu-pipeline-stage hu-stage-qualified" href="{% url 'admin:crm_lead_changelist' %}?status__exact=qualified">
+        <div class="hu-stage-count">{{ metrics.leads_qualified }}</div>
+        <div class="hu-stage-label">Qualified</div>
+      </a>
+      <div class="hu-pipeline-arrow">→</div>
+      <a class="hu-pipeline-stage hu-stage-pending" href="{% url 'admin:chef_services_chefcustomerconnection_changelist' %}?status__exact=pending">
+        <div class="hu-stage-count">{{ metrics.connections_pending }}</div>
+        <div class="hu-stage-label">Pending Connections</div>
+      </a>
+      <div class="hu-pipeline-arrow">→</div>
+      <a class="hu-pipeline-stage hu-stage-won" href="{% url 'admin:crm_lead_changelist' %}?status__exact=won">
+        <div class="hu-stage-count">{{ metrics.leads_won }}</div>
+        <div class="hu-stage-label">Won</div>
+      </a>
+    </div>
+
+    <!-- Secondary Stats -->
+    <div class="hu-stats-grid">
+      <div class="hu-stat-box">
+        <div class="hu-stat-icon">💰</div>
+        <div class="hu-stat-value">{{ metrics.revenue_month_display }}</div>
+        <div class="hu-stat-label">Revenue (30d)</div>
+      </div>
+      <div class="hu-stat-box">
+        <div class="hu-stat-icon">📧</div>
+        <a href="{% url 'admin:chefs_chefpaymentlink_changelist' %}?status__exact=pending" class="hu-stat-link">
+          <div class="hu-stat-value">{{ metrics.payment_links_pending }}</div>
+          <div class="hu-stat-label">Pending Payments</div>
+        </a>
+      </div>
+      <div class="hu-stat-box">
+        <div class="hu-stat-icon">📝</div>
+        <a href="{% url 'admin:chef_services_chefserviceorder_changelist' %}?status__exact=confirmed" class="hu-stat-link">
+          <div class="hu-stat-value">{{ metrics.service_orders_confirmed }}</div>
+          <div class="hu-stat-label">Confirmed Orders</div>
+        </a>
+      </div>
+      <div class="hu-stat-box">
+        <div class="hu-stat-icon">⭐</div>
+        <a href="{% url 'admin:reviews_review_changelist' %}" class="hu-stat-link">
+          <div class="hu-stat-value">{{ metrics.reviews_week }}</div>
+          <div class="hu-stat-label">Reviews (7d)</div>
+        </a>
+      </div>
+    </div>
+
+    <!-- Quick Actions -->
     <div class="hu-quick">
       <div class="hu-quick-title">Quick Actions</div>
       <div class="hu-quick-links">
-        {% if legacy_meal_plan_enabled %}
-          <a href="{% url 'admin:meals_mealplan_changelist' %}?has_changes__exact=1&is_approved__exact=0" class="hu-quick-link">Review Meal Plan Changes</a>
+        <a href="{% url 'admin:crm_lead_add' %}" class="hu-quick-link hu-quick-primary">+ Add Lead</a>
+        <a href="{% url 'admin:chefs_chef_changelist' %}" class="hu-quick-link">View Chefs</a>
+        <a href="{% url 'admin:chef_services_chefserviceorder_changelist' %}" class="hu-quick-link">Service Orders</a>
+        <a href="{% url 'admin:chefs_chefpaymentlink_changelist' %}" class="hu-quick-link">Payment Links</a>
+        {% if metrics.chef_requests_pending > 0 %}
+          <a href="{% url 'admin:chefs_chefrequest_changelist' %}" class="hu-quick-link hu-quick-alert">
+            Chef Requests ({{ metrics.chef_requests_pending }})
+          </a>
         {% endif %}
-        <a href="{% url 'admin:chefs_chefrequest_changelist' %}" class="hu-quick-link">Chef Requests</a>
-        <a href="{% url 'admin:meals_systemupdate_changelist' %}" class="hu-quick-link">Send System Update</a>
-        <a href="{% url 'admin:meals_order_changelist' %}" class="hu-quick-link">Orders</a>
       </div>
     </div>
   </div>
@@ -76,8 +126,7 @@
         {% endfor %}
       </div>
     {% else %}
-      <p>{% trans 'You don’t have permission to view or edit anything.' %}</p>
+      <p>{% trans 'You don't have permission to view or edit anything.' %}</p>
     {% endif %}
   </div>
 {% endblock %}
-

@@ -8,7 +8,7 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { CHEF_EMOJIS } from '../utils/emojis.js'
 import FamilySelector from './FamilySelector.jsx'
 import SousChefChat from './SousChefChat.jsx'
@@ -62,6 +62,10 @@ export default function SousChefWidget({
   onEmojiChange
 }) {
   const navigate = useNavigate()
+  const location = useLocation()
+  
+  // Hide widget when on the full-page Sous Chef view
+  const isOnSousChefPage = location.pathname === '/chefs/dashboard/sous-chef'
   
   // Notification context
   let notifications = null
@@ -322,6 +326,11 @@ export default function SousChefWidget({
   }, [isResizing, resizeDirection, handleResizeMove, handleResizeEnd])
 
   const unreadCount = notifications?.unreadCount || 0
+
+  // Don't render if on the full-page Sous Chef view
+  if (isOnSousChefPage) {
+    return null
+  }
 
   return (
     <div className="sous-chef-widget-container" ref={widgetRef}>

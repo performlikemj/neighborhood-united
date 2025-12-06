@@ -388,3 +388,244 @@ class AreaWaitlist(models.Model):
             entry.save(update_fields=['notified', 'notified_at'])
         
         return entry, created
+
+
+class ChefPaymentLink(models.Model):
+    """
+    Tracks payment links created by chefs for clients (both platform users and manual contacts).
+    Uses Stripe Payment Links for secure, shareable payment URLs.
+    """
+    
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        PENDING = "pending", "Pending Payment"
+        PAID = "paid", "Paid"
+        EXPIRED = "expired", "Expired"
+        CANCELLED = "cancelled", "Cancelled"
+    
+    chef = models.ForeignKey(
+        'Chef',
+        on_delete=models.CASCADE,
+        related_name='payment_links'
+    )
+    
+    # Recipient - either a platform user or a manual contact (Lead)
+    lead = models.ForeignKey(
+        'crm.Lead',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='payment_links',
+        help_text="For off-platform clients (manual contacts)"
+    )
+    customer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='chef_payment_links',
+        help_text="For platform users"
+    )
+    
+    # Payment details
+    amount_cents = models.PositiveIntegerField(
+        help_text="Payment amount in cents (e.g., 5000 = $50.00)"
+    )
+    currency = models.CharField(max_length=3, default='usd')
+    description = models.CharField(
+        max_length=500,
+        help_text="Description of what this payment is for"
+    )
+    
+    # Stripe integration
+    stripe_payment_link_id = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        help_text="Stripe Payment Link ID"
+    )
+    stripe_payment_link_url = models.URLField(
+        max_length=500,
+        blank=True,
+        null=True,
+        help_text="Shareable Stripe Payment Link URL"
+    )
+    stripe_price_id = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        help_text="Stripe Price ID created for this payment"
+    )
+    stripe_product_id = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        help_text="Stripe Product ID created for this payment"
+    )
+    stripe_checkout_session_id = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        help_text="Stripe Checkout Session ID when payment is initiated"
+    )
+    stripe_payment_intent_id = models.CharField(
+        max_length=200,
+        blank=True,
+        null=True,
+        help_text="Stripe Payment Intent ID after successful payment"
+    )
+    
+    # Status tracking
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT
+    )
+    
+    # Email tracking
+    recipient_email = models.EmailField(
+        blank=True,
+        help_text="Email address the payment link was sent to"
+    )
+    email_sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the payment link email was last sent"
+    )
+    email_send_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Number of times the payment link has been emailed"
+    )
+    
+    # Payment completion tracking
+    paid_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the payment was completed"
+    )
+    paid_amount_cents = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Actual amount paid (may differ due to fees)"
+    )
+    
+    # Expiration
+    expires_at = models.DateTimeField(
+        help_text="When this payment link expires"
+    )
+    
+    # Notes and metadata
+    internal_notes = models.TextField(
+        blank=True,
+        help_text="Internal notes for the chef (not shown to client)"
+    )
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        app_label = 'chefs'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['chef', 'status']),
+            models.Index(fields=['chef', '-created_at']),
+            models.Index(fields=['lead', 'status']),
+            models.Index(fields=['customer', 'status']),
+            models.Index(fields=['stripe_payment_link_id']),
+            models.Index(fields=['stripe_checkout_session_id']),
+        ]
+    
+    def __str__(self):
+        recipient = self.get_recipient_name()
+        return f"PaymentLink(${self.amount_cents/100:.2f} to {recipient}, {self.status})"
+    
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        errors = {}
+        
+        # Must have either lead or customer, but not both
+        if self.lead and self.customer:
+            errors['lead'] = "Cannot have both a lead and a customer for the same payment link."
+        if not self.lead and not self.customer and self.status != self.Status.DRAFT:
+            errors['lead'] = "Must specify either a lead (manual contact) or a customer (platform user)."
+        
+        # Validate amount
+        if self.amount_cents and self.amount_cents < 50:
+            errors['amount_cents'] = "Minimum amount is $0.50 (50 cents)."
+        
+        if errors:
+            raise ValidationError(errors)
+    
+    def get_recipient_name(self):
+        """Get the name of the payment recipient."""
+        if self.lead:
+            return f"{self.lead.first_name} {self.lead.last_name}".strip()
+        if self.customer:
+            return self.customer.get_full_name() or self.customer.username
+        return "Unknown"
+    
+    def get_recipient_email(self):
+        """Get the email of the payment recipient."""
+        if self.recipient_email:
+            return self.recipient_email
+        if self.lead and self.lead.email:
+            return self.lead.email
+        if self.customer and self.customer.email:
+            return self.customer.email
+        return None
+    
+    def is_expired(self):
+        """Check if the payment link has expired."""
+        return timezone.now() > self.expires_at
+    
+    def can_send_email(self):
+        """Check if the payment link can be sent via email."""
+        email = self.get_recipient_email()
+        if not email:
+            return False, "No email address available"
+        
+        # For leads, require email verification
+        if self.lead and not self.lead.email_verified:
+            return False, "Email not verified"
+        
+        if self.status not in [self.Status.DRAFT, self.Status.PENDING]:
+            return False, f"Cannot send email for {self.status} payment link"
+        
+        if self.is_expired():
+            return False, "Payment link has expired"
+        
+        return True, None
+    
+    def mark_as_paid(self, payment_intent_id=None, amount_cents=None):
+        """Mark the payment link as paid."""
+        self.status = self.Status.PAID
+        self.paid_at = timezone.now()
+        if payment_intent_id:
+            self.stripe_payment_intent_id = payment_intent_id
+        if amount_cents:
+            self.paid_amount_cents = amount_cents
+        self.save(update_fields=[
+            'status', 'paid_at', 'stripe_payment_intent_id', 
+            'paid_amount_cents', 'updated_at'
+        ])
+    
+    def cancel(self):
+        """Cancel the payment link."""
+        if self.status == self.Status.PAID:
+            raise ValueError("Cannot cancel a paid payment link")
+        self.status = self.Status.CANCELLED
+        self.save(update_fields=['status', 'updated_at'])
+    
+    def record_email_sent(self, email_address=None):
+        """Record that an email was sent for this payment link."""
+        self.email_sent_at = timezone.now()
+        self.email_send_count += 1
+        if email_address:
+            self.recipient_email = email_address
+        if self.status == self.Status.DRAFT:
+            self.status = self.Status.PENDING
+        self.save(update_fields=[
+            'email_sent_at', 'email_send_count', 
+            'recipient_email', 'status', 'updated_at'
+        ])

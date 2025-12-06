@@ -5,20 +5,20 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # Install deps
-COPY sautai-react-frontend/package*.json ./
+COPY package*.json ./
 RUN npm ci
 
 # Build with API base configured at build time
 ARG VITE_API_BASE
 ENV VITE_API_BASE=${VITE_API_BASE}
 
-COPY sautai-react-frontend/ ./
+COPY . ./
 RUN npm run build
 
 # ---- Runtime stage ----
 FROM nginx:alpine
 
-COPY sautai-react-frontend/nginx.conf /etc/nginx/conf.d/default.conf
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 # Ensure static files are world-readable (avoid 403 on files with 0600)

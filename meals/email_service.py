@@ -566,7 +566,11 @@ def generate_user_summary(user_id: int, summary_date=None) -> None:
     import hashlib
     import json
     
-    user = get_object_or_404(CustomUser, id=user_id)
+    # Use filter().first() instead of get_object_or_404 to handle deleted users gracefully
+    user = CustomUser.objects.filter(id=user_id).first()
+    if user is None:
+        logger.warning(f"generate_user_summary: User {user_id} not found, skipping summary generation")
+        return
     user_context = generate_user_context(user)
     
     # Get or create summary_date (default to today in user's local timezone)

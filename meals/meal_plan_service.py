@@ -999,14 +999,21 @@ def create_meal_plan_for_user(
     try:
         from utils.redis_client import get_redis_connection
         conn = get_redis_connection()
-        if conn is not None:
+        # Check that conn is not None AND has the publish method (guards against test mocks)
+        if conn is not None and hasattr(conn, 'publish'):
             channel = f"meal_plan_stream:{user.id}:{start_of_week.strftime('%Y_%m_%d')}"
             r1 = conn.publish(channel, json.dumps({"event": "progress", "data": {"pct": 100}}))
             r2 = conn.publish(channel, json.dumps({"event": "done", "data": {}}))
+        elif conn is not None:
+            logger.warning(f"[{request_id}] Redis connection object missing 'publish' method, skipping stream update")
     except Exception as e:
-        # n8n traceback
+        # Only send to n8n if URL is configured
         n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-        requests.post(n8n_traceback_url, json={"error": str(e), "source":"create_meal_plan_for_user", "traceback": traceback.format_exc()})
+        if n8n_traceback_url:
+            try:
+                requests.post(n8n_traceback_url, json={"error": str(e), "source":"create_meal_plan_for_user", "traceback": traceback.format_exc()})
+            except Exception:
+                pass  # Don't fail if n8n webhook fails
 
     return meal_plan
 

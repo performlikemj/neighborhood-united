@@ -16,9 +16,17 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 logger = logging.getLogger(__name__)
 
-# Initialize Groq client
-_groq_api_key = os.environ.get("GROQ_API_KEY")
-client = Groq(api_key=_groq_api_key) if _groq_api_key and Groq else None
+# Lazy-load Groq client to avoid import-time initialization issues
+_groq_client = None
+
+def _get_groq_client():
+    """Get or create the Groq client lazily."""
+    global _groq_client
+    if _groq_client is None:
+        api_key = os.environ.get("GROQ_API_KEY")
+        if api_key and Groq:
+            _groq_client = Groq(api_key=api_key)
+    return _groq_client
 
 VAR_RX = re.compile(r"({{.*?}}|{%.*?%})", re.S)
 
@@ -207,7 +215,11 @@ def translate_paragraphs(html: str, target_lang: str) -> str:
             
             # Call Groq API with the batch
             try:
-                response = client.chat.completions.create(
+                groq_client = _get_groq_client()
+                if not groq_client:
+                    logger.warning("Groq client not available, skipping translation")
+                    continue
+                response = groq_client.chat.completions.create(
                     model=getattr(settings, 'GROQ_MODEL', 'llama-3.3-70b-versatile'),
                     messages=[
                         {

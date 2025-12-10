@@ -62,8 +62,15 @@ def get_redis_connection():
             logger.error(f"Redis fallback connection failed: {fallback_error}")
             return None
 
-# Initialize Redis connection
-r = get_redis_connection()
+# Lazy-load Redis connection to avoid import-time connection attempts
+_redis_connection = None
+
+def _get_redis():
+    """Get or create the Redis connection lazily."""
+    global _redis_connection
+    if _redis_connection is None:
+        _redis_connection = get_redis_connection()
+    return _redis_connection
 
 def _key(user_id: str, model: str) -> str:
     """
@@ -93,6 +100,7 @@ def hit_quota(user_id: str, model: str, limit: int) -> bool:
     
     Returns True if the user has ALREADY exhausted today's limit.
     """
+    r = _get_redis()
     if not r:
         logger.warning("Redis connection not available, allowing request")
         return False

@@ -2,7 +2,13 @@
 /.sautai/
 *.sqlite3
 *.bk
+# Ignore data/backup JSON files but allow package.json and config files
 *.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!jsconfig.json
+!**/package.json
 __pycache__/
 media/
 staticfiles/

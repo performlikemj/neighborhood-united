@@ -70,14 +70,18 @@ def create_or_update_lead_for_user(
     duplication. Each call appends a ``LeadInteraction`` with the supplied
     context so downstream users can see the full timeline.
     """
-
-    context = LeadContext(user=user, chef_user=chef_user, offering=offering)
+    # Only use offering if it's the correct model type (services.ServiceOffering)
+    # ChefServiceOffering from chef_services app is a different model
+    from services.models import ServiceOffering
+    valid_offering = offering if isinstance(offering, ServiceOffering) else None
+    
+    context = LeadContext(user=user, chef_user=chef_user, offering=valid_offering)
     defaults = _build_lead_defaults(context, source, interaction_payload)
 
+    # Look up by owner and email only - offering may vary across orders
     lead, created = Lead.objects.get_or_create(
         owner=chef_user,
         email=defaults.get("email") or None,
-        offering=offering,
         defaults=defaults,
     )
 

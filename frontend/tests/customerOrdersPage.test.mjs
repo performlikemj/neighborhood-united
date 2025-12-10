@@ -23,8 +23,8 @@ test('CustomerOrders fetches service orders and reuses meal order tab', () => {
 
 test('CustomerOrders renders service and meal sections', () => {
   const source = load(customerOrdersPath)
-  assert.match(source, /Service orders/, 'Expected a Service orders section heading.')
-  assert.match(source, /Meal orders/, 'Expected a Meal orders section heading.')
+  assert.match(source, /Service Orders/i, 'Expected a Service Orders section heading.')
+  assert.match(source, /Meal Orders/i, 'Expected a Meal Orders section heading.')
 })
 
 test('App routes include the customer orders page', () => {

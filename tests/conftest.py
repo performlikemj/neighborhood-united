@@ -26,13 +26,28 @@ if "tiktoken" not in sys.modules:
 @pytest.fixture(autouse=True)
 def _stub_external(monkeypatch, settings):
     if getattr(settings, 'TEST_MODE', False):
-        monkeypatch.setattr('openai.ChatCompletion.create', Mock(return_value={
-            'choices': [{'message': {'content': 'TEST'}}]})
-        )
-        monkeypatch.setattr('meals.youtube.find_related_youtube_videos',
-            Mock(return_value={'status': 'success', 'videos': ['https://youtu.be/dQw4w9WgXcQ']})
-        )
-        monkeypatch.setattr('meals.meal_generation.generate_meal_details',
-            Mock(return_value={'name': 'Test Meal', 'ingredients': []})
-        )
+        # Stub OpenAI - use try/except since module structure may vary
+        try:
+            monkeypatch.setattr('openai.ChatCompletion.create', Mock(return_value={
+                'choices': [{'message': {'content': 'TEST'}}]})
+            )
+        except (ImportError, AttributeError):
+            pass  # OpenAI API structure may have changed
+        
+        # Stub YouTube video search (now in meal_planning_tools)
+        try:
+            monkeypatch.setattr('meals.meal_planning_tools.find_related_youtube_videos',
+                Mock(return_value={'status': 'success', 'videos': ['https://youtu.be/dQw4w9WgXcQ']})
+            )
+        except (ImportError, AttributeError):
+            pass
+        
+        # Stub meal generation
+        try:
+            monkeypatch.setattr('meals.meal_generation.generate_meal_details',
+                Mock(return_value={'name': 'Test Meal', 'ingredients': []})
+            )
+        except (ImportError, AttributeError):
+            pass
+        
         monkeypatch.setattr(time, 'sleep', lambda *_: None) 

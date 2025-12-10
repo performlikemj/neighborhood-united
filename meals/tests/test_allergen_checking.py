@@ -39,8 +39,12 @@ def sample_meal(db):
 
 @pytest.fixture
 def chef_meal(db):
-    """Create a test chef meal"""
+    """Create a test chef meal with required fields for chef-created meals"""
     from chefs.models import Chef
+    from django.utils import timezone
+    from django.core.files.uploadedfile import SimpleUploadedFile
+    from decimal import Decimal
+    
     # Create a chef first
     chef = Chef.objects.create(
         user=CustomUser.objects.create_user(
@@ -50,10 +54,21 @@ def chef_meal(db):
         ),
         bio="Test chef"
     )
+    
+    # Chef-created meals require start_date, price, and image
+    dummy_image = SimpleUploadedFile(
+        name='test_meal.jpg',
+        content=b'\x47\x49\x46\x38\x89\x61\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00\x21\xf9\x04\x01\x00\x00\x00\x00\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00\x3b',
+        content_type='image/gif'
+    )
+    
     meal = Meal.objects.create(
         name="Chef's Special",
         description="Chef-created special dish",
-        chef=chef
+        chef=chef,
+        start_date=timezone.now().date(),
+        price=Decimal("25.00"),
+        image=dummy_image
     )
     return meal
 

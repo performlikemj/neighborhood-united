@@ -26,8 +26,20 @@ from shared.utils import generate_user_context
 
 logger = logging.getLogger(__name__)
 
-# Set up Groq client
-client = Groq(api_key=getattr(settings, "GROQ_API_KEY", None) or os.getenv("GROQ_API_KEY"))
+# Lazy-load Groq client to avoid errors during module import when API key is not set
+_groq_client = None
+
+def get_groq_client():
+    """Get or create the Groq client. Raises error only when actually used without API key."""
+    global _groq_client
+    if _groq_client is None:
+        if Groq is None:
+            raise ImportError("groq package is not installed")
+        api_key = getattr(settings, "GROQ_API_KEY", None) or os.getenv("GROQ_API_KEY")
+        if not api_key:
+            raise ValueError("GROQ_API_KEY must be set in settings or environment")
+        _groq_client = Groq(api_key=api_key)
+    return _groq_client
 
 
 def generate_streaming_instructions(
@@ -265,7 +277,7 @@ def _generate_daily_instructions(meal_plan_meals) -> str:
         )
         
         # Call Groq to generate instructions
-        response = client.chat.completions.create(
+        response = get_groq_client().chat.completions.create(
             model=getattr(settings, 'GROQ_MODEL', 'llama-3.3-70b-versatile'),
             messages=[
                 {"role": "system", "content": system_content},
@@ -358,7 +370,7 @@ def _generate_bulk_prep_instructions(meal_plan) -> str:
     
     try:
         # Call Groq to generate instructions
-        response = client.chat.completions.create(
+        response = get_groq_client().chat.completions.create(
             model=getattr(settings, 'GROQ_MODEL', 'llama-3.3-70b-versatile'),
             messages=[
                 {

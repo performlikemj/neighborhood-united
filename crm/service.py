@@ -21,13 +21,17 @@ def _build_lead_defaults(context: LeadContext, source: str, extra: Optional[Dict
         "first_name": user.first_name or user.username or "",
         "last_name": user.last_name or "",
         "email": getattr(user, "email", ""),
-        "phone": getattr(user, "phone_number", ""),
+        "phone": getattr(user, "phone_number", "") or "",
         "owner": context.chef_user,
         "offering": context.offering,
         "source": source,
     }
     if extra:
-        defaults.update(extra)
+        # Only include fields that exist on the Lead model
+        valid_lead_fields = {f.name for f in Lead._meta.get_fields() if hasattr(f, 'name')}
+        for key, value in extra.items():
+            if key in valid_lead_fields:
+                defaults[key] = value
     return defaults
 
 

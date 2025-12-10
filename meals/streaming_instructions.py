@@ -10,6 +10,7 @@ additional metadata like macros or YouTube information.
 from typing import Dict, List, Any, Optional
 import json
 import logging
+import os
 from django.core.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404
 from django.conf import settings

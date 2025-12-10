@@ -62,7 +62,11 @@ date-container-v-ars.sh
 deploy-container-apps.sh
 deploy-simple.sh
 docker-compose.yml
-Dockerfile.*
+# Allow Dockerfiles needed for CI/CD
+# Dockerfile.*
+!Dockerfile.django
+!Dockerfile.celery
+!Dockerfile.celery-beat
 setup-azure-secrets.sh
 ../setup-secure-env.sh
 Azure_Container_Apps_Troubleshooting_Guide.md

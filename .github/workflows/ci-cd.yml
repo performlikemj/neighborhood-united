@@ -2,9 +2,11 @@ name: CI / CD (no third-party actions)
 
 on:
   push:
-    branches: [ main ]
+    # Run tests on all branch pushes; deployment jobs only trigger on main
+    branches: [ '**' ]
   pull_request:
-    branches: [ main ]
+    # Run tests on all PRs
+    branches: [ '**' ]
   workflow_dispatch:
 
 defaults:

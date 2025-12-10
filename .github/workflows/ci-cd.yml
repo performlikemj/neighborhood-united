@@ -111,26 +111,21 @@ jobs:
       - name: Run checks and tests
         env:
           TEST_MODE: "True"
-          # Force DEBUG=False so settings.py uses DB_* variables (not TEST_DB_*)
-          DEBUG: "False"
+          # Keep DEBUG=True so settings.py uses local memory cache (no Redis needed)
+          # and TEST_DB_* variables for database connection
+          DEBUG: "True"
+          # Set TEST_DB_* variables for when DEBUG=True
+          TEST_DB_NAME: test_db
+          TEST_DB_USER: test_user
+          TEST_DB_PASSWORD: test_password
+          TEST_DB_HOST: localhost
+          TEST_DB_PORT: "5432"
         run: |
           export DJANGO_SETTINGS_MODULE=hood_united.settings
           # Ensure SECRET_KEY is never empty in CI
           export SECRET_KEY=${SECRET_KEY:-dummy-test-secret}
           # Mock OpenAI API key for tests
           export OPENAI_API_KEY=dummy-key-for-testing
-          # Postgres connection for tests (both sets for compatibility)
-          export DB_NAME=test_db
-          export DB_USER=test_user
-          export DB_PASSWORD=test_password
-          export DB_HOST=localhost
-          export DB_PORT=5432
-          # Also set TEST_DB_* in case DEBUG somehow becomes True
-          export TEST_DB_NAME=test_db
-          export TEST_DB_USER=test_user
-          export TEST_DB_PASSWORD=test_password
-          export TEST_DB_HOST=localhost
-          export TEST_DB_PORT=5432
           export ALLOWED_HOSTS="*"
           # Django checks before tests
           python manage.py makemigrations --check --dry-run

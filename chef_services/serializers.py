@@ -225,6 +225,8 @@ class ChefCustomerConnectionSerializer(serializers.ModelSerializer):
     customer_id = serializers.IntegerField(read_only=True)
     # Include partner names for display purposes
     chef_username = serializers.CharField(source='chef.user.username', read_only=True)
+    chef_display_name = serializers.SerializerMethodField()
+    chef_photo = serializers.SerializerMethodField()
     customer_username = serializers.CharField(source='customer.username', read_only=True)
     customer_first_name = serializers.CharField(source='customer.first_name', read_only=True)
     customer_last_name = serializers.CharField(source='customer.last_name', read_only=True)
@@ -235,7 +237,23 @@ class ChefCustomerConnectionSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'chef_id', 'customer_id', 'status', 'initiated_by',
             'requested_at', 'responded_at', 'ended_at',
-            'chef_username', 'customer_username',
+            'chef_username', 'chef_display_name', 'chef_photo',
+            'customer_username',
             'customer_first_name', 'customer_last_name', 'customer_email',
         ]
         read_only_fields = fields
+    
+    def get_chef_display_name(self, obj):
+        """Return chef's display name (first + last or username)"""
+        user = obj.chef.user
+        if user.first_name and user.last_name:
+            return f"{user.first_name} {user.last_name}"
+        if user.first_name:
+            return user.first_name
+        return user.username
+    
+    def get_chef_photo(self, obj):
+        """Return chef's profile photo URL"""
+        if obj.chef.profile_pic:
+            return obj.chef.profile_pic.url
+        return None

@@ -272,6 +272,15 @@ function connectionStatusLabel(status){
 }
 
 function connectionChefName(connection){
+  // Check for chef_display_name first (preferred)
+  if (connection?.chef_display_name) {
+    return connection.chef_display_name
+  }
+  // Fall back to chef_username
+  if (connection?.chef_username) {
+    return connection.chef_username
+  }
+  // Check for nested chef object with display name
   const profile = connection?.chef || connection?.chef_profile || connection?.chef_details || {}
   return deriveChefName(connection, profile) || 'Chef'
 }
@@ -698,51 +707,107 @@ export default function CustomerOrders(){
   }, [])
 
   return (
-    <div className="page-orders" style={{display:'flex', flexDirection:'column', gap:'1.25rem'}}>
-      <header>
-        <h1>Your orders</h1>
-        <p className="muted" style={{marginTop:'.35rem'}}>Track your chef-service bookings and meal-plan orders in one place.</p>
+    <div className="page-orders">
+      {/* Hero Header */}
+      <header className="orders-hero">
+        <div className="orders-hero-content">
+          <h1 className="orders-title">
+            <i className="fa-solid fa-receipt"></i>
+            Your Orders
+          </h1>
+          <p className="orders-subtitle">Track your chef-service bookings and meal-plan orders in one place.</p>
+        </div>
       </header>
-      <div className="seg-control" role="tablist" aria-label="Order types">
-        <button className={`seg ${tab==='services'?'active':''}`} onClick={()=> setTab('services')} role="tab" aria-selected={tab==='services'}>Chef services</button>
-        <button className={`seg ${tab==='meals'?'active':''}`} onClick={()=> setTab('meals')} role="tab" aria-selected={tab==='meals'}>Meal orders</button>
+      
+      {/* Tab Navigation */}
+      <div className="orders-tabs">
+        <button 
+          className={`orders-tab ${tab==='services'?'active':''}`} 
+          onClick={()=> setTab('services')} 
+          role="tab" 
+          aria-selected={tab==='services'}
+        >
+          <i className="fa-solid fa-concierge-bell"></i>
+          Chef Services
+        </button>
+        <button 
+          className={`orders-tab ${tab==='meals'?'active':''}`} 
+          onClick={()=> setTab('meals')} 
+          role="tab" 
+          aria-selected={tab==='meals'}
+        >
+          <i className="fa-solid fa-utensils"></i>
+          Meal Orders
+        </button>
       </div>
+      <div className="orders-content">
       {tab === 'services' ? (
-        <div>
-          <div className="card" style={{marginBottom:'1rem'}}>
-            <div style={{display:'flex', justifyContent:'space-between', flexWrap:'wrap', gap:'.5rem'}}>
-              <div>
-                <h2 style={{margin:'0 0 .25rem 0'}}>Client connections</h2>
-                <div className="muted">Manage invitations and active chef partnerships.</div>
+        <>
+          <section className="orders-section">
+            <div className="orders-section-header">
+              <div className="orders-section-title">
+                <i className="fa-solid fa-link"></i>
+                <h2>Chef Connections</h2>
               </div>
-              <div className="muted" style={{fontSize:'.85rem'}}>
-                Accepted: {acceptedConnections.length} · Pending: {pendingConnections.length}
+              <div className="orders-section-meta">
+                <span className="connection-stat">
+                  <i className="fa-solid fa-check-circle"></i>
+                  {acceptedConnections.length} Active
+                </span>
+                {pendingConnections.length > 0 && (
+                  <span className="connection-stat pending">
+                    <i className="fa-solid fa-clock"></i>
+                    {pendingConnections.length} Pending
+                  </span>
+                )}
               </div>
             </div>
+            <div className="orders-section-body">
             {connections.length === 0 ? (
-              <div className="muted" style={{marginTop:'.75rem'}}>You have not connected with any chefs yet.</div>
+              <div className="orders-empty-state">
+                <i className="fa-solid fa-user-chef"></i>
+                <p>You haven't connected with any chefs yet.</p>
+                <Link to="/chefs" className="btn btn-primary">
+                  <i className="fa-solid fa-search"></i>
+                  Find a Chef
+                </Link>
+              </div>
             ) : (
-              <div style={{display:'flex', flexDirection:'column', gap:'1rem', marginTop:'.75rem'}}>
+              <div className="connections-list">
                 {pendingConnections.length > 0 && (
-                  <div>
-                    <h3 style={{margin:'0 0 .35rem 0', fontSize:'1rem'}}>Pending invitations</h3>
-                    <ul style={{listStyle:'none', margin:0, padding:0, display:'flex', flexDirection:'column', gap:'.75rem'}}>
+                  <div className="connection-group">
+                    <h3 className="connection-group-title">
+                      <i className="fa-regular fa-envelope"></i>
+                      Pending Invitations
+                    </h3>
+                    <div className="connection-cards">
                       {pendingConnections.map(connection => {
                         const busy = connectionUpdating && String(connectionActionId) === String(connection?.id)
                         const chefName = connectionChefName(connection)
+                        const chefPhoto = connection?.chef_photo
                         const link = getChefProfilePath(connection, connection?.chef, connection?.chefId)
                         return (
-                          <li key={connection?.id || `pending-${connection?.chefId || connection?.id}`}
-                            style={{display:'flex', justifyContent:'space-between', gap:'1rem', flexWrap:'wrap', alignItems:'center'}}>
-                            <div>
-                              <div style={{fontWeight:600}}>
-                                {link ? <Link to={link}>{chefName}</Link> : chefName}
+                          <div key={connection?.id || `pending-${connection?.chefId || connection?.id}`} className="connection-card pending">
+                            <div className="connection-card-main">
+                              <div className="connection-avatar">
+                                {chefPhoto ? (
+                                  <img src={chefPhoto} alt={chefName} />
+                                ) : (
+                                  <div className="connection-avatar-placeholder">
+                                    <i className="fa-solid fa-user-chef"></i>
+                                  </div>
+                                )}
                               </div>
-                              <div className="muted" style={{fontSize:'.85rem'}}>
-                                {connectionStatusLabel(connection.status)} · {connection.viewerInitiated ? 'Waiting for chef response' : 'Chef invited you'}
+                              <div className="connection-info">
+                                <div className="connection-name">
+                                  {link ? <Link to={link}>{chefName}</Link> : chefName}
+                                </div>
+                                <div className="connection-status">
+                                  {connection.viewerInitiated ? 'Waiting for chef response' : 'Chef invited you'}
+                                </div>
                               </div>
                             </div>
-                            <div style={{display:'flex', gap:'.5rem'}}>
+                            <div className="connection-actions">
                               {connection.canAccept && (
                                 <button className="btn btn-primary btn-sm" disabled={busy} onClick={()=> handleConnectionAction(connection.id, 'accept')}>
                                   {busy ? 'Accepting…' : 'Accept'}
@@ -754,88 +819,119 @@ export default function CustomerOrders(){
                                 </button>
                               )}
                             </div>
-                          </li>
+                          </div>
                         )
                       })}
-                    </ul>
+                    </div>
                   </div>
                 )}
                 {acceptedConnections.length > 0 && (
-                  <div>
-                    <h3 style={{margin:'0 0 .35rem 0', fontSize:'1rem'}}>Active chefs</h3>
-                    <ul style={{listStyle:'none', margin:0, padding:0, display:'flex', flexDirection:'column', gap:'.75rem'}}>
+                  <div className="connection-group">
+                    <h3 className="connection-group-title">
+                      <i className="fa-solid fa-star"></i>
+                      Your Chefs
+                    </h3>
+                    <div className="connection-cards">
                       {acceptedConnections.map(connection => {
                         const busy = connectionUpdating && String(connectionActionId) === String(connection?.id)
                         const chefName = connectionChefName(connection)
+                        const chefPhoto = connection?.chef_photo
                         const link = getChefProfilePath(connection, connection?.chef, connection?.chefId)
                         return (
-                          <li key={connection?.id || `accepted-${connection?.chefId || connection?.id}`}
-                            style={{display:'flex', justifyContent:'space-between', gap:'1rem', flexWrap:'wrap', alignItems:'center'}}>
-                            <div>
-                              <div style={{fontWeight:600}}>
-                                {link ? <Link to={link}>{chefName}</Link> : chefName}
+                          <div key={connection?.id || `accepted-${connection?.chefId || connection?.id}`} className="connection-card active">
+                            <div className="connection-card-main">
+                              <div className="connection-avatar">
+                                {chefPhoto ? (
+                                  <img src={chefPhoto} alt={chefName} />
+                                ) : (
+                                  <div className="connection-avatar-placeholder">
+                                    <i className="fa-solid fa-user-chef"></i>
+                                  </div>
+                                )}
+                                <span className="connection-badge active">
+                                  <i className="fa-solid fa-check"></i>
+                                </span>
                               </div>
-                              <div className="muted" style={{fontSize:'.85rem'}}>
-                                {connectionStatusLabel(connection.status)}
+                              <div className="connection-info">
+                                <div className="connection-name">
+                                  {link ? <Link to={link}>{chefName}</Link> : chefName}
+                                </div>
+                                <div className="connection-status active">
+                                  <i className="fa-solid fa-circle"></i>
+                                  Connected
+                                </div>
                               </div>
                             </div>
-                            <button className="btn btn-outline btn-sm" disabled={busy} onClick={()=> handleConnectionAction(connection.id, 'end')}>
-                              {busy ? 'Ending…' : 'End Service'}
-                            </button>
-                          </li>
+                            <div className="connection-actions">
+                              <button className="btn btn-outline btn-sm" disabled={busy} onClick={()=> handleConnectionAction(connection.id, 'end')}>
+                                {busy ? 'Ending…' : 'End Service'}
+                              </button>
+                            </div>
+                          </div>
                         )
                       })}
-                    </ul>
+                    </div>
                   </div>
                 )}
                 {(declinedConnections.length > 0 || endedConnections.length > 0) && (
-                  <div>
-                    <h3 style={{margin:'0 0 .35rem 0', fontSize:'1rem'}}>Recent updates</h3>
-                    <ul style={{listStyle:'none', margin:0, padding:0, display:'flex', flexDirection:'column', gap:'.5rem'}}>
+                  <div className="connection-group history">
+                    <h3 className="connection-group-title">
+                      <i className="fa-solid fa-clock-rotate-left"></i>
+                      Recent Updates
+                    </h3>
+                    <div className="connection-history-list">
                       {[...declinedConnections, ...endedConnections].slice(0,5).map(connection => {
                         const chefName = connectionChefName(connection)
                         return (
-                          <li key={connection?.id || `history-${connection?.chefId || connection?.id}`}>
-                            <div style={{display:'flex', justifyContent:'space-between', gap:'.75rem', flexWrap:'wrap'}}>
-                              <span>{chefName}</span>
-                              <span className="muted" style={{fontSize:'.85rem'}}>{connectionStatusLabel(connection.status)}</span>
-                            </div>
-                          </li>
+                          <div key={connection?.id || `history-${connection?.chefId || connection?.id}`} className="connection-history-item">
+                            <span className="connection-history-name">{chefName}</span>
+                            <span className="connection-history-status">{connectionStatusLabel(connection.status)}</span>
+                          </div>
                         )
                       })}
-                    </ul>
+                    </div>
                   </div>
                 )}
               </div>
             )}
-          </div>
-          <div className="card" style={{marginBottom:'1rem', display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'.5rem'}}>
-            <div>
-              <h2 style={{margin:'0 0 .35rem 0'}}>Service orders</h2>
-              <div className="muted">These are bookings you’ve made directly with chefs.</div>
             </div>
-            <div style={{display:'flex', gap:'.5rem'}}>
-              <button className="btn btn-outline btn-sm" onClick={()=> loadServiceOrders()} disabled={serviceLoading}>Refresh</button>
+          </section>
+          
+          <section className="orders-section">
+            <div className="orders-section-header">
+              <div className="orders-section-title">
+                <i className="fa-solid fa-calendar-check"></i>
+                <h2>Service Orders</h2>
+              </div>
+              <button className="btn btn-outline btn-sm" onClick={()=> loadServiceOrders()} disabled={serviceLoading}>
+                <i className="fa-solid fa-refresh"></i>
+                Refresh
+              </button>
             </div>
-          </div>
-          {serviceOrdersView}
-        </div>
+            <div className="orders-section-body">
+              {serviceOrdersView}
+            </div>
+          </section>
+        </>
       ) : (
-        <div style={{display:'flex', flexDirection:'column', gap:'1rem'}}>
-          <div className="card" style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'.5rem'}}>
-            <div>
-              <h2 style={{margin:'0 0 .35rem 0'}}>Meal orders</h2>
-              <div className="muted">Chef-prepared meals you’ve planned through sautai.</div>
+        <section className="orders-section">
+          <div className="orders-section-header">
+            <div className="orders-section-title">
+              <i className="fa-solid fa-bowl-food"></i>
+              <h2>Meal Orders</h2>
             </div>
           </div>
-          <OrdersTab
-            onNotify={notify}
-            verifyingOrderId={verifyingMealOrderId}
-            setVerifyingOrderId={setVerifyingMealOrderId}
-            onPollRequest={pollMealOrderPayment}
-          />
-        </div>
+          <div className="orders-section-body">
+            <OrdersTab
+              onNotify={notify}
+              verifyingOrderId={verifyingMealOrderId}
+              setVerifyingOrderId={setVerifyingMealOrderId}
+              onPollRequest={pollMealOrderPayment}
+            />
+          </div>
+        </section>
       )}
+      </div>
       {cancelDialog}
     </div>
   )

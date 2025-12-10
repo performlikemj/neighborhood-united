@@ -540,8 +540,7 @@ input[type="tel"],
 input[type="date"],
 input[type="datetime-local"],
 input[type="time"],
-textarea,
-select {
+textarea {
   border: 1px solid var(--hu-border);
   border-radius: var(--hu-radius-sm);
   padding: 10px 12px;
@@ -551,6 +550,29 @@ select {
   transition: all 0.15s ease;
   width: 100%;
   max-width: 600px;
+}
+
+/* Select dropdowns - separate styling to prevent text cutoff */
+select {
+  border: 1px solid var(--hu-border);
+  border-radius: var(--hu-radius-sm);
+  padding: 10px 36px 10px 12px;
+  font-size: 0.9rem;
+  color: var(--hu-text);
+  background: var(--hu-surface);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%235c6b5d' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  transition: all 0.15s ease;
+  width: 100%;
+  max-width: 600px;
+  min-height: 42px;
+  line-height: 1.4;
+  cursor: pointer;
 }
 input[type="text"]:hover,
 input[type="password"]:hover,
@@ -562,8 +584,7 @@ input[type="tel"]:hover,
 input[type="date"]:hover,
 input[type="datetime-local"]:hover,
 input[type="time"]:hover,
-textarea:hover,
-select:hover {
+textarea:hover {
   border-color: var(--hu-border-strong);
 }
 input[type="text"]:focus,
@@ -576,11 +597,83 @@ input[type="tel"]:focus,
 input[type="date"]:focus,
 input[type="datetime-local"]:focus,
 input[type="time"]:focus,
-textarea:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--hu-primary);
+  box-shadow: 0 0 0 3px rgba(92,184,92,0.18);
+}
+
+/* Select hover and focus */
+select:hover {
+  border-color: var(--hu-border-strong);
+}
 select:focus {
   outline: none;
   border-color: var(--hu-primary);
   box-shadow: 0 0 0 3px rgba(92,184,92,0.18);
+}
+
+/* Fix for Django admin's related widget selects */
+.related-widget-wrapper select,
+#changelist-filter select,
+.form-row select,
+fieldset select {
+  padding: 10px 36px 10px 12px;
+  min-height: 42px;
+  text-overflow: ellipsis;
+}
+
+/* Multi-select boxes (filter_horizontal, etc.) */
+select[multiple],
+.selector select {
+  background-image: none;
+  padding: 8px 12px;
+  min-height: 120px;
+  overflow-y: auto;
+}
+select[multiple] option,
+.selector select option {
+  padding: 6px 8px;
+  border-radius: 4px;
+  margin: 2px 0;
+}
+select[multiple] option:checked,
+.selector select option:checked {
+  background: rgba(92,184,92,0.2);
+  color: var(--hu-primary-700);
+}
+
+/* Selector widget (filter_horizontal) */
+.selector {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.selector select {
+  flex: 1;
+  min-width: 200px;
+}
+.selector-chooser {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+}
+.selector-chooser li {
+  list-style: none;
+}
+.selector-add,
+.selector-remove {
+  background: var(--hu-primary) !important;
+  color: #fff !important;
+  border: none !important;
+  border-radius: 6px !important;
+  padding: 8px 12px !important;
+  cursor: pointer;
+}
+.selector-add:hover,
+.selector-remove:hover {
+  background: var(--hu-primary-600) !important;
 }
 
 /* Read-only inputs */
@@ -1775,11 +1868,25 @@ html[data-theme="dark"] input[type="text"],
 html[data-theme="dark"] input[type="password"],
 html[data-theme="dark"] input[type="email"],
 html[data-theme="dark"] input[type="number"],
-html[data-theme="dark"] textarea,
-html[data-theme="dark"] select {
+html[data-theme="dark"] textarea {
   background: var(--hu-surface-2);
   border-color: var(--hu-border);
   color: var(--hu-text);
+}
+html[data-theme="dark"] select {
+  background-color: var(--hu-surface-2);
+  border-color: var(--hu-border);
+  color: var(--hu-text);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23a6b5ab' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+}
+html[data-theme="dark"] select[multiple],
+html[data-theme="dark"] .selector select {
+  background-image: none;
+}
+html[data-theme="dark"] select[multiple] option:checked,
+html[data-theme="dark"] .selector select option:checked {
+  background: rgba(92,184,92,0.25);
+  color: var(--hu-primary-700);
 }
 html[data-theme="dark"] input[type="checkbox"],
 html[data-theme="dark"] input[type="radio"] {

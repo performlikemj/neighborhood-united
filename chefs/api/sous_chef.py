@@ -47,16 +47,29 @@ def _get_chef_or_403(request):
         )
 
 
-def _validate_family_params(request):
-    """Validate and extract family_id and family_type from request."""
+def _validate_family_params(request, require_family: bool = False):
+    """
+    Validate and extract family_id and family_type from request.
+    
+    Args:
+        request: The HTTP request
+        require_family: If True, family_id is required. If False, returns (None, None, None) when not provided.
+    
+    Returns:
+        (family_id, family_type, error_response) - error_response is None if valid
+    """
     family_id = request.data.get('family_id') or request.query_params.get('family_id')
     family_type = request.data.get('family_type') or request.query_params.get('family_type', 'customer')
     
+    # If no family_id provided
     if not family_id:
-        return None, None, Response(
-            {"error": "family_id is required"},
-            status=400
-        )
+        if require_family:
+            return None, None, Response(
+                {"error": "family_id is required"},
+                status=400
+            )
+        # General mode - no family selected
+        return None, None, None
     
     try:
         family_id = int(family_id)
@@ -80,37 +93,16 @@ def _sse_event(data: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-@renderer_classes([EventStreamRenderer])
-def sous_chef_stream_message(request):
+def _verify_family_access(chef, family_id, family_type):
     """
-    POST /api/chefs/me/sous-chef/stream/
-    
-    Stream a message to the Sous Chef assistant for a specific family.
-    
-    Request Body:
-    {
-        "message": "What should I make for the Johnsons this week?",
-        "family_id": 123,
-        "family_type": "customer"  // or "lead"
-    }
-    
-    Returns: Server-Sent Events stream
+    Verify that the chef has access to the specified family.
+    Returns (success, error_response).
+    If family_id is None (general mode), returns (True, None).
     """
-    chef, error_response = _get_chef_or_403(request)
-    if error_response:
-        return error_response
+    if family_id is None:
+        # General mode - no family to verify
+        return True, None
     
-    family_id, family_type, error_response = _validate_family_params(request)
-    if error_response:
-        return error_response
-    
-    message = request.data.get('message', '').strip()
-    if not message:
-        return Response({"error": "message is required"}, status=400)
-    
-    # Verify family exists and chef has access
     try:
         if family_type == 'customer':
             # Verify customer exists and chef has connection
@@ -122,15 +114,52 @@ def sous_chef_stream_message(request):
                 status=ChefCustomerConnection.STATUS_ACCEPTED
             ).exists()
             if not connection:
-                return Response(
+                return False, Response(
                     {"error": "No active connection with this customer"},
                     status=403
                 )
         else:
             # Verify lead exists and belongs to this chef
-            lead = Lead.objects.get(id=family_id, owner=chef.user)
+            Lead.objects.get(id=family_id, owner=chef.user)
+        return True, None
     except (CustomUser.DoesNotExist, Lead.DoesNotExist):
-        return Response({"error": "Family not found"}, status=404)
+        return False, Response({"error": "Family not found"}, status=404)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@renderer_classes([EventStreamRenderer])
+def sous_chef_stream_message(request):
+    """
+    POST /api/chefs/me/sous-chef/stream/
+    
+    Stream a message to the Sous Chef assistant. Family is optional.
+    
+    Request Body:
+    {
+        "message": "What should I make for the Johnsons this week?",
+        "family_id": 123,        // optional - omit for general assistant mode
+        "family_type": "customer"  // or "lead", required if family_id provided
+    }
+    
+    Returns: Server-Sent Events stream
+    """
+    chef, error_response = _get_chef_or_403(request)
+    if error_response:
+        return error_response
+    
+    family_id, family_type, error_response = _validate_family_params(request, require_family=False)
+    if error_response:
+        return error_response
+    
+    message = request.data.get('message', '').strip()
+    if not message:
+        return Response({"error": "message is required"}, status=400)
+    
+    # Verify family access if family provided
+    success, error_response = _verify_family_access(chef, family_id, family_type)
+    if not success:
+        return error_response
     
     def stream_generator() -> Generator[str, None, None]:
         """Generate SSE events from the assistant."""
@@ -167,12 +196,12 @@ def sous_chef_send_message(request):
     """
     POST /api/chefs/me/sous-chef/message/
     
-    Send a message and get a complete response (non-streaming).
+    Send a message and get a complete response (non-streaming). Family is optional.
     
     Request Body:
     {
         "message": "What are the Johnsons' dietary restrictions?",
-        "family_id": 123,
+        "family_id": 123,        // optional - omit for general assistant mode
         "family_type": "customer"
     }
     
@@ -188,13 +217,18 @@ def sous_chef_send_message(request):
     if error_response:
         return error_response
     
-    family_id, family_type, error_response = _validate_family_params(request)
+    family_id, family_type, error_response = _validate_family_params(request, require_family=False)
     if error_response:
         return error_response
     
     message = request.data.get('message', '').strip()
     if not message:
         return Response({"error": "message is required"}, status=400)
+    
+    # Verify family access if family provided
+    success, error_response = _verify_family_access(chef, family_id, family_type)
+    if not success:
+        return error_response
     
     try:
         from meals.sous_chef_assistant import SousChefAssistant
@@ -220,13 +254,13 @@ def sous_chef_structured_message(request):
     """
     POST /api/chefs/me/sous-chef/structured/
     
-    Send a message and get a structured JSON response.
-    Uses OpenAI's structured output for consistent formatting.
+    Send a message and get a structured JSON response. Family is optional.
+    Uses structured output for consistent formatting.
     
     Request Body:
     {
         "message": "What should I make for the Johnsons this week?",
-        "family_id": 123,
+        "family_id": 123,        // optional - omit for general assistant mode
         "family_type": "customer"
     }
     
@@ -247,7 +281,7 @@ def sous_chef_structured_message(request):
     if error_response:
         return error_response
     
-    family_id, family_type, error_response = _validate_family_params(request)
+    family_id, family_type, error_response = _validate_family_params(request, require_family=False)
     if error_response:
         return error_response
     
@@ -255,25 +289,10 @@ def sous_chef_structured_message(request):
     if not message:
         return Response({"error": "message is required"}, status=400)
     
-    # Verify family exists and chef has access
-    try:
-        if family_type == 'customer':
-            from chef_services.models import ChefCustomerConnection
-            customer = CustomUser.objects.get(id=family_id)
-            connection = ChefCustomerConnection.objects.filter(
-                chef=chef,
-                customer=customer,
-                status=ChefCustomerConnection.STATUS_ACCEPTED
-            ).exists()
-            if not connection:
-                return Response(
-                    {"error": "No active connection with this customer"},
-                    status=403
-                )
-        else:
-            lead = Lead.objects.get(id=family_id, owner=chef.user)
-    except (CustomUser.DoesNotExist, Lead.DoesNotExist):
-        return Response({"error": "Family not found"}, status=404)
+    # Verify family access if family provided
+    success, error_response = _verify_family_access(chef, family_id, family_type)
+    if not success:
+        return error_response
     
     try:
         from meals.sous_chef_assistant import SousChefAssistant
@@ -299,12 +318,12 @@ def sous_chef_new_conversation(request):
     """
     POST /api/chefs/me/sous-chef/new-conversation/
     
-    Start a new conversation with the Sous Chef for a specific family.
+    Start a new conversation with the Sous Chef. Family is optional.
     This deactivates any existing active thread and creates a fresh one.
     
     Request Body:
     {
-        "family_id": 123,
+        "family_id": 123,        // optional - omit for general assistant mode
         "family_type": "customer"
     }
     
@@ -312,15 +331,20 @@ def sous_chef_new_conversation(request):
     {
         "status": "success",
         "thread_id": 789,
-        "family_name": "Johnson Family"
+        "family_name": "Johnson Family"  // or "General Assistant" if no family
     }
     """
     chef, error_response = _get_chef_or_403(request)
     if error_response:
         return error_response
     
-    family_id, family_type, error_response = _validate_family_params(request)
+    family_id, family_type, error_response = _validate_family_params(request, require_family=False)
     if error_response:
+        return error_response
+    
+    # Verify family access if family provided
+    success, error_response = _verify_family_access(chef, family_id, family_type)
+    if not success:
         return error_response
     
     try:
@@ -346,55 +370,56 @@ def sous_chef_thread_history(request, family_type, family_id):
     """
     GET /api/chefs/me/sous-chef/history/{family_type}/{family_id}/
     
-    Get conversation history for a specific family.
+    Get conversation history for a specific family or general mode.
+    Use family_type="general" and family_id=0 for general assistant mode.
     
     Response:
     {
         "status": "success",
         "thread_id": 789,
-        "family_name": "Johnson Family",
-        "messages": [
-            {
-                "role": "chef",
-                "content": "What should I make?",
-                "created_at": "2024-01-15T10:30:00Z"
-            },
-            {
-                "role": "assistant",
-                "content": "Based on the family's preferences...",
-                "created_at": "2024-01-15T10:30:05Z"
-            }
-        ]
+        "family_name": "Johnson Family",  // or "General Assistant"
+        "messages": [...]
     }
     """
     chef, error_response = _get_chef_or_403(request)
     if error_response:
         return error_response
     
-    if family_type not in ('customer', 'lead'):
-        return Response({"error": "Invalid family_type"}, status=400)
-    
-    try:
-        family_id = int(family_id)
-    except (ValueError, TypeError):
-        return Response({"error": "Invalid family_id"}, status=400)
+    # Handle general mode (no family)
+    if family_type == 'general' and str(family_id) == '0':
+        actual_family_id = None
+        actual_family_type = None
+    else:
+        if family_type not in ('customer', 'lead'):
+            return Response({"error": "Invalid family_type"}, status=400)
+        
+        try:
+            actual_family_id = int(family_id)
+        except (ValueError, TypeError):
+            return Response({"error": "Invalid family_id"}, status=400)
+        actual_family_type = family_type
     
     try:
         from meals.sous_chef_assistant import SousChefAssistant
         
         assistant = SousChefAssistant(
             chef_id=chef.id,
-            family_id=family_id,
-            family_type=family_type
+            family_id=actual_family_id,
+            family_type=actual_family_type
         )
         
         history = assistant.get_conversation_history()
         thread = assistant._get_or_create_thread()
         
+        # Get family name or "General Assistant" for no-family mode
+        family_name = getattr(thread, 'family_name', None)
+        if not family_name and not assistant.has_family_context:
+            family_name = "General Assistant"
+        
         return Response({
             "status": "success",
             "thread_id": thread.id,
-            "family_name": thread.family_name,
+            "family_name": family_name,
             "messages": history
         })
         
@@ -424,6 +449,22 @@ def sous_chef_family_context(request, family_type, family_id):
     chef, error_response = _get_chef_or_403(request)
     if error_response:
         return error_response
+    
+    # Handle general mode (no family)
+    if family_type == 'general' and str(family_id) == '0':
+        return Response({
+            "status": "success",
+            "family_name": "General Assistant",
+            "family_type": "general",
+            "family_id": None,
+            "household_size": 0,
+            "dietary_restrictions": [],
+            "allergies": [],
+            "members": [],
+            "total_orders": 0,
+            "total_spent": 0,
+            "is_general_mode": True
+        })
     
     if family_type not in ('customer', 'lead'):
         return Response({"error": "Invalid family_type"}, status=400)

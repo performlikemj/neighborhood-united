@@ -37,6 +37,13 @@ class Chef(models.Model):
         blank=True,
         help_text="Emoji icon for the Sous Chef assistant widget"
     )
+    # Calendly booking link
+    calendly_url = models.URLField(
+        blank=True,
+        null=True,
+        max_length=500,
+        help_text="Calendly booking URL for client consultations"
+    )
 
 
     def __str__(self):

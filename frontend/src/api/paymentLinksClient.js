@@ -216,3 +216,4 @@ export default {
   PAYMENT_LINK_STATUSES,
   CLIENT_TYPES,
 }
+

@@ -351,7 +351,8 @@ The prep planning tools are available through the Sous Chef AI assistant:
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | Dec 2025 | Initial release with multi-client support |
+| 1.1 | Dec 2025 | Updated with accurate UI walkthrough and screenshot placeholders |
 
 ---
 
-*This SOP is maintained by the Hood United development team. For questions or feature requests, contact support.*
+*This SOP is maintained by the sautai development team. For questions or feature requests, contact support.*

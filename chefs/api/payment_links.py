@@ -618,3 +618,4 @@ def payment_link_stats(request):
             {"error": "Failed to fetch statistics. Please try again."},
             status=500
         )
+

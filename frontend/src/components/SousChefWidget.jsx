@@ -136,11 +136,22 @@ export default function SousChefWidget({
     }
   }, [showEmojiPicker])
 
+  // Track if this is the initial mount
+  const isInitialMountRef = useRef(true)
+  
   // Watch for new notifications and show toast
   useEffect(() => {
     if (!notifications) return
     
     const currentCount = notifications.unreadCount
+    
+    // Skip the first render to avoid setState during initial mount cascade
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false
+      prevUnreadCount.current = currentCount
+      return
+    }
+    
     const latestUnread = notifications.getLatestUnread()
     
     // New notification arrived
@@ -153,6 +164,7 @@ export default function SousChefWidget({
         setShowToast(false)
       }, 8000)
       
+      prevUnreadCount.current = currentCount
       return () => clearTimeout(timer)
     }
     

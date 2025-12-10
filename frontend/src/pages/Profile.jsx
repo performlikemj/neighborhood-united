@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useAuth } from '../context/AuthContext.jsx'
 import { api } from '../api'
 import Listbox from '../components/Listbox.jsx'
+import ServiceAreaPicker from '../components/ServiceAreaPicker.jsx'
 import { COUNTRIES, countryNameFromCode, codeFromCountryName } from '../utils/geo.js'
 
 const FALLBACK_DIETS = ['Everything','Vegetarian','Vegan','Halal','Kosher','Gluten‑Free','Pescatarian','Keto','Paleo','Low‑Calorie','Low‑Sodium','High‑Protein','Dairy‑Free','Nut‑Free']
@@ -16,7 +17,7 @@ export default function Profile(){
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState(null)
   const [applyOpen, setApplyOpen] = useState(false)
-  const [chefForm, setChefForm] = useState({ experience:'', bio:'', serving_areas:'', profile_pic:null })
+  const [chefForm, setChefForm] = useState({ experience:'', bio:'', serving_areas:'', selected_areas: [], profile_pic:null })
   const [applyMsg, setApplyMsg] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const [toasts, setToasts] = useState([]) // {id, text, tone, closing}
@@ -471,7 +472,7 @@ export default function Profile(){
       {applyOpen && (
         <>
           <div className="right-panel-overlay" onClick={()=> setApplyOpen(false)} />
-          <aside className="right-panel" role="dialog" aria-label="Become a Chef">
+          <aside className="right-panel" role="dialog" aria-label="Become a Chef" style={{ maxWidth: '700px' }}>
             <div className="right-panel-head">
               <div className="slot-title">Become a Community Chef</div>
               <button className="icon-btn" onClick={()=> setApplyOpen(false)}>✕</button>
@@ -482,18 +483,43 @@ export default function Profile(){
               <textarea className="textarea" rows={3} value={chefForm.experience} onChange={e=>setChefForm({...chefForm, experience:e.target.value})} />
               <div className="label">Bio</div>
               <textarea className="textarea" rows={3} value={chefForm.bio} onChange={e=>setChefForm({...chefForm, bio:e.target.value})} />
-              <div className="label">Serving areas (postal codes)</div>
-              <input className="input" value={chefForm.serving_areas} onChange={e=>setChefForm({...chefForm, serving_areas:e.target.value})} />
-              <div className="label">Profile picture (optional)</div>
+              
+              <div className="label" style={{ marginTop: '1rem' }}>Service Areas</div>
+              <p className="muted" style={{ fontSize: '0.85em', marginBottom: '0.5rem' }}>
+                Select cities, wards, or districts where you can serve customers. You can search or browse available areas.
+              </p>
+              <ServiceAreaPicker
+                country={(form?.country || user?.address?.country || '').toUpperCase()}
+                selectedAreas={chefForm.selected_areas || []}
+                onChange={(areas) => setChefForm({ ...chefForm, selected_areas: areas })}
+                maxHeight="400px"
+              />
+              
+              <div className="label" style={{ marginTop: '1rem' }}>
+                Additional postal codes (optional)
+                <span className="muted" style={{ fontWeight: 400, marginLeft: '0.5rem' }}>comma-separated</span>
+              </div>
+              <input 
+                className="input" 
+                value={chefForm.serving_areas} 
+                onChange={e=>setChefForm({...chefForm, serving_areas:e.target.value})} 
+                placeholder="e.g., 150-0001, 150-0002"
+              />
+              
+              <div className="label" style={{ marginTop: '1rem' }}>Profile picture (optional)</div>
               <input type="file" onChange={e=>setChefForm({...chefForm, profile_pic:e.target.files?.[0]||null})} />
-              <div className="actions-row" style={{marginTop:'.6rem'}}>
+              <div className="actions-row" style={{marginTop:'1rem'}}>
                 <button className="btn btn-primary" disabled={submitting} onClick={async ()=>{
                   setSubmitting(true); setApplyMsg(null)
                   try{
                     const fd = new FormData()
                     fd.append('experience', chefForm.experience)
                     fd.append('bio', chefForm.bio)
-                    fd.append('serving_areas', chefForm.serving_areas)
+                    // Combine selected areas with manual postal codes
+                    const areaIds = (chefForm.selected_areas || []).map(a => a.area_id || a.id)
+                    const manualCodes = chefForm.serving_areas || ''
+                    fd.append('serving_areas', manualCodes)
+                    fd.append('selected_area_ids', JSON.stringify(areaIds))
                     if (chefForm.profile_pic) fd.append('profile_pic', chefForm.profile_pic)
                     const resp = await api.post('/chefs/api/submit-chef-request/', fd, { headers:{'Content-Type':'multipart/form-data'} })
                     if (resp.status===200 || resp.status===201){

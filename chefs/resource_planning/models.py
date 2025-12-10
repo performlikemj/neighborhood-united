@@ -328,3 +328,4 @@ class ChefPrepPlanCommitment(models.Model):
         if self.customer_name:
             label += f" for {self.customer_name}"
         return f"{self.commitment_type}: {label} on {self.service_date}"
+

@@ -557,7 +557,7 @@ def password_reset_request(request):
         <html>
         <body>
             <div style="text-align: center;">
-                <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautai Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+                <img src="https://live.staticflickr.com/65535/54973558613_5624f181a7_m.jpg" alt="sautai Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
             </div>
             <h2 style="color: #333;">Password Reset Request</h2>
             <p>Hi {user.username},</p>
@@ -718,7 +718,7 @@ def update_profile_api(request):
                 <html>
                 <body>
                     <div style="text-align: center;">
-                        <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautai Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+                        <img src="https://live.staticflickr.com/65535/54973558613_5624f181a7_m.jpg" alt="sautai Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
                     </div>
                     <h2 style="color: #333;">Email Verification Required, {user.username}</h2>
                     <p>We noticed that you've updated your email address. To continue accessing your account, please verify your new email address by clicking the button below:</p>
@@ -1247,7 +1247,7 @@ def register_api_view(request):
             <html>
             <body>
                 <div style="text-align: center;">
-                    <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautai Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+                    <img src="https://live.staticflickr.com/65535/54973558613_5624f181a7_m.jpg" alt="sautai Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
                 </div>
                 <h2 style="color: #333;">Welcome to sautai, {user.username}!</h2>
                 <p>Thank you for signing up! We're excited to have you on board.</p>
@@ -1378,7 +1378,7 @@ def send_activation_email_to_user(user, email_subject_prefix=""):
         <html>
         <body>
             <div style="text-align: center;">
-                <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautai Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+                <img src="https://live.staticflickr.com/65535/54973558613_5624f181a7_m.jpg" alt="sautai Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
             </div>
             <h2 style="color: #333;">Welcome back to sautai, {user.username}!</h2>
             <p>You requested a new activation link. Please confirm your email address by clicking the button below:</p>
@@ -2028,7 +2028,7 @@ def onboarding_complete_registration(request):
             <html>
             <body>
                 <div style="text-align: center;">
-                    <img src="https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg" alt="sautai Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
+                    <img src="https://live.staticflickr.com/65535/54973558613_5624f181a7_m.jpg" alt="sautai Logo" style="width: 200px; height: auto; margin-bottom: 20px;">
                 </div>
                 <h2 style="color: #333;">Welcome to sautai, {user.username}!</h2>
                 <p>Thank you for signing up! We're excited to have you on board.</p>

@@ -126,3 +126,4 @@ def update_connection_message_activity(sender, instance, created, **kwargs):
     except Exception as e:
         logger.warning(f"Failed to update message activity: {e}")
 
+

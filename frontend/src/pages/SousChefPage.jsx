@@ -39,7 +39,7 @@ export default function SousChefPage() {
 
   // Load chef's sous chef emoji on mount
   useEffect(() => {
-    api.get('/chefs/api/me/chef/').then(res => {
+    api.get('/chefs/api/me/chef/profile/').then(res => {
       if (res.data?.sous_chef_emoji) {
         setCurrentEmoji(res.data.sous_chef_emoji)
       }
@@ -98,8 +98,10 @@ export default function SousChefPage() {
             </button>
             <div className="header-title">
               <h1>Sous Chef</h1>
-              {selectedFamily.familyName && (
+              {selectedFamily.familyId ? (
                 <span className="current-family">with {selectedFamily.familyName}</span>
+              ) : (
+                <span className="current-family general">General Assistant</span>
               )}
             </div>
           </div>
@@ -151,29 +153,38 @@ export default function SousChefPage() {
 
       {/* Main Content Area */}
       <main className="page-main">
-        {selectedFamily.familyId ? (
-          <div className="chat-container">
-            <SousChefChat
-              familyId={selectedFamily.familyId}
-              familyType={selectedFamily.familyType}
-              familyName={selectedFamily.familyName}
-              initialInput={draftInput}
-            />
-          </div>
-        ) : (
-          <div className="empty-state">
-            <div className="empty-card">
-              <div className="empty-icon">{currentEmoji}</div>
-              <h2>Welcome to Sous Chef</h2>
-              <p>Select a client to get started. I'll have full context about their dietary needs, allergies, and history.</p>
-              <div className="empty-selector">
-                <FamilySelector
-                  selectedFamilyId={selectedFamily.familyId}
-                  selectedFamilyType={selectedFamily.familyType}
-                  onFamilySelect={handleFamilySelect}
-                />
-              </div>
+        <div className="chat-container">
+          {/* Mode indicator banner when in general mode */}
+          {!selectedFamily.familyId && (
+            <div className="general-mode-banner">
+              <span className="banner-icon">💡</span>
+              <span className="banner-text">
+                <strong>General Assistant Mode</strong> — I can help with platform questions, SOPs, and prep planning. 
+                <button 
+                  className="select-family-link"
+                  onClick={() => document.querySelector('.family-selector-trigger')?.click()}
+                >
+                  Select a client
+                </button>
+                {' '}for personalized meal planning.
+              </span>
             </div>
+          )}
+          <SousChefChat
+            familyId={selectedFamily.familyId}
+            familyType={selectedFamily.familyType}
+            familyName={selectedFamily.familyName || (selectedFamily.familyId ? null : 'General Assistant')}
+            initialInput={draftInput}
+          />
+        </div>
+        {/* Family selector floating panel */}
+        {!selectedFamily.familyId && (
+          <div className="floating-family-selector">
+            <FamilySelector
+              selectedFamilyId={selectedFamily.familyId}
+              selectedFamilyType={selectedFamily.familyType}
+              onFamilySelect={handleFamilySelect}
+            />
           </div>
         )}
       </main>
@@ -474,6 +485,77 @@ export default function SousChefPage() {
 
         .empty-selector {
           text-align: left;
+        }
+
+        /* ============================================
+           GENERAL MODE BANNER
+           ============================================ */
+        .general-mode-banner {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          padding: 0.75rem 1rem;
+          background: linear-gradient(135deg, rgba(92, 184, 92, 0.1) 0%, rgba(92, 184, 92, 0.05) 100%);
+          border-bottom: 1px solid rgba(92, 184, 92, 0.2);
+          font-size: 0.875rem;
+          color: var(--text, #1a1a1a);
+        }
+
+        .banner-icon {
+          font-size: 1.25rem;
+        }
+
+        .banner-text {
+          flex: 1;
+        }
+
+        .banner-text strong {
+          color: var(--primary, #5cb85c);
+        }
+
+        .select-family-link {
+          background: none;
+          border: none;
+          color: var(--primary, #5cb85c);
+          text-decoration: underline;
+          cursor: pointer;
+          padding: 0;
+          font: inherit;
+        }
+
+        .select-family-link:hover {
+          color: var(--primary-700, #449d44);
+        }
+
+        /* Floating family selector for general mode */
+        .floating-family-selector {
+          position: fixed;
+          bottom: 1.5rem;
+          right: 1.5rem;
+          z-index: 50;
+          background: var(--surface, #fff);
+          border-radius: 12px;
+          padding: 1rem;
+          box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+          border: 1px solid var(--border, #e0e0e0);
+          max-width: 320px;
+        }
+
+        .floating-family-selector::before {
+          content: 'Switch to client:';
+          display: block;
+          font-size: 0.75rem;
+          font-weight: 600;
+          color: var(--muted, #666);
+          margin-bottom: 0.5rem;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+
+        /* Header general mode indicator */
+        .current-family.general {
+          opacity: 0.8;
+          font-style: italic;
         }
 
         /* ============================================

@@ -70,3 +70,4 @@ class Migration(migrations.Migration):
             index=models.Index(fields=['stripe_checkout_session_id'], name='chefs_chefp_stripe_sess_idx'),
         ),
     ]
+

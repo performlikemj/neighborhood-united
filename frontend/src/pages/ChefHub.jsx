@@ -30,7 +30,7 @@ export default function ChefHub() {
     setLoading(true)
     setError(null)
     try {
-      const resp = await api.get(`/customer-dashboard/api/my-chefs/${chefId}/`)
+      const resp = await api.get(`/customer_dashboard/api/my-chefs/${chefId}/`)
       setHubData(resp.data)
     } catch (e) {
       console.error('Failed to fetch chef hub data:', e)
@@ -48,10 +48,10 @@ export default function ChefHub() {
   
   if (loading) {
     return (
-      <div className="page-chef-hub container">
-        <div className="loading-state">
-          <div className="spinner" />
-          <p>Loading...</p>
+      <div className="page-chef-hub">
+        <div className="chef-hub-loading">
+          <div className="spinner" style={{width: 40, height: 40, borderWidth: 4}} />
+          <p>Loading your chef...</p>
         </div>
       </div>
     )
@@ -59,8 +59,9 @@ export default function ChefHub() {
   
   if (error) {
     return (
-      <div className="page-chef-hub container">
-        <div className="error-state">
+      <div className="page-chef-hub">
+        <div className="chef-hub-error">
+          <div className="error-icon">😕</div>
           <h2>Oops!</h2>
           <p>{error}</p>
           <Link to="/my-chefs" className="btn btn-primary">Back to My Chefs</Link>
@@ -72,115 +73,181 @@ export default function ChefHub() {
   const { chef, connected_since, current_plan, upcoming_orders, pending_suggestions } = hubData
   
   return (
-    <div className="page-chef-hub container">
+    <div className="page-chef-hub">
       {/* Back link for multi-chef users */}
       {hasMultipleChefs && (
-        <Link to="/my-chefs" className="back-link">← Back to My Chefs</Link>
+        <div className="chef-hub-back">
+          <Link to="/my-chefs" className="back-link">
+            <i className="fa-solid fa-arrow-left"></i>
+            Back to My Chefs
+          </Link>
+        </div>
       )}
       
-      {/* Chef Header */}
-      <header className="chef-header">
-        <div className="chef-photo-large">
-          {chef.photo ? (
-            <img src={chef.photo} alt={chef.display_name} />
-          ) : (
-            <div className="photo-placeholder-large">{getSeededChefEmoji(chef.id)}</div>
-          )}
-        </div>
-        
-        <div className="chef-details">
-          <h1>{chef.display_name}</h1>
-          {chef.rating && (
-            <div className="chef-rating">
-              {'★'.repeat(Math.round(chef.rating))}
-              {'☆'.repeat(5 - Math.round(chef.rating))}
-              <span className="rating-text">
-                {chef.rating} ({chef.review_count} reviews)
-              </span>
+      {/* Chef Header - Hero Style */}
+      <header className="chef-hub-hero">
+        <div className="chef-hub-hero-content">
+          <div className="chef-hub-avatar">
+            {chef.photo ? (
+              <img src={chef.photo} alt={chef.display_name} className="chef-hub-photo" />
+            ) : (
+              <div className="chef-hub-photo-placeholder">
+                {getSeededChefEmoji(chef.id)}
+              </div>
+            )}
+            <div className="chef-hub-status-badge">
+              <i className="fa-solid fa-check"></i>
+              Connected
             </div>
-          )}
-          <p className="connected-since">
-            Connected since {formatDate(connected_since)}
-          </p>
+          </div>
           
-          <div className="chef-actions">
-            <button className="btn btn-outline" onClick={() => {/* TODO: Message chef */}}>
-              Message Chef
-            </button>
-            <Link to={`/chefs/${chef.username}`} className="btn btn-outline">
-              View Profile
-            </Link>
+          <div className="chef-hub-info">
+            <h1 className="chef-hub-name">{chef.display_name}</h1>
+            
+            {chef.specialty && (
+              <p className="chef-hub-specialty">{chef.specialty}</p>
+            )}
+            
+            {chef.rating && (
+              <div className="chef-hub-rating">
+                <div className="stars">
+                  {[1,2,3,4,5].map(star => (
+                    <i 
+                      key={star}
+                      className={`fa-solid fa-star ${star <= Math.round(chef.rating) ? 'filled' : 'empty'}`}
+                    ></i>
+                  ))}
+                </div>
+                {chef.review_count > 0 && (
+                  <span className="rating-text">
+                    {chef.rating.toFixed(1)} ({chef.review_count} {chef.review_count === 1 ? 'review' : 'reviews'})
+                  </span>
+                )}
+              </div>
+            )}
+            
+            <p className="chef-hub-connected">
+              <i className="fa-regular fa-calendar-check"></i>
+              Connected since {formatDate(connected_since)}
+            </p>
+            
+            <div className="chef-hub-actions">
+              <button className="btn btn-outline btn-icon" onClick={() => {/* TODO: Message chef */}}>
+                <i className="fa-regular fa-comment"></i>
+                Message Chef
+              </button>
+              <Link to={`/chefs/${chef.username}`} className="btn btn-outline btn-icon">
+                <i className="fa-regular fa-user"></i>
+                View Profile
+              </Link>
+            </div>
           </div>
         </div>
       </header>
       
-      {/* Current Meal Plan */}
-      <section className="hub-section">
-        <div className="section-header">
-          <h2>Current Meal Plan</h2>
-          {current_plan && (
-            <Link to={`/my-chefs/${chefId}/meal-plan`} className="view-all-link">
-              View All →
+      {/* Main Content */}
+      <div className="chef-hub-content">
+        {/* Current Meal Plan */}
+        <section className="hub-card">
+          <div className="hub-card-header">
+            <div className="hub-card-title">
+              <i className="fa-solid fa-utensils"></i>
+              <h2>Current Meal Plan</h2>
+            </div>
+            {current_plan && (
+              <Link to={`/my-chefs/${chefId}/meal-plan`} className="view-all-link">
+                View All <i className="fa-solid fa-arrow-right"></i>
+              </Link>
+            )}
+          </div>
+          
+          <div className="hub-card-body">
+            {current_plan ? (
+              <MealPlanSummary plan={current_plan} chefId={chefId} />
+            ) : (
+              <div className="hub-empty-state">
+                <div className="empty-icon">🍽️</div>
+                <p className="empty-title">No active meal plan yet</p>
+                <p className="empty-hint">Your chef will create a personalized plan for you.</p>
+              </div>
+            )}
+            
+            {pending_suggestions > 0 && (
+              <div className="pending-badge">
+                <i className="fa-solid fa-bell"></i>
+                {pending_suggestions} suggestion{pending_suggestions > 1 ? 's' : ''} pending review
+              </div>
+            )}
+          </div>
+        </section>
+        
+        {/* Upcoming Orders */}
+        <section className="hub-card">
+          <div className="hub-card-header">
+            <div className="hub-card-title">
+              <i className="fa-solid fa-clock"></i>
+              <h2>Upcoming Orders</h2>
+            </div>
+            <Link to={`/my-chefs/${chefId}/orders`} className="view-all-link">
+              View All <i className="fa-solid fa-arrow-right"></i>
             </Link>
-          )}
-        </div>
+          </div>
+          
+          <div className="hub-card-body">
+            {upcoming_orders && upcoming_orders.length > 0 ? (
+              <div className="orders-list">
+                {upcoming_orders.map(order => (
+                  <OrderCard key={order.id} order={order} />
+                ))}
+              </div>
+            ) : (
+              <div className="hub-empty-state">
+                <div className="empty-icon">📦</div>
+                <p className="empty-title">No upcoming orders</p>
+                <p className="empty-hint">Your orders will appear here when placed.</p>
+              </div>
+            )}
+          </div>
+        </section>
         
-        {current_plan ? (
-          <MealPlanSummary plan={current_plan} chefId={chefId} />
-        ) : (
-          <div className="empty-section">
-            <p>No active meal plan yet.</p>
-            <p className="hint">Your chef will create a personalized plan for you.</p>
+        {/* Quick Actions */}
+        <section className="hub-card hub-actions-card">
+          <div className="hub-card-header">
+            <div className="hub-card-title">
+              <i className="fa-solid fa-bolt"></i>
+              <h2>Quick Actions</h2>
+            </div>
           </div>
-        )}
-        
-        {pending_suggestions > 0 && (
-          <div className="pending-badge">
-            {pending_suggestions} suggestion{pending_suggestions > 1 ? 's' : ''} pending review
+          
+          <div className="hub-card-body">
+            <div className="quick-actions-grid">
+              <Link to={`/chefs/${chef.username}`} className="quick-action-item">
+                <div className="quick-action-icon">
+                  <i className="fa-solid fa-book-open"></i>
+                </div>
+                <span className="quick-action-label">Browse Menu</span>
+                <i className="fa-solid fa-chevron-right quick-action-arrow"></i>
+              </Link>
+              
+              <Link to="/profile" className="quick-action-item">
+                <div className="quick-action-icon">
+                  <i className="fa-solid fa-sliders"></i>
+                </div>
+                <span className="quick-action-label">Update Preferences</span>
+                <i className="fa-solid fa-chevron-right quick-action-arrow"></i>
+              </Link>
+              
+              <button className="quick-action-item" onClick={() => {/* TODO: Request service */}}>
+                <div className="quick-action-icon">
+                  <i className="fa-solid fa-calendar-plus"></i>
+                </div>
+                <span className="quick-action-label">Request Service</span>
+                <i className="fa-solid fa-chevron-right quick-action-arrow"></i>
+              </button>
+            </div>
           </div>
-        )}
-      </section>
-      
-      {/* Upcoming Orders */}
-      <section className="hub-section">
-        <div className="section-header">
-          <h2>Upcoming Orders</h2>
-          <Link to={`/my-chefs/${chefId}/orders`} className="view-all-link">
-            View All →
-          </Link>
-        </div>
-        
-        {upcoming_orders && upcoming_orders.length > 0 ? (
-          <div className="orders-list">
-            {upcoming_orders.map(order => (
-              <OrderCard key={order.id} order={order} />
-            ))}
-          </div>
-        ) : (
-          <div className="empty-section">
-            <p>No upcoming orders.</p>
-          </div>
-        )}
-      </section>
-      
-      {/* Quick Actions */}
-      <section className="hub-section quick-actions">
-        <h2>Quick Actions</h2>
-        <div className="action-buttons">
-          <Link to={`/chefs/${chef.username}`} className="action-btn">
-            <span className="action-icon">🍽️</span>
-            <span className="action-label">Browse Menu</span>
-          </Link>
-          <Link to="/profile" className="action-btn">
-            <span className="action-icon">⚙️</span>
-            <span className="action-label">Update Preferences</span>
-          </Link>
-          <button className="action-btn" onClick={() => {/* TODO: Request service */}}>
-            <span className="action-icon">📅</span>
-            <span className="action-label">Request Service</span>
-          </button>
-        </div>
-      </section>
+        </section>
+      </div>
     </div>
   )
 }
@@ -191,22 +258,24 @@ export default function ChefHub() {
 function MealPlanSummary({ plan, chefId }) {
   return (
     <div className="meal-plan-summary">
-      <div className="plan-header">
-        <h3>{plan.title}</h3>
-        <span className="plan-dates">
+      <div className="plan-info">
+        <h3 className="plan-title">{plan.title}</h3>
+        <div className="plan-dates">
+          <i className="fa-regular fa-calendar"></i>
           {formatDate(plan.start_date)} - {formatDate(plan.end_date)}
-        </span>
+        </div>
+        {plan.notes && (
+          <p className="plan-notes">{plan.notes}</p>
+        )}
       </div>
-      
-      {plan.notes && (
-        <p className="plan-notes">{plan.notes}</p>
-      )}
       
       <div className="plan-actions">
         <Link to={`/my-chefs/${chefId}/meal-plan`} className="btn btn-primary">
+          <i className="fa-solid fa-eye"></i>
           View Full Plan
         </Link>
         <Link to={`/my-chefs/${chefId}/meal-plan?suggest=true`} className="btn btn-outline">
+          <i className="fa-solid fa-lightbulb"></i>
           Suggest Changes
         </Link>
       </div>
@@ -218,25 +287,31 @@ function MealPlanSummary({ plan, chefId }) {
  * Order card component
  */
 function OrderCard({ order }) {
-  const statusColors = {
-    placed: 'status-pending',
-    confirmed: 'status-confirmed',
-    completed: 'status-completed',
-    cancelled: 'status-cancelled',
+  const statusConfig = {
+    placed: { color: 'status-pending', icon: 'fa-clock', label: 'Placed' },
+    confirmed: { color: 'status-confirmed', icon: 'fa-check-circle', label: 'Confirmed' },
+    completed: { color: 'status-completed', icon: 'fa-check-double', label: 'Completed' },
+    cancelled: { color: 'status-cancelled', icon: 'fa-times-circle', label: 'Cancelled' },
   }
   
+  const status = statusConfig[order.status] || statusConfig.placed
+  
   return (
-    <div className="order-card">
-      <div className="order-info">
-        <h4>{order.meal_name}</h4>
-        <p className="order-date">{formatDate(order.event_date)}</p>
+    <div className="order-card-item">
+      <div className="order-main">
+        <h4 className="order-name">{order.meal_name}</h4>
+        <div className="order-date">
+          <i className="fa-regular fa-calendar"></i>
+          {formatDate(order.event_date)}
+        </div>
       </div>
       <div className="order-meta">
-        <span className={`status-badge ${statusColors[order.status] || ''}`}>
-          {order.status}
+        <span className={`order-status ${status.color}`}>
+          <i className={`fa-solid ${status.icon}`}></i>
+          {status.label}
         </span>
         {order.price && (
-          <span className="order-price">${order.price}</span>
+          <span className="order-price">${parseFloat(order.price).toFixed(2)}</span>
         )}
       </div>
     </div>
@@ -255,4 +330,3 @@ function formatDate(dateStr) {
     year: date.getFullYear() !== new Date().getFullYear() ? 'numeric' : undefined
   })
 }
-

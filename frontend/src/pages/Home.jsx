@@ -156,6 +156,49 @@ export default function Home(){
 
       <div className="divider" />
 
+      {/* Global Chef Discovery Section - Featured for guests */}
+      {!user && (
+        <section className="section" aria-labelledby="discover">
+          <h2 id="discover" className="section-title">
+            <span style={{marginRight: '0.5rem'}}>🌍</span>
+            Discover Chefs Worldwide
+          </h2>
+          <p className="section-sub">
+            Explore talented chefs from around the world. Browse their profiles, see their culinary creations, and get inspired by global cuisines.
+          </p>
+          <div className="discover-regions" style={{marginTop:'1.25rem'}}>
+            <div className="intro-cards" style={{gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))'}}>
+              {[
+                {flag: '🇺🇸', name: 'United States', code: 'US'},
+                {flag: '🇬🇧', name: 'United Kingdom', code: 'GB'},
+                {flag: '🇨🇦', name: 'Canada', code: 'CA'},
+                {flag: '🇫🇷', name: 'France', code: 'FR'},
+                {flag: '🇮🇹', name: 'Italy', code: 'IT'},
+                {flag: '🇯🇵', name: 'Japan', code: 'JP'},
+              ].map(region => (
+                <Link 
+                  key={region.code} 
+                  to={`/chefs?country=${region.code}`} 
+                  className="card" 
+                  style={{textAlign: 'center', textDecoration: 'none', padding: '1.25rem 1rem', transition: 'all 0.2s ease'}}
+                >
+                  <span style={{fontSize: '2.5rem', display: 'block', marginBottom: '0.5rem'}}>{region.flag}</span>
+                  <h4 style={{margin: 0, fontSize: '1rem'}}>{region.name}</h4>
+                </Link>
+              ))}
+            </div>
+          </div>
+          <div style={{textAlign: 'center', marginTop: '1.5rem'}}>
+            <Link to="/chefs" className="btn btn-primary" style={{fontSize: '1rem', padding: '0.75rem 1.5rem'}}>
+              <span style={{marginRight: '0.5rem'}}>🗺️</span>
+              Explore All Chefs
+            </Link>
+          </div>
+        </section>
+      )}
+
+      <div className="divider" />
+
       {/* Customer Section */}
       <section className="section" aria-labelledby="customers">
         <div className="cta">

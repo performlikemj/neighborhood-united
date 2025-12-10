@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useTheme } from '../context/ThemeContext.jsx'
 import { FEATURES } from '../config/features.js'
-import { api } from '../api'
 
 function PlateStackIcon(){
   const stroke = 'currentColor'
@@ -19,14 +18,14 @@ function PlateStackIcon(){
 }
 
 export default function NavBar(){
-  const { user, logout, switchRole, hasChefAccess } = useAuth()
+  const { user, logout, switchRole, hasChefAccess, connectedChefs, hasChefConnection } = useAuth()
   const { theme, toggleTheme } = useTheme()
   const nav = useNavigate()
   const location = useLocation()
   const [switching, setSwitching] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
-  const [brandSrc, setBrandSrc] = useState('/sautai_logo_web.png')
+  const [brandSrc, setBrandSrc] = useState('/sautai_logo_new.png')
   const onBrandError = ()=> setBrandSrc('/sautai_logo_transparent_800.png')
   const isAuthed = Boolean(user)
   const inChef = user?.current_role === 'chef'
@@ -37,20 +36,8 @@ export default function NavBar(){
     location.pathname.startsWith('/chefs/')
   )
   
-  // Track connected chefs for adaptive nav text
-  const [connectedChefCount, setConnectedChefCount] = useState(0)
-  
-  // Fetch connected chef count for customers
-  useEffect(() => {
-    if (isAuthed && !inChef && FEATURES.CLIENT_PORTAL_MY_CHEFS) {
-      api.get('/customer-dashboard/api/my-chefs/')
-        .then(resp => setConnectedChefCount(resp?.data?.count || 0))
-        .catch(() => setConnectedChefCount(0))
-    }
-  }, [isAuthed, inChef])
-  
-  // Determine if user has chef connection(s)
-  const hasChefConnection = connectedChefCount > 0
+  // Use connected chefs from AuthContext (no separate API call needed)
+  const connectedChefCount = connectedChefs?.length || 0
 
   const doLogout = () => {
     logout()
@@ -88,7 +75,7 @@ export default function NavBar(){
       <div className="navbar-inner container">
         <div className="brand">
           <Link to="/" onClick={closeMenu} style={{display:'inline-flex', alignItems:'center', gap:'.5rem', textDecoration:'none'}}>
-            <img src={brandSrc} onError={onBrandError} alt="sautai" style={{height:32, width:'auto', borderRadius:6}} />
+            <img src={brandSrc} onError={onBrandError} alt="sautai" style={{height:40, width:'auto'}} />
             <span style={{color:'inherit', textDecoration:'none'}}>sautai</span>
           </Link>
         </div>

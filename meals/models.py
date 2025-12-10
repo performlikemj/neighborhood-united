@@ -2035,3 +2035,204 @@ class MealPlanGenerationJob(models.Model):
         self.error_message = error
         self.completed_at = timezone.now()
         self.save(update_fields=['status', 'error_message', 'completed_at'])
+
+
+# =============================================================================
+# Purchase Receipt Models (for ingredient/shopping tracking)
+# =============================================================================
+
+class MealPlanReceipt(models.Model):
+    """
+    Receipt for purchases related to meal plans, prep plans, or general chef expenses.
+    
+    Chefs can upload receipts to track ingredient purchases, associate them with
+    specific meal plans or customers, and maintain records for reimbursement or
+    accounting purposes.
+    """
+    CATEGORY_CHOICES = [
+        ('ingredients', 'Ingredients'),
+        ('supplies', 'Cooking Supplies'),
+        ('equipment', 'Equipment'),
+        ('packaging', 'Packaging'),
+        ('delivery', 'Delivery/Transport'),
+        ('other', 'Other'),
+    ]
+    
+    STATUS_CHOICES = [
+        ('uploaded', 'Uploaded'),
+        ('reviewed', 'Reviewed'),
+        ('reimbursed', 'Reimbursed'),
+        ('rejected', 'Rejected'),
+    ]
+    
+    # Ownership
+    chef = models.ForeignKey(
+        Chef,
+        on_delete=models.CASCADE,
+        related_name='receipts',
+        help_text="The chef who uploaded this receipt"
+    )
+    
+    # Customer association (optional)
+    customer = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='chef_receipts',
+        help_text="Customer this expense is associated with (for billing)"
+    )
+    
+    # Meal plan associations (all optional - a receipt may be general)
+    meal_plan = models.ForeignKey(
+        MealPlan,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='receipts',
+        help_text="User-generated meal plan this receipt is for"
+    )
+    chef_meal_plan = models.ForeignKey(
+        ChefMealPlan,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='receipts',
+        help_text="Chef-created meal plan this receipt is for"
+    )
+    prep_plan = models.ForeignKey(
+        'chefs.ChefPrepPlan',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='receipts',
+        help_text="Prep plan this receipt is associated with"
+    )
+    
+    # Receipt details
+    receipt_image = models.ImageField(
+        upload_to='receipts/%Y/%m/',
+        help_text="Photo/scan of the receipt"
+    )
+    receipt_thumbnail = models.ImageField(
+        upload_to='receipts/thumbnails/%Y/%m/',
+        blank=True,
+        null=True,
+        help_text="Auto-generated thumbnail"
+    )
+    
+    # Financial info
+    amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Total amount on the receipt"
+    )
+    currency = models.CharField(max_length=3, default='USD')
+    tax_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Tax portion of the total"
+    )
+    
+    # Metadata
+    category = models.CharField(
+        max_length=20,
+        choices=CATEGORY_CHOICES,
+        default='ingredients'
+    )
+    merchant_name = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Store/vendor name"
+    )
+    purchase_date = models.DateField(
+        help_text="Date of purchase"
+    )
+    description = models.TextField(
+        blank=True,
+        help_text="Description of items purchased"
+    )
+    
+    # Itemized breakdown (optional, JSON for flexibility)
+    items = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Optional itemized list: [{name, quantity, unit_price, total}]"
+    )
+    
+    # Status tracking
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='uploaded'
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_receipts'
+    )
+    reviewer_notes = models.TextField(
+        blank=True,
+        help_text="Admin/reviewer notes"
+    )
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-purchase_date', '-created_at']
+        indexes = [
+            models.Index(fields=['chef', '-purchase_date']),
+            models.Index(fields=['chef', 'status']),
+            models.Index(fields=['chef', 'customer', '-purchase_date']),
+            models.Index(fields=['chef', 'category']),
+        ]
+    
+    def __str__(self):
+        merchant = self.merchant_name or "Receipt"
+        return f"{merchant} - {self.currency} {self.amount} ({self.purchase_date})"
+    
+    def save(self, *args, **kwargs):
+        """Extract image dimensions on save."""
+        if self.receipt_image and hasattr(self.receipt_image, 'file'):
+            try:
+                from PIL import Image
+                from io import BytesIO
+                from django.core.files.uploadedfile import InMemoryUploadedFile
+                
+                # Generate thumbnail
+                image = Image.open(self.receipt_image.file)
+                image.thumbnail((300, 300), Image.Resampling.LANCZOS)
+                
+                thumb_io = BytesIO()
+                thumb_format = 'JPEG' if image.mode == 'RGB' else 'PNG'
+                image.save(thumb_io, format=thumb_format, quality=85)
+                thumb_io.seek(0)
+                
+                # Only set thumbnail if not already set
+                if not self.receipt_thumbnail:
+                    ext = '.jpg' if thumb_format == 'JPEG' else '.png'
+                    thumb_name = f"thumb_{self.receipt_image.name.split('/')[-1].rsplit('.', 1)[0]}{ext}"
+                    self.receipt_thumbnail = InMemoryUploadedFile(
+                        thumb_io, 'ImageField', thumb_name,
+                        f'image/{thumb_format.lower()}', thumb_io.tell(), None
+                    )
+                
+                self.receipt_image.file.seek(0)
+            except Exception:
+                pass  # Silently fail thumbnail generation
+        
+        super().save(*args, **kwargs)
+    
+    @property
+    def subtotal(self):
+        """Calculate subtotal (amount minus tax)."""
+        if self.tax_amount:
+            return self.amount - self.tax_amount
+        return self.amount

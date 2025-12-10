@@ -1,6 +1,18 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom'
 import { api } from '../api.js'
+import { useAuth } from '../context/AuthContext.jsx'
+import { useConnections } from '../hooks/useConnections.js'
+
+// Helper to extract chef connection ID
+function pickChefConnectionId(chef){
+  if (!chef || typeof chef !== 'object') return null
+  const candidates = [chef.id, chef.chef_id, chef.user_id, chef?.user?.id]
+  for (const candidate of candidates){
+    if (candidate != null) return candidate
+  }
+  return null
+}
 
 export default function ChefGallery(){
   const { username } = useParams()
@@ -35,6 +47,67 @@ export default function ChefGallery(){
   
   // Error
   const [error, setError] = useState(null)
+  
+  // Sticky widget visibility
+  const heroRef = useRef(null)
+  const [showStickyWidget, setShowStickyWidget] = useState(false)
+  
+  // Auth & Connections
+  const { user: authUser } = useAuth()
+  const {
+    requestConnection,
+    requestStatus: connectionRequestStatus,
+    getConnectionForChef,
+    hasActiveConnectionForChef
+  } = useConnections('customer')
+  const [connectionAction, setConnectionAction] = useState(null)
+  
+  const viewerCustomerId = useMemo(() => {
+    if (!authUser) return null
+    return authUser?.id ?? authUser?.user_id ?? null
+  }, [authUser?.id, authUser?.user_id])
+  
+  const chefConnectionId = useMemo(() => pickChefConnectionId(chef), [chef])
+  
+  const chefConnection = useMemo(() => {
+    if (chefConnectionId == null) return null
+    return getConnectionForChef(chefConnectionId)
+  }, [chefConnectionId, getConnectionForChef])
+  
+  const connectionPending = Boolean(chefConnection?.isPending)
+  const connectionAccepted = Boolean(chefConnection?.isAccepted)
+  const requestingInvitation = connectionRequestStatus === 'pending'
+  
+  const viewerOwnChefProfile = useMemo(() => {
+    if (!authUser?.id || !chef) return false
+    const candidates = [chef?.user?.id, chef?.id, chef?.user_id]
+    return candidates.some(candidate => candidate != null && Number(candidate) === Number(authUser.id))
+  }, [authUser?.id, chef?.id, chef?.user?.id, chef?.user_id])
+  
+  const canRequestInvitation = chefConnectionId != null && !viewerOwnChefProfile && !connectionAccepted && !connectionPending && !hasActiveConnectionForChef(chefConnectionId)
+  
+  const handleRequestInvitation = async () => {
+    if (requestingInvitation || !canRequestInvitation) return
+    if (chefConnectionId == null || viewerCustomerId == null) {
+      if (!authUser) {
+        const next = `${window.location.pathname}${window.location.search}`
+        window.location.href = `/login?next=${encodeURIComponent(next)}`
+        return
+      }
+      window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: 'Unable to send request. Please refresh.', tone: 'error' } }))
+      return
+    }
+    setConnectionAction('request')
+    try {
+      await requestConnection({ chefId: chefConnectionId, customerId: viewerCustomerId })
+      window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: 'Request sent to the chef!', tone: 'success' } }))
+    } catch (err) {
+      const msg = err?.response?.data?.detail || 'Unable to send request right now.'
+      window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: msg, tone: 'error' } }))
+    } finally {
+      setConnectionAction(null)
+    }
+  }
   
   // Active photo for lightbox
   const activePhoto = useMemo(()=>{
@@ -296,6 +369,24 @@ export default function ChefGallery(){
     return ()=> window.removeEventListener('keydown', handleKeyDown)
   }, [lightboxIndex, photos.length, closeLightbox, openPhotoAt])
   
+  // Show sticky widget when hero scrolls out of view
+  useEffect(() => {
+    if (!heroRef.current) return
+    
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setShowStickyWidget(!entry.isIntersecting)
+      },
+      { 
+        threshold: 0,
+        rootMargin: '-80px 0px 0px 0px'
+      }
+    )
+    
+    observer.observe(heroRef.current)
+    return () => observer.disconnect()
+  }, [chef?.id])
+  
   // Toggle tag filter
   const toggleTag = (tag) => {
     setActiveTags(prev => 
@@ -339,7 +430,7 @@ export default function ChefGallery(){
   return (
     <div className="page-chef-gallery">
       {/* Hero Section */}
-      <div className="gallery-hero">
+      <div className="gallery-hero" ref={heroRef}>
         <div className="gallery-hero-content">
           <button className="gallery-back-btn" onClick={()=> navigate(`/c/${username}`)}>
             <i className="fa-solid fa-arrow-left"></i>
@@ -377,6 +468,62 @@ export default function ChefGallery(){
           </div>
         </div>
       </div>
+      
+      {/* Sticky Add Chef Widget - appears when hero scrolls out of view */}
+      {showStickyWidget && !viewerOwnChefProfile && (
+        <div className="chef-sticky-widget">
+          <div className="chef-sticky-widget-content">
+            {chef.profile_pic_url ? (
+              <img src={chef.profile_pic_url} alt="" className="sticky-avatar" />
+            ) : (
+              <div className="sticky-avatar sticky-avatar-placeholder">
+                <i className="fa-solid fa-user"></i>
+              </div>
+            )}
+            <span className="sticky-name">{chef?.user?.username || 'Chef'}</span>
+            {connectionAccepted ? (
+              <div className="sticky-add-btn connected">
+                <i className="fa-solid fa-check"></i>
+                <span>Connected</span>
+              </div>
+            ) : connectionPending ? (
+              <div className="sticky-add-btn pending">
+                <i className="fa-solid fa-clock"></i>
+                <span>Pending</span>
+              </div>
+            ) : canRequestInvitation ? (
+              <button 
+                className="sticky-add-btn" 
+                onClick={handleRequestInvitation}
+                disabled={requestingInvitation}
+              >
+                {requestingInvitation ? (
+                  <>
+                    <div className="sticky-spinner"></div>
+                    <span>Adding...</span>
+                  </>
+                ) : (
+                  <>
+                    <i className="fa-solid fa-plus"></i>
+                    <span>Add Chef</span>
+                  </>
+                )}
+              </button>
+            ) : !authUser ? (
+              <button 
+                className="sticky-add-btn" 
+                onClick={() => {
+                  const next = `${window.location.pathname}${window.location.search}`
+                  window.location.href = `/login?next=${encodeURIComponent(next)}`
+                }}
+              >
+                <i className="fa-solid fa-plus"></i>
+                <span>Add Chef</span>
+              </button>
+            ) : null}
+          </div>
+        </div>
+      )}
       
       {/* Filter Bar */}
       <div className="gallery-filters">

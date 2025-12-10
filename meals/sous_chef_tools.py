@@ -78,8 +78,8 @@ SOUS_CHEF_TOOLS = [
                     "description": "Which meals to include (default: all)"
                 },
                 "cuisine_preference": {
-                    "type": "string",
-                    "description": "Optional cuisine style preference"
+                    "type": ["string", "null"],
+                    "description": "Optional cuisine style preference (can be null)"
                 }
             },
             "required": []
@@ -149,18 +149,18 @@ SOUS_CHEF_TOOLS = [
                     "description": "Brief summary of the note (max 255 chars)"
                 },
                 "details": {
-                    "type": "string",
-                    "description": "Full details of the note"
+                    "type": ["string", "null"],
+                    "description": "Full details of the note (can be null)"
                 },
                 "interaction_type": {
-                    "type": "string",
+                    "type": ["string", "null"],
                     "enum": ["note", "call", "email", "meeting", "message"],
-                    "description": "Type of interaction (default: note)",
+                    "description": "Type of interaction (default: note, can be null)",
                     "default": "note"
                 },
                 "next_steps": {
-                    "type": "string",
-                    "description": "Any follow-up actions needed"
+                    "type": ["string", "null"],
+                    "description": "Any follow-up actions needed (can be null)"
                 }
             },
             "required": ["summary"]
@@ -281,9 +281,9 @@ SOUS_CHEF_TOOLS = [
             "type": "object",
             "properties": {
                 "group_by": {
-                    "type": "string",
+                    "type": ["string", "null"],
                     "enum": ["date", "category"],
-                    "description": "How to organize the list: 'date' groups by when to buy, 'category' groups by storage type (refrigerated, frozen, pantry, counter)",
+                    "description": "How to organize the list: 'date' groups by when to buy, 'category' groups by storage type (can be null, defaults to date)",
                     "default": "date"
                 }
             },
@@ -331,18 +331,99 @@ SOUS_CHEF_TOOLS = [
             },
             "required": []
         }
+    },
+    {
+        "type": "function",
+        "name": "lookup_chef_hub_help",
+        "description": "Look up detailed documentation about a Chef Hub feature. Use when a chef asks 'how do I...' questions about platform features like profile, services, payment links, events, etc.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": "The feature or topic to look up (e.g., 'payment links', 'services', 'break mode', 'profile')"
+                }
+            },
+            "required": ["topic"]
+        }
     }
 ]
 
 
-def get_sous_chef_tools() -> List[Dict[str, Any]]:
-    """Return the list of Sous Chef tool definitions."""
-    return SOUS_CHEF_TOOLS
+# Tools that require a family/customer context to function
+# These will be disabled when no family is selected
+FAMILY_REQUIRED_TOOLS = {
+    "get_family_dietary_summary",
+    "check_recipe_compliance",
+    "suggest_family_menu",
+    "scale_recipe_for_household",
+    "get_family_order_history",
+    "add_family_note",
+    "get_upcoming_family_orders",
+    "get_household_members",
+    "save_family_insight",
+    "get_family_insights",
+    "estimate_prep_time",  # needs household size context
+}
+
+
+def get_sous_chef_tools(include_family_tools: bool = True) -> List[Dict[str, Any]]:
+    """
+    Return the list of Sous Chef tool definitions in Groq/OpenAI format.
+    
+    Args:
+        include_family_tools: If False, exclude tools that require a family context.
+                              Used when chef is using Sous Chef without selecting a family.
+    """
+    # Transform to the nested function format that Groq expects:
+    # {"type": "function", "function": {"name": ..., "description": ..., "parameters": ...}}
+    formatted_tools = []
+    for tool in SOUS_CHEF_TOOLS:
+        tool_name = tool["name"]
+        
+        # Skip family-required tools if not including them
+        if not include_family_tools and tool_name in FAMILY_REQUIRED_TOOLS:
+            continue
+            
+        formatted_tools.append({
+            "type": "function",
+            "function": {
+                "name": tool_name,
+                "description": tool["description"],
+                "parameters": tool["parameters"]
+            }
+        })
+    return formatted_tools
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOOL IMPLEMENTATIONS
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# SOP file mapping for Chef Hub help lookup
+SOP_TOPIC_MAP = {
+    "profile": "CHEF_PROFILE_GALLERY_SOP.md",
+    "gallery": "CHEF_PROFILE_GALLERY_SOP.md",
+    "photos": "CHEF_PROFILE_GALLERY_SOP.md",
+    "break": "CHEF_PROFILE_GALLERY_SOP.md",
+    "stripe": "CHEF_PROFILE_GALLERY_SOP.md",
+    "kitchen": "CHEF_KITCHEN_SOP.md",
+    "ingredients": "CHEF_KITCHEN_SOP.md",
+    "dishes": "CHEF_KITCHEN_SOP.md",
+    "services": "CHEF_SERVICES_PRICING_SOP.md",
+    "pricing": "CHEF_SERVICES_PRICING_SOP.md",
+    "tiers": "CHEF_SERVICES_PRICING_SOP.md",
+    "events": "CHEF_MEALS_EVENTS_SOP.md",
+    "meals": "CHEF_MEALS_EVENTS_SOP.md",
+    "clients": "CHEF_CLIENT_MANAGEMENT_SOP.md",
+    "households": "CHEF_CLIENT_MANAGEMENT_SOP.md",
+    "payment": "CHEF_PAYMENT_LINKS_SOP.md",
+    "invoice": "CHEF_PAYMENT_LINKS_SOP.md",
+    "connections": "CHEF_CONNECTIONS_SOP.md",
+    "prep": "CHEF_PREP_PLANNING_SOP.md",
+    "shopping": "CHEF_PREP_PLANNING_SOP.md",
+}
+
 
 def handle_sous_chef_tool_call(
     name: str,
@@ -388,6 +469,8 @@ def handle_sous_chef_tool_call(
         "get_batch_cooking_suggestions": _get_batch_cooking_suggestions,
         "check_ingredient_shelf_life": _check_ingredient_shelf_life,
         "get_upcoming_commitments": _get_upcoming_commitments_tool,
+        # Chef Hub help tool
+        "lookup_chef_hub_help": _lookup_chef_hub_help,
     }
     
     handler = tool_map.get(name)
@@ -399,6 +482,54 @@ def handle_sous_chef_tool_call(
     except Exception as e:
         logger.error(f"Tool {name} error: {e}")
         return {"status": "error", "message": str(e)}
+
+
+def _lookup_chef_hub_help(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """Look up Chef Hub documentation for a topic."""
+    import os
+    from django.conf import settings
+    
+    topic = args.get("topic", "").lower()
+    
+    # Find matching SOP file
+    sop_file = None
+    for keyword, filename in SOP_TOPIC_MAP.items():
+        if keyword in topic:
+            sop_file = filename
+            break
+    
+    if not sop_file:
+        return {
+            "status": "success",
+            "content": "No specific documentation found for that topic. Available topics: profile, gallery, photos, kitchen, services, events, meals, clients, payment links, connections, prep planning, break mode."
+        }
+    
+    # Read the SOP file
+    docs_path = os.path.join(settings.BASE_DIR, "docs", sop_file)
+    try:
+        with open(docs_path, "r") as f:
+            content = f.read()
+        
+        # Extract relevant section based on topic (simplified: return key sections)
+        # For now, return a trimmed version to stay within token limits
+        if len(content) > 4000:
+            content = content[:4000] + "\n\n[Content trimmed for length...]"
+        
+        return {
+            "status": "success", 
+            "source": sop_file,
+            "content": content
+        }
+    except FileNotFoundError:
+        return {
+            "status": "error",
+            "message": f"Documentation file not found: {sop_file}"
+        }
 
 
 def _get_family_dietary_summary(

@@ -242,3 +242,4 @@ class ShelfLifeResultSerializer(serializers.Serializer):
     shelf_life_days = serializers.IntegerField()
     storage_type = serializers.CharField()
     notes = serializers.CharField(allow_null=True)
+

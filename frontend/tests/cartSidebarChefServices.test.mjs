@@ -13,13 +13,13 @@ test('CartSidebar updates draft chef service orders before checkout', () => {
   const source = loadSidebar()
   assert.match(
     source,
-    /api\.patch\(`\/chef-services\/orders\/\$\{[^}]+\}\/update\//,
-    'Expected CartSidebar to patch chef service orders using the /chef-services draft update endpoint.'
+    /api\.patch\(`\/services\/orders\/\$\{[^}]+\}\/update\//,
+    'Expected CartSidebar to patch chef service orders using the /services draft update endpoint.'
   )
   assert.match(
     source,
-    /api\.post\(`\/chef-services\/orders\/\$\{[^}]+\}\/checkout/,
-    'Expected CartSidebar to call /chef-services/orders/{id}/checkout after updating the draft.'
+    /api\.post\(`\/services\/orders\/\$\{[^}]+\}\/checkout/,
+    'Expected CartSidebar to call /services/orders/{id}/checkout after updating the draft.'
   )
 })
 

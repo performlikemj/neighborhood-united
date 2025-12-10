@@ -308,7 +308,7 @@ def _transform_to_instacart_payload(
     payload = {
         "title": title,
         "link_type": "shopping_list",
-        "image_url": "https://live.staticflickr.com/65535/53937452345_f4e9251155_z.jpg",
+        "image_url": "https://live.staticflickr.com/65535/54973558613_5624f181a7_m.jpg",
         "expires_in": min(cache_duration_days, 365),  # Ensure within Instacart's max limit
         "line_items": line_items
     }

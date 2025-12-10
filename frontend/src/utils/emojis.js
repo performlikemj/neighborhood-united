@@ -33,3 +33,4 @@ export function getSeededChefEmoji(seed) {
   return CHEF_EMOJIS[Math.abs(hash) % CHEF_EMOJIS.length]
 }
 
+

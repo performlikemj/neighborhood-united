@@ -654,32 +654,31 @@ def generate_meals_for_plan(request, plan_id):
     from meals.models import MealPlanGenerationJob
     from chefs.tasks import generate_meal_plan_suggestions_async
     
-    print(f"[DEBUG] generate_meals_for_plan called - plan_id={plan_id}")
-    logger.info(f"[DEBUG] generate_meals_for_plan called - plan_id={plan_id}")
+    logger.debug(f"generate_meals_for_plan called - plan_id={plan_id}")
     
     chef = get_chef_for_request(request)
     if not chef:
-        print("[DEBUG] No chef found for request")
+        logger.debug("No chef found for request")
         return Response(
             {'error': 'You must be a chef to access this endpoint.'},
             status=status.HTTP_403_FORBIDDEN
         )
     
-    print(f"[DEBUG] Chef found: {chef.id}")
+    logger.debug(f"Chef found: {chef.id}")
     
     plan = get_object_or_404(ChefMealPlan, id=plan_id, chef=chef)
-    print(f"[DEBUG] Plan found: {plan.id}, customer={plan.customer_id}")
+    logger.debug(f"Plan found: {plan.id}, customer={plan.customer_id}")
     
     mode = request.data.get('mode', 'full_week')
     target_day = request.data.get('day', '')
     target_meal_type = request.data.get('meal_type', '')
     custom_prompt = request.data.get('prompt', '')
     
-    print(f"[DEBUG] Request params: mode={mode}, day={target_day}, meal_type={target_meal_type}")
+    logger.debug(f"Request params: mode={mode}, day={target_day}, meal_type={target_meal_type}")
     
     if mode == 'single_slot':
         if not target_day or not target_meal_type:
-            print("[DEBUG] Missing day/meal_type for single_slot mode")
+            logger.debug("Missing day/meal_type for single_slot mode")
             return Response(
                 {'error': 'day and meal_type are required for single_slot mode.'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -692,7 +691,7 @@ def generate_meals_for_plan(request, plan_id):
     ).first()
     
     if existing_job:
-        print(f"[DEBUG] Found existing job: {existing_job.id}, status={existing_job.status}")
+        logger.debug(f"Found existing job: {existing_job.id}, status={existing_job.status}")
         return Response({
             'job_id': existing_job.id,
             'status': existing_job.status,
@@ -700,7 +699,7 @@ def generate_meals_for_plan(request, plan_id):
         })
     
     # Create the job
-    print("[DEBUG] Creating new job...")
+    logger.debug("Creating new job...")
     job = MealPlanGenerationJob.objects.create(
         plan=plan,
         chef=chef,
@@ -709,16 +708,15 @@ def generate_meals_for_plan(request, plan_id):
         target_meal_type=target_meal_type,
         custom_prompt=custom_prompt
     )
-    print(f"[DEBUG] Job created: {job.id}")
+    logger.debug(f"Job created: {job.id}")
     
     # Queue the async task
-    print(f"[DEBUG] Queuing task for job {job.id}...")
+    logger.debug(f"Queuing task for job {job.id}...")
     try:
         task_result = generate_meal_plan_suggestions_async.delay(job.id)
-        print(f"[DEBUG] Task queued successfully: task_id={task_result.id}")
+        logger.debug(f"Task queued successfully: task_id={task_result.id}")
     except Exception as e:
-        print(f"[DEBUG] ERROR queuing task: {e}")
-        logger.error(f"Failed to queue task: {e}")
+        logger.error(f"Failed to queue task for job {job.id}: {e}")
         job.mark_failed(f"Failed to queue task: {e}")
         return Response({
             'error': f'Failed to queue task: {e}'

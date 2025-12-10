@@ -561,7 +561,7 @@ def send_email_verification(request, lead_id):
             from datetime import timedelta
             cooldown = timedelta(minutes=5)
             if timezone.now() - lead.email_verification_sent_at < cooldown:
-                remaining = (lead.email_verification_sent_at + cooldown - timezone.now()).seconds // 60
+                remaining = int((lead.email_verification_sent_at + cooldown - timezone.now()).total_seconds() // 60)
                 return Response(
                     {"error": f"Please wait {remaining + 1} minute(s) before requesting another verification email."},
                     status=429

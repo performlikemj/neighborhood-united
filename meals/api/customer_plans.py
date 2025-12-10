@@ -316,3 +316,4 @@ def get_current_plan(request):
         'plan': _serialize_plan(current_plan, include_days=True)
     })
 
+

@@ -1,0 +1,336 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls static %}
+
+{% block title %}Partial Approve: {{ area_request }} | {{ site_title }}{% endblock %}
+
+{% block breadcrumbs %}
+<div class="breadcrumbs">
+    <a href="{% url 'admin:index' %}">{% trans 'Home' %}</a>
+    &rsaquo; <a href="{% url 'admin:app_list' app_label=opts.app_label %}">{{ opts.app_label|capfirst }}</a>
+    &rsaquo; <a href="{% url 'admin:local_chefs_servicearearequest_changelist' %}">{{ opts.verbose_name_plural|capfirst }}</a>
+    &rsaquo; Partial Approve
+</div>
+{% endblock %}
+
+{% block content %}
+<style>
+    .partial-approve-container {
+        max-width: 900px;
+    }
+    .request-info {
+        background: #f8f9fa;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 15px;
+        margin-bottom: 20px;
+    }
+    .request-info h3 {
+        margin: 0 0 10px 0;
+        color: #333;
+    }
+    .request-info .detail {
+        margin: 5px 0;
+        color: #666;
+    }
+    .selection-section {
+        margin-bottom: 25px;
+    }
+    .selection-section h3 {
+        border-bottom: 2px solid #79aec8;
+        padding-bottom: 8px;
+        margin-bottom: 15px;
+    }
+    .selection-list {
+        max-height: 400px;
+        overflow-y: auto;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+    }
+    .selection-item {
+        display: flex;
+        align-items: flex-start;
+        padding: 12px 15px;
+        border-bottom: 1px solid #eee;
+        transition: background 0.15s;
+    }
+    .selection-item:hover {
+        background: #f8f9fa;
+    }
+    .selection-item:last-child {
+        border-bottom: none;
+    }
+    .selection-item input[type="checkbox"] {
+        margin-right: 12px;
+        margin-top: 3px;
+        transform: scale(1.2);
+    }
+    .selection-item-content {
+        flex: 1;
+    }
+    .selection-item-name {
+        font-weight: 600;
+        color: #333;
+    }
+    .selection-item-local {
+        color: #666;
+        margin-left: 8px;
+    }
+    .selection-item-details {
+        font-size: 12px;
+        color: #888;
+        margin-top: 3px;
+    }
+    .selection-item-count {
+        background: #79aec8;
+        color: #fff;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 12px;
+        white-space: nowrap;
+    }
+    .select-buttons {
+        margin-bottom: 10px;
+    }
+    .select-buttons button {
+        margin-right: 8px;
+        padding: 5px 12px;
+        font-size: 12px;
+        cursor: pointer;
+        border: 1px solid #ccc;
+        border-radius: 3px;
+        background: #fff;
+    }
+    .select-buttons button:hover {
+        background: #f0f0f0;
+    }
+    .notes-section {
+        margin-bottom: 25px;
+    }
+    .notes-section textarea {
+        width: 100%;
+        min-height: 100px;
+        padding: 10px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 14px;
+    }
+    .action-buttons {
+        display: flex;
+        gap: 10px;
+        margin-top: 20px;
+    }
+    .action-buttons .submit-button {
+        background: #5bc0de;
+        color: #fff;
+        border: none;
+        padding: 12px 24px;
+        font-size: 14px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: 600;
+    }
+    .action-buttons .submit-button:hover {
+        background: #4ab4d1;
+    }
+    .action-buttons .approve-all-button {
+        background: #5cb85c;
+    }
+    .action-buttons .approve-all-button:hover {
+        background: #4cae4c;
+    }
+    .action-buttons .cancel-button {
+        background: #6c757d;
+        color: #fff;
+        border: none;
+        padding: 12px 24px;
+        font-size: 14px;
+        border-radius: 4px;
+        cursor: pointer;
+        text-decoration: none;
+    }
+    .action-buttons .cancel-button:hover {
+        background: #5a6268;
+    }
+    .empty-message {
+        padding: 20px;
+        text-align: center;
+        color: #888;
+        font-style: italic;
+    }
+    .total-summary {
+        background: #e7f3ff;
+        border: 1px solid #79aec8;
+        border-radius: 4px;
+        padding: 10px 15px;
+        margin-top: 15px;
+        font-size: 13px;
+    }
+    .total-summary .count {
+        font-weight: 600;
+        color: #417690;
+    }
+</style>
+
+<div class="partial-approve-container">
+    <h1>Partial Approve Request</h1>
+    
+    <div class="request-info">
+        <h3>Request from {{ area_request.chef.user.username }}</h3>
+        <div class="detail"><strong>Submitted:</strong> {{ area_request.created_at|date:"N j, Y, P" }}</div>
+        {% if area_request.chef_notes %}
+        <div class="detail"><strong>Chef's Note:</strong> {{ area_request.chef_notes }}</div>
+        {% endif %}
+        <div class="detail"><strong>Total Requested:</strong> {{ area_request.requested_areas.count }} areas, {{ area_request.requested_postal_codes.count }} individual codes</div>
+    </div>
+    
+    <form method="post">
+        {% csrf_token %}
+        
+        {% if areas %}
+        <div class="selection-section">
+            <h3>Administrative Areas ({{ areas|length }})</h3>
+            <p style="color: #666; font-size: 13px; margin-bottom: 10px;">
+                Select the areas you want to approve. Each area includes all its postal codes.
+            </p>
+            
+            <div class="select-buttons">
+                <button type="button" onclick="selectAllAreas()">Select All</button>
+                <button type="button" onclick="deselectAllAreas()">Deselect All</button>
+            </div>
+            
+            <div class="selection-list" id="areas-list">
+                {% for area in areas %}
+                <div class="selection-item">
+                    <input type="checkbox" name="areas" value="{{ area.id }}" id="area_{{ area.id }}" checked>
+                    <div class="selection-item-content">
+                        <label for="area_{{ area.id }}" style="cursor: pointer;">
+                            <span class="selection-item-name">{{ area.name }}</span>
+                            {% if area.name_local %}
+                            <span class="selection-item-local">({{ area.name_local }})</span>
+                            {% endif %}
+                        </label>
+                        <div class="selection-item-details">
+                            {{ area.area_type|capfirst }}
+                            {% if area.parent_name %} in {{ area.parent_name }}{% endif %}
+                        </div>
+                    </div>
+                    <span class="selection-item-count">{{ area.postal_code_count }} codes</span>
+                </div>
+                {% endfor %}
+            </div>
+            
+            <div class="total-summary" id="areas-summary">
+                <span class="count" id="areas-selected-count">{{ areas|length }}</span> of {{ areas|length }} areas selected
+            </div>
+        </div>
+        {% endif %}
+        
+        {% if postal_codes %}
+        <div class="selection-section">
+            <h3>Individual Postal Codes ({{ postal_codes|length }})</h3>
+            <p style="color: #666; font-size: 13px; margin-bottom: 10px;">
+                Select individual postal codes to approve.
+            </p>
+            
+            <div class="select-buttons">
+                <button type="button" onclick="selectAllCodes()">Select All</button>
+                <button type="button" onclick="deselectAllCodes()">Deselect All</button>
+            </div>
+            
+            <div class="selection-list" id="codes-list">
+                {% for pc in postal_codes %}
+                <div class="selection-item">
+                    <input type="checkbox" name="postal_codes" value="{{ pc.id }}" id="code_{{ pc.id }}" checked>
+                    <div class="selection-item-content">
+                        <label for="code_{{ pc.id }}" style="cursor: pointer;">
+                            <span class="selection-item-name">{{ pc.display_code|default:pc.code }}</span>
+                        </label>
+                        <div class="selection-item-details">
+                            {{ pc.place_name|default:"—" }} • {{ pc.country }}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            
+            <div class="total-summary" id="codes-summary">
+                <span class="count" id="codes-selected-count">{{ postal_codes|length }}</span> of {{ postal_codes|length }} codes selected
+            </div>
+        </div>
+        {% endif %}
+        
+        {% if not areas and not postal_codes %}
+        <div class="empty-message">
+            No areas or postal codes to approve in this request.
+        </div>
+        {% endif %}
+        
+        <div class="notes-section">
+            <h3>Admin Notes</h3>
+            <textarea name="admin_notes" placeholder="Add notes about your decision (optional)..."></textarea>
+        </div>
+        
+        <div class="action-buttons">
+            <button type="submit" class="submit-button">
+                Approve Selected Items
+            </button>
+            <button type="button" class="submit-button approve-all-button" onclick="selectAll(); this.form.submit();">
+                Approve All
+            </button>
+            <a href="{% url 'admin:local_chefs_servicearearequest_changelist' %}" class="cancel-button">
+                Cancel
+            </a>
+        </div>
+    </form>
+</div>
+
+<script>
+function updateAreasSummary() {
+    const checkboxes = document.querySelectorAll('#areas-list input[type="checkbox"]');
+    const checked = document.querySelectorAll('#areas-list input[type="checkbox"]:checked');
+    document.getElementById('areas-selected-count').textContent = checked.length;
+}
+
+function updateCodesSummary() {
+    const checkboxes = document.querySelectorAll('#codes-list input[type="checkbox"]');
+    const checked = document.querySelectorAll('#codes-list input[type="checkbox"]:checked');
+    const counter = document.getElementById('codes-selected-count');
+    if (counter) counter.textContent = checked.length;
+}
+
+function selectAllAreas() {
+    document.querySelectorAll('#areas-list input[type="checkbox"]').forEach(cb => cb.checked = true);
+    updateAreasSummary();
+}
+
+function deselectAllAreas() {
+    document.querySelectorAll('#areas-list input[type="checkbox"]').forEach(cb => cb.checked = false);
+    updateAreasSummary();
+}
+
+function selectAllCodes() {
+    document.querySelectorAll('#codes-list input[type="checkbox"]').forEach(cb => cb.checked = true);
+    updateCodesSummary();
+}
+
+function deselectAllCodes() {
+    document.querySelectorAll('#codes-list input[type="checkbox"]').forEach(cb => cb.checked = false);
+    updateCodesSummary();
+}
+
+function selectAll() {
+    selectAllAreas();
+    selectAllCodes();
+}
+
+// Add event listeners for real-time count updates
+document.querySelectorAll('#areas-list input[type="checkbox"]').forEach(cb => {
+    cb.addEventListener('change', updateAreasSummary);
+});
+document.querySelectorAll('#codes-list input[type="checkbox"]').forEach(cb => {
+    cb.addEventListener('change', updateCodesSummary);
+});
+</script>
+{% endblock %}
+
+

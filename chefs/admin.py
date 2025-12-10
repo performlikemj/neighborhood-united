@@ -100,12 +100,25 @@ class ChefRequestAdmin(admin.ModelAdmin):
                     if obj.profile_pic:
                         chef.profile_pic = obj.profile_pic
                     
+                    # Mark chef as verified upon approval
+                    chef.is_verified = True
+                    
                     # Save the chef object
                     chef.save()
                     
                     # Set postal codes if there are any
                     if obj.requested_postalcodes.exists():
                         chef.serving_postalcodes.set(obj.requested_postalcodes.all())
+                        # Notify area waitlist users for each postal code
+                        # (M2M .set() doesn't trigger post_save signals on through model)
+                        from .tasks import notify_area_waitlist_users
+                        chef_username = getattr(chef.user, 'username', 'chef')
+                        for postal_code_obj in obj.requested_postalcodes.all():
+                            notify_area_waitlist_users.delay(
+                                postal_code_obj.code,
+                                str(postal_code_obj.country),
+                                chef_username
+                            )
                     
                     # Update UserRole for this user
                     user_role, created = UserRole.objects.get_or_create(user=obj.user)
@@ -145,12 +158,25 @@ class ChefRequestAdmin(admin.ModelAdmin):
                         if chef_request.profile_pic:
                             chef.profile_pic = chef_request.profile_pic
                         
+                        # Mark chef as verified upon approval
+                        chef.is_verified = True
+                        
                         # Save the chef object
                         chef.save()
                         
                         # Set postal codes if there are any
                         if chef_request.requested_postalcodes.exists():
                             chef.serving_postalcodes.set(chef_request.requested_postalcodes.all())
+                            # Notify area waitlist users for each postal code
+                            # (M2M .set() doesn't trigger post_save signals on through model)
+                            from .tasks import notify_area_waitlist_users
+                            chef_username = getattr(chef.user, 'username', 'chef')
+                            for postal_code_obj in chef_request.requested_postalcodes.all():
+                                notify_area_waitlist_users.delay(
+                                    postal_code_obj.code,
+                                    str(postal_code_obj.country),
+                                    chef_username
+                                )
                         
                         # Update UserRole for this user
                         user_role, created = UserRole.objects.get_or_create(user=chef_request.user)

@@ -502,3 +502,4 @@ def prep_plan_summary(request):
         'items_overdue': items_overdue,
         'latest_plan': ChefPrepPlanListSerializer(latest_plan).data if latest_plan else None
     })
+

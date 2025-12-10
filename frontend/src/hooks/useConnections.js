@@ -132,7 +132,9 @@ export function useConnections(role){
       return toArray(payload)
     },
     staleTime: 60_000,
-    refetchOnWindowFocus: false
+    refetchOnWindowFocus: false,
+    // Only fetch connections if user is authenticated
+    enabled: Boolean(user?.id)
   })
 
   const connections = useMemo(() => {

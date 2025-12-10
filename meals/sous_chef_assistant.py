@@ -70,9 +70,12 @@ from utils.groq_rate_limit import groq_call_with_retry
 
 logger = logging.getLogger(__name__)
 
-# Model configuration
-MODEL_PRIMARY = "gpt-4o"
-MODEL_FALLBACK = "gpt-4o-mini"
+# Model configuration - use Groq models from settings
+def _get_groq_model():
+    return getattr(settings, 'GROQ_MODEL', None) or os.getenv('GROQ_MODEL', 'openai/gpt-oss-120b')
+
+MODEL_PRIMARY = _get_groq_model()
+MODEL_FALLBACK = "llama-3.3-70b-versatile"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -171,6 +174,26 @@ SOUS_CHEF_PROMPT_TEMPLATE = """
       • Politely redirect off-topic questions back to meal planning.
     </Scope>
 
+    <!-- 5-F. CHEF HUB PLATFORM KNOWLEDGE -->
+    <ChefHubReference>
+      You can help {chef_name} navigate Chef Hub features:
+      
+      | Feature | Purpose | Sidebar Location |
+      |---------|---------|------------------|
+      | Profile | Bio, photos, service areas, Calendly | Profile |
+      | Photos | Upload gallery images | Photos |
+      | Kitchen | Manage ingredients, dishes, meals | Kitchen |
+      | Services | Create tiered pricing offerings | Services |
+      | Events | Schedule meal events | Events |
+      | Clients | Manage customers and households | Clients |
+      | Payment Links | Send Stripe payment requests | Payment Links |
+      | Connections | Accept/decline customer requests | Connections |
+      | Prep Planning | Generate shopping lists | Prep Planning |
+      | Break Mode | Temporarily pause operations | Dashboard toggle |
+      
+      For detailed step-by-step guidance on any feature, use the `lookup_chef_hub_help` tool to retrieve accurate documentation.
+    </ChefHubReference>
+
   </OperatingInstructions>
 </PromptTemplate>
 """
@@ -189,26 +212,28 @@ def _safe_json_dumps(obj) -> str:
 
 class SousChefAssistant:
     """
-    AI assistant for chefs to help with family-specific meal planning.
+    AI assistant for chefs to help with meal planning and platform guidance.
     
-    Each instance is scoped to a specific chef + family combination.
-    The assistant has full context about the family's dietary needs,
-    household composition, and order history with this chef.
+    Can operate in two modes:
+    1. Family mode: Scoped to a specific chef + family combination with full
+       context about the family's dietary needs, household composition, and order history.
+    2. General mode: Chef-only, for SOP questions, prep planning, and general guidance
+       without a specific family context.
     """
 
     def __init__(
         self,
         chef_id: int,
-        family_id: int,
-        family_type: str = 'customer'  # 'customer' or 'lead'
+        family_id: int = None,
+        family_type: str = None  # 'customer' or 'lead', required if family_id provided
     ):
         """
-        Initialize a Sous Chef assistant for a specific chef and family.
+        Initialize a Sous Chef assistant for a chef, optionally with a family context.
         
         Args:
             chef_id: The ID of the Chef using the assistant
-            family_id: The ID of the family (CustomUser or Lead)
-            family_type: Either 'customer' or 'lead'
+            family_id: Optional - The ID of the family (CustomUser or Lead)
+            family_type: Optional - Either 'customer' or 'lead' (required if family_id provided)
         """
         self.chef_id = chef_id
         self.family_id = family_id
@@ -230,24 +255,32 @@ class SousChefAssistant:
             self.openai_client = None
             logger.warning("OpenAI client not available - structured outputs will use fallback")
         
-        # Load chef and family
+        # Load chef
         self.chef = Chef.objects.select_related('user').get(id=chef_id)
         self.customer = None
         self.lead = None
         
-        if family_type == 'customer':
-            self.customer = CustomUser.objects.get(id=family_id)
-        elif family_type == 'lead':
-            self.lead = Lead.objects.get(id=family_id)
-        else:
-            raise ValueError(f"Invalid family_type: {family_type}")
+        # Load family if provided
+        if family_id is not None:
+            if family_type == 'customer':
+                self.customer = CustomUser.objects.get(id=family_id)
+            elif family_type == 'lead':
+                self.lead = Lead.objects.get(id=family_id)
+            else:
+                raise ValueError(f"Invalid family_type: {family_type}. Must be 'customer' or 'lead' when family_id is provided.")
         
-        # Generate family context
-        self.family_context = generate_family_context_for_chef(
-            chef=self.chef,
-            customer=self.customer,
-            lead=self.lead
-        )
+        # Track if we're in family mode or general mode
+        self.has_family_context = self.customer is not None or self.lead is not None
+        
+        # Generate family context (will be minimal if no family selected)
+        if self.has_family_context:
+            self.family_context = generate_family_context_for_chef(
+                chef=self.chef,
+                customer=self.customer,
+                lead=self.lead
+            )
+        else:
+            self.family_context = "No family selected. Operating in general assistant mode."
         
         # Build system instructions
         self.instructions = self._build_instructions()
@@ -267,44 +300,72 @@ class SousChefAssistant:
                 pass
 
     def _build_instructions(self) -> str:
-        """Build the system instructions with chef and family context."""
+        """Build the system instructions with chef and optional family context."""
         # Get chef name
         chef_name = self.chef.user.get_full_name() or self.chef.user.username
         
-        # Get tool descriptions
+        # Get tool descriptions (filtered based on family context)
         tools = self._get_tools()
         tool_descriptions = []
         for tool in tools:
-            name = tool.get('name', 'unknown')
-            desc = tool.get('description', 'No description')
+            func_info = tool.get('function', tool)
+            name = func_info.get('name', 'unknown')
+            desc = func_info.get('description', 'No description')
             tool_descriptions.append(f"    • {name}: {desc}")
         
         all_tools_str = '\n'.join(tool_descriptions) if tool_descriptions else "    No tools available."
         
+        # Build family context section
+        if self.has_family_context:
+            family_context = self.family_context
+        else:
+            # General mode - no family selected
+            family_context = """    <GeneralMode>
+      No family selected. You are operating in General Assistant mode.
+      
+      In this mode, you can help {chef_name} with:
+      • Platform questions and SOPs (how to use Chef Hub features)
+      • Prep planning and shopping lists
+      • General cooking tips and ingredient information
+      • Upcoming commitments and batch cooking suggestions
+      
+      To get family-specific meal planning help (dietary restrictions, menu suggestions, 
+      recipe scaling), ask the chef to select a family from the dropdown.
+    </GeneralMode>""".format(chef_name=chef_name)
+        
         return SOUS_CHEF_PROMPT_TEMPLATE.format(
             chef_name=chef_name,
-            family_context=self.family_context,
+            family_context=family_context,
             all_tools=all_tools_str
         )
 
     def _get_tools(self) -> List[Dict[str, Any]]:
-        """Get the tools available for sous chef operations."""
+        """Get the tools available for sous chef operations.
+        
+        In general mode (no family), family-specific tools are excluded.
+        """
         from .sous_chef_tools import get_sous_chef_tools
-        return get_sous_chef_tools()
+        return get_sous_chef_tools(include_family_tools=self.has_family_context)
 
     def _get_or_create_thread(self) -> SousChefThread:
-        """Get or create a conversation thread for this chef + family."""
+        """Get or create a conversation thread for this chef + optional family."""
         filter_kwargs = {
             'chef': self.chef,
             'is_active': True,
         }
         
-        if self.family_type == 'customer':
-            filter_kwargs['customer'] = self.customer
-            filter_kwargs['lead__isnull'] = True
+        if self.has_family_context:
+            # Family mode - thread is scoped to a specific family
+            if self.family_type == 'customer':
+                filter_kwargs['customer'] = self.customer
+                filter_kwargs['lead__isnull'] = True
+            else:
+                filter_kwargs['lead'] = self.lead
+                filter_kwargs['customer__isnull'] = True
         else:
-            filter_kwargs['lead'] = self.lead
+            # General mode - chef-only thread (no family)
             filter_kwargs['customer__isnull'] = True
+            filter_kwargs['lead__isnull'] = True
         
         try:
             thread = SousChefThread.objects.filter(**filter_kwargs).latest('updated_at')
@@ -315,10 +376,12 @@ class SousChefAssistant:
                 'chef': self.chef,
                 'is_active': True,
             }
-            if self.family_type == 'customer':
-                create_kwargs['customer'] = self.customer
-            else:
-                create_kwargs['lead'] = self.lead
+            if self.has_family_context:
+                if self.family_type == 'customer':
+                    create_kwargs['customer'] = self.customer
+                else:
+                    create_kwargs['lead'] = self.lead
+            # For general mode, both customer and lead remain null
             
             return SousChefThread.objects.create(**create_kwargs)
 
@@ -498,7 +561,7 @@ Conversation:
         # Fallback to OpenAI only if Groq unavailable
         try:
             resp = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-5.1-mini",
                 messages=[
                     {"role": "system", "content": system_prompt}, 
                     {"role": "user", "content": user_prompt}
@@ -664,7 +727,18 @@ Conversation:
             if msg.role == 'assistant' and content:
                 try:
                     parsed = json.loads(content)
-                    if isinstance(parsed, dict) and 'blocks' in parsed:
+                    
+                    # Handle array-wrapped responses: [{"blocks": [...]}]
+                    if isinstance(parsed, list) and len(parsed) > 0:
+                        if isinstance(parsed[0], dict) and 'blocks' in parsed[0]:
+                            # Unwrap and re-serialize
+                            content = json.dumps(parsed[0])
+                            is_structured = True
+                        elif isinstance(parsed[0], dict) and parsed[0].get('type'):
+                            # Direct blocks array - wrap it
+                            content = json.dumps({"blocks": parsed})
+                            is_structured = True
+                    elif isinstance(parsed, dict) and 'blocks' in parsed:
                         # This is structured content - return as-is
                         is_structured = True
                 except (json.JSONDecodeError, TypeError):
@@ -831,35 +905,16 @@ Conversation:
     def send_structured_message(self, message: str) -> Dict[str, Any]:
         """
         Send a message and get a structured JSON response.
-        Uses OpenAI's structured output to ensure consistent formatting.
+        Uses Groq with tools first, then JSON mode for final response.
         """
         thread = self._get_or_create_thread()
         
         # Build history for chat completions format
         history = thread.openai_input_history or []
         
-        # Convert to chat format
+        # Convert to chat format - use BASE instructions (no JSON format) for Phase 1
         chat_messages = []
-        
-        # Add system message with structured output instructions
-        structured_instructions = self.instructions + """
-
-IMPORTANT: You MUST respond using the structured JSON format.
-Your response should be an array of content blocks:
-- Use "text" blocks for paragraphs of text
-- Use "table" blocks for tabular data (with headers and rows arrays)
-- Use "list" blocks for bulleted or numbered lists (with items array and ordered boolean)
-
-Example response structure:
-{
-  "blocks": [
-    {"type": "text", "content": "Here are three nut-free alternatives:"},
-    {"type": "table", "headers": ["Option", "Dish", "Time", "Notes"], "rows": [["A", "Grilled salmon", "25 min", "Light and fresh"]]},
-    {"type": "text", "content": "Let me know which option works best!"}
-  ]
-}
-"""
-        chat_messages.append({"role": "system", "content": structured_instructions})
+        chat_messages.append({"role": "system", "content": self.instructions})
         
         # Add conversation history
         for item in history:
@@ -871,85 +926,120 @@ Example response structure:
         # Add new user message
         chat_messages.append({"role": "user", "content": message})
         
-        # Select model (gpt-4o supports structured output)
-        model = "gpt-4o"
-        
         # Save user message
         self._save_message(thread, 'chef', message)
         
-        try:
-            # Check if OpenAI client is available for structured outputs
-            if self.openai_client is None:
-                # Fallback: Use Groq with JSON mode and manual parsing
-                return self._send_message_structured_fallback(thread, chat_messages, message)
-            
-            # Use OpenAI structured output with Pydantic model
-            completion = self.openai_client.beta.chat.completions.parse(
-                model=model,
-                messages=chat_messages,
-                response_format=SousChefResponse,
-            )
-            
-            response_message = completion.choices[0].message
-            
-            if response_message.parsed:
-                # Successfully parsed structured response
-                structured_response = response_message.parsed
-                # Convert to JSON string for storage
-                response_json = structured_response.model_dump_json()
-                
-                # Save to thread history
-                chat_messages.append({"role": "assistant", "content": response_json})
-                thread.openai_input_history = chat_messages
-                thread.save(update_fields=['openai_input_history', 'updated_at'])
-                
-                # Save message to database
-                self._save_message(thread, 'assistant', response_json)
-                
-                return {
-                    "status": "success",
-                    "content": structured_response.model_dump(),
-                    "thread_id": thread.id
-                }
-            elif response_message.refusal:
-                # Model refused to respond
-                return {
-                    "status": "error",
-                    "message": response_message.refusal,
-                    "thread_id": thread.id
-                }
-            else:
-                # Unexpected response
-                return {
-                    "status": "error",
-                    "message": "Unexpected response format",
-                    "thread_id": thread.id
-                }
-                
-        except Exception as e:
-            logger.error(f"Error in send_structured_message: {e}\n{traceback.format_exc()}")
-            # Fallback: return error
-            return {
-                "status": "error",
-                "message": str(e),
-                "thread_id": thread.id
-            }
+        # Use two-phase approach: tools first, then JSON mode
+        return self._send_message_structured_groq(thread, chat_messages, message)
 
-    def _send_message_structured_fallback(
+    def _send_message_structured_groq(
         self,
         thread: 'SousChefThread',
         chat_messages: List[Dict],
         message: str
     ) -> Dict[str, Any]:
         """
-        Fallback method using Groq with JSON mode when OpenAI is not available.
-        Manually parses the JSON response into our structured format.
+        Send structured message using Groq with tool support.
+        
+        Two-phase approach:
+        1. First, loop with tools enabled until all tool calls are resolved
+        2. Then, make final call with JSON mode for structured output
         """
         try:
-            # Use Groq with JSON mode
+            model = _get_groq_model()
+            tools = self._get_tools()
+            max_iterations = 10
+            iteration = 0
+            
+            # Phase 1: Handle tool calls (tools and JSON mode can't be used together)
+            while iteration < max_iterations:
+                iteration += 1
+                
+                # Call with tools enabled (no JSON mode yet)
+                completion = self.groq.chat.completions.create(
+                    model=model,
+                    messages=chat_messages,
+                    tools=tools,
+                )
+                
+                choice = completion.choices[0] if completion.choices else None
+                if not choice:
+                    break
+                
+                assistant_message = choice.message
+                response_text = assistant_message.content or ""
+                tool_calls = assistant_message.tool_calls or []
+                
+                # If no tool calls, we're done with phase 1
+                if not tool_calls:
+                    # Add any text response to history before phase 2
+                    if response_text:
+                        chat_messages.append({"role": "assistant", "content": response_text})
+                    break
+                
+                # Add assistant message with tool calls to history
+                chat_messages.append({
+                    "role": "assistant",
+                    "content": response_text or None,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {"name": tc.function.name, "arguments": tc.function.arguments}
+                        }
+                        for tc in tool_calls
+                    ]
+                })
+                
+                # Execute tool calls
+                for tool_call in tool_calls:
+                    call_id = tool_call.id
+                    name = tool_call.function.name
+                    arguments = tool_call.function.arguments
+                    
+                    try:
+                        from .sous_chef_tools import handle_sous_chef_tool_call
+                        result = handle_sous_chef_tool_call(
+                            name=name,
+                            arguments=arguments,
+                            chef=self.chef,
+                            customer=self.customer,
+                            lead=self.lead
+                        )
+                    except Exception as e:
+                        logger.error(f"Tool call error: {e}")
+                        result = {"status": "error", "message": str(e)}
+                    
+                    # Add tool result to history
+                    chat_messages.append({
+                        "role": "tool",
+                        "content": json.dumps(result),
+                        "tool_call_id": call_id
+                    })
+            
+            # Phase 2: Get structured JSON response (no tools, JSON mode enabled)
+            # Add detailed JSON format instructions for the final call
+            json_format_instructions = """Now provide your final response as JSON. You MUST use this exact structure:
+{
+  "blocks": [
+    {"type": "text", "content": "Your paragraph text here"},
+    {"type": "table", "headers": ["Col1", "Col2"], "rows": [["val1", "val2"]]},
+    {"type": "list", "ordered": false, "items": ["item1", "item2"]}
+  ]
+}
+
+Use "text" blocks for paragraphs, "table" blocks for tabular data, and "list" blocks for bullet points.
+Respond ONLY with valid JSON, no other text."""
+            
+            json_instruction_msg = {
+                "role": "user", 
+                "content": json_format_instructions
+            }
+            messages_for_json = chat_messages + [json_instruction_msg]
+            
             completion = self.groq.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=chat_messages,
+                model=model,
+                messages=messages_for_json,
                 response_format={"type": "json_object"},
             )
             
@@ -958,19 +1048,47 @@ Example response structure:
             # Parse JSON response
             try:
                 parsed = json.loads(response_content)
-                # Validate it has the expected structure
-                if "blocks" not in parsed:
+                
+                # Handle various malformed responses
+                # Case 1: Array wrapper - model returned [{"blocks": [...]}] instead of {"blocks": [...]}
+                if isinstance(parsed, list):
+                    if len(parsed) > 0 and isinstance(parsed[0], dict) and "blocks" in parsed[0]:
+                        parsed = parsed[0]
+                    else:
+                        # Array of blocks directly - wrap it
+                        parsed = {"blocks": parsed}
+                
+                # Case 2: Missing blocks key
+                if not isinstance(parsed, dict) or "blocks" not in parsed:
                     # Wrap in blocks structure if needed
                     parsed = {"blocks": [{"type": "text", "content": response_content}]}
                 
                 response_json = json.dumps(parsed)
                 
-                # Save to thread history
-                chat_messages.append({"role": "assistant", "content": response_json})
+                # Extract plain text from blocks for conversation history
+                # This prevents the model from seeing JSON in history and mimicking it
+                plain_text_parts = []
+                for block in parsed.get("blocks", []):
+                    if block.get("type") == "text":
+                        plain_text_parts.append(block.get("content", ""))
+                    elif block.get("type") == "table":
+                        # Summarize table as text
+                        headers = block.get("headers", [])
+                        plain_text_parts.append(f"[Table with columns: {', '.join(headers)}]")
+                    elif block.get("type") == "list":
+                        items = block.get("items", [])
+                        plain_text_parts.append("\n".join(f"• {item}" for item in items[:3]))
+                        if len(items) > 3:
+                            plain_text_parts.append(f"... and {len(items) - 3} more items")
+                
+                history_text = "\n\n".join(plain_text_parts) or response_content
+                
+                # Save plain text to thread history (not JSON)
+                chat_messages.append({"role": "assistant", "content": history_text})
                 thread.openai_input_history = chat_messages
                 thread.save(update_fields=['openai_input_history', 'updated_at'])
                 
-                # Save message to database
+                # Save structured JSON to database for UI rendering
                 self._save_message(thread, 'assistant', response_json)
                 
                 return {
@@ -983,7 +1101,8 @@ Example response structure:
                 fallback_content = {"blocks": [{"type": "text", "content": response_content}]}
                 response_json = json.dumps(fallback_content)
                 
-                chat_messages.append({"role": "assistant", "content": response_json})
+                # Save plain text to history
+                chat_messages.append({"role": "assistant", "content": response_content})
                 thread.openai_input_history = chat_messages
                 thread.save(update_fields=['openai_input_history', 'updated_at'])
                 self._save_message(thread, 'assistant', response_json)
@@ -995,10 +1114,16 @@ Example response structure:
                 }
                 
         except Exception as e:
-            logger.error(f"Error in structured fallback: {e}\n{traceback.format_exc()}")
+            logger.error(f"Error in structured Groq message: {e}\n{traceback.format_exc()}")
+            # Return a user-friendly error instead of the raw exception
+            fallback_content = {
+                "blocks": [
+                    {"type": "text", "content": "I'm sorry, I ran into an issue processing your request. Could you try rephrasing your question?"}
+                ]
+            }
             return {
-                "status": "error",
-                "message": str(e),
+                "status": "success",  # Return success with fallback content so UI doesn't break
+                "content": fallback_content,
                 "thread_id": thread.id
             }
 

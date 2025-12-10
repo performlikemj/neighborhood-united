@@ -10,6 +10,8 @@ from chefs.api import sous_chef as sous_chef_api
 from chefs.api import availability as availability_api
 from chefs.api import meal_plans as meal_plans_api
 from chefs.api import payment_links as payment_links_api
+from chefs.api import documents as documents_api
+from chefs.api import receipts as receipts_api
 from chefs.resource_planning import views as prep_plan_api
 from . import views
 
@@ -175,4 +177,23 @@ urlpatterns = [
     path('api/me/ingredients/shelf-life/', prep_plan_api.shelf_life_lookup, name='chef_shelf_life'),
     path('api/me/prep-plans/quick-generate/', prep_plan_api.quick_generate_prep_plan, name='chef_quick_prep_plan'),
     path('api/me/prep-plans/summary/', prep_plan_api.prep_plan_summary, name='chef_prep_plan_summary'),
+    
+    # ==========================================================================
+    # Chef Verification Documents API
+    # ==========================================================================
+    
+    # Document CRUD
+    path('api/me/documents/', documents_api.verification_documents, name='chef_documents'),
+    path('api/me/documents/<int:document_id>/', documents_api.verification_document_detail, name='chef_document_detail'),
+    path('api/me/documents/status/', documents_api.verification_status, name='chef_verification_status'),
+    
+    # ==========================================================================
+    # Chef Receipt Management API
+    # ==========================================================================
+    
+    # Receipt CRUD
+    path('api/me/receipts/', receipts_api.receipt_list, name='chef_receipts'),
+    path('api/me/receipts/stats/', receipts_api.receipt_stats, name='chef_receipt_stats'),
+    path('api/me/receipts/<int:receipt_id>/', receipts_api.receipt_detail, name='chef_receipt_detail'),
+    path('api/me/clients/<int:customer_id>/receipts/', receipts_api.customer_receipts, name='chef_customer_receipts'),
 ]

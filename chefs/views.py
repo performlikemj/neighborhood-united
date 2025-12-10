@@ -349,16 +349,45 @@ def submit_chef_request(request):
         # Ensure postal_codes is a list
         if not isinstance(postal_codes, list):
             postal_codes = [postal_codes] if postal_codes else []
-        if postal_codes:
+        
+        # Handle selected area IDs (from ServiceAreaPicker)
+        selected_area_ids = request.data.get('selected_area_ids', [])
+        if isinstance(selected_area_ids, str):
             try:
-                from local_chefs.models import PostalCode
-                # Clear existing postal codes
-                chef_request.requested_postalcodes.clear()
-                
-                processed_codes = []
-                failed_codes = []
-                
-                # Add new postal codes
+                import json
+                selected_area_ids = json.loads(selected_area_ids)
+            except:
+                selected_area_ids = []
+        
+        processed_codes = []
+        failed_codes = []
+        processed_areas = []
+        
+        try:
+            from local_chefs.models import PostalCode, AdministrativeArea
+            # Clear existing postal codes
+            chef_request.requested_postalcodes.clear()
+            
+            # Process selected areas - add all postal codes from those areas
+            if selected_area_ids:
+                for area_id in selected_area_ids:
+                    try:
+                        area = AdministrativeArea.objects.get(id=area_id)
+                        area_postal_codes = area.get_all_postal_codes()
+                        for pc in area_postal_codes:
+                            chef_request.requested_postalcodes.add(pc)
+                        processed_areas.append({
+                            'id': area_id, 
+                            'name': area.name,
+                            'postal_code_count': area_postal_codes.count()
+                        })
+                    except AdministrativeArea.DoesNotExist:
+                        logger.warning(f"Area {area_id} not found")
+                    except Exception as e:
+                        logger.error(f"Error processing area {area_id}: {e}")
+            
+            # Also process individual postal codes
+            if postal_codes:
                 for code in postal_codes:
                     try:
                         # Normalize and get/create per country
@@ -370,27 +399,29 @@ def submit_chef_request(request):
                         n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
                         requests.post(n8n_traceback_url, json={"error": f"Error processing postal code {code}: {str(e)}", "source":"submit_chef_request", "traceback": traceback.format_exc()})
                         failed_codes.append({'code': code, 'error': str(e)})
-                
-                if failed_codes:
-                    logger.error(f"Some postal codes failed: {failed_codes}")
-                
-            except Exception as e:
-                # n8n traceback
-                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-                requests.post(n8n_traceback_url, json={"error": f"Failed to process postal codes", "source":"submit_chef_request", "traceback": traceback.format_exc()})
-                return JsonResponse({
-                    'error': 'Failed to process postal codes',
-                    'details': str(e),
-                    'processed_codes': processed_codes,
-                    'failed_codes': failed_codes
-                }, status=500)
+            
+            if failed_codes:
+                logger.error(f"Some postal codes failed: {failed_codes}")
+            
+        except Exception as e:
+            # n8n traceback
+            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
+            requests.post(n8n_traceback_url, json={"error": f"Failed to process postal codes", "source":"submit_chef_request", "traceback": traceback.format_exc()})
+            return JsonResponse({
+                'error': 'Failed to process postal codes',
+                'details': str(e),
+                'processed_codes': processed_codes,
+                'failed_codes': failed_codes
+            }, status=500)
         
         return JsonResponse({
             'success': True,
             'message': 'Chef request submitted successfully',
             'request_id': chef_request.id,
             'user_id': user_id,
-            'processed_postal_codes': processed_codes if postal_codes else [],
+            'processed_postal_codes': processed_codes,
+            'processed_areas': processed_areas,
+            'total_postal_codes': chef_request.requested_postalcodes.count(),
             'profile_pic_saved': 'profile_pic' in request.FILES
         })
         

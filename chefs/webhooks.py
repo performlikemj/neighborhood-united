@@ -155,3 +155,4 @@ def _send_traceback(error, source):
         )
     except requests.exceptions.RequestException:
         pass  # Don't fail silently but don't raise either
+

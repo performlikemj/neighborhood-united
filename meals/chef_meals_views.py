@@ -983,7 +983,52 @@ def stripe_webhook(request):
                                 status='succeeded',
                                 details={'payment_intent_id': payment_intent.id}
                             )
-                        
+        
+        # Handle membership subscription events
+        elif event.type == 'customer.subscription.created':
+            subscription = event.data.object
+            try:
+                from memberships.webhooks import handle_subscription_created
+                handle_subscription_created(subscription)
+                logger.info(f"Processed subscription.created for {subscription.id}")
+            except Exception as sub_err:
+                logger.error(f"Membership subscription.created handling failed: {sub_err}", exc_info=True)
+        
+        elif event.type == 'customer.subscription.updated':
+            subscription = event.data.object
+            try:
+                from memberships.webhooks import handle_subscription_updated
+                handle_subscription_updated(subscription)
+                logger.info(f"Processed subscription.updated for {subscription.id}")
+            except Exception as sub_err:
+                logger.error(f"Membership subscription.updated handling failed: {sub_err}", exc_info=True)
+        
+        elif event.type == 'customer.subscription.deleted':
+            subscription = event.data.object
+            try:
+                from memberships.webhooks import handle_subscription_deleted
+                handle_subscription_deleted(subscription)
+                logger.info(f"Processed subscription.deleted for {subscription.id}")
+            except Exception as sub_err:
+                logger.error(f"Membership subscription.deleted handling failed: {sub_err}", exc_info=True)
+        
+        elif event.type == 'invoice.paid':
+            invoice = event.data.object
+            try:
+                from memberships.webhooks import handle_invoice_paid
+                handle_invoice_paid(invoice)
+                logger.info(f"Processed invoice.paid for {invoice.id}")
+            except Exception as inv_err:
+                logger.error(f"Membership invoice.paid handling failed: {inv_err}", exc_info=True)
+        
+        elif event.type == 'invoice.payment_failed':
+            invoice = event.data.object
+            try:
+                from memberships.webhooks import handle_invoice_payment_failed
+                handle_invoice_payment_failed(invoice)
+                logger.warning(f"Processed invoice.payment_failed for {invoice.id}")
+            except Exception as inv_err:
+                logger.error(f"Membership invoice.payment_failed handling failed: {inv_err}", exc_info=True)
         
         return Response({"status": "success"})
         

@@ -94,19 +94,15 @@ export default function SousChefChat({
     }
   }, [pendingPrompt, familyId, historyLoading, isStreaming, onContextHandled])
 
-  // Load history and context when family changes
+  // Determine if we're in general mode (no family selected)
+  const isGeneralMode = !familyId
+
+  // Load history and context when family changes (or general mode)
   useEffect(() => {
-    if (!familyId || !familyType) {
-      setMessages([])
-      setFamilyContext(null)
-      setHistoryLoading(false)
-      return
-    }
-    
     let mounted = true
     
     async function loadData() {
-      isInitialLoadRef.current = true  // Reset for new family
+      isInitialLoadRef.current = true  // Reset for new family/mode
       setHistoryLoading(true)
       setMessages([])
       setFamilyContext(null)
@@ -114,9 +110,10 @@ export default function SousChefChat({
       
       try {
         // Load history and context in parallel
+        // For general mode, pass null values - API client handles this
         const [historyData, contextData] = await Promise.all([
-          getSousChefHistory(familyId, familyType).catch(() => null),
-          getFamilyContext(familyId, familyType).catch(() => null)
+          getSousChefHistory(familyId || null, familyType || null).catch(() => null),
+          getFamilyContext(familyId || null, familyType || null).catch(() => null)
         ])
         
         if (!mounted) return
@@ -173,7 +170,7 @@ export default function SousChefChat({
   }, [isStreaming, familyId])
 
   const handleNewChat = async () => {
-    if (!familyId || !familyType) return
+    // Works in both family mode and general mode
     
     // Abort any in-progress stream
     if (abortRef.current) {
@@ -193,7 +190,8 @@ export default function SousChefChat({
 
   const handleSend = useCallback(async () => {
     const text = input.trim()
-    if (!text || isStreaming || !familyId || !familyType) return
+    // Allow sending in both family mode and general mode
+    if (!text || isStreaming) return
     
     setError(null)
     setInput('')
@@ -222,9 +220,10 @@ export default function SousChefChat({
     
     try {
       // Use structured output endpoint (non-streaming)
+      // Pass null for family params in general mode
       const result = await sendStructuredMessage({
-        familyId,
-        familyType,
+        familyId: familyId || null,
+        familyType: familyType || null,
         message: text
       })
       
@@ -274,8 +273,13 @@ export default function SousChefChat({
     }
   }
 
-  // Quick action buttons
-  const quickActions = [
+  // Quick action buttons - different for general mode vs family mode
+  const quickActions = isGeneralMode ? [
+    { label: '📚 Platform help', prompt: 'How do I use Chef Hub?' },
+    { label: '💳 Payment links', prompt: 'How do I send a payment link to a client?' },
+    { label: '🍳 Kitchen setup', prompt: 'How do I set up my kitchen with ingredients and dishes?' },
+    { label: '📅 Scheduling', prompt: 'How do I manage events and meal schedules?' }
+  ] : [
     { label: '🍽️ Menu suggestions', prompt: 'What should I make for this family this week?' },
     { label: '⚠️ Check allergies', prompt: 'What are the critical allergies I need to watch out for?' },
     { label: '📊 Order history', prompt: "Show me what I've made for them before." },
@@ -292,22 +296,10 @@ export default function SousChefChat({
     }, 100)
   }
 
-  if (!familyId || !familyType) {
-    return (
-      <div className="sous-chef-chat empty-state">
-        <div className="empty-content">
-          <span className="empty-icon">{chefEmoji}</span>
-          <h3>Select a Family</h3>
-          <p>Choose a family from the dropdown above to start chatting with your Sous Chef assistant.</p>
-        </div>
-      </div>
-    )
-  }
-
   return (
     <div className="sous-chef-chat">
-      {/* Family Context Panel */}
-      {familyContext && (
+      {/* Family Context Panel - only show in family mode */}
+      {familyContext && !isGeneralMode && (
         <div className={`context-panel ${showContext ? 'expanded' : 'collapsed'}`}>
           <div className="context-header" onClick={() => setShowContext(!showContext)}>
             <span className="context-title">
@@ -365,7 +357,12 @@ export default function SousChefChat({
           <span className="chef-icon">{chefEmoji}</span>
           <div>
             <h3>Sous Chef</h3>
-            <span className="subtitle muted">Helping you serve {familyName || 'this family'}</span>
+            <span className="subtitle muted">
+              {isGeneralMode 
+                ? 'General Assistant — ask me anything about Chef Hub'
+                : `Helping you serve ${familyName || 'this family'}`
+              }
+            </span>
           </div>
         </div>
         <button className="btn btn-outline btn-sm" onClick={handleNewChat} disabled={isStreaming}>
@@ -382,9 +379,14 @@ export default function SousChefChat({
         ) : messages.length === 0 ? (
           <div className="welcome-state">
             <div className="welcome-content">
-              <span className="welcome-icon">🍳</span>
+              <span className="welcome-icon">{isGeneralMode ? '💡' : '🍳'}</span>
               <h3>How can I help you today?</h3>
-              <p>I have full context about this family's dietary needs, allergies, and your history with them.</p>
+              <p>
+                {isGeneralMode 
+                  ? "I can help with platform questions, SOPs, prep planning, and more. Select a client for personalized meal planning."
+                  : "I have full context about this family's dietary needs, allergies, and your history with them."
+                }
+              </p>
               
               <div className="quick-actions">
                 {quickActions.map((action, idx) => (

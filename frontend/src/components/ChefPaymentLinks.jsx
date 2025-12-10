@@ -235,15 +235,16 @@ export default function ChefPaymentLinks() {
   // Stats summary cards
   const StatCard = ({ label, value, color }) => (
     <div style={{
-      backgroundColor: '#fff',
+      backgroundColor: 'var(--surface, #fff)',
       padding: '16px 20px',
       borderRadius: '8px',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+      boxShadow: 'var(--shadow-sm, 0 1px 3px rgba(0,0,0,0.1))',
       textAlign: 'center',
-      minWidth: '120px'
+      minWidth: '120px',
+      border: '1px solid var(--border, #eee)'
     }}>
       <div style={{ fontSize: '24px', fontWeight: 'bold', color }}>{value}</div>
-      <div style={{ fontSize: '13px', color: '#666', marginTop: '4px' }}>{label}</div>
+      <div style={{ fontSize: '13px', color: 'var(--muted, #666)', marginTop: '4px' }}>{label}</div>
     </div>
   )
 
@@ -259,25 +260,25 @@ export default function ChefPaymentLinks() {
           display: 'flex',
           alignItems: 'center',
           padding: '12px 16px',
-          borderBottom: '1px solid #eee',
+          borderBottom: '1px solid var(--border, #eee)',
           cursor: 'pointer',
-          backgroundColor: selected?.id === link.id ? '#f0f7ff' : '#fff',
+          backgroundColor: selected?.id === link.id ? 'color-mix(in oklab, var(--surface) 85%, var(--primary) 15%)' : 'var(--surface, #fff)',
           transition: 'background-color 0.15s'
         }}
       >
         <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 500, marginBottom: '4px' }}>
+          <div style={{ fontWeight: 500, marginBottom: '4px', color: 'var(--text, #333)' }}>
             {link.recipient?.name || 'Unknown'}
           </div>
-          <div style={{ fontSize: '13px', color: '#666', marginBottom: '4px' }}>
+          <div style={{ fontSize: '13px', color: 'var(--muted, #666)', marginBottom: '4px' }}>
             {link.description.length > 50 ? `${link.description.substring(0, 50)}...` : link.description}
           </div>
-          <div style={{ fontSize: '12px', color: '#999' }}>
+          <div style={{ fontSize: '12px', color: 'var(--muted, #999)' }}>
             Created {new Date(link.created_at).toLocaleDateString()}
           </div>
         </div>
         <div style={{ textAlign: 'right', marginLeft: '16px' }}>
-          <div style={{ fontWeight: 600, fontSize: '16px', color: '#333' }}>
+          <div style={{ fontWeight: 600, fontSize: '16px', color: 'var(--text, #333)' }}>
             {link.amount_display}
           </div>
           <div style={{
@@ -304,7 +305,7 @@ export default function ChefPaymentLinks() {
         <div style={{
           padding: '40px',
           textAlign: 'center',
-          color: '#999'
+          color: 'var(--muted, #999)'
         }}>
           Select a payment link to view details
         </div>
@@ -331,21 +332,22 @@ export default function ChefPaymentLinks() {
           }}>
             {getStatusLabel(link.status)}
           </div>
-          <h3 style={{ margin: '0 0 8px 0', fontSize: '24px' }}>{link.amount_display}</h3>
-          <p style={{ margin: 0, color: '#666' }}>{link.description}</p>
+          <h3 style={{ margin: '0 0 8px 0', fontSize: '24px', color: 'var(--text, #333)' }}>{link.amount_display}</h3>
+          <p style={{ margin: 0, color: 'var(--muted, #666)' }}>{link.description}</p>
         </div>
 
         {/* Recipient */}
         <div style={{
-          backgroundColor: '#f8f9fa',
+          backgroundColor: 'var(--surface-2, #f8f9fa)',
           padding: '16px',
           borderRadius: '8px',
-          marginBottom: '20px'
+          marginBottom: '20px',
+          border: '1px solid var(--border, #eee)'
         }}>
-          <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Recipient</div>
-          <div style={{ fontWeight: 500 }}>{link.recipient?.name || 'Unknown'}</div>
+          <div style={{ fontSize: '12px', color: 'var(--muted, #666)', marginBottom: '4px' }}>Recipient</div>
+          <div style={{ fontWeight: 500, color: 'var(--text, #333)' }}>{link.recipient?.name || 'Unknown'}</div>
           {link.recipient?.email && (
-            <div style={{ fontSize: '14px', color: '#666', marginTop: '4px' }}>
+            <div style={{ fontSize: '14px', color: 'var(--muted, #666)', marginTop: '4px' }}>
               {link.recipient.email}
               {link.recipient.type === 'lead' && (
                 <span style={{
@@ -353,8 +355,8 @@ export default function ChefPaymentLinks() {
                   padding: '2px 6px',
                   borderRadius: '4px',
                   fontSize: '11px',
-                  backgroundColor: link.recipient.email_verified ? '#d4edda' : '#fff3cd',
-                  color: link.recipient.email_verified ? '#155724' : '#856404'
+                  backgroundColor: link.recipient.email_verified ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                  color: link.recipient.email_verified ? '#10b981' : '#f59e0b'
                 }}>
                   {link.recipient.email_verified ? 'Verified' : 'Not Verified'}
                 </span>
@@ -366,25 +368,27 @@ export default function ChefPaymentLinks() {
         {/* Payment URL */}
         {link.payment_url && (
           <div style={{ marginBottom: '20px' }}>
-            <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px' }}>Payment Link</div>
+            <div style={{ fontSize: '12px', color: 'var(--muted, #666)', marginBottom: '8px' }}>Payment Link</div>
             <div style={{
               display: 'flex',
               alignItems: 'center',
               gap: '8px',
-              backgroundColor: '#f8f9fa',
+              backgroundColor: 'var(--surface-2, #f8f9fa)',
               padding: '12px',
               borderRadius: '8px',
               fontSize: '13px',
-              wordBreak: 'break-all'
+              wordBreak: 'break-all',
+              border: '1px solid var(--border, #eee)'
             }}>
-              <span style={{ flex: 1, color: '#007bff' }}>{link.payment_url}</span>
+              <span style={{ flex: 1, color: 'var(--link, #007bff)' }}>{link.payment_url}</span>
               <button
                 onClick={() => handleCopyLink(link.payment_url)}
                 style={{
                   padding: '6px 12px',
-                  border: '1px solid #ddd',
+                  border: '1px solid var(--border, #ddd)',
                   borderRadius: '4px',
-                  backgroundColor: '#fff',
+                  backgroundColor: 'var(--surface, #fff)',
+                  color: 'var(--text, #333)',
                   cursor: 'pointer',
                   fontSize: '12px',
                   whiteSpace: 'nowrap'
@@ -404,16 +408,16 @@ export default function ChefPaymentLinks() {
           marginBottom: '20px'
         }}>
           <div>
-            <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Created</div>
-            <div style={{ fontSize: '14px' }}>
+            <div style={{ fontSize: '12px', color: 'var(--muted, #666)', marginBottom: '4px' }}>Created</div>
+            <div style={{ fontSize: '14px', color: 'var(--text, #333)' }}>
               {new Date(link.created_at).toLocaleDateString()}
             </div>
           </div>
           <div>
-            <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Expires</div>
+            <div style={{ fontSize: '12px', color: 'var(--muted, #666)', marginBottom: '4px' }}>Expires</div>
             <div style={{
               fontSize: '14px',
-              color: link.is_expired ? '#dc3545' : '#333'
+              color: link.is_expired ? '#dc3545' : 'var(--text, #333)'
             }}>
               {new Date(link.expires_at).toLocaleDateString()}
               {link.is_expired && ' (Expired)'}
@@ -421,8 +425,8 @@ export default function ChefPaymentLinks() {
           </div>
           {link.email_sent_at && (
             <div>
-              <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Last Sent</div>
-              <div style={{ fontSize: '14px' }}>
+              <div style={{ fontSize: '12px', color: 'var(--muted, #666)', marginBottom: '4px' }}>Last Sent</div>
+              <div style={{ fontSize: '14px', color: 'var(--text, #333)' }}>
                 {new Date(link.email_sent_at).toLocaleDateString()}
                 {link.email_send_count > 1 && ` (${link.email_send_count} times)`}
               </div>
@@ -430,7 +434,7 @@ export default function ChefPaymentLinks() {
           )}
           {link.paid_at && (
             <div>
-              <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Paid</div>
+              <div style={{ fontSize: '12px', color: 'var(--muted, #666)', marginBottom: '4px' }}>Paid</div>
               <div style={{ fontSize: '14px', color: '#28a745' }}>
                 {new Date(link.paid_at).toLocaleDateString()}
               </div>
@@ -441,13 +445,14 @@ export default function ChefPaymentLinks() {
         {/* Internal Notes */}
         {link.internal_notes && (
           <div style={{ marginBottom: '20px' }}>
-            <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px' }}>Internal Notes</div>
+            <div style={{ fontSize: '12px', color: 'var(--muted, #666)', marginBottom: '8px' }}>Internal Notes</div>
             <div style={{
-              backgroundColor: '#fffbf0',
+              backgroundColor: 'rgba(245, 158, 11, 0.1)',
               padding: '12px',
               borderRadius: '8px',
               fontSize: '14px',
-              borderLeft: '3px solid #ffc107'
+              borderLeft: '3px solid #ffc107',
+              color: 'var(--text, #333)'
             }}>
               {link.internal_notes}
             </div>
@@ -460,7 +465,7 @@ export default function ChefPaymentLinks() {
           gap: '12px',
           marginTop: '24px',
           paddingTop: '20px',
-          borderTop: '1px solid #eee'
+          borderTop: '1px solid var(--border, #eee)'
         }}>
           {canSend && (
             <button
@@ -469,7 +474,7 @@ export default function ChefPaymentLinks() {
               style={{
                 flex: 1,
                 padding: '12px',
-                backgroundColor: '#007bff',
+                backgroundColor: 'var(--primary, #5cb85c)',
                 color: '#fff',
                 border: 'none',
                 borderRadius: '6px',
@@ -487,7 +492,7 @@ export default function ChefPaymentLinks() {
               disabled={cancelling}
               style={{
                 padding: '12px 20px',
-                backgroundColor: '#fff',
+                backgroundColor: 'var(--surface, #fff)',
                 color: '#dc3545',
                 border: '1px solid #dc3545',
                 borderRadius: '6px',
@@ -522,21 +527,22 @@ export default function ChefPaymentLinks() {
         zIndex: 1000
       }}>
         <div style={{
-          backgroundColor: '#fff',
+          backgroundColor: 'var(--surface, #fff)',
           borderRadius: '12px',
           width: '90%',
           maxWidth: '500px',
           maxHeight: '90vh',
-          overflow: 'auto'
+          overflow: 'auto',
+          border: '1px solid var(--border, #eee)'
         }}>
           <div style={{
             padding: '20px',
-            borderBottom: '1px solid #eee',
+            borderBottom: '1px solid var(--border, #eee)',
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center'
           }}>
-            <h3 style={{ margin: 0 }}>Create Payment Link</h3>
+            <h3 style={{ margin: 0, color: 'var(--text, #333)' }}>Create Payment Link</h3>
             <button
               onClick={() => setShowCreateModal(false)}
               style={{
@@ -544,7 +550,7 @@ export default function ChefPaymentLinks() {
                 border: 'none',
                 fontSize: '24px',
                 cursor: 'pointer',
-                color: '#666'
+                color: 'var(--muted, #666)'
               }}
             >
               ×
@@ -554,7 +560,7 @@ export default function ChefPaymentLinks() {
           <form onSubmit={handleCreate} style={{ padding: '20px' }}>
             {/* Amount */}
             <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, color: 'var(--text, #333)' }}>
                 Amount ($) *
               </label>
               <input
@@ -568,16 +574,18 @@ export default function ChefPaymentLinks() {
                 style={{
                   width: '100%',
                   padding: '10px 12px',
-                  border: '1px solid #ddd',
+                  border: '1px solid var(--border, #ddd)',
                   borderRadius: '6px',
-                  fontSize: '16px'
+                  fontSize: '16px',
+                  backgroundColor: 'var(--surface, #fff)',
+                  color: 'var(--text, #333)'
                 }}
               />
             </div>
 
             {/* Description */}
             <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, color: 'var(--text, #333)' }}>
                 Description *
               </label>
               <input
@@ -590,16 +598,18 @@ export default function ChefPaymentLinks() {
                 style={{
                   width: '100%',
                   padding: '10px 12px',
-                  border: '1px solid #ddd',
+                  border: '1px solid var(--border, #ddd)',
                   borderRadius: '6px',
-                  fontSize: '14px'
+                  fontSize: '14px',
+                  backgroundColor: 'var(--surface, #fff)',
+                  color: 'var(--text, #333)'
                 }}
               />
             </div>
 
             {/* Client Selection */}
             <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, color: 'var(--text, #333)' }}>
                 Select Client *
               </label>
               <select
@@ -618,9 +628,11 @@ export default function ChefPaymentLinks() {
                 style={{
                   width: '100%',
                   padding: '10px 12px',
-                  border: '1px solid #ddd',
+                  border: '1px solid var(--border, #ddd)',
                   borderRadius: '6px',
-                  fontSize: '14px'
+                  fontSize: '14px',
+                  backgroundColor: 'var(--surface, #fff)',
+                  color: 'var(--text, #333)'
                 }}
               >
                 <option value="">Select a client...</option>
@@ -647,7 +659,7 @@ export default function ChefPaymentLinks() {
 
             {/* Expiration */}
             <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, color: 'var(--text, #333)' }}>
                 Expires In (days)
               </label>
               <select
@@ -656,9 +668,11 @@ export default function ChefPaymentLinks() {
                 style={{
                   width: '100%',
                   padding: '10px 12px',
-                  border: '1px solid #ddd',
+                  border: '1px solid var(--border, #ddd)',
                   borderRadius: '6px',
-                  fontSize: '14px'
+                  fontSize: '14px',
+                  backgroundColor: 'var(--surface, #fff)',
+                  color: 'var(--text, #333)'
                 }}
               >
                 <option value={7}>7 days</option>
@@ -671,7 +685,7 @@ export default function ChefPaymentLinks() {
 
             {/* Internal Notes */}
             <div style={{ marginBottom: '24px' }}>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, color: 'var(--text, #333)' }}>
                 Internal Notes (optional)
               </label>
               <textarea
@@ -682,10 +696,12 @@ export default function ChefPaymentLinks() {
                 style={{
                   width: '100%',
                   padding: '10px 12px',
-                  border: '1px solid #ddd',
+                  border: '1px solid var(--border, #ddd)',
                   borderRadius: '6px',
                   fontSize: '14px',
-                  resize: 'vertical'
+                  resize: 'vertical',
+                  backgroundColor: 'var(--surface, #fff)',
+                  color: 'var(--text, #333)'
                 }}
               />
             </div>
@@ -698,9 +714,9 @@ export default function ChefPaymentLinks() {
                 style={{
                   flex: 1,
                   padding: '12px',
-                  backgroundColor: '#f8f9fa',
-                  color: '#333',
-                  border: '1px solid #ddd',
+                  backgroundColor: 'var(--surface-2, #f8f9fa)',
+                  color: 'var(--text, #333)',
+                  border: '1px solid var(--border, #ddd)',
                   borderRadius: '6px',
                   cursor: 'pointer',
                   fontWeight: 500
@@ -714,7 +730,7 @@ export default function ChefPaymentLinks() {
                 style={{
                   flex: 1,
                   padding: '12px',
-                  backgroundColor: '#007bff',
+                  backgroundColor: 'var(--primary, #5cb85c)',
                   color: '#fff',
                   border: 'none',
                   borderRadius: '6px',
@@ -741,12 +757,12 @@ export default function ChefPaymentLinks() {
         alignItems: 'center',
         marginBottom: '24px'
       }}>
-        <h2 style={{ margin: 0 }}>Payment Links</h2>
+        <h2 style={{ margin: 0, color: 'var(--text, #333)' }}>Payment Links</h2>
         <button
           onClick={openCreateModal}
           style={{
             padding: '10px 20px',
-            backgroundColor: '#007bff',
+            backgroundColor: 'var(--primary, #5cb85c)',
             color: '#fff',
             border: 'none',
             borderRadius: '6px',
@@ -771,13 +787,13 @@ export default function ChefPaymentLinks() {
           overflowX: 'auto',
           paddingBottom: '8px'
         }}>
-          <StatCard label="Total Links" value={stats.total_count || 0} color="#333" />
+          <StatCard label="Total Links" value={stats.total_count || 0} color="var(--text, #333)" />
           <StatCard label="Pending" value={stats.pending_count || 0} color="#ffc107" />
           <StatCard label="Paid" value={stats.paid_count || 0} color="#28a745" />
           <StatCard
             label="Pending Amount"
             value={formatAmount(stats.total_pending_amount_cents || 0)}
-            color="#007bff"
+            color="var(--link, #007bff)"
           />
           <StatCard
             label="Collected"
@@ -801,10 +817,12 @@ export default function ChefPaymentLinks() {
           onChange={(e) => setSearchQuery(e.target.value)}
           style={{
             padding: '8px 12px',
-            border: '1px solid #ddd',
+            border: '1px solid var(--border, #ddd)',
             borderRadius: '6px',
             fontSize: '14px',
-            minWidth: '200px'
+            minWidth: '200px',
+            backgroundColor: 'var(--surface, #fff)',
+            color: 'var(--text, #333)'
           }}
         />
         <select
@@ -812,9 +830,11 @@ export default function ChefPaymentLinks() {
           onChange={(e) => setStatusFilter(e.target.value)}
           style={{
             padding: '8px 12px',
-            border: '1px solid #ddd',
+            border: '1px solid var(--border, #ddd)',
             borderRadius: '6px',
-            fontSize: '14px'
+            fontSize: '14px',
+            backgroundColor: 'var(--surface, #fff)',
+            color: 'var(--text, #333)'
           }}
         >
           {PAYMENT_LINK_STATUSES.map(s => (
@@ -828,23 +848,24 @@ export default function ChefPaymentLinks() {
         display: isDesktop ? 'grid' : 'block',
         gridTemplateColumns: '1fr 400px',
         gap: '24px',
-        backgroundColor: '#fff',
+        backgroundColor: 'var(--surface, #fff)',
         borderRadius: '12px',
-        boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-        overflow: 'hidden'
+        boxShadow: 'var(--shadow-sm, 0 1px 3px rgba(0,0,0,0.1))',
+        overflow: 'hidden',
+        border: '1px solid var(--border, #eee)'
       }}>
         {/* List */}
         <div style={{
-          borderRight: isDesktop ? '1px solid #eee' : 'none',
+          borderRight: isDesktop ? '1px solid var(--border, #eee)' : 'none',
           maxHeight: isDesktop ? '600px' : 'auto',
           overflowY: 'auto'
         }}>
           {loading ? (
-            <div style={{ padding: '40px', textAlign: 'center', color: '#999' }}>
+            <div style={{ padding: '40px', textAlign: 'center', color: 'var(--muted, #999)' }}>
               Loading...
             </div>
           ) : paymentLinks.length === 0 ? (
-            <div style={{ padding: '40px', textAlign: 'center', color: '#999' }}>
+            <div style={{ padding: '40px', textAlign: 'center', color: 'var(--muted, #999)' }}>
               <p>No payment links found</p>
               <p style={{ fontSize: '14px' }}>Create your first payment link to get started</p>
             </div>
@@ -875,21 +896,22 @@ export default function ChefPaymentLinks() {
           zIndex: 1000
         }}>
           <div style={{
-            backgroundColor: '#fff',
+            backgroundColor: 'var(--surface, #fff)',
             borderTopLeftRadius: '16px',
             borderTopRightRadius: '16px',
             width: '100%',
             maxHeight: '80vh',
-            overflow: 'auto'
+            overflow: 'auto',
+            border: '1px solid var(--border, #eee)'
           }}>
             <div style={{
               padding: '16px',
-              borderBottom: '1px solid #eee',
+              borderBottom: '1px solid var(--border, #eee)',
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center'
             }}>
-              <h3 style={{ margin: 0 }}>Payment Link Details</h3>
+              <h3 style={{ margin: 0, color: 'var(--text, #333)' }}>Payment Link Details</h3>
               <button
                 onClick={() => setSelected(null)}
                 style={{
@@ -897,7 +919,7 @@ export default function ChefPaymentLinks() {
                   border: 'none',
                   fontSize: '24px',
                   cursor: 'pointer',
-                  color: '#666'
+                  color: 'var(--muted, #666)'
                 }}
               >
                 ×
@@ -912,3 +934,4 @@ export default function ChefPaymentLinks() {
     </div>
   )
 }
+

@@ -584,46 +584,51 @@ export default function ChefAllClients() {
           {showAddMember && <MemberForm isEditing={false} onSubmit={handleAddMember} onCancel={() => { setShowAddMember(false); setMemberForm({ ...INITIAL_MEMBER }) }} />}
         </div>
 
-        {/* Meal Plans Section */}
-        {client.source_type === 'platform' && (
-          <div style={{ marginBottom: '1rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.75rem' }}>
-              <h4 style={{ ...styles.sectionTitle, margin: 0 }}>
-                <span style={{ marginRight: '.35rem' }}>📅</span> Meal Plans
-              </h4>
-            </div>
-            <div style={{
-              ...styles.infoBox,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              gap: '.5rem'
-            }}>
-              <span style={{ color: 'var(--muted)', fontSize: '.9rem' }}>
-                Create personalized meal plans with AI assistance
-              </span>
-              <button
-                onClick={() => setMealPlanOpen(true)}
-                style={{
-                  padding: '.5rem 1rem',
-                  background: 'linear-gradient(135deg, var(--primary, #5cb85c), #4a9d4a)',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '8px',
-                  fontSize: '.85rem',
-                  fontWeight: 500,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '.35rem'
-                }}
-              >
-                ✨ Manage Plans
-              </button>
-            </div>
+        {/* Meal Plans Section - Available for all clients */}
+        <div style={{ marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.75rem' }}>
+            <h4 style={{ ...styles.sectionTitle, margin: 0 }}>
+              <span style={{ marginRight: '.35rem' }}>📅</span> Meal Plans
+            </h4>
           </div>
-        )}
+          <div style={{
+            ...styles.infoBox,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '.5rem'
+          }}>
+            <span style={{ color: 'var(--muted)', fontSize: '.9rem' }}>
+              Create personalized meal plans with AI assistance
+            </span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setMealPlanOpen(true)
+              }}
+              style={{
+                padding: '.5rem 1rem',
+                background: 'linear-gradient(135deg, var(--primary, #5cb85c), #4a9d4a)',
+                color: 'white',
+                border: 'none',
+                borderRadius: '8px',
+                fontSize: '.85rem',
+                fontWeight: 500,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '.35rem',
+                position: 'relative',
+                zIndex: 10
+              }}
+            >
+              ✨ Manage Plans
+            </button>
+          </div>
+        </div>
 
         {/* Notes */}
         {client.notes && (
@@ -643,6 +648,16 @@ export default function ChefAllClients() {
         <div style={styles.detailPanel}>
           <ClientDetail client={selected} onClose={() => setShowDetail(false)} />
         </div>
+        
+        {/* Meal Plan Slideout - must be included in mobile view */}
+        <MealPlanSlideout
+          isOpen={mealPlanOpen}
+          onClose={() => setMealPlanOpen(false)}
+          client={selected}
+          onPlanUpdate={() => {
+            // Optionally refresh client data
+          }}
+        />
       </div>
     )
   }

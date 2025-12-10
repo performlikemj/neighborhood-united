@@ -33,9 +33,9 @@ export default function MyChefs() {
   // Loading state
   if (connectedChefsLoading) {
     return (
-      <div className="page-my-chefs container">
-        <div className="loading-state">
-          <div className="spinner" />
+      <div className="page-my-chefs">
+        <div className="my-chefs-loading">
+          <div className="spinner" style={{width: 40, height: 40, borderWidth: 4}} />
           <p>Loading your chefs...</p>
         </div>
       </div>
@@ -45,24 +45,25 @@ export default function MyChefs() {
   // No chefs connected
   if (!hasChefConnection) {
     return (
-      <div className="page-my-chefs container">
-        <div className="empty-state-professional">
-          <div className="empty-icon">{emptyStateEmoji}</div>
+      <div className="page-my-chefs">
+        <div className="my-chefs-empty">
+          <div className="empty-illustration">{emptyStateEmoji}</div>
           <h2>No Chef Connected Yet</h2>
+          <p className="empty-description">
+            {hasChefAccess 
+              ? 'Connect with a chef to get personalized meal plans and services.'
+              : 'Chefs aren\'t available in your area yet, but you can get ready!'}
+          </p>
           {hasChefAccess ? (
-            <>
-              <p>Connect with a chef to get personalized meal plans and services.</p>
-              <Link to="/chefs" className="btn btn-primary">
-                Find a Chef
-              </Link>
-            </>
+            <Link to="/chefs" className="btn btn-primary btn-lg">
+              <i className="fa-solid fa-search"></i>
+              Find a Chef
+            </Link>
           ) : (
-            <>
-              <p>Chefs aren't available in your area yet, but you can get ready!</p>
-              <Link to="/get-ready" className="btn btn-primary">
-                Get Started
-              </Link>
-            </>
+            <Link to="/get-ready" className="btn btn-primary btn-lg">
+              <i className="fa-solid fa-rocket"></i>
+              Get Started
+            </Link>
           )}
         </div>
       </div>
@@ -71,22 +72,34 @@ export default function MyChefs() {
   
   // Multiple chefs - show list
   return (
-    <div className="page-my-chefs container">
-      <header className="page-header">
-        <h1>My Chefs</h1>
-        <p className="subtitle">Your personal chef connections</p>
+    <div className="page-my-chefs">
+      {/* Hero Header */}
+      <header className="my-chefs-hero">
+        <div className="my-chefs-hero-content">
+          <h1 className="my-chefs-title">
+            <i className="fa-solid fa-users"></i>
+            My Chefs
+          </h1>
+          <p className="my-chefs-subtitle">
+            Your personal chef connections
+          </p>
+        </div>
       </header>
       
-      <div className="chefs-list">
-        {connectedChefs.map(chef => (
-          <ChefCard key={chef.id} chef={chef} />
-        ))}
-      </div>
-      
-      <div className="actions-footer">
-        <Link to="/chefs" className="btn btn-outline">
-          Find Another Chef
-        </Link>
+      {/* Chefs Grid */}
+      <div className="my-chefs-content">
+        <div className="my-chefs-grid">
+          {connectedChefs.map(chef => (
+            <ChefCard key={chef.id} chef={chef} />
+          ))}
+        </div>
+        
+        <div className="my-chefs-footer">
+          <Link to="/chefs" className="btn btn-outline btn-lg">
+            <i className="fa-solid fa-plus"></i>
+            Find Another Chef
+          </Link>
+        </div>
       </div>
     </div>
   )
@@ -111,34 +124,52 @@ function ChefCard({ chef }) {
   }
   
   return (
-    <Link to={`/my-chefs/${chef.id}`} className="chef-card">
-      <div className="chef-photo">
-        {chef.photo ? (
-          <img src={chef.photo} alt={chef.display_name} />
-        ) : (
-          <div className="photo-placeholder">{getSeededChefEmoji(chef.id)}</div>
-        )}
-      </div>
-      
-      <div className="chef-info">
-        <h3 className="chef-name">{chef.display_name}</h3>
-        {chef.specialty && (
-          <p className="chef-specialty">{chef.specialty}</p>
-        )}
-        {chef.rating && (
-          <div className="chef-rating">
-            {'★'.repeat(Math.round(chef.rating))}
-            {'☆'.repeat(5 - Math.round(chef.rating))}
-            <span className="rating-value">{chef.rating}</span>
+    <Link to={`/my-chefs/${chef.id}`} className="my-chef-card">
+      <div className="my-chef-card-header">
+        <div className="my-chef-avatar">
+          {chef.photo ? (
+            <img src={chef.photo} alt={chef.display_name} className="my-chef-photo" />
+          ) : (
+            <div className="my-chef-photo-placeholder">
+              {getSeededChefEmoji(chef.id)}
+            </div>
+          )}
+          <div className="my-chef-status">
+            <i className="fa-solid fa-check"></i>
           </div>
-        )}
-        <p className="last-activity">
-          Last activity: {formatLastActivity(chef.last_activity)}
-        </p>
+        </div>
+        
+        <div className="my-chef-info">
+          <h3 className="my-chef-name">{chef.display_name}</h3>
+          {chef.specialty && (
+            <p className="my-chef-specialty">{chef.specialty}</p>
+          )}
+          {chef.rating && (
+            <div className="my-chef-rating">
+              <div className="stars">
+                {[1,2,3,4,5].map(star => (
+                  <i 
+                    key={star}
+                    className={`fa-solid fa-star ${star <= Math.round(chef.rating) ? 'filled' : 'empty'}`}
+                  ></i>
+                ))}
+              </div>
+              <span className="rating-value">{chef.rating.toFixed(1)}</span>
+            </div>
+          )}
+        </div>
       </div>
       
-      <div className="chef-arrow">→</div>
+      <div className="my-chef-card-footer">
+        <div className="my-chef-activity">
+          <i className="fa-regular fa-clock"></i>
+          Last activity: {formatLastActivity(chef.last_activity)}
+        </div>
+        <div className="my-chef-action">
+          <span>View Hub</span>
+          <i className="fa-solid fa-arrow-right"></i>
+        </div>
+      </div>
     </Link>
   )
 }
-

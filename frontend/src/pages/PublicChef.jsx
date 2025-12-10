@@ -149,7 +149,9 @@ export default function PublicChef(){
   const [error, setError] = useState(null)
   const [mapOpen, setMapOpen] = useState(false)
   const sentryRef = useRef(null)
+  const heroRef = useRef(null)
   const [sticky, setSticky] = useState(false)
+  const [showStickyWidget, setShowStickyWidget] = useState(false)
   const [servesMyArea, setServesMyArea] = useState(null)
   // Waitlist state
   const [waitlistCfg, setWaitlistCfg] = useState(null)
@@ -1019,6 +1021,25 @@ export default function PublicChef(){
     setVisiblePhotos(12)
   }, [chef?.id])
 
+  // Show sticky widget when hero scrolls out of view
+  useEffect(() => {
+    if (!heroRef.current) return
+    
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        // Show widget when hero is NOT intersecting (scrolled past)
+        setShowStickyWidget(!entry.isIntersecting)
+      },
+      { 
+        threshold: 0,
+        rootMargin: '-80px 0px 0px 0px' // Account for navbar height
+      }
+    )
+    
+    observer.observe(heroRef.current)
+    return () => observer.disconnect()
+  }, [chef?.id])
+
   // Keyboard support for lightbox
   return (
     <div className="page-public-chef-marketplace">
@@ -1041,11 +1062,53 @@ export default function PublicChef(){
           <div ref={sentryRef} aria-hidden />
           
           {/* Hero Section - Compelling Storefront */}
-          <div className="chef-hero" style={coverImage ? { backgroundImage:`linear-gradient(rgba(0,0,0,0.4), rgba(0,0,0,0.6)), url(${coverImage})` } : undefined}>
+          <div className="chef-hero" ref={heroRef} style={coverImage ? { backgroundImage:`linear-gradient(rgba(0,0,0,0.4), rgba(0,0,0,0.6)), url(${coverImage})` } : undefined}>
             <div className="chef-hero-content">
-              {chef.profile_pic_url && (
-                <img src={chef.profile_pic_url} alt={chef?.user?.username||'Chef'} className="chef-hero-avatar" />
-              )}
+              {/* Avatar with integrated Add button */}
+              <div className="chef-hero-avatar-wrapper">
+                {chef.profile_pic_url ? (
+                  <img src={chef.profile_pic_url} alt={chef?.user?.username||'Chef'} className="chef-hero-avatar" />
+                ) : (
+                  <div className="chef-hero-avatar chef-hero-avatar-placeholder">
+                    <i className="fa-solid fa-user"></i>
+                  </div>
+                )}
+                {!viewerOwnChefProfile && (
+                  connectionAccepted ? (
+                    <div className="hero-add-btn connected" title="Connected">
+                      <i className="fa-solid fa-check"></i>
+                    </div>
+                  ) : connectionPending ? (
+                    <div className="hero-add-btn pending" title="Request pending">
+                      <i className="fa-solid fa-clock"></i>
+                    </div>
+                  ) : canRequestInvitation ? (
+                    <button 
+                      className="hero-add-btn" 
+                      onClick={handleRequestInvitation}
+                      disabled={requestingInvitation}
+                      title="Add this chef"
+                    >
+                      {requestingInvitation ? (
+                        <div className="hero-add-spinner"></div>
+                      ) : (
+                        <i className="fa-solid fa-plus"></i>
+                      )}
+                    </button>
+                  ) : !authUser ? (
+                    <button 
+                      className="hero-add-btn" 
+                      onClick={() => {
+                        const next = `${window.location.pathname}${window.location.search}`
+                        window.location.href = `/login?next=${encodeURIComponent(next)}`
+                      }}
+                      title="Sign in to add this chef"
+                    >
+                      <i className="fa-solid fa-plus"></i>
+                    </button>
+                  ) : null
+                )}
+              </div>
               <h1 className="chef-hero-title">{chef?.user?.username || 'Chef'}</h1>
               <p className="chef-hero-tagline">{chef?.bio || 'Your personal chef for delicious, home-cooked meals'}</p>
               
@@ -1059,110 +1122,120 @@ export default function PublicChef(){
                 </div>
               )}
 
+              {/* Primary Actions - Clean two-button layout */}
               <div className="chef-hero-actions">
                 <a href="#services" className="btn btn-primary btn-lg">
                   <i className="fa-solid fa-concierge-bell" style={{marginRight:'.5rem'}}></i>
-                  Book Chef Services
+                  Book Services
                 </a>
-                <Link 
-                  to={`/c/${encodedChefSlug}/gallery`} 
-                  className="btn btn-outline btn-lg" 
-                  style={{background:'rgba(255,255,255,0.15)',borderColor:'rgba(255,255,255,0.4)',color:'#fff'}}
-                >
-                  <i className="fa-solid fa-images" style={{marginRight:'.5rem'}}></i>
-                  View Gallery {chef.photos && chef.photos.length > 0 && `(${chef.photos.length})`}
-                </Link>
                 <a href="#meals" className="btn btn-outline btn-lg" style={{background:'rgba(255,255,255,0.15)',borderColor:'rgba(255,255,255,0.4)',color:'#fff'}}>
                   <i className="fa-solid fa-utensils" style={{marginRight:'.5rem'}}></i>
-                  See Weekly Menu
+                  View Menu
                 </a>
-                <button 
-                  className="btn btn-outline btn-lg" 
-                  style={{background:'rgba(255,255,255,0.15)',borderColor:'rgba(255,255,255,0.4)',color:'#fff'}}
-                  onClick={()=> setMapOpen(true)}
-                >
-                  <i className="fa-solid fa-map" style={{marginRight:'.5rem'}}></i>
-                  View Map
-                </button>
               </div>
 
-              {chef?.review_summary && (
-                <div className="chef-hero-reviews">
-                  <i className="fa-solid fa-star" style={{color:'#fbbf24'}}></i>
-                  <span>{chef.review_summary}</span>
-                </div>
-              )}
-
-              {/* Trust Badges - Critical for Stripe Connect approval */}
-              <div className="trust-badges">
-                {/* Platform Verified - shows if email verified and profile meets basic requirements */}
-                {(chef?.user?.is_email_verified || chef?.is_verified || chef?.user?.is_active) && (
-                  <div className="trust-badge">
+              {/* Compact Trust & Info Row */}
+              <div className="chef-hero-meta">
+                {chef?.review_summary && (
+                  <span className="hero-meta-item">
+                    <i className="fa-solid fa-star" style={{color:'#fbbf24'}}></i>
+                    {chef.review_summary}
+                  </span>
+                )}
+                {(chef?.is_verified || chef?.background_checked || chef?.food_handlers_cert || chef?.insured) && (
+                  <span className="hero-meta-item hero-verified" title={[
+                    chef?.is_verified && 'Identity Verified',
+                    chef?.background_checked && 'Background Checked',
+                    chef?.food_handlers_cert && 'Food Safety Certified',
+                    chef?.insured && (chef?.insurance_expiry ? `Insured until ${chef.insurance_expiry}` : 'Insured')
+                  ].filter(Boolean).join(' · ')}>
                     <i className="fa-solid fa-shield-check"></i>
-                    <span>Identity Verified</span>
-                  </div>
+                    Verified
+                  </span>
                 )}
-                
-                {/* Background Checked - shows if chef has passed background verification */}
-                {chef?.background_checked && (
-                  <div className="trust-badge verified">
-                    <i className="fa-solid fa-certificate"></i>
-                    <span>Background Checked</span>
-                  </div>
+                {chef.photos && chef.photos.length > 0 && (
+                  <Link to={`/c/${encodedChefSlug}/gallery`} className="hero-meta-item hero-meta-link">
+                    <i className="fa-solid fa-images"></i>
+                    {chef.photos.length} Photos
+                  </Link>
                 )}
-                
-                {/* Insured & Licensed - shows if chef has valid insurance/licenses */}
-                {chef?.insured && (
-                  <div className="trust-badge verified">
-                    <i className="fa-solid fa-shield-halved"></i>
-                    <span>Insured & Licensed</span>
-                  </div>
+                <button className="hero-meta-item hero-meta-link" onClick={()=> setMapOpen(true)}>
+                  <i className="fa-solid fa-map-marker-alt"></i>
+                  Map
+                </button>
+                {chef?.calendly_url && (
+                  <a href={chef.calendly_url} target="_blank" rel="noopener noreferrer" className="hero-meta-item hero-meta-link">
+                    <i className="fa-regular fa-calendar"></i>
+                    Consult
+                  </a>
                 )}
-                
-                {/* Stripe Secure Payments - always shows since all payments go through Stripe */}
-                <div className="trust-badge stripe-badge">
-                  <i className="fa-brands fa-stripe"></i>
-                  <span>Stripe Verified</span>
-                </div>
-                
-                {/* Secure Checkout */}
-                <div className="trust-badge">
-                  <i className="fa-solid fa-credit-card"></i>
-                  <span>Secure Checkout</span>
-                </div>
               </div>
             </div>
           </div>
 
-          {/* Service Provider Banner - Critical for Stripe compliance */}
-          <div className="service-provider-banner">
-            <div className="service-provider-content">
-              <div className="service-provider-icon">
-                <i className="fa-solid fa-utensils"></i>
-              </div>
-              <div className="service-provider-info">
-                <h2>Personal Chef Services</h2>
-                <p>
-                  <strong>{chef?.user?.username || 'This chef'}</strong> is an independent personal chef 
-                  offering professional in-home cooking, meal preparation, and catering services. 
-                  All bookings are made directly with the chef through our secure platform.
-                </p>
-              </div>
-              <div className="service-provider-badges">
-                <div className="provider-badge">
-                  <i className="fa-solid fa-building"></i>
-                  <span>Independent Business</span>
-                </div>
-                <div className="provider-badge">
-                  <i className="fa-solid fa-file-contract"></i>
-                  <span>Service Agreement</span>
-                </div>
-                <div className="provider-badge">
-                  <i className="fa-solid fa-hand-holding-dollar"></i>
-                  <span>Direct Payments</span>
-                </div>
+          {/* Sticky Add Chef Widget - appears when hero scrolls out of view */}
+          {showStickyWidget && !viewerOwnChefProfile && (
+            <div className="chef-sticky-widget">
+              <div className="chef-sticky-widget-content">
+                {chef.profile_pic_url ? (
+                  <img src={chef.profile_pic_url} alt="" className="sticky-avatar" />
+                ) : (
+                  <div className="sticky-avatar sticky-avatar-placeholder">
+                    <i className="fa-solid fa-user"></i>
+                  </div>
+                )}
+                <span className="sticky-name">{chef?.user?.username || 'Chef'}</span>
+                {connectionAccepted ? (
+                  <div className="sticky-add-btn connected">
+                    <i className="fa-solid fa-check"></i>
+                    <span>Connected</span>
+                  </div>
+                ) : connectionPending ? (
+                  <div className="sticky-add-btn pending">
+                    <i className="fa-solid fa-clock"></i>
+                    <span>Pending</span>
+                  </div>
+                ) : canRequestInvitation ? (
+                  <button 
+                    className="sticky-add-btn" 
+                    onClick={handleRequestInvitation}
+                    disabled={requestingInvitation}
+                  >
+                    {requestingInvitation ? (
+                      <>
+                        <div className="sticky-spinner"></div>
+                        <span>Adding...</span>
+                      </>
+                    ) : (
+                      <>
+                        <i className="fa-solid fa-plus"></i>
+                        <span>Add Chef</span>
+                      </>
+                    )}
+                  </button>
+                ) : !authUser ? (
+                  <button 
+                    className="sticky-add-btn" 
+                    onClick={() => {
+                      const next = `${window.location.pathname}${window.location.search}`
+                      window.location.href = `/login?next=${encodeURIComponent(next)}`
+                    }}
+                  >
+                    <i className="fa-solid fa-plus"></i>
+                    <span>Add Chef</span>
+                  </button>
+                ) : null}
               </div>
             </div>
+          )}
+
+          {/* Service Provider Disclosure - Required for Stripe compliance */}
+          <div className="service-provider-disclosure">
+            <i className="fa-solid fa-info-circle"></i>
+            <span>
+              <strong>{chef?.user?.username || 'This chef'}</strong> is an independent personal chef. 
+              Services are booked directly and payments processed securely via Stripe.
+            </span>
           </div>
 
           {/* Main Content Container */}

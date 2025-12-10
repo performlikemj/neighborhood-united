@@ -5,7 +5,7 @@ from .models import (
     MealPlan, MealPlanMeal, Dish, Ingredient, Order, Cart, MealType, Meal, OrderMeal, 
     ShoppingList, Instruction, MealPlanInstruction, PantryItem, MealPlanMealPantryUsage, SystemUpdate,
     ChefMealEvent, ChefMealOrder, ChefMealReview, StripeConnectAccount, PlatformFeeConfig, PaymentLog,
-    MealPlanBatchJob, MealPlanBatchRequest
+    MealPlanBatchJob, MealPlanBatchRequest, MealPlanReceipt
 )
 from reviews.models import Review
 from django.template.response import TemplateResponse
@@ -571,6 +571,96 @@ admin.site.register(StripeConnectAccount, StripeConnectAccountAdmin)
 admin.site.register(PlatformFeeConfig, PlatformFeeConfigAdmin)
 admin.site.register(PaymentLog, PaymentLogAdmin)
 admin.site.register(MealPlanBatchJob, MealPlanBatchJobAdmin)
+
+
+@admin.register(MealPlanReceipt)
+class MealPlanReceiptAdmin(admin.ModelAdmin):
+    """Admin for managing chef receipts for ingredient/supply purchases."""
+    list_display = (
+        'id', 'chef', 'merchant_name', 'amount_display', 'category',
+        'purchase_date', 'status', 'customer_display', 'created_at'
+    )
+    list_filter = ('status', 'category', 'purchase_date', 'chef')
+    search_fields = (
+        'chef__user__username', 'merchant_name', 'description',
+        'customer__username', 'customer__email'
+    )
+    readonly_fields = (
+        'receipt_thumbnail', 'created_at', 'updated_at', 'reviewed_at', 'reviewed_by'
+    )
+    raw_id_fields = ('chef', 'customer', 'meal_plan', 'chef_meal_plan', 'prep_plan')
+    date_hierarchy = 'purchase_date'
+    actions = ['mark_reviewed', 'mark_reimbursed', 'mark_rejected']
+    
+    fieldsets = (
+        (None, {
+            'fields': ('chef', 'status')
+        }),
+        ('Receipt Image', {
+            'fields': ('receipt_image', 'receipt_thumbnail')
+        }),
+        ('Financial Details', {
+            'fields': ('amount', 'currency', 'tax_amount', 'category', 'merchant_name', 'purchase_date')
+        }),
+        ('Description', {
+            'fields': ('description', 'items')
+        }),
+        ('Associations', {
+            'fields': ('customer', 'meal_plan', 'chef_meal_plan', 'prep_plan'),
+            'classes': ('collapse',)
+        }),
+        ('Review', {
+            'fields': ('reviewer_notes', 'reviewed_at', 'reviewed_by'),
+            'classes': ('collapse',)
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def amount_display(self, obj):
+        from django.utils.html import format_html
+        return format_html('<strong>{} {:,.2f}</strong>', obj.currency, obj.amount)
+    amount_display.short_description = 'Amount'
+    amount_display.admin_order_field = 'amount'
+    
+    def customer_display(self, obj):
+        if obj.customer:
+            return obj.customer.username
+        return '—'
+    customer_display.short_description = 'Customer'
+    
+    def mark_reviewed(self, request, queryset):
+        from django.utils import timezone
+        updated = queryset.filter(status='uploaded').update(
+            status='reviewed',
+            reviewed_at=timezone.now(),
+            reviewed_by=request.user
+        )
+        self.message_user(request, f"Marked {updated} receipt(s) as reviewed.")
+    mark_reviewed.short_description = "Mark selected as reviewed"
+    
+    def mark_reimbursed(self, request, queryset):
+        from django.utils import timezone
+        updated = queryset.filter(status__in=['uploaded', 'reviewed']).update(
+            status='reimbursed',
+            reviewed_at=timezone.now(),
+            reviewed_by=request.user
+        )
+        self.message_user(request, f"Marked {updated} receipt(s) as reimbursed.")
+    mark_reimbursed.short_description = "Mark selected as reimbursed"
+    
+    def mark_rejected(self, request, queryset):
+        from django.utils import timezone
+        updated = queryset.filter(status__in=['uploaded', 'reviewed']).update(
+            status='rejected',
+            reviewed_at=timezone.now(),
+            reviewed_by=request.user
+        )
+        self.message_user(request, f"Marked {updated} receipt(s) as rejected.")
+    mark_rejected.short_description = "Mark selected as rejected"
+
 
 # Global admin site branding
 django_admin.site.site_header = "Hood United Admin"

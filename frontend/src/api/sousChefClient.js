@@ -173,20 +173,23 @@ export async function sendSousChefMessage({ familyId, familyType, message }) {
 
 /**
  * Send a message and get a structured JSON response.
- * Uses OpenAI's structured output for consistent formatting.
+ * Uses structured output for consistent formatting.
  * 
  * @param {Object} params
- * @param {number} params.familyId - The family ID
- * @param {string} params.familyType - 'customer' or 'lead'
+ * @param {number|null} params.familyId - The family ID (null for general mode)
+ * @param {string|null} params.familyType - 'customer' or 'lead' (null for general mode)
  * @param {string} params.message - The message to send
  * @returns {Promise<Object>} Response with content.blocks array
  */
 export async function sendStructuredMessage({ familyId, familyType, message }) {
-  const response = await api.post(`${SOUS_CHEF_BASE}/structured/`, {
-    family_id: familyId,
-    family_type: familyType,
-    message
-  }, {
+  // Build payload - only include family params if provided
+  const payload = { message }
+  if (familyId) {
+    payload.family_id = familyId
+    payload.family_type = familyType || 'customer'
+  }
+  
+  const response = await api.post(`${SOUS_CHEF_BASE}/structured/`, payload, {
     skipUserId: true,
     withCredentials: true
   })
@@ -194,17 +197,21 @@ export async function sendStructuredMessage({ familyId, familyType, message }) {
 }
 
 /**
- * Start a new conversation for a family.
+ * Start a new conversation for a family or general mode.
  * 
- * @param {number} familyId - The family ID
- * @param {string} familyType - 'customer' or 'lead'
+ * @param {number|null} familyId - The family ID (null for general mode)
+ * @param {string|null} familyType - 'customer' or 'lead' (null for general mode)
  * @returns {Promise<Object>}
  */
 export async function newSousChefConversation(familyId, familyType) {
-  const response = await api.post(`${SOUS_CHEF_BASE}/new-conversation/`, {
-    family_id: familyId,
-    family_type: familyType
-  }, {
+  // Build payload - only include family params if provided
+  const payload = {}
+  if (familyId) {
+    payload.family_id = familyId
+    payload.family_type = familyType || 'customer'
+  }
+  
+  const response = await api.post(`${SOUS_CHEF_BASE}/new-conversation/`, payload, {
     skipUserId: true,
     withCredentials: true
   })
@@ -212,14 +219,18 @@ export async function newSousChefConversation(familyId, familyType) {
 }
 
 /**
- * Get conversation history for a family.
+ * Get conversation history for a family or general mode.
  * 
- * @param {number} familyId - The family ID
- * @param {string} familyType - 'customer' or 'lead'
+ * @param {number|null} familyId - The family ID (null for general mode)
+ * @param {string|null} familyType - 'customer' or 'lead' (null for general mode)
  * @returns {Promise<Object>}
  */
 export async function getSousChefHistory(familyId, familyType) {
-  const response = await api.get(`${SOUS_CHEF_BASE}/history/${familyType}/${familyId}/`, {
+  // Use general/0 for general mode (no family)
+  const type = familyId ? familyType : 'general'
+  const id = familyId || 0
+  
+  const response = await api.get(`${SOUS_CHEF_BASE}/history/${type}/${id}/`, {
     skipUserId: true,
     withCredentials: true
   })
@@ -227,14 +238,18 @@ export async function getSousChefHistory(familyId, familyType) {
 }
 
 /**
- * Get family context summary.
+ * Get family context summary or general mode info.
  * 
- * @param {number} familyId - The family ID
- * @param {string} familyType - 'customer' or 'lead'
+ * @param {number|null} familyId - The family ID (null for general mode)
+ * @param {string|null} familyType - 'customer' or 'lead' (null for general mode)
  * @returns {Promise<Object>}
  */
 export async function getFamilyContext(familyId, familyType) {
-  const response = await api.get(`${SOUS_CHEF_BASE}/context/${familyType}/${familyId}/`, {
+  // Use general/0 for general mode (no family)
+  const type = familyId ? familyType : 'general'
+  const id = familyId || 0
+  
+  const response = await api.get(`${SOUS_CHEF_BASE}/context/${type}/${id}/`, {
     skipUserId: true,
     withCredentials: true
   })

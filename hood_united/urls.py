@@ -36,6 +36,7 @@ urlpatterns = [
     path('reviews/', include('reviews.urls')),
     path('local_chefs/', include('local_chefs.urls')),
     path('crm/', include('crm.urls')),
+    path('memberships/', include('memberships.urls')),
 ]
 
 # Serve media files in development only

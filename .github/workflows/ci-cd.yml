@@ -11,8 +11,54 @@ defaults:
   run:
     shell: bash
 
+# Environment variables for deployment
+env:
+  REGISTRY: sautairegistry
+  RESOURCE_GROUP: sautAI
+  # Backend apps
+  DJANGO_APP: sautai-django-westus2
+  CELERY_WORKER_APP: sautai-celery-worker-westus2
+  CELERY_BEAT_APP: sautai-beat-westus2
+  # Frontend app
+  FRONTEND_APP: sautai-react-westus2
+
 jobs:
-  build-test:
+  # ============================================================================
+  # Frontend: API path audits and tests
+  # ============================================================================
+  frontend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Run API path audit
+        working-directory: frontend
+        run: node scripts/audit-api-paths.mjs
+
+      - name: Run React hooks audit
+        working-directory: frontend
+        run: node scripts/audit-react-hooks.mjs
+
+      - name: Run frontend tests
+        working-directory: frontend
+        run: node --test tests/*.test.mjs
+
+  # ============================================================================
+  # Backend: Django tests
+  # ============================================================================
+  backend-test:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -81,3 +127,118 @@ jobs:
           python manage.py migrate --noinput
           python manage.py check
           python -m pytest
+
+  # ============================================================================
+  # Deploy Backend (only on push to main, after tests pass)
+  # ============================================================================
+  deploy-backend:
+    runs-on: ubuntu-latest
+    needs: [frontend-test, backend-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Login to ACR
+        run: |
+          az acr login --name ${{ env.REGISTRY }}
+
+      - name: Security check - DEBUG must be False
+        run: |
+          debug_line=$(grep "^DEBUG = " hood_united/settings.py | head -1)
+          echo "Found DEBUG setting: $debug_line"
+          if echo "$debug_line" | grep -q "str_to_bool.*'False'"; then
+            echo "✅ DEBUG uses environment variable with False default"
+          elif echo "$debug_line" | grep -q "^DEBUG = False$"; then
+            echo "✅ DEBUG is correctly set to False"
+          else
+            echo "❌ ERROR: DEBUG must be set to False for production"
+            exit 1
+          fi
+
+      - name: Build and push Django image
+        run: |
+          docker build --platform linux/amd64 \
+            -f Dockerfile.django \
+            -t ${{ env.REGISTRY }}.azurecr.io/django:${{ github.sha }} \
+            -t ${{ env.REGISTRY }}.azurecr.io/django:latest \
+            .
+          docker push ${{ env.REGISTRY }}.azurecr.io/django:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}.azurecr.io/django:latest
+
+      - name: Build and push Celery worker image
+        run: |
+          docker build --platform linux/amd64 \
+            -f Dockerfile.celery \
+            -t ${{ env.REGISTRY }}.azurecr.io/celery-worker:${{ github.sha }} \
+            -t ${{ env.REGISTRY }}.azurecr.io/celery-worker:latest \
+            .
+          docker push ${{ env.REGISTRY }}.azurecr.io/celery-worker:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}.azurecr.io/celery-worker:latest
+
+      - name: Build and push Celery beat image
+        run: |
+          docker build --platform linux/amd64 \
+            -f Dockerfile.celery-beat \
+            -t ${{ env.REGISTRY }}.azurecr.io/celery-beat:${{ github.sha }} \
+            -t ${{ env.REGISTRY }}.azurecr.io/celery-beat:latest \
+            .
+          docker push ${{ env.REGISTRY }}.azurecr.io/celery-beat:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}.azurecr.io/celery-beat:latest
+
+      - name: Deploy Django to Container Apps
+        run: |
+          az containerapp update \
+            --name ${{ env.DJANGO_APP }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.REGISTRY }}.azurecr.io/django:${{ github.sha }}
+
+      - name: Deploy Celery Worker to Container Apps
+        run: |
+          az containerapp update \
+            --name ${{ env.CELERY_WORKER_APP }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.REGISTRY }}.azurecr.io/celery-worker:${{ github.sha }}
+
+      - name: Deploy Celery Beat to Container Apps
+        run: |
+          az containerapp update \
+            --name ${{ env.CELERY_BEAT_APP }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.REGISTRY }}.azurecr.io/celery-beat:${{ github.sha }}
+
+  # ============================================================================
+  # Deploy Frontend (only on push to main, after tests pass)
+  # ============================================================================
+  deploy-frontend:
+    runs-on: ubuntu-latest
+    needs: [frontend-test, backend-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Build and push frontend via ACR
+        run: |
+          az acr build \
+            --registry ${{ env.REGISTRY }} \
+            --image sautai-react-frontend:${{ github.sha }} \
+            --image sautai-react-frontend:latest \
+            --build-arg VITE_API_BASE="" \
+            -f frontend/Dockerfile \
+            frontend/
+
+      - name: Deploy frontend to Container Apps
+        run: |
+          az containerapp update \
+            --name ${{ env.FRONTEND_APP }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.REGISTRY }}.azurecr.io/sautai-react-frontend:${{ github.sha }}

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { api, stripe } from '../api'
 import { createOffering } from '../api/servicesClient.js'
@@ -8,6 +8,7 @@ import ChefAllClients from '../components/ChefAllClients.jsx'
 import ChefPrepPlanning from '../components/ChefPrepPlanning.jsx'
 import ChefPaymentLinks from '../components/ChefPaymentLinks.jsx'
 import SousChefWidget from '../components/SousChefWidget.jsx'
+import ServiceAreaPicker from '../components/ServiceAreaPicker.jsx'
 import { SousChefNotificationProvider } from '../contexts/SousChefNotificationContext.jsx'
 
 function toArray(payload){
@@ -337,7 +338,7 @@ export default function ChefDashboard(){
 
   // Chef profile
   const [chef, setChef] = useState(null)
-  const [profileForm, setProfileForm] = useState({ experience:'', bio:'', profile_pic:null, banner_image:null })
+  const [profileForm, setProfileForm] = useState({ experience:'', bio:'', profile_pic:null, banner_image:null, calendly_url:'' })
   const [profileSaving, setProfileSaving] = useState(false)
   const [profileInit, setProfileInit] = useState(false)
   const [bannerUpdating, setBannerUpdating] = useState(false)
@@ -348,6 +349,14 @@ export default function ChefDashboard(){
   const [isOnBreak, setIsOnBreak] = useState(false)
   const [breakBusy, setBreakBusy] = useState(false)
   const [breakReason, setBreakReason] = useState('')
+
+  // Service area management
+  const [areaStatus, setAreaStatus] = useState(null) // { approved_areas, pending_requests, etc. }
+  const [areaStatusLoading, setAreaStatusLoading] = useState(false)
+  const [showAreaPicker, setShowAreaPicker] = useState(false)
+  const [newAreaSelection, setNewAreaSelection] = useState([])
+  const [areaRequestNotes, setAreaRequestNotes] = useState('')
+  const [submittingAreaRequest, setSubmittingAreaRequest] = useState(false)
 
   // Chef photos
   const [photoForm, setPhotoForm] = useState({ image:null, title:'', caption:'', is_featured:false })
@@ -522,7 +531,7 @@ export default function ChefDashboard(){
       const data = resp.data || null
       setChef(data)
       setIsOnBreak(Boolean(data?.is_on_break))
-      setProfileForm({ experience: data?.experience || '', bio: data?.bio || '', profile_pic: null, banner_image: null })
+      setProfileForm({ experience: data?.experience || '', bio: data?.bio || '', profile_pic: null, banner_image: null, calendly_url: data?.calendly_url || '' })
     }catch(e){
       const status = e?.response?.status
       // Handle token/role propagation races: retry once after nudging user_details
@@ -538,6 +547,68 @@ export default function ChefDashboard(){
       setProfileInit(true)
     }
   }
+
+  // Load service area status
+  const loadAreaStatus = useCallback(async () => {
+    setAreaStatusLoading(true)
+    try {
+      const resp = await api.get('/local_chefs/api/chef/area-status/')
+      setAreaStatus(resp.data || null)
+    } catch (e) {
+      console.warn('Failed to load area status:', e)
+      setAreaStatus(null)
+    } finally {
+      setAreaStatusLoading(false)
+    }
+  }, [])
+
+  // Submit new area request
+  const submitAreaRequest = useCallback(async () => {
+    if (submittingAreaRequest || newAreaSelection.length === 0) return
+    
+    setSubmittingAreaRequest(true)
+    try {
+      const areaIds = newAreaSelection.map(a => a.area_id || a.id)
+      await api.post('/local_chefs/api/chef/area-requests/', {
+        area_ids: areaIds,
+        notes: areaRequestNotes
+      })
+      
+      // Reset form and reload status
+      setNewAreaSelection([])
+      setAreaRequestNotes('')
+      setShowAreaPicker(false)
+      await loadAreaStatus()
+      
+      window.dispatchEvent(new CustomEvent('global-toast', { 
+        detail: { text: 'Area request submitted! An admin will review it soon.', tone: 'success' } 
+      }))
+    } catch (e) {
+      const msg = e?.response?.data?.error || 'Failed to submit request'
+      window.dispatchEvent(new CustomEvent('global-toast', { 
+        detail: { text: msg, tone: 'error' } 
+      }))
+    } finally {
+      setSubmittingAreaRequest(false)
+    }
+  }, [submittingAreaRequest, newAreaSelection, areaRequestNotes, loadAreaStatus])
+
+  // Cancel pending request
+  const cancelAreaRequest = useCallback(async (requestId) => {
+    if (!window.confirm('Cancel this area request?')) return
+    
+    try {
+      await api.delete(`/local_chefs/api/chef/area-requests/${requestId}/cancel/`)
+      await loadAreaStatus()
+      window.dispatchEvent(new CustomEvent('global-toast', { 
+        detail: { text: 'Request cancelled', tone: 'success' } 
+      }))
+    } catch (e) {
+      window.dispatchEvent(new CustomEvent('global-toast', { 
+        detail: { text: 'Failed to cancel request', tone: 'error' } 
+      }))
+    }
+  }, [loadAreaStatus])
 
   const toggleBreak = async (nextState)=>{
     if (breakBusy) return
@@ -658,7 +729,7 @@ export default function ChefDashboard(){
   const loadAll = async ()=>{
     setNotice(null)
     try{ await api.get('/auth/api/user_details/') }catch{}
-    const tasks = [loadChefProfile(), loadIngredients(), loadDishes(), loadMeals(), loadEvents(), loadOrders(), loadServiceOrders(), loadStripeStatus(), loadServiceOfferings()]
+    const tasks = [loadChefProfile(), loadAreaStatus(), loadIngredients(), loadDishes(), loadMeals(), loadEvents(), loadOrders(), loadServiceOrders(), loadStripeStatus(), loadServiceOfferings()]
     await Promise.all(tasks.map(p => p.catch(()=>undefined)))
   }
 
@@ -1517,6 +1588,17 @@ export default function ChefDashboard(){
                 <span className="updated-chip">Banner updated</span>
               </div>
             )}
+            <div className="label" style={{marginTop:'.6rem'}}>Calendly Booking Link</div>
+            <input 
+              type="url" 
+              className="input"
+              placeholder="https://calendly.com/yourname/consultation"
+              value={profileForm.calendly_url}
+              onChange={e => setProfileForm(f => ({ ...f, calendly_url: e.target.value }))}
+            />
+            <div className="muted" style={{marginTop:'.25rem'}}>
+              Let customers book a consultation or tasting session with you
+            </div>
             <div style={{marginTop:'.6rem'}}>
               <button className="btn btn-primary" disabled={profileSaving} onClick={async ()=>{
                 setProfileSaving(true)
@@ -1524,10 +1606,10 @@ export default function ChefDashboard(){
                   const hasBanner = Boolean(profileForm.banner_image)
                   if (profileForm.profile_pic || hasBanner){
                     if (hasBanner) setBannerUpdating(true)
-                    const fd = new FormData(); fd.append('experience', profileForm.experience||''); fd.append('bio', profileForm.bio||''); if (profileForm.profile_pic) fd.append('profile_pic', profileForm.profile_pic); if (profileForm.banner_image) fd.append('banner_image', profileForm.banner_image)
+                    const fd = new FormData(); fd.append('experience', profileForm.experience||''); fd.append('bio', profileForm.bio||''); fd.append('calendly_url', profileForm.calendly_url||''); if (profileForm.profile_pic) fd.append('profile_pic', profileForm.profile_pic); if (profileForm.banner_image) fd.append('banner_image', profileForm.banner_image)
                     await api.patch('/chefs/api/me/chef/profile/update/', fd, { headers: { 'Content-Type':'multipart/form-data' } })
                   } else {
-                    await api.patch('/chefs/api/me/chef/profile/update/', { experience: profileForm.experience, bio: profileForm.bio })
+                    await api.patch('/chefs/api/me/chef/profile/update/', { experience: profileForm.experience, bio: profileForm.bio, calendly_url: profileForm.calendly_url || null })
                   }
                   await loadChefProfile()
                   if (hasBanner){
@@ -1544,6 +1626,251 @@ export default function ChefDashboard(){
               }}>{profileSaving?'Saving…':'Save changes'}</button>
             </div>
           </div>
+          
+          {/* Service Areas Management */}
+          <div className="card">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+              <h3 style={{ margin: 0 }}>Service Areas</h3>
+              <button 
+                className="btn btn-outline btn-sm" 
+                onClick={() => { setShowAreaPicker(!showAreaPicker); setNewAreaSelection([]) }}
+              >
+                {showAreaPicker ? 'Cancel' : '+ Request New Areas'}
+              </button>
+            </div>
+            
+            {areaStatusLoading ? (
+              <div className="muted">Loading service areas...</div>
+            ) : areaStatus ? (
+              <>
+                {/* Current approved areas */}
+                {(areaStatus.approved_areas?.length > 0 || areaStatus.ungrouped_postal_codes?.length > 0) ? (
+                  <div style={{ marginBottom: '1rem' }}>
+                    <div style={{ fontSize: '0.85em', fontWeight: 600, textTransform: 'uppercase', opacity: 0.6, marginBottom: '0.5rem' }}>
+                      Approved Service Areas ({areaStatus.total_postal_codes} postal codes)
+                    </div>
+                    
+                    {/* Areas grouped by admin region */}
+                    {areaStatus.approved_areas?.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                        {areaStatus.approved_areas.map(area => (
+                          <span 
+                            key={area.area_id} 
+                            style={{
+                              background: 'var(--accent-green-soft, rgba(92, 184, 92, 0.15))',
+                              border: '1px solid var(--accent-green, #5cb85c)',
+                              borderRadius: '6px',
+                              padding: '0.35rem 0.75rem',
+                              fontSize: '0.9em'
+                            }}
+                          >
+                            {area.name}
+                            {area.name_local && area.name_local !== area.name && (
+                              <span style={{ opacity: 0.6, marginLeft: '0.35rem' }}>{area.name_local}</span>
+                            )}
+                            <span style={{ opacity: 0.5, marginLeft: '0.35rem' }}>({area.postal_code_count})</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    
+                    {/* Individual postal codes not linked to an admin area */}
+                    {areaStatus.ungrouped_postal_codes?.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: '0.8em', opacity: 0.6, marginBottom: '0.35rem' }}>
+                          Individual postal codes:
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                          {areaStatus.ungrouped_postal_codes.map(pc => (
+                            <span 
+                              key={pc.id} 
+                              style={{
+                                background: 'var(--bg-muted, #f5f5f5)',
+                                border: '1px solid var(--border, #ddd)',
+                                borderRadius: '4px',
+                                padding: '0.25rem 0.5rem',
+                                fontSize: '0.85em'
+                              }}
+                            >
+                              {pc.code}
+                              {pc.place_name && <span style={{ opacity: 0.6, marginLeft: '0.25rem' }}>({pc.place_name})</span>}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="muted" style={{ marginBottom: '1rem' }}>
+                    No approved service areas yet. Request areas below.
+                  </div>
+                )}
+                
+                {/* Pending requests */}
+                {areaStatus.pending_requests?.length > 0 && (
+                  <div style={{ 
+                    marginBottom: '1rem', 
+                    padding: '0.75rem', 
+                    background: 'rgba(255, 193, 7, 0.15)', 
+                    borderRadius: '6px', 
+                    border: '1px solid rgba(255, 193, 7, 0.4)' 
+                  }}>
+                    <div style={{ fontSize: '0.85em', fontWeight: 600, marginBottom: '0.5rem', color: 'var(--text-warning, #ffc107)' }}>
+                      ⏳ Pending Requests
+                    </div>
+                    {areaStatus.pending_requests.map(req => (
+                      <div key={req.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                        <div>
+                          <span style={{ color: 'var(--text, inherit)' }}>{req.areas.map(a => a.name).join(', ') || 'Individual codes'}</span>
+                          <span style={{ marginLeft: '0.5rem', opacity: 0.7 }}>({req.total_codes_requested} codes)</span>
+                        </div>
+                        <button 
+                          className="btn btn-outline btn-sm" 
+                          onClick={() => cancelAreaRequest(req.id)}
+                          style={{ color: '#ff6b6b', borderColor: '#ff6b6b' }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                
+                {/* Request new areas form */}
+                {showAreaPicker && (
+                  <div style={{ borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
+                    <div style={{ fontSize: '0.85em', fontWeight: 600, textTransform: 'uppercase', opacity: 0.6, marginBottom: '0.5rem' }}>
+                      Request Additional Areas
+                    </div>
+                    <p className="muted" style={{ fontSize: '0.85em', marginBottom: '0.75rem' }}>
+                      Select areas you want to serve. Your request will be reviewed by an admin.
+                      You'll keep your existing approved areas while the request is pending.
+                    </p>
+                    
+                    <ServiceAreaPicker
+                      country={
+                        // Try multiple sources for country code
+                        areaStatus?.approved_areas?.[0]?.country ||
+                        areaStatus?.ungrouped_postal_codes?.[0]?.country ||
+                        chef?.serving_postalcodes?.[0]?.country ||
+                        'US'
+                      }
+                      selectedAreas={newAreaSelection}
+                      onChange={setNewAreaSelection}
+                      maxHeight="400px"
+                    />
+                    
+                    <div style={{ marginTop: '0.75rem' }}>
+                      <div className="label">Notes (optional)</div>
+                      <textarea 
+                        className="textarea" 
+                        rows={2} 
+                        value={areaRequestNotes}
+                        onChange={e => setAreaRequestNotes(e.target.value)}
+                        placeholder="Why do you want to serve these areas?"
+                      />
+                    </div>
+                    
+                    <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
+                      <button 
+                        className="btn btn-primary"
+                        disabled={submittingAreaRequest || newAreaSelection.length === 0}
+                        onClick={submitAreaRequest}
+                      >
+                        {submittingAreaRequest ? 'Submitting...' : `Request ${newAreaSelection.length} Area${newAreaSelection.length !== 1 ? 's' : ''}`}
+                      </button>
+                      <button 
+                        className="btn btn-outline"
+                        onClick={() => { setShowAreaPicker(false); setNewAreaSelection([]) }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+                
+                {/* Recent history */}
+                {areaStatus.request_history?.length > 0 && !showAreaPicker && (
+                  <details style={{ marginTop: '1rem' }}>
+                    <summary style={{ cursor: 'pointer', fontSize: '0.85em', opacity: 0.7 }}>
+                      Recent request history
+                    </summary>
+                    <div style={{ marginTop: '0.5rem' }}>
+                      {areaStatus.request_history.map(req => {
+                        const statusColors = {
+                          approved: { bg: 'rgba(92, 184, 92, 0.2)', color: '#5cb85c' },
+                          rejected: { bg: 'rgba(217, 83, 79, 0.2)', color: '#d9534f' },
+                          partially_approved: { bg: 'rgba(91, 192, 222, 0.2)', color: '#5bc0de' },
+                        }
+                        const style = statusColors[req.status] || { bg: 'rgba(255,255,255,0.1)', color: 'inherit' }
+                        
+                        return (
+                          <div key={req.id} style={{ 
+                            padding: '0.5rem',
+                            marginBottom: '0.35rem',
+                            borderRadius: '4px',
+                            background: 'rgba(255,255,255,0.03)',
+                            border: '1px solid var(--border-light, rgba(255,255,255,0.1))',
+                            fontSize: '0.9em'
+                          }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <span>
+                                {req.areas_count} area{req.areas_count !== 1 ? 's' : ''} requested
+                                <span style={{ marginLeft: '0.5rem', opacity: 0.6 }}>
+                                  {new Date(req.created_at).toLocaleDateString()}
+                                </span>
+                              </span>
+                              <span style={{ 
+                                padding: '2px 8px', 
+                                borderRadius: '3px',
+                                fontSize: '0.85em',
+                                background: style.bg,
+                                color: style.color
+                              }}>
+                                {req.status_display || req.status}
+                              </span>
+                            </div>
+                            
+                            {/* Show approval details for partial approvals */}
+                            {req.status === 'partially_approved' && req.approval_summary && (
+                              <div style={{ marginTop: '0.5rem', fontSize: '0.85em' }}>
+                                <div style={{ color: '#5cb85c' }}>
+                                  ✅ Approved: {req.approval_summary.approved_areas} areas ({req.approval_summary.approved_codes} codes)
+                                </div>
+                                <div style={{ color: '#d9534f' }}>
+                                  ❌ Rejected: {req.approval_summary.rejected_areas} areas ({req.approval_summary.rejected_codes} codes)
+                                </div>
+                                {req.approved_areas?.length > 0 && (
+                                  <div style={{ marginTop: '0.25rem', opacity: 0.8 }}>
+                                    <span style={{ fontWeight: 500 }}>Approved:</span> {req.approved_areas.map(a => a.name).join(', ')}
+                                  </div>
+                                )}
+                                {req.rejected_areas?.length > 0 && (
+                                  <div style={{ opacity: 0.6 }}>
+                                    <span style={{ fontWeight: 500 }}>Not approved:</span> {req.rejected_areas.map(a => a.name).join(', ')}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            
+                            {/* Show admin notes if any */}
+                            {req.admin_notes && (
+                              <div style={{ marginTop: '0.35rem', fontSize: '0.85em', opacity: 0.7, fontStyle: 'italic' }}>
+                                "{req.admin_notes}"
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </details>
+                )}
+              </>
+            ) : (
+              <div className="muted">Unable to load service areas</div>
+            )}
+          </div>
+          
           <div className="card">
             <div style={{display:'flex', alignItems:'center', justifyContent:'space-between'}}>
               <h3 style={{margin:0}}>Public preview</h3>

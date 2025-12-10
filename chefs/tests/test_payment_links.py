@@ -1753,3 +1753,4 @@ class SecurityTestCase(APITestCase):
                 # Verify stored as-is (frontend should escape)
                 data = response.json()
                 self.assertEqual(data['description'], description)
+

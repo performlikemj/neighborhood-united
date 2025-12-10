@@ -35,3 +35,4 @@ class Migration(migrations.Migration):
             index=models.Index(fields=['email_verification_token'], name='crm_lead_email_v_a4e8b5_idx'),
         ),
     ]
+

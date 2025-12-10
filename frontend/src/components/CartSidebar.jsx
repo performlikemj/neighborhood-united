@@ -126,7 +126,6 @@ export default function CartSidebar() {
         })
       }
       setAddresses(filtered)
-      addressesFetchedRef.current = true
       nextCount = filtered.length
     }catch(err){
       if (isDev){
@@ -141,6 +140,7 @@ export default function CartSidebar() {
       setAddresses([])
       setAddressesError(message)
     }finally{
+      addressesFetchedRef.current = true  // Mark as fetched regardless of success/failure
       if (isDev){
         console.debug('[CartSidebar] fetchAddresses finished', {
           loading: false,
@@ -354,7 +354,7 @@ export default function CartSidebar() {
 
           let updatedOrder = null
           try{
-            const updateResp = await api.patch(`/chef-services/orders/${serviceItem.orderId}/update/`, payload)
+            const updateResp = await api.patch(`/services/orders/${serviceItem.orderId}/update/`, payload)
             updatedOrder = updateResp?.data || null
             if (updatedOrder) {
               updateCartItem(indexInCart, {
@@ -376,7 +376,7 @@ export default function CartSidebar() {
           }
 
           try{
-            const checkoutResp = await api.post(`/chef-services/orders/${serviceItem.orderId}/checkout`, {})
+            const checkoutResp = await api.post(`/services/orders/${serviceItem.orderId}/checkout/`, {})
             const checkoutData = checkoutResp?.data || {}
             if (checkoutData?.validation_errors) {
               setValidationDetails(checkoutData.validation_errors)

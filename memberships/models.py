@@ -353,3 +353,4 @@ class MembershipPaymentLog(models.Model):
             paid_at=paid_at,
         )
 
+

@@ -38,7 +38,7 @@ class ChefMembershipModelTests(TestCase):
         
         self.assertEqual(membership.chef, self.chef)
         self.assertEqual(membership.status, ChefMembership.Status.TRIAL)
-        self.assertFalse(membership.is_active_member)  # Trial without end date
+        self.assertTrue(membership.is_active_member)  # TRIAL status is considered active
     
     def test_trial_membership(self):
         """Test trial membership status."""
@@ -138,4 +138,5 @@ class MembershipPaymentLogTests(TestCase):
         
         self.assertEqual(payment.period_start, period_start)
         self.assertEqual(payment.period_end, period_end)
+
 

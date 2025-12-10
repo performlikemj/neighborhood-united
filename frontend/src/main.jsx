@@ -6,6 +6,7 @@ import App from './App.jsx'
 import { AuthProvider } from './context/AuthContext.jsx'
 import { ThemeProvider } from './context/ThemeContext.jsx'
 import { CartProvider } from './context/CartContext.jsx'
+import { MessagingProvider } from './context/MessagingContext.jsx'
 import './styles.css'
 
 const queryClient = new QueryClient({
@@ -28,7 +29,9 @@ createRoot(document.getElementById('root')).render(
         <ThemeProvider>
           <AuthProvider>
             <CartProvider>
-              <App />
+              <MessagingProvider>
+                <App />
+              </MessagingProvider>
             </CartProvider>
           </AuthProvider>
         </ThemeProvider>

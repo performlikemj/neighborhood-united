@@ -10,8 +10,8 @@ from services.models import ServiceOffering
 class LeadSerializerTests(TestCase):
     def setUp(self):
         user_model = get_user_model()
-        self.owner = user_model.objects.create_user(username="owner", password="pw")
-        self.author = user_model.objects.create_user(username="author", password="pw")
+        self.owner = user_model.objects.create_user(username="owner", email="owner@test.com", password="pw")
+        self.author = user_model.objects.create_user(username="author", email="author@test.com", password="pw")
         self.offering = ServiceOffering.objects.create(
             name="Tasting Menu",
             slug="tasting-menu",

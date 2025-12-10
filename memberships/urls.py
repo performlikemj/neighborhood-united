@@ -13,3 +13,4 @@ urlpatterns = [
     path('payments/', views.payment_history, name='payments'),
 ]
 
+

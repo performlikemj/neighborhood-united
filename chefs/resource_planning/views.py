@@ -503,3 +503,4 @@ def prep_plan_summary(request):
         'latest_plan': ChefPrepPlanListSerializer(latest_plan).data if latest_plan else None
     })
 
+

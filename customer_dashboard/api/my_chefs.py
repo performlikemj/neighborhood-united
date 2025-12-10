@@ -4,7 +4,7 @@ API endpoints for customer's connected chefs (multi-chef support).
 These endpoints support the Client Portal experience where customers
 can view and interact with their connected chefs.
 """
-from django.db.models import Max
+from django.db.models import Max, Avg, Count
 from django.db.models.functions import Coalesce, Greatest
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -14,8 +14,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from chef_services.models import ChefCustomerConnection
-from meals.models import ChefMealPlan, Order
+from chef_services.models import ChefCustomerConnection, ChefServiceOffering, ChefServicePriceTier
+from meals.models import ChefMealPlan, Order, Dish, ChefMealEvent
 
 
 @api_view(['GET'])
@@ -246,6 +246,166 @@ def get_chef_orders(request, chef_id):
         'total': total,
         'limit': limit,
         'offset': offset,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_chef_catalog(request, chef_id):
+    """
+    Get the chef's full catalog: dishes, upcoming meal events, and services.
+    
+    Services are filtered based on the customer's location - only services
+    available in their area are returned.
+    
+    Args:
+        chef_id: The ID of the chef
+        
+    Returns:
+        {
+            'dishes': [...],
+            'meal_events': [...],
+            'services': [...]
+        }
+    """
+    # Verify connection exists
+    connection = get_object_or_404(
+        ChefCustomerConnection.objects.select_related('chef'),
+        customer=request.user,
+        chef_id=chef_id,
+        status=ChefCustomerConnection.STATUS_ACCEPTED
+    )
+    
+    chef = connection.chef
+    
+    # Get user's postal code for service filtering
+    user_postal_code = None
+    if hasattr(request.user, 'address') and request.user.address:
+        user_postal_code = getattr(request.user.address, 'postal_code', None) or \
+                          getattr(request.user.address, 'postalcode', None)
+    
+    # 1. Get chef's dishes
+    dishes_qs = Dish.objects.filter(chef=chef).select_related('chef')
+    dishes = []
+    for dish in dishes_qs:
+        # Get first photo if available
+        photo_url = None
+        if hasattr(dish, 'photos') and dish.photos.exists():
+            first_photo = dish.photos.first()
+            if first_photo and first_photo.image:
+                photo_url = first_photo.image.url
+        
+        dishes.append({
+            'id': dish.id,
+            'name': dish.name,
+            'description': getattr(dish, 'description', ''),
+            'photo': photo_url,
+            'calories': float(dish.calories) if dish.calories else None,
+            'protein': float(dish.protein) if dish.protein else None,
+            'carbohydrates': float(dish.carbohydrates) if dish.carbohydrates else None,
+            'fat': float(dish.fat) if dish.fat else None,
+            'featured': dish.featured,
+        })
+    
+    # 2. Get upcoming meal events (open for orders, future dates)
+    today = timezone.now().date()
+    now = timezone.now()
+    
+    events_qs = ChefMealEvent.objects.filter(
+        chef=chef,
+        event_date__gte=today,
+        status__in=['scheduled', 'open'],
+        order_cutoff_time__gt=now
+    ).select_related('meal').order_by('event_date', 'event_time')[:20]
+    
+    meal_events = []
+    for event in events_qs:
+        # Get meal photo if available
+        photo_url = None
+        if event.meal and hasattr(event.meal, 'photos') and event.meal.photos.exists():
+            first_photo = event.meal.photos.first()
+            if first_photo and first_photo.image:
+                photo_url = first_photo.image.url
+        
+        spots_remaining = event.max_orders - event.orders_count if event.max_orders else None
+        
+        meal_events.append({
+            'id': event.id,
+            'meal_id': event.meal_id,
+            'meal_name': event.meal.name if event.meal else 'Unknown',
+            'description': event.description or (event.meal.description if event.meal else ''),
+            'photo': photo_url,
+            'event_date': event.event_date.isoformat(),
+            'event_time': event.event_time.strftime('%H:%M') if event.event_time else None,
+            'order_cutoff': event.order_cutoff_time.isoformat(),
+            'base_price': float(event.base_price),
+            'current_price': float(event.current_price),
+            'min_price': float(event.min_price),
+            'spots_remaining': spots_remaining,
+            'status': event.status,
+        })
+    
+    # 3. Get chef's service offerings (filtered by customer's location)
+    services_qs = ChefServiceOffering.objects.filter(
+        chef=chef,
+        active=True
+    ).prefetch_related('tiers')
+    
+    # Check if user's postal code is in chef's serving areas
+    chef_postal_codes = set()
+    if hasattr(chef, 'serving_postalcodes'):
+        chef_postal_codes = set(
+            pc.code for pc in chef.serving_postalcodes.all()
+        )
+    
+    # User is in service area if their postal code matches OR if chef has no restrictions
+    user_in_service_area = (
+        not chef_postal_codes or  # Chef serves everywhere
+        (user_postal_code and user_postal_code in chef_postal_codes)
+    )
+    
+    services = []
+    for offering in services_qs:
+        # Check if this offering is specifically targeted to this user
+        is_targeted = offering.target_customers.filter(id=request.user.id).exists()
+        
+        # Include if: user is in service area OR offering is targeted to them
+        if not user_in_service_area and not is_targeted:
+            continue
+        
+        # Get active tiers
+        tiers = []
+        for tier in offering.tiers.filter(active=True):
+            tiers.append({
+                'id': tier.id,
+                'name': tier.display_label or f"{tier.household_min}-{tier.household_max or '∞'} people",
+                'description': '',
+                'price_cents': tier.desired_unit_amount_cents,
+                'household_min': tier.household_min,
+                'household_max': tier.household_max,
+                'is_recurring': tier.is_recurring,
+                'recurrence_interval': tier.recurrence_interval,
+            })
+        
+        if not tiers:
+            continue  # Skip offerings with no active tiers
+        
+        services.append({
+            'id': offering.id,
+            'service_type': offering.service_type,
+            'service_type_display': offering.get_service_type_display(),
+            'title': offering.title,
+            'description': offering.description,
+            'default_duration_minutes': offering.default_duration_minutes,
+            'tiers': tiers,
+            'is_personalized': is_targeted,
+        })
+    
+    return Response({
+        'dishes': dishes,
+        'meal_events': meal_events,
+        'services': services,
+        'user_in_service_area': user_in_service_area,
     })
 
 

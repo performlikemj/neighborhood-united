@@ -11,13 +11,16 @@ https://docs.djangoproject.com/en/4.2/howto/deployment/asgi/
 import os
 from django.core.asgi import get_asgi_application
 from channels.routing import ProtocolTypeRouter, URLRouter
-import hood_united.routing  # Updated import
+from channels.auth import AuthMiddlewareStack
+import hood_united.routing
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'hood_united.settings')
 
 application = ProtocolTypeRouter({
     "http": get_asgi_application(),
-    "websocket": URLRouter(
-            hood_united.routing.websocket_urlpatterns  # Updated reference
+    "websocket": AuthMiddlewareStack(
+        URLRouter(
+            hood_united.routing.websocket_urlpatterns
         )
+    ),
 })

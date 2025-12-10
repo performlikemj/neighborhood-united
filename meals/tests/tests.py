@@ -4,7 +4,8 @@ from django.test import TestCase
 from freezegun import freeze_time
 from datetime import datetime, timedelta
 from django.utils import timezone
-from meals.models import PantryItem, CustomUser, MealPlan, MealPlanMeal
+from meals.models import PantryItem, MealPlan, MealPlanMeal
+from custom_auth.models import CustomUser
 from meals.meal_generation import (
     generate_and_create_meal,
     get_expiring_pantry_items

@@ -243,3 +243,4 @@ class ShelfLifeResultSerializer(serializers.Serializer):
     storage_type = serializers.CharField()
     notes = serializers.CharField(allow_null=True)
 
+

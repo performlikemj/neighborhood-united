@@ -37,6 +37,7 @@ urlpatterns = [
     path('local_chefs/', include('local_chefs.urls')),
     path('crm/', include('crm.urls')),
     path('memberships/', include('memberships.urls')),
+    path('messaging/', include('messaging.urls')),
 ]
 
 # Serve media files in development only

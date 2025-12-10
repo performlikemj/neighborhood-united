@@ -9,7 +9,9 @@ import ChefPrepPlanning from '../components/ChefPrepPlanning.jsx'
 import ChefPaymentLinks from '../components/ChefPaymentLinks.jsx'
 import SousChefWidget from '../components/SousChefWidget.jsx'
 import ServiceAreaPicker from '../components/ServiceAreaPicker.jsx'
+import ChatPanel from '../components/ChatPanel.jsx'
 import { SousChefNotificationProvider } from '../contexts/SousChefNotificationContext.jsx'
+import { useMessaging } from '../context/MessagingContext.jsx'
 
 function toArray(payload){
   if (!payload) return []
@@ -326,6 +328,120 @@ const OrdersIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="no
 const MealsIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>
 const PrepPlanIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="m9 14 2 2 4-4"/></svg>
 const PaymentLinksIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/><path d="M7 15h4"/><path d="M15 15h2"/></svg>
+const MessagesIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+
+/**
+ * ChefMessagesSection - Messages tab for chef dashboard
+ */
+function ChefMessagesSection() {
+  const { conversations, conversationsLoading, fetchConversations, totalUnread } = useMessaging()
+  const [chatOpen, setChatOpen] = useState(false)
+  const [selectedConversation, setSelectedConversation] = useState(null)
+  
+  useEffect(() => {
+    fetchConversations()
+  }, [fetchConversations])
+  
+  const handleOpenChat = (conversation) => {
+    setSelectedConversation(conversation)
+    setChatOpen(true)
+  }
+  
+  const formatTime = (dateStr) => {
+    if (!dateStr) return ''
+    const date = new Date(dateStr)
+    const now = new Date()
+    const isToday = date.toDateString() === now.toDateString()
+    const yesterday = new Date(now)
+    yesterday.setDate(yesterday.getDate() - 1)
+    const isYesterday = date.toDateString() === yesterday.toDateString()
+    
+    if (isToday) {
+      return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+    }
+    if (isYesterday) {
+      return 'Yesterday'
+    }
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  }
+  
+  return (
+    <div>
+      <header style={{marginBottom:'1.5rem', display:'flex', alignItems:'center', justifyContent:'space-between'}}>
+        <div>
+          <h1 style={{margin:'0 0 .25rem 0'}}>Messages</h1>
+          <p className="muted" style={{margin:0}}>Chat with your connected clients</p>
+        </div>
+        {totalUnread > 0 && (
+          <span className="badge badge-primary">{totalUnread} unread</span>
+        )}
+      </header>
+      
+      <div className="card">
+        {conversationsLoading && (
+          <div style={{display:'flex', alignItems:'center', justifyContent:'center', padding:'3rem'}}>
+            <div className="spinner" style={{width: 32, height: 32}} />
+          </div>
+        )}
+        
+        {!conversationsLoading && conversations.length === 0 && (
+          <div className="chef-empty-state" style={{padding:'3rem', textAlign:'center'}}>
+            <MessagesIcon />
+            <p style={{margin:'1rem 0 0', fontWeight:600}}>No conversations yet</p>
+            <p className="muted" style={{margin:'.5rem 0 0'}}>Messages from your clients will appear here</p>
+          </div>
+        )}
+        
+        {!conversationsLoading && conversations.length > 0 && (
+          <div className="conversations-list">
+            {conversations.map(conv => (
+              <button
+                key={conv.id}
+                className="conversation-item"
+                onClick={() => handleOpenChat(conv)}
+              >
+                <div className="conversation-avatar">
+                  {conv.customer_photo ? (
+                    <img src={conv.customer_photo} alt="" />
+                  ) : (
+                    <div className="conversation-avatar-placeholder">
+                      <i className="fa-solid fa-user"></i>
+                    </div>
+                  )}
+                </div>
+                <div className="conversation-info">
+                  <div className="conversation-header">
+                    <span className="conversation-name">{conv.customer_name}</span>
+                    <span className="conversation-time">{formatTime(conv.last_message_at)}</span>
+                  </div>
+                  <div className="conversation-preview">
+                    {conv.last_message_preview || 'Start a conversation'}
+                  </div>
+                </div>
+                {conv.unread_count > 0 && (
+                  <span className="conversation-unread">{conv.unread_count}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      
+      {/* Chat Panel */}
+      <ChatPanel
+        isOpen={chatOpen}
+        onClose={() => {
+          setChatOpen(false)
+          setSelectedConversation(null)
+          fetchConversations() // Refresh after closing
+        }}
+        conversationId={selectedConversation?.id}
+        recipientName={selectedConversation?.customer_name}
+        recipientPhoto={selectedConversation?.customer_photo}
+      />
+    </div>
+  )
+}
 
 export default function ChefDashboard(){
   const [tab, setTab] = useState('dashboard')
@@ -1156,6 +1272,7 @@ export default function ChefDashboard(){
           <NavItem value="kitchen" label="Kitchen" icon={KitchenIcon} />
           <NavItem value="connections" label="Connections" icon={ConnectionsIcon} />
           <NavItem value="clients" label="Clients" icon={ClientsIcon} />
+          <NavItem value="messages" label="Messages" icon={MessagesIcon} />
           <NavItem value="payments" label="Payment Links" icon={PaymentLinksIcon} />
           <NavItem value="services" label="Services" icon={ServicesIcon} />
           <NavItem value="events" label="Events" icon={EventsIcon} />
@@ -1549,6 +1666,8 @@ export default function ChefDashboard(){
 
 
       {tab==='clients' && <ChefAllClients />}
+
+      {tab==='messages' && <ChefMessagesSection />}
 
       {tab==='payments' && <ChefPaymentLinks />}
 

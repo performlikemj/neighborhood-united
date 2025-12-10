@@ -82,6 +82,7 @@ INSTALLED_APPS = [
     'local_chefs',
     'crm',
     'memberships',
+    'messaging',
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
@@ -452,6 +453,25 @@ else:
                 "SOCKET_KEEPALIVE": True,
             },
         }
+    }
+
+# Django Channels layer configuration
+if DEBUG:
+    # Development: Use in-memory channel layer
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer"
+        }
+    }
+else:
+    # Production: Use Redis channel layer
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [RAW_REDIS_URL],
+            },
+        },
     }
 
 # Celery settings

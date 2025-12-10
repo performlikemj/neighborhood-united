@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useTheme } from '../context/ThemeContext.jsx'
+import { useMessaging } from '../context/MessagingContext.jsx'
 import { FEATURES } from '../config/features.js'
 
 function PlateStackIcon(){
@@ -20,6 +21,7 @@ function PlateStackIcon(){
 export default function NavBar(){
   const { user, logout, switchRole, hasChefAccess, connectedChefs, hasChefConnection } = useAuth()
   const { theme, toggleTheme } = useTheme()
+  const { totalUnread } = useMessaging()
   const nav = useNavigate()
   const location = useLocation()
   const [switching, setSwitching] = useState(false)
@@ -105,6 +107,21 @@ export default function NavBar(){
           {(!inChef && isAuthed && hasChefConnection && FEATURES.CLIENT_PORTAL_MY_CHEFS) && (
             <Link to="/my-chefs" onClick={closeMenu} className="btn btn-outline">
               {connectedChefCount === 1 ? 'My Chef' : 'My Chefs'}
+            </Link>
+          )}
+          
+          {/* Messages notification for chefs - goes to dashboard messages tab */}
+          {(inChef && isAuthed) && (
+            <Link 
+              to="/chefs/dashboard" 
+              onClick={closeMenu} 
+              className="nav-icon-link"
+              title="Messages"
+            >
+              <i className="fa-regular fa-comment"></i>
+              {totalUnread > 0 && (
+                <span className="nav-unread-badge">{totalUnread > 9 ? '9+' : totalUnread}</span>
+              )}
             </Link>
           )}
           

@@ -47,3 +47,4 @@ class ChefMembershipSerializer(serializers.ModelSerializer):
         )['total'] or 0
         return total_cents / 100
 
+

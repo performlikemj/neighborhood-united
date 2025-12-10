@@ -382,3 +382,4 @@ def customer_receipts(request, customer_id):
     return Response(data)
 
 
+

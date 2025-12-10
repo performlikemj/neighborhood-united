@@ -1,8 +1,12 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { Link, useParams, useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../context/AuthContext.jsx'
+import { useMessaging } from '../context/MessagingContext.jsx'
 import { getSeededChefEmoji } from '../utils/emojis.js'
+import ChefMenuModal from '../components/ChefMenuModal.jsx'
+import RequestServiceModal from '../components/RequestServiceModal.jsx'
+import ChatPanel from '../components/ChatPanel.jsx'
 
 /**
  * ChefHub - Individual chef relationship page
@@ -14,10 +18,18 @@ export default function ChefHub() {
   const { chefId } = useParams()
   const navigate = useNavigate()
   const { connectedChefs } = useAuth()
+  const { getOrCreateConversation } = useMessaging()
   
   const [hubData, setHubData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  
+  // Modal states
+  const [menuModalOpen, setMenuModalOpen] = useState(false)
+  const [serviceModalOpen, setServiceModalOpen] = useState(false)
+  const [chatOpen, setChatOpen] = useState(false)
+  const [conversationId, setConversationId] = useState(null)
+  const [chatLoading, setChatLoading] = useState(false)
   
   // Check if we have multiple chefs (to show back button)
   const hasMultipleChefs = connectedChefs.length > 1
@@ -25,6 +37,28 @@ export default function ChefHub() {
   useEffect(() => {
     fetchHubData()
   }, [chefId])
+  
+  // Handle opening chat
+  const handleOpenChat = useCallback(async () => {
+    if (chatLoading) return
+    
+    setChatLoading(true)
+    try {
+      const conversation = await getOrCreateConversation(chefId)
+      setConversationId(conversation.id)
+      setChatOpen(true)
+    } catch (err) {
+      console.error('Failed to open chat:', err)
+      // Show error toast
+      try {
+        window.dispatchEvent(new CustomEvent('global-toast', { 
+          detail: { text: 'Unable to open chat. Please try again.', tone: 'error' } 
+        }))
+      } catch {}
+    } finally {
+      setChatLoading(false)
+    }
+  }, [chefId, chatLoading, getOrCreateConversation])
   
   const fetchHubData = async () => {
     setLoading(true)
@@ -132,8 +166,16 @@ export default function ChefHub() {
             </p>
             
             <div className="chef-hub-actions">
-              <button className="btn btn-outline btn-icon" onClick={() => {/* TODO: Message chef */}}>
-                <i className="fa-regular fa-comment"></i>
+              <button 
+                className="btn btn-outline btn-icon" 
+                onClick={handleOpenChat}
+                disabled={chatLoading}
+              >
+                {chatLoading ? (
+                  <span className="spinner-sm"></span>
+                ) : (
+                  <i className="fa-regular fa-comment"></i>
+                )}
                 Message Chef
               </button>
               <Link to={`/chefs/${chef.username}`} className="btn btn-outline btn-icon">
@@ -221,13 +263,13 @@ export default function ChefHub() {
           
           <div className="hub-card-body">
             <div className="quick-actions-grid">
-              <Link to={`/chefs/${chef.username}`} className="quick-action-item">
+              <button className="quick-action-item" onClick={() => setMenuModalOpen(true)}>
                 <div className="quick-action-icon">
                   <i className="fa-solid fa-book-open"></i>
                 </div>
                 <span className="quick-action-label">Browse Menu</span>
                 <i className="fa-solid fa-chevron-right quick-action-arrow"></i>
-              </Link>
+              </button>
               
               <Link to="/profile" className="quick-action-item">
                 <div className="quick-action-icon">
@@ -237,7 +279,7 @@ export default function ChefHub() {
                 <i className="fa-solid fa-chevron-right quick-action-arrow"></i>
               </Link>
               
-              <button className="quick-action-item" onClick={() => {/* TODO: Request service */}}>
+              <button className="quick-action-item" onClick={() => setServiceModalOpen(true)}>
                 <div className="quick-action-icon">
                   <i className="fa-solid fa-calendar-plus"></i>
                 </div>
@@ -248,6 +290,27 @@ export default function ChefHub() {
           </div>
         </section>
       </div>
+      
+      {/* Modals */}
+      <ChefMenuModal
+        isOpen={menuModalOpen}
+        onClose={() => setMenuModalOpen(false)}
+        chefId={chefId}
+        chefUsername={chef.username}
+      />
+      <RequestServiceModal
+        isOpen={serviceModalOpen}
+        onClose={() => setServiceModalOpen(false)}
+        chefId={chefId}
+        chefUsername={chef.username}
+      />
+      <ChatPanel
+        isOpen={chatOpen}
+        onClose={() => setChatOpen(false)}
+        conversationId={conversationId}
+        recipientName={chef.display_name}
+        recipientPhoto={chef.photo}
+      />
     </div>
   )
 }

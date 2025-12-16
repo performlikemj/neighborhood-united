@@ -30,9 +30,9 @@ def _get_groq_client():
 
 VAR_RX = re.compile(r"({{.*?}}|{%.*?%})", re.S)
 
-# Initialize Redis connection with proper SSL handling
+# Initialize Redis connection
 def get_redis_client():
-    """Get Redis client with proper SSL configuration for Azure Redis."""
+    """Get Redis client for TLS-enabled Redis providers (Upstash, Azure, etc.)."""
     redis_url = os.getenv('REDIS_URL', '') or os.getenv('CELERY_BROKER_URL', '')
     
     if not redis_url:
@@ -40,8 +40,6 @@ def get_redis_client():
         return None
     
     try:
-        # Try direct connection - URL now contains lowercase ssl_cert_reqs=none
-        # that both Celery and redis-py accept
         client = redis.Redis.from_url(
             redis_url,
             socket_connect_timeout=10,
@@ -57,22 +55,7 @@ def get_redis_client():
         
     except Exception as e:
         logger.error(f"Redis connection failed: {e}")
-        
-        # Fallback: try basic connection without SSL options
-        try:
-            client = redis.Redis.from_url(
-                redis_url,
-                socket_connect_timeout=5,
-                socket_timeout=5,
-                decode_responses=True
-            )
-            client.ping()
-            logger.warning("Redis connected with basic configuration (fallback)")
-            return client
-            
-        except Exception as fallback_error:
-            logger.error(f"Redis fallback connection failed: {fallback_error}")
-            return None
+        return None
 
 # Global Redis connection instance
 _redis_connection = None

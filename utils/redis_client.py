@@ -21,29 +21,31 @@ def _true(val: str) -> bool:
 
 
 def get_redis_connection():
-    """Get a properly configured Redis connection with SSL support for Azure Redis.
-    Note: Redis is always attempted if URL is configured; no DEBUG-based disable.
+    """Get a properly configured Redis connection.
+    
+    Works with any TLS-enabled Redis provider (Upstash, Azure, etc.) that uses
+    properly formatted rediss:// URLs. No special SSL manipulation needed.
     """
     redis_url = os.getenv('REDIS_URL', '') or os.getenv('CELERY_BROKER_URL', '')
-    
     
     if not redis_url:
         logger.error("No Redis URL found in environment variables (REDIS_URL or CELERY_BROKER_URL)")
         return None
     
-    logger.info(f"Attempting Redis connection to: {redis_url.split('@')[0]}@[REDACTED]")
+    # Redact password for logging
+    try:
+        redacted_url = redis_url.split('@')[0] + '@[REDACTED]' if '@' in redis_url else '[REDACTED]'
+    except Exception:
+        redacted_url = '[REDACTED]'
     
+    logger.info(f"Attempting Redis connection to: {redacted_url}")
     
     try:
-        # Try direct connection - URL now contains lowercase ssl_cert_reqs=none
-        # that both Celery and redis-py accept
         client = redis.Redis.from_url(
             redis_url,
             decode_responses=True,
             socket_keepalive=True,
-            socket_keepalive_options={},
             health_check_interval=30,
-            retry_on_error=[redis.exceptions.ReadOnlyError, redis.exceptions.ConnectionError],
             socket_connect_timeout=10,
             socket_timeout=10,
             retry_on_timeout=True
@@ -51,51 +53,29 @@ def get_redis_connection():
         
         # Test the connection
         client.ping()
-        logger.info("Redis connection successful to Azure Redis")
+        logger.info("Redis connection successful")
         return client
         
     except Exception as e:
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(e),
-            'source': 'get_redis_connection',
-            'traceback': traceback.format_exc()
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
-        logger.error(f"Redis connection failed to Azure Redis: {e}")
+        # Send error to n8n for monitoring
+        n8n_url = os.getenv('N8N_TRACEBACK_URL')
+        if n8n_url:
+            try:
+                n8n_traceback = {
+                    'error': str(e),
+                    'source': 'get_redis_connection',
+                    'traceback': traceback.format_exc()
+                }
+                requests.post(n8n_url, json=n8n_traceback, timeout=5)
+            except Exception:
+                pass  # Don't let traceback reporting break the main flow
         
-        # Try with modified SSL settings - NEVER fallback to localhost
-        try:
-            # Change ssl_cert_reqs from 'required' to 'none' for compatibility
-            modified_url = redis_url.replace('ssl_cert_reqs=required', 'ssl_cert_reqs=none')
-            logger.info(f"Trying modified SSL settings: {modified_url.split('@')[0]}@[REDACTED]")
-            
-            client = redis.Redis.from_url(
-                modified_url,
-                decode_responses=True,
-                socket_connect_timeout=10,
-                socket_timeout=10,
-                retry_on_timeout=True
-            )
-            client.ping()
-            logger.warning("Redis connected with modified SSL configuration (ssl_cert_reqs=none)")
-            return client
-            
-        except Exception as fallback_error:
-            # n8n traceback
-            n8n_traceback = {
-                'error': str(fallback_error),
-                'source': 'get_redis_connection',
-                'traceback': traceback.format_exc()
-            }
-            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
-            logger.error(f"Redis connection failed even with modified SSL: {fallback_error}")
-            logger.error("WILL NOT FALLBACK TO LOCALHOST - returning None")
-            return None
+        logger.error(f"Redis connection failed: {e}")
+        return None
 
 class RedisClient:
     """
-    Shared Redis client with proper SSL support for Azure Redis.
+    Shared Redis client for TLS-enabled Redis providers (Upstash, Azure, etc.).
     """
     
     def __init__(self):
@@ -103,22 +83,18 @@ class RedisClient:
         self._redis_url = os.getenv('REDIS_URL', '') or os.getenv('CELERY_BROKER_URL', '')
     
     def _get_connection(self):
-        """Get or create Redis connection. No DEBUG-based disable."""
+        """Get or create Redis connection."""
         if self._connection is None:
             if not self._redis_url:
                 logger.error("REDIS_URL environment variable not set")
                 return None
             
             try:
-                # Try direct connection - URL now contains lowercase ssl_cert_reqs=none
-                # that both Celery and redis-py accept
                 connection = redis.Redis.from_url(
                     self._redis_url,
                     decode_responses=True,
                     socket_keepalive=True,
-                    socket_keepalive_options={},
                     health_check_interval=30,
-                    retry_on_error=[redis.exceptions.ReadOnlyError, redis.exceptions.ConnectionError],
                     socket_connect_timeout=10,
                     socket_timeout=10,
                     retry_on_timeout=True
@@ -133,32 +109,21 @@ class RedisClient:
             except Exception as e:
                 logger.error(f"Redis connection failed: {e}")
                 
-                # Try with modified SSL settings instead of basic fallback
-                try:
-                    modified_url = self._redis_url.replace('ssl_cert_reqs=required', 'ssl_cert_reqs=none')
-                    connection = redis.Redis.from_url(
-                        modified_url,
-                        decode_responses=True,
-                        socket_connect_timeout=10,
-                        socket_timeout=10,
-                        retry_on_timeout=True
-                    )
-                    connection.ping()
-                    logger.warning("Redis connected with modified SSL configuration")
-                    self._connection = connection
-                    return self._connection
-                    
-                except Exception as fallback_error:
-                    logger.error(f"Redis fallback connection failed: {fallback_error}")
-                    # n8n traceback
-                    n8n_traceback = {
-                        'error': str(fallback_error),
-                        'source': 'get_redis_connection',
-                        'traceback': traceback.format_exc()
-                    }
-                    requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
-                    logger.error("No Redis connection available - operations will be skipped")
-                    return None
+                # Send error to n8n for monitoring
+                n8n_url = os.getenv('N8N_TRACEBACK_URL')
+                if n8n_url:
+                    try:
+                        n8n_traceback = {
+                            'error': str(e),
+                            'source': 'RedisClient._get_connection',
+                            'traceback': traceback.format_exc()
+                        }
+                        requests.post(n8n_url, json=n8n_traceback, timeout=5)
+                    except Exception:
+                        pass  # Don't let traceback reporting break the main flow
+                
+                logger.error("No Redis connection available - operations will be skipped")
+                return None
         
         return self._connection
     
@@ -191,13 +156,6 @@ class RedisClient:
                 return value
                 
         except Exception as e:
-            # n8n traceback
-            n8n_traceback = {
-                'error': str(e),
-                'source': 'get_redis_connection',
-                'traceback': traceback.format_exc()
-            }
-            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             logger.error(f"Error getting key '{key}' from Redis: {str(e)}")
             return default
     
@@ -233,13 +191,6 @@ class RedisClient:
             return True
             
         except Exception as e:
-            # n8n traceback
-            n8n_traceback = {
-                'error': str(e),
-                'source': 'get_redis_connection',
-                'traceback': traceback.format_exc()
-            }
-            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             logger.error(f"Error setting key '{key}' in Redis: {str(e)}")
             return False
     
@@ -263,13 +214,6 @@ class RedisClient:
             return True
             
         except Exception as e:
-            # n8n traceback
-            n8n_traceback = {
-                'error': str(e),
-                'source': 'get_redis_connection',
-                'traceback': traceback.format_exc()
-            }
-            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             logger.error(f"Error deleting key '{key}' from Redis: {str(e)}")
             return False
     
@@ -292,13 +236,6 @@ class RedisClient:
             return bool(conn.exists(key))
             
         except Exception as e:
-            # n8n traceback
-            n8n_traceback = {
-                'error': str(e),
-                'source': 'get_redis_connection',
-                'traceback': traceback.format_exc()
-            }
-            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
             logger.error(f"Error checking existence of key '{key}' in Redis: {str(e)}")
             return False
 

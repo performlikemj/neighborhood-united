@@ -218,6 +218,25 @@ else:
         }
     }
 
+# Supabase database for migration (dual database support)
+# Uses SUPA_DB_* environment variables
+if os.getenv('SUPA_DB_HOST'):
+    DATABASES['supabase'] = {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('SUPA_DB_NAME', 'postgres'),
+        'USER': os.getenv('SUPA_DB_USER', 'postgres'),
+        'PASSWORD': os.getenv('SUPA_DB_PASSWORD'),
+        'HOST': os.getenv('SUPA_DB_HOST'),
+        'PORT': os.getenv('SUPA_DB_PORT', '5432'),
+        'CONN_MAX_AGE': 0,
+        'CONN_HEALTH_CHECKS': True,
+        'OPTIONS': {
+            'connect_timeout': 10,
+            'sslmode': 'require',  # Supabase requires SSL
+            'options': '-c statement_timeout=60000',
+        },
+    }
+
 # Password validation
 # https://docs.djangoproject.com/en/4.2/ref/settings/#auth-password-validators
 
@@ -426,19 +445,14 @@ if DEBUG:
         }
     }
 else:
-    # Production: Use Redis with SSL
+    # Production: Use Redis with SSL (Upstash or other TLS-enabled Redis)
     RAW_REDIS_URL = os.getenv("REDIS_URL", "").strip()
 
     if not RAW_REDIS_URL:
         raise RuntimeError("REDIS_URL is not set")
 
-    if not RAW_REDIS_URL.startswith("rediss://"):
-        # assume host[:port][/db]   →  prepend scheme & default port/db
-        RAW_REDIS_URL = f"rediss://{RAW_REDIS_URL}:6380/0"
-
-    # Append SSL flag only once - use 'none' for better compatibility
-    if "ssl_cert_reqs=" not in RAW_REDIS_URL:
-        RAW_REDIS_URL = RAW_REDIS_URL + "?ssl_cert_reqs=required"
+    # Upstash and most modern Redis providers use properly formatted rediss:// URLs
+    # No URL manipulation needed - the provider URL is used as-is
 
     CACHES = {
         "default": {
@@ -507,20 +521,11 @@ CELERY_TASK_ACKS_LATE = True  # Acknowledge task after completion, not before
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 CELERY_TIMEZONE = TIME_ZONE  # or explicit e.g. 'UTC' or 'Asia/Tokyo'
 CELERY_ENABLE_UTC = True
-# Celery broker transport options with more robust SSL handling
-if DEBUG:
-    # Development: minimal SSL configuration or no SSL
-    CELERY_BROKER_TRANSPORT_OPTIONS = {
-        'visibility_timeout': 3600,
-    }
-else:
-    # Production: Try flexible SSL configuration
-    CELERY_BROKER_TRANSPORT_OPTIONS = {
-        'visibility_timeout': 3600,
-        'ssl': {
-            'ssl_cert_reqs': 'required',  # Skip SSL certificate verification for compatibility
-        }
-    }
+# Celery broker transport options
+# Upstash and modern Redis providers handle TLS automatically via rediss:// URL scheme
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    'visibility_timeout': 3600,
+}
 CELERYD_LOG_FILE = "/var/log/celery/celery.log"
 CELERYD_LOG_LEVEL = "DEBUG"
 

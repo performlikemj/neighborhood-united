@@ -910,6 +910,12 @@ export default function ChefDashboard(){
 
   useEffect(()=>{ loadAll() }, [])
 
+  // Set page title with chef name
+  useEffect(() => {
+    const chefName = chef?.user?.username || 'Dashboard'
+    document.title = `sautai — Chef ${chefName}`
+  }, [chef?.user?.username])
+
   useEffect(()=>{
     // Poll while onboarding is incomplete
     if (!payouts || payouts.loading) return

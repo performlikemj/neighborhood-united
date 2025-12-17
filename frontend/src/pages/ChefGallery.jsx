@@ -233,6 +233,12 @@ export default function ChefGallery(){
     return ()=> { cancelled = true }
   }, [username])
   
+  // Set page title with chef name
+  useEffect(() => {
+    const chefName = chef?.user?.username || username || 'Gallery'
+    document.title = `sautai — Chef ${chefName} Gallery`
+  }, [chef?.user?.username, username])
+  
   // Fetch gallery stats (optional - falls back to client-side computation)
   useEffect(()=>{
     let cancelled = false

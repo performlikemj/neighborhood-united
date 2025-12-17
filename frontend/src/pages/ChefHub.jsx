@@ -106,6 +106,12 @@ export default function ChefHub() {
   
   const { chef, connected_since, current_plan, upcoming_orders, pending_suggestions } = hubData
   
+  // Set page title with chef name
+  useEffect(() => {
+    const chefName = chef?.display_name || chef?.username || 'Chef'
+    document.title = `sautai — Chef ${chefName}`
+  }, [chef?.display_name, chef?.username])
+  
   return (
     <div className="page-chef-hub">
       {/* Back link for multi-chef users */}

@@ -4,9 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>sautai</title>
-    <!-- Favicons -->
-    <link rel="icon" type="image/png" sizes="512x512" href="/sautai_logo_new.png" />
-    <link rel="icon" type="image/png" sizes="180x180" href="/sautai_logo_new.png" />
+    <!-- Favicons - SVG for dynamic theme switching, PNG fallback -->
+    <link rel="icon" type="image/svg+xml" href="/sautai_logo_new.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/sautai_logo_new.png" />
     <!-- Apple Touch Icon -->
     <link rel="apple-touch-icon" sizes="180x180" href="/sautai_logo_new.png" />
@@ -33,6 +32,10 @@
           var stored = localStorage.getItem('theme');
           var t = (stored === 'dark' || stored === 'light') ? stored : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
           document.documentElement.setAttribute('data-theme', t);
+          // Set initial favicon based on theme
+          var faviconPath = t === 'dark' ? '/sautai_logo_new_dark.svg' : '/sautai_logo_new.svg';
+          var favicon = document.querySelector('link[rel="icon"][type="image/svg+xml"]');
+          if (favicon) favicon.href = faviconPath;
         }catch{}
       })();
     </script>

@@ -614,7 +614,7 @@ export default function PublicChef(){
     return false
   }
 
-  const title = useMemo(()=> chef?.user?.username ? `${chef.user.username} • Chef` : 'Chef', [chef])
+  const title = useMemo(()=> chef?.user?.username ? `Chef ${chef.user.username}` : 'Chef', [chef])
 
   useEffect(()=>{
     document.title = `sautai — ${title}`

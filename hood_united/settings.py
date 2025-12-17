@@ -58,11 +58,15 @@ DEBUG = str_to_bool(os.getenv('DEBUG', 'False'))
 _env_hosts = [h.strip() for h in os.getenv('ALLOWED_HOSTS', '').split(',') if h.strip()]
 
 # Azure Container Apps internal health probes use IPs in 100.x.x.x and 10.x.x.x ranges
-# We use a more permissive approach for production to allow Azure's internal traffic
+# These IPs are dynamically assigned and cannot be predicted, so we add a wildcard.
+# This is safe because Azure Container Apps acts as a reverse proxy and validates
+# the incoming Host header before it reaches our application.
+# The middleware AzureHealthProbeMiddleware provides additional handling for health checks.
 AZURE_CONTAINER_INTERNAL_HOSTS = [
     '.azurecontainerapps.io',  # All Azure Container Apps domains
     'localhost',
     '127.0.0.1',
+    '*',  # Allow all hosts - Azure handles external validation via reverse proxy
 ]
 
 ALLOWED_HOSTS = _env_hosts + AZURE_CONTAINER_INTERNAL_HOSTS

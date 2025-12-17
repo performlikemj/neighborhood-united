@@ -1,15 +1,22 @@
 """
 JWT authentication middleware for Django Channels WebSocket connections.
+
+NOTE: We avoid importing Django models at module level to prevent
+AppRegistryNotReady errors in ASGI context. Imports that depend on
+Django's app registry must be done inside functions.
 """
 from urllib.parse import parse_qs
 from channels.db import database_sync_to_async
 from channels.middleware import BaseMiddleware
-from django.contrib.auth.models import AnonymousUser
-from rest_framework_simplejwt.tokens import AccessToken
-from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def get_anonymous_user():
+    """Import AnonymousUser lazily to avoid AppRegistryNotReady errors."""
+    from django.contrib.auth.models import AnonymousUser
+    return AnonymousUser()
 
 
 @database_sync_to_async
@@ -18,6 +25,9 @@ def get_user_from_token(token_string):
     Validate JWT token and return the associated user.
     """
     from django.contrib.auth import get_user_model
+    from rest_framework_simplejwt.tokens import AccessToken
+    from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+    
     User = get_user_model()
     
     try:
@@ -34,7 +44,7 @@ def get_user_from_token(token_string):
     except Exception as e:
         logger.error(f"[WebSocket] Token validation error: {e}")
     
-    return AnonymousUser()
+    return get_anonymous_user()
 
 
 class JWTAuthMiddleware(BaseMiddleware):
@@ -71,7 +81,7 @@ class JWTAuthMiddleware(BaseMiddleware):
             # Fall back to session-based auth if no token provided
             # This allows backward compatibility for same-origin connections
             if 'user' not in scope or scope['user'] is None:
-                scope['user'] = AnonymousUser()
+                scope['user'] = get_anonymous_user()
         
         return await super().__call__(scope, receive, send)
 

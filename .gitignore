@@ -12,6 +12,7 @@
 __pycache__/
 media/
 staticfiles/
+!**/staticwebapp.config.json
 *.pyo
 *.pyc
 *.pyd

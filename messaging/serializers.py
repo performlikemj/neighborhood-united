@@ -92,3 +92,4 @@ class ConversationDetailSerializer(ConversationSerializer):
         messages = list(reversed(messages))
         return MessageSerializer(messages, many=True).data
 
+

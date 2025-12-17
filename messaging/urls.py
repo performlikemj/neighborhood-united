@@ -26,3 +26,4 @@ urlpatterns = [
     path('api/unread-counts/', views.get_unread_counts, name='get_unread_counts'),
 ]
 
+

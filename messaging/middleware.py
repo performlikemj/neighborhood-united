@@ -94,3 +94,4 @@ class JWTAuthMiddlewareStack:
         from channels.auth import AuthMiddlewareStack
         # First try session auth, then JWT auth takes precedence if token is provided
         return JWTAuthMiddleware(AuthMiddlewareStack(inner))
+

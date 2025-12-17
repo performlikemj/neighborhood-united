@@ -222,3 +222,4 @@ class ChatConsumer(AsyncWebsocketConsumer):
         except Conversation.DoesNotExist:
             pass
 
+

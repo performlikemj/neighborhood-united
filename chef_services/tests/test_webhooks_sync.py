@@ -1,3 +1,4 @@
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -54,7 +55,7 @@ class ChefServicesWebhooksSyncTests(TestCase):
             offering=self.off,
             tier=self.tier,
             household_size=2,
-            service_date=timezone.now().date(),
+            service_date=(timezone.now() + timedelta(days=2)).date(),
             service_start_time=timezone.now().time(),
             status='awaiting_payment',
         )
@@ -89,7 +90,7 @@ class ChefServicesWebhooksSyncTests(TestCase):
             offering=self.off,
             tier=self.tier,
             household_size=2,
-            service_date=timezone.now().date(),
+            service_date=(timezone.now() + timedelta(days=2)).date(),
             service_start_time=timezone.now().time(),
             status='awaiting_payment',
         )

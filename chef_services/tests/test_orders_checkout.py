@@ -1,3 +1,4 @@
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -46,7 +47,7 @@ class ChefServicesOrdersCheckoutTests(TestCase):
         payload = {
             "offering_id": self.off.id,
             "household_size": 2,
-            "service_date": timezone.now().date().isoformat(),
+            "service_date": (timezone.now() + timedelta(days=2)).date().isoformat(),
             "service_start_time": "10:00:00",
             "address_id": self.addr.id,
         }
@@ -62,7 +63,7 @@ class ChefServicesOrdersCheckoutTests(TestCase):
         payload = {
             "offering_id": self.off.id,
             "household_size": 2,
-            "service_date": timezone.now().date().isoformat(),
+            "service_date": (timezone.now() + timedelta(days=2)).date().isoformat(),
             "service_start_time": "10:00:00",
             "address_id": other_addr.id,
         }
@@ -76,7 +77,7 @@ class ChefServicesOrdersCheckoutTests(TestCase):
         payload = {
             "offering_id": self.off.id,
             "household_size": 2,
-            "service_date": timezone.now().date().isoformat(),
+            "service_date": (timezone.now() + timedelta(days=2)).date().isoformat(),
             "service_start_time": "10:00:00",
             "address_id": self.addr.id,
         }
@@ -100,7 +101,7 @@ class ChefServicesOrdersCheckoutTests(TestCase):
             offering=self.off,
             tier=self.tier,
             household_size=2,
-            service_date=timezone.now().date(),
+            service_date=(timezone.now() + timedelta(days=2)).date(),
             service_start_time=timezone.now().time(),
             status='awaiting_payment',
             stripe_session_id='cs_123',
@@ -122,7 +123,7 @@ class ChefServicesOrdersCheckoutTests(TestCase):
             "offering_id": self.off.id,
             "tier_id": self.tier.id,
             "household_size": 2,
-            "service_date": timezone.now().date().isoformat(),
+            "service_date": (timezone.now() + timedelta(days=2)).date().isoformat(),
             "service_start_time": "12:00:00",
             "address_id": self.addr.id,
         }
@@ -144,7 +145,7 @@ class ChefServicesOrdersCheckoutTests(TestCase):
         order_payload = {
             "offering_id": self.off.id,
             "household_size": 2,
-            "service_date": timezone.now().date().isoformat(),
+            "service_date": (timezone.now() + timedelta(days=2)).date().isoformat(),
             "service_start_time": "10:00:00",
             "address_id": self.addr.id,
         }
@@ -167,7 +168,7 @@ class ChefServicesOrdersCheckoutTests(TestCase):
             offering=self.off,
             tier=self.tier,
             household_size=2,
-            service_date=timezone.now().date(),
+            service_date=(timezone.now() + timedelta(days=2)).date(),
             service_start_time=timezone.now().time(),
         )
 
@@ -192,7 +193,7 @@ class ChefServicesOrdersCheckoutTests(TestCase):
             offering=self.off,
             tier=self.tier,
             household_size=2,
-            service_date=timezone.now().date(),
+            service_date=(timezone.now() + timedelta(days=2)).date(),
             service_start_time=timezone.now().time(),
             status='confirmed',
         )
@@ -255,7 +256,7 @@ class ChefServicesOrdersCheckoutTests(TestCase):
 
         url = reverse('service_update_order', args=[order.id])
         payload = {
-            "service_date": timezone.now().date().isoformat(),
+            "service_date": (timezone.now() + timedelta(days=2)).date().isoformat(),
             "service_start_time": "14:00:00",
             "address_id": self.addr.id,
             "special_requests": "Please use the back entrance"
@@ -263,7 +264,7 @@ class ChefServicesOrdersCheckoutTests(TestCase):
         resp = self.client.patch(url, payload, format='json')
         self.assertEqual(resp.status_code, 200, resp.content)
         data = resp.json()
-        self.assertEqual(data['service_date'], timezone.now().date().isoformat())
+        self.assertEqual(data['service_date'], (timezone.now() + timedelta(days=2)).date().isoformat())
         self.assertEqual(data['service_start_time'], "14:00:00")
         self.assertEqual(data['special_requests'], "Please use the back entrance")
 
@@ -275,14 +276,14 @@ class ChefServicesOrdersCheckoutTests(TestCase):
             offering=self.off,
             tier=self.tier,
             household_size=2,
-            service_date=timezone.now().date(),
+            service_date=(timezone.now() + timedelta(days=2)).date(),
             service_start_time=timezone.now().time(),
             status='confirmed',
         )
 
         url = reverse('service_update_order', args=[order.id])
         payload = {
-            "service_date": (timezone.now().date() + timezone.timedelta(days=1)).isoformat(),
+            "service_date": (timezone.now() + timedelta(days=3)).date().isoformat(),
         }
         resp = self.client.patch(url, payload, format='json')
         self.assertEqual(resp.status_code, 400)
@@ -304,7 +305,7 @@ class ChefServicesOrdersCheckoutTests(TestCase):
         # Step 2: Update with scheduling details
         update_url = reverse('service_update_order', args=[order_id])
         update_payload = {
-            "service_date": timezone.now().date().isoformat(),
+            "service_date": (timezone.now() + timedelta(days=2)).date().isoformat(),
             "service_start_time": "14:00:00",
             "address_id": self.addr.id,
         }

@@ -619,8 +619,23 @@ else:
     SECURE_BROWSER_XSS_FILTER = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
 
-# Webhook URL for n8n order events
-N8N_ORDER_EVENTS_WEBHOOK_URL = os.getenv('N8N_ORDER_EVENTS_WEBHOOK_URL', '')
-
-# Webhook URL for n8n traceback
-N8N_TRACEBACK_URL = os.getenv('N8N_TRACEBACK_URL', '')
+# Error Reporting Configuration
+# TODO: Add Sentry DSN for production error tracking
+# SENTRY_DSN = os.getenv('SENTRY_DSN', '')
+# See utils/error_reporting.py for integration guide
+#
+# When ready to integrate Sentry:
+# 1. pip install sentry-sdk
+# 2. Add SENTRY_DSN environment variable
+# 3. Uncomment and configure sentry_sdk.init() below
+#
+# import sentry_sdk
+# from sentry_sdk.integrations.django import DjangoIntegration
+# from sentry_sdk.integrations.celery import CeleryIntegration
+# if os.getenv('SENTRY_DSN'):
+#     sentry_sdk.init(
+#         dsn=os.getenv('SENTRY_DSN'),
+#         integrations=[DjangoIntegration(), CeleryIntegration()],
+#         traces_sample_rate=0.1,
+#         send_default_pii=False,
+#     )

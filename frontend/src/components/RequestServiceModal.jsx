@@ -111,13 +111,17 @@ export default function RequestServiceModal({ isOpen, onClose, chefId, chefUsern
       }
     }
     
-    // For home_chef services, date/time is required
+    // For home_chef services, date/time is required and must be at least 24 hours away
     if (selectedService?.service_type === 'home_chef') {
       if (!formData.serviceDate) {
         errors.serviceDate = 'Service date is required'
       }
       if (!formData.serviceStartTime) {
         errors.serviceStartTime = 'Start time is required'
+      }
+      // Check minimum notice (24 hours)
+      if (formData.serviceDate && formData.serviceStartTime && !isServiceDateTimeValid(formData.serviceDate, formData.serviceStartTime)) {
+        errors.serviceDate = 'Service must be scheduled at least 24 hours in advance'
       }
     }
     
@@ -176,10 +180,20 @@ export default function RequestServiceModal({ isOpen, onClose, chefId, chefUsern
     return `$${(cents / 100).toFixed(2)}`
   }
 
-  // Get minimum date (today)
+  // Get minimum date (tomorrow - services require 24 hours notice)
   const getMinDate = () => {
-    const today = new Date()
-    return today.toISOString().split('T')[0]
+    const tomorrow = new Date()
+    tomorrow.setDate(tomorrow.getDate() + 1)
+    return tomorrow.toISOString().split('T')[0]
+  }
+
+  // Check if service datetime is at least 24 hours from now
+  const isServiceDateTimeValid = (dateStr, timeStr) => {
+    if (!dateStr || !timeStr) return true // Let required validation handle empty fields
+    const serviceDateTime = new Date(`${dateStr}T${timeStr}`)
+    const minDateTime = new Date()
+    minDateTime.setHours(minDateTime.getHours() + 24)
+    return serviceDateTime >= minDateTime
   }
 
   if (!isOpen) return null

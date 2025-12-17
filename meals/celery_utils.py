@@ -1,17 +1,25 @@
+"""
+Celery task utilities for consistent error handling and task management.
+
+TODO: Migrate to utils.error_reporting.report_error() for centralized error tracking.
+      When Sentry is integrated, errors will automatically be captured there.
+      See utils/error_reporting.py for Sentry integration guide.
+"""
 import functools
 import logging
 import traceback
-import requests
-from django.conf import settings
-from celery import shared_task
-import os
+
 logger = logging.getLogger(__name__)
+
 
 def handle_task_failure(task_func):
     """
     Decorator to handle Celery task failures consistently.
-    Sends traceback to N8N webhook and logs the error.
-    Also handles Redis lock cleanup for meal plan generation tasks.
+    Logs the error and handles Redis lock cleanup for meal plan generation tasks.
+    
+    Note: n8n webhook error reporting has been removed. Errors are now logged
+    via Python's logging system. For production error tracking, integrate Sentry.
+    See utils/error_reporting.py for integration guide.
     """
     @functools.wraps(task_func)
     def wrapper(*args, **kwargs):
@@ -46,17 +54,10 @@ def handle_task_failure(task_func):
                 except Exception as cleanup_error:
                     logger.error(f"Error cleaning up Redis lock during task failure: {str(cleanup_error)}")
             
-            # Send traceback to N8N webhook if configured
-            n8n_traceback_url = os.getenv('N8N_TRACEBACK_URL', '')
-            if n8n_traceback_url:
-                try:
-                    requests.post(n8n_traceback_url, json={
-                        "error": str(e),
-                        "source": f"celery_task_{task_func.__name__}",
-                        "traceback": tb
-                    })
-                except Exception as webhook_error:
-                    logger.error(f"Failed to send error to N8N webhook: {str(webhook_error)}")
+            # TODO: Use utils.error_reporting.report_error() for centralized error tracking
+            # Example:
+            # from utils.error_reporting import report_error
+            # report_error(e, f"celery_task_{task_func.__name__}", {'traceback': tb})
             
             # Re-raise the exception to let Celery handle the task failure
             raise

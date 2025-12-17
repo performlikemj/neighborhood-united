@@ -222,6 +222,7 @@ jobs:
   # ============================================================================
   deploy-frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [frontend-test, backend-test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
@@ -245,11 +246,34 @@ jobs:
           VITE_API_BASE: ${{ env.VITE_API_BASE }}
         run: pnpm run build
 
+      - name: Verify SWA deployment token is present
+        working-directory: frontend
+        env:
+          SWA_CLI_DEPLOYMENT_TOKEN: ${{ secrets.SWA_DEPLOYMENT_TOKEN }}
+        run: |
+          if [ -z "$SWA_CLI_DEPLOYMENT_TOKEN" ]; then
+            echo "❌ Missing SWA_DEPLOYMENT_TOKEN secret. Add it in GitHub → Settings → Secrets → Actions."
+            exit 1
+          fi
+          echo "✅ SWA_DEPLOYMENT_TOKEN present (length: ${#SWA_CLI_DEPLOYMENT_TOKEN})"
+
+      - name: Verify staticwebapp.config.json is in dist
+        working-directory: frontend
+        run: |
+          if [ ! -f "dist/staticwebapp.config.json" ]; then
+            echo "❌ staticwebapp.config.json not found in dist/"
+            echo "Copying from public/ to dist/"
+            cp public/staticwebapp.config.json dist/
+          fi
+          echo "✅ staticwebapp.config.json present in dist/"
+          cat dist/staticwebapp.config.json
+
       - name: Deploy to Azure Static Web App
         working-directory: frontend
         env:
           SWA_CLI_DEPLOYMENT_TOKEN: ${{ secrets.SWA_DEPLOYMENT_TOKEN }}
         run: |
-          npx @azure/static-web-apps-cli deploy dist \
+          npx --yes @azure/static-web-apps-cli@2.0.7 deploy dist \
             --deployment-token "$SWA_CLI_DEPLOYMENT_TOKEN" \
-            --env production
+            --env production \
+            --verbose

@@ -1,6 +1,7 @@
 import json
 import logging
 import stripe
+from datetime import datetime, timedelta
 from django.db import transaction
 from django.db.models import Prefetch, Q
 from django.shortcuts import get_object_or_404
@@ -732,6 +733,15 @@ def checkout_order(request, order_id):
     # Check if address is required and missing
     if not order.address:
         validation_errors["address"] = "Delivery address is required."
+    
+    # Minimum notice validation (24 hours)
+    if order.service_date and order.service_start_time:
+        service_datetime = datetime.combine(order.service_date, order.service_start_time)
+        if timezone.is_naive(service_datetime):
+            service_datetime = timezone.make_aware(service_datetime)
+        min_datetime = timezone.now() + timedelta(hours=24)
+        if service_datetime < min_datetime:
+            validation_errors["service_date"] = "Service must be scheduled at least 24 hours in advance."
     
     if validation_errors:
         return Response({

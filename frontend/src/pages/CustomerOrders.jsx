@@ -508,7 +508,7 @@ export default function CustomerOrders(){
       console.log('[CustomerOrders] Chef details', { chefId: order.chef, chef, chefDetails })
       
       const chefInfo = {
-        username: chef.username || chef.display_name || 'Chef',
+        username: chef.user?.username || chef.display_name || 'Chef',
         id: order.chef
       }
       console.log('[CustomerOrders] Constructed chefInfo', chefInfo)

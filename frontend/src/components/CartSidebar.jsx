@@ -229,6 +229,15 @@ export default function CartSidebar() {
     if (validationDetails) setValidationDetails(null)
   }
 
+  // Check if service datetime is at least 24 hours from now
+  function isServiceDateTimeValid(dateStr, timeStr) {
+    if (!dateStr || !timeStr) return true // Let required validation handle empty fields
+    const serviceDateTime = new Date(`${dateStr}T${timeStr}`)
+    const minDateTime = new Date()
+    minDateTime.setHours(minDateTime.getHours() + 24)
+    return serviceDateTime >= minDateTime
+  }
+
   function validateServiceItem(item) {
     const errors = {}
     const requiresDateTime = Boolean(item.requiresDateTime)
@@ -242,6 +251,10 @@ export default function CartSidebar() {
     }
     if (requiresDateTime && !item.serviceStartTime) {
       errors.service_start_time = 'Select a service start time before checkout.'
+    }
+    // Check minimum notice (24 hours)
+    if (requiresDateTime && item.serviceDate && item.serviceStartTime && !isServiceDateTimeValid(item.serviceDate, item.serviceStartTime)) {
+      errors.service_date = 'Service must be scheduled at least 24 hours in advance.'
     }
     if (needsScheduleNotes && !item.scheduleNotes) {
       errors.schedule_preferences = 'Add scheduling preferences for this recurring service.'

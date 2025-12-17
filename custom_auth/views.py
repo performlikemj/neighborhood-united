@@ -212,23 +212,16 @@ def email_authentication_view(request, auth_token):
                 # Continue with partially translated content
             
             if not unsubscribed:
-                n8n_webhook_url = os.getenv('N8N_EMAIL_REPLY_WEBHOOK_URL')
-                if n8n_webhook_url:
-                    payload = {
-                        'status': 'success', 'action': 'send_pending_message_ack', 
-                        'reply_content': ack_email_html_content,
-                        'recipient_email': pending_message.sender_email,
-                        'from_email': personal_assistant_email_for_template,
-                        'original_subject': ack_subject,
-                        'in_reply_to_header': pending_message.in_reply_to_header,
-                        'email_thread_id': pending_message.email_thread_id
-                    }
-                    try:
-                        requests.post(n8n_webhook_url, json=payload, timeout=10)
-                    except requests.RequestException as e_n8n:
-                        logger.error(f"Failed to send ack for pending message to n8n for user {user.id}: {e_n8n}")
-                else:
-                    logger.warning("N8N_EMAIL_REPLY_WEBHOOK_URL not configured. Cannot send ack for pending message.")
+                try:
+                    from utils.email import send_html_email
+                    send_html_email(
+                        subject=ack_subject,
+                        html_content=ack_email_html_content,
+                        recipient_email=pending_message.sender_email,
+                        from_email=personal_assistant_email_for_template
+                    )
+                except Exception as e_n8n:
+                    logger.exception(f"Failed to send ack for pending message for user {user.id}: {e_n8n}")
             else:
                 logger.info(f"User {user.username} has unsubscribed from emails. Skipping acknowledgment email.")
                 

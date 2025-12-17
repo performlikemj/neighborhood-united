@@ -233,46 +233,28 @@ def process_email(request):
                 # Check if user has unsubscribed from emails
                 unsubscribe = getattr(user, 'unsubscribed_from_emails', False)
                 if not unsubscribe:
-                    n8n_webhook_url = os.getenv('N8N_EMAIL_REPLY_WEBHOOK_URL')
-                    if n8n_webhook_url:
-                        payload = {
-                            'status': 'success', 'action': 'send_acknowledgment', 
-                            'reply_content': ack_email_html_content,
-                            'recipient_email': sender_email,
-                            'from_email': user.personal_assistant_email if hasattr(user, 'personal_assistant_email') and user.personal_assistant_email else f"mj+{user.email_token}@sautai.com",
-                            'original_subject': "Re: " + original_subject if original_subject else "Message from your sautai Assistant",
-                            'in_reply_to_header': in_reply_to_header, 
-                            'email_thread_id': email_thread_id
-                        }
-                        try:
-                            response = requests.post(n8n_webhook_url, json=payload, timeout=10)
-                            response.raise_for_status()
-                            logger.info(f"Acknowledgment email successfully sent to n8n for user {user.id} (recipient: {sender_email}).")
-                            return JsonResponse({
-                                'status': 'success',
-                                'action': 'acknowledgment_sent_db_session_forced_new',
-                                'message': 'Session recovered. Acknowledgment email processed.'
-                            })
-                        except requests.RequestException as e_n8n:
-                            logger.error(f"Failed to send acknowledgment email to n8n for user {user.id}: {e_n8n}. Payload: {json.dumps(payload)}")
-                            # If ack fails, the DB session and Celery task are still created. Consider implications.
-                            return JsonResponse({
-                                'status': 'error',
-                                'message': f'Failed to send acknowledgment email via n8n: {str(e_n8n)}'
-                            }, status=500)
-                    else:
-                        logger.error("N8N_EMAIL_REPLY_WEBHOOK_URL not configured. Cannot send acknowledgment email.")
-                        # DB session and Celery task are created.
-                        # n8n traceback
-                        n8n_traceback = {
-                            'error': 'N8N_EMAIL_REPLY_WEBHOOK_URL not configured. Cannot send acknowledgment email.',
-                            'source': 'process_email',
-                            'traceback': traceback.format_exc()
-                        }
-                        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+                    try:
+                        from utils.email import send_html_email
+                        from_email = user.personal_assistant_email if hasattr(user, 'personal_assistant_email') and user.personal_assistant_email else f"mj+{user.email_token}@sautai.com"
+                        subject = "Re: " + original_subject if original_subject else "Message from your sautai Assistant"
+                        
+                        send_html_email(
+                            subject=subject,
+                            html_content=ack_email_html_content,
+                            recipient_email=sender_email,
+                            from_email=from_email
+                        )
+                        logger.info(f"Acknowledgment email successfully sent for user {user.id} (recipient: {sender_email}).")
+                        return JsonResponse({
+                            'status': 'success',
+                            'action': 'acknowledgment_sent_db_session_forced_new',
+                            'message': 'Session recovered. Acknowledgment email processed.'
+                        })
+                    except Exception as e_email:
+                        logger.exception(f"Failed to send acknowledgment email for user {user.id}: {e_email}")
                         return JsonResponse({
                             'status': 'error',
-                            'message': 'Email service (n8n webhook) not configured for acknowledgments, but DB session started.'
+                            'message': f'Failed to send acknowledgment email: {str(e_email)}'
                         }, status=500)
                 else:
                     return JsonResponse({

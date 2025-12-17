@@ -37,11 +37,25 @@ export default function useWebSocket(conversationId, options = {}) {
   const [isConnecting, setIsConnecting] = useState(false)
   const [error, setError] = useState(null)
 
-  // Build WebSocket URL
+  // Build WebSocket URL - connect to backend directly (not through SWA)
   const getWebSocketUrl = useCallback(() => {
+    // Use VITE_API_BASE to get backend host, or fall back to same origin for dev
+    const apiBase = import.meta.env.VITE_API_BASE || ''
+    
+    // Get JWT token for authentication
+    const token = localStorage.getItem('accessToken')
+    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : ''
+    
+    if (apiBase) {
+      // Convert http(s):// to ws(s)://
+      const wsBase = apiBase.replace(/^http/, 'ws')
+      return `${wsBase}/ws/chat/${conversationId}/${tokenParam}`
+    }
+    
+    // Fallback for local dev (same origin)
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = window.location.host
-    return `${protocol}//${host}/ws/chat/${conversationId}/`
+    return `${protocol}//${host}/ws/chat/${conversationId}/${tokenParam}`
   }, [conversationId])
 
   // Connect to WebSocket

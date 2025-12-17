@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from django.db import models
 from django.core.exceptions import ValidationError
 from django.utils import timezone
@@ -310,6 +311,16 @@ class ChefServiceOrder(models.Model):
                     # One-time weekly prep requires specific date/time
                     if not self.service_date or not self.service_start_time:
                         errors["service_date"] = "Service date and start time are required for one-time weekly prep."
+
+        # Minimum notice validation (24 hours) - only when transitioning to payment/confirmed
+        if requires_schedule and self.service_date and self.service_start_time:
+            service_datetime = datetime.combine(self.service_date, self.service_start_time)
+            # Make timezone-aware if needed
+            if timezone.is_naive(service_datetime):
+                service_datetime = timezone.make_aware(service_datetime)
+            min_datetime = timezone.now() + timedelta(hours=24)
+            if service_datetime < min_datetime:
+                errors["service_date"] = "Service must be scheduled at least 24 hours in advance."
 
         if errors:
             raise ValidationError(errors)

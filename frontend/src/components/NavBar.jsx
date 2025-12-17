@@ -113,6 +113,22 @@ export default function NavBar(){
           {(inChef && isAuthed) && (
             <Link 
               to="/chefs/dashboard" 
+              state={{ tab: 'messages' }}
+              onClick={closeMenu} 
+              className="nav-icon-link"
+              title="Messages"
+            >
+              <i className="fa-regular fa-comment"></i>
+              {totalUnread > 0 && (
+                <span className="nav-unread-badge">{totalUnread > 9 ? '9+' : totalUnread}</span>
+              )}
+            </Link>
+          )}
+          
+          {/* Messages notification for customers with chef connections */}
+          {(!inChef && isAuthed && hasChefConnection) && (
+            <Link 
+              to="/my-chefs" 
               onClick={closeMenu} 
               className="nav-icon-link"
               title="Messages"

@@ -6652,7 +6652,7 @@ body.chef-gallery-modal-open {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.5);
-  z-index: 1000;
+  z-index: 9500;
   backdrop-filter: blur(2px);
 }
 
@@ -6663,7 +6663,7 @@ body.chef-gallery-modal-open {
   bottom: 0;
   width: min(420px, 95vw);
   background: var(--surface);
-  z-index: 1001;
+  z-index: 9501;
   display: flex;
   flex-direction: column;
   box-shadow: -8px 0 32px rgba(0, 0, 0, 0.15);

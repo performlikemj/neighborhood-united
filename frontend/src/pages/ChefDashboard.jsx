@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { api, stripe } from '../api'
 import { createOffering } from '../api/servicesClient.js'
 import { useConnections } from '../hooks/useConnections.js'
@@ -444,9 +444,17 @@ function ChefMessagesSection() {
 }
 
 export default function ChefDashboard(){
-  const [tab, setTab] = useState('dashboard')
+  const location = useLocation()
+  const [tab, setTab] = useState(() => location.state?.tab || 'dashboard')
   const [notice, setNotice] = useState(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  
+  // Handle navigation state changes (e.g., clicking messages icon from navbar)
+  useEffect(() => {
+    if (location.state?.tab && location.state.tab !== tab) {
+      setTab(location.state.tab)
+    }
+  }, [location.state?.tab])
 
   // Stripe Connect status
   const [payouts, setPayouts] = useState({ loading: true, has_account:false, is_active:false, needs_onboarding:false, account_id:null, continue_onboarding_url:null, disabled_reason:null, diagnostic:null })

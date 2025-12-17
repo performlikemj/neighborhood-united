@@ -37,14 +37,19 @@ def _process_health_probe(request):
     """
     # Get the host from the request
     host = request.META.get('HTTP_HOST', '')
+    path = getattr(request, 'path', 'unknown')
+    
+    logger.info(f"AzureHealthProbeMiddleware: Processing request - Host: {host}, Path: {path}")
     
     # For health check path, respond immediately
     if request.path in ('/healthz/', '/healthz'):
+        logger.info(f"AzureHealthProbeMiddleware: Health check path detected, returning 200 OK")
         return HttpResponse('ok', content_type='text/plain')
     
     # For internal IPs, rewrite the Host header to localhost
     # This allows the request to pass Django's ALLOWED_HOSTS check
     if _is_internal_ip(host):
+        logger.info(f"AzureHealthProbeMiddleware: Internal IP detected ({host}), rewriting to localhost")
         request.META['HTTP_HOST'] = 'localhost'
         request.META['HTTP_X_ORIGINAL_HOST'] = host  # Preserve original for logging
     

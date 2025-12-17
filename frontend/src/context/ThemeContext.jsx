@@ -18,27 +18,14 @@ function getInitialTheme(){
   return getSystemTheme()
 }
 
-// Update favicon based on theme
+// Update SVG favicon based on theme (for browsers that support SVG favicons)
 function updateFavicon(isDark){
   try{
-    const faviconPath = isDark ? '/sautai_logo_new_dark.svg' : '/sautai_logo_new.svg'
-    // Update all favicon link elements
-    const linkElements = document.querySelectorAll('link[rel*="icon"]')
-    linkElements.forEach(link => {
-      // Only update SVG/PNG favicon links, not apple-touch-icon
-      if (link.getAttribute('rel') === 'icon' || link.getAttribute('rel') === 'shortcut icon'){
-        link.href = faviconPath
-      }
+    const svgPath = isDark ? '/sautai_logo_new_dark.svg' : '/sautai_logo_new.svg'
+    // Update SVG favicons only - PNG fallback stays constant for Safari
+    document.querySelectorAll('link[rel="icon"][type="image/svg+xml"]').forEach(link => {
+      link.href = svgPath
     })
-    // Also update or create a primary favicon link if none exists
-    let primaryFavicon = document.querySelector('link[rel="icon"][type="image/svg+xml"]')
-    if (!primaryFavicon){
-      primaryFavicon = document.createElement('link')
-      primaryFavicon.rel = 'icon'
-      primaryFavicon.type = 'image/svg+xml'
-      document.head.appendChild(primaryFavicon)
-    }
-    primaryFavicon.href = faviconPath
   }catch(e){
     console.warn('Failed to update favicon:', e)
   }

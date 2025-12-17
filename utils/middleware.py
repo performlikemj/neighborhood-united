@@ -1,6 +1,8 @@
 """
 Custom middleware for request processing.
 """
+import re
+from django.http import HttpResponse
 from django.utils.deprecation import MiddlewareMixin
 from utils.model_selection import choose_model, MODEL_GPT41_MINI, MODEL_GPT41_NANO
 from utils.openai_helpers import token_length
@@ -8,6 +10,54 @@ from utils.redis_client import get, set, delete
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class AzureHealthProbeMiddleware:
+    """
+    Middleware to handle Azure Container Apps health probes.
+    
+    Azure Container Apps health probes come from internal IPs (100.x.x.x, 10.x.x.x)
+    that are not in ALLOWED_HOSTS. This middleware:
+    1. Detects health probe requests (by path or internal IP)
+    2. Returns a quick 200 OK response for /healthz/ path
+    3. Rewrites the Host header for internal IPs so Django's SecurityMiddleware accepts them
+    
+    This middleware MUST be placed BEFORE django.middleware.security.SecurityMiddleware
+    """
+    
+    # Regex patterns for Azure internal IPs
+    INTERNAL_IP_PATTERNS = [
+        re.compile(r'^10\.'),        # 10.x.x.x - Azure internal network
+        re.compile(r'^100\.'),       # 100.x.x.x - Carrier Grade NAT (health probes)
+        re.compile(r'^172\.(1[6-9]|2[0-9]|3[0-1])\.'),  # 172.16-31.x.x - Private range
+        re.compile(r'^192\.168\.'),  # 192.168.x.x - Private range
+        re.compile(r'^127\.'),       # 127.x.x.x - Localhost
+    ]
+    
+    def __init__(self, get_response):
+        self.get_response = get_response
+    
+    def __call__(self, request):
+        # Get the host from the request
+        host = request.META.get('HTTP_HOST', '')
+        
+        # Extract IP (remove port if present)
+        host_ip = host.split(':')[0] if ':' in host else host
+        
+        # Check if this is from an internal Azure IP
+        is_internal_ip = any(pattern.match(host_ip) for pattern in self.INTERNAL_IP_PATTERNS)
+        
+        # For health check path, respond immediately without further processing
+        if request.path == '/healthz/' or request.path == '/healthz':
+            return HttpResponse('ok', content_type='text/plain')
+        
+        # For internal IPs, rewrite the Host header to localhost
+        # This allows the request to pass Django's ALLOWED_HOSTS check
+        if is_internal_ip:
+            request.META['HTTP_HOST'] = 'localhost'
+            request.META['HTTP_X_ORIGINAL_HOST'] = host  # Preserve original for logging
+        
+        return self.get_response(request)
 
 class ModelSelectionMiddleware(MiddlewareMixin):
     """

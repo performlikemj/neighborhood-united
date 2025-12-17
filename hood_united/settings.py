@@ -54,7 +54,18 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = str_to_bool(os.getenv('DEBUG', 'False'))
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '').split(',')
+# Parse ALLOWED_HOSTS from environment, filter empty strings
+_env_hosts = [h.strip() for h in os.getenv('ALLOWED_HOSTS', '').split(',') if h.strip()]
+
+# Azure Container Apps internal health probes use IPs in 100.x.x.x and 10.x.x.x ranges
+# We use a more permissive approach for production to allow Azure's internal traffic
+AZURE_CONTAINER_INTERNAL_HOSTS = [
+    '.azurecontainerapps.io',  # All Azure Container Apps domains
+    'localhost',
+    '127.0.0.1',
+]
+
+ALLOWED_HOSTS = _env_hosts + AZURE_CONTAINER_INTERNAL_HOSTS
 
 # Model quota limits
 GPT41_AUTH_LIMIT = int(os.getenv('GPT41_AUTH_LIMIT', 5))  # gpt-5 per authenticated user / day
@@ -100,6 +111,7 @@ MEAL_PLAN_EMAIL_NOTIFICATIONS_ENABLED = str_to_bool(
 )
 
 MIDDLEWARE = [
+    'utils.middleware.AzureHealthProbeMiddleware',  # Must be first - handles Azure health probes
     'corsheaders.middleware.CorsMiddleware',  # CORS must be as high as possible
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -118,6 +130,8 @@ else:
     # Fallback if no CORS_ALLOWED_ORIGINS set
     CORS_ALLOWED_ORIGINS = [
         os.getenv('STREAMLIT_URL', 'https://sautai.com'),
+        'https://sautai.com',
+        'https://www.sautai.com',
         'https://hoodunited.org',
         'https://www.hoodunited.org',
         'https://neighborhoodunited.org',

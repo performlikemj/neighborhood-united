@@ -4,9 +4,9 @@ from . import views
 app_name = 'local_chefs'
 
 urlpatterns = [
-    # Legacy endpoints
-    path('api/chef_service_areas/', views.chef_service_areas, name='chef_service_areas'),
-    path('api/service_area_chefs/', views.service_area_chefs, name='service_area_chefs'),
+    # Legacy endpoints removed for security - see local_chefs/views.py for details
+    # path('api/chef_service_areas/', views.chef_service_areas, name='chef_service_areas'),
+    # path('api/service_area_chefs/', views.service_area_chefs, name='service_area_chefs'),
     
     # Administrative area search and browsing
     path('api/areas/search/', views.search_areas, name='search_areas'),

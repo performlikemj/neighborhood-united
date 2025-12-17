@@ -1,5 +1,7 @@
 from django.shortcuts import render, get_object_or_404, redirect
 from django.views.generic import CreateView, ListView
+from django.views.generic.edit import UpdateView, DeleteView
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import HttpResponseForbidden
 from django.urls import reverse_lazy
 from django.contrib.contenttypes.models import ContentType
@@ -11,7 +13,6 @@ from .serializers import ReviewSerializer
 from chefs.models import Chef
 from meals.models import Meal, Order, MealPlan
 from custom_auth.models import UserRole
-from django.views.generic.edit import UpdateView, DeleteView
 from django.db import IntegrityError
 from django.db.models.signals import post_save
 from django.dispatch import receiver
@@ -20,7 +21,7 @@ from shared.utils import generate_review_summary
 # from django.core.cache import cache  # For rate limiting
 # from django.core.mail import send_mail  # For sending email notifications
 
-class ReviewCreateView(CreateView):
+class ReviewCreateView(LoginRequiredMixin, CreateView):
     model = Review
     fields = ['content', 'rating']
     template_name = 'review_create.html'
@@ -77,7 +78,7 @@ class ReviewCreateView(CreateView):
 # TODO: Search and Filter - Add features for users to search reviews by keyword or filter by rating.
 # TODO: Analytics Dashboard - A dashboard for chefs to see an overview of their reviews, ratings, etc.
 
-class ReviewListView(ListView):
+class ReviewListView(LoginRequiredMixin, ListView):
     model = Review
     template_name = 'review_list.html'
     context_object_name = 'reviews'
@@ -95,7 +96,7 @@ class ReviewListView(ListView):
             return Review.objects.none()
 
 
-class ReviewUpdateView(UpdateView):
+class ReviewUpdateView(LoginRequiredMixin, UpdateView):
     model = Review
     fields = ['content', 'rating']
     template_name = 'review_edit.html'
@@ -104,7 +105,7 @@ class ReviewUpdateView(UpdateView):
         return reverse_lazy('reviews:review_list')
     
 
-class ReviewDeleteView(DeleteView):
+class ReviewDeleteView(LoginRequiredMixin, DeleteView):
     model = Review
     template_name = 'review_confirm_delete.html'
 

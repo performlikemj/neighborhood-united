@@ -17,55 +17,33 @@ from chefs.models import Chef
 from custom_auth.models import Address, CustomUser
 
 
+# =============================================================================
+# DEPRECATED LEGACY ENDPOINTS - REMOVED FROM URLs FOR SECURITY
+# =============================================================================
+# These endpoints were removed because:
+# 1. chef_service_areas: Returns dict instead of Response (broken)
+# 2. service_area_chefs: Security risk - accepts arbitrary user_id and exposes
+#    user address/location data without authentication
+#
+# Use the new authenticated API endpoints instead:
+# - GET /api/areas/search/ - Search for areas
+# - GET /api/chef/service-areas/ - Get chef's service areas (authenticated)
+# =============================================================================
+
 def chef_service_areas(request, query):
-    """Legacy endpoint - returns chef service areas by chef name query."""
-    normalized_query = query.strip().lower()
-    chefs = Chef.objects.filter(user__username__icontains=normalized_query)
-
-    if not chefs.exists():
-        return JsonResponse({'error': 'No chefs found based on the query provided'})
-
-    auth_chef_result = []
-    for chef in chefs:
-        postal_codes_served = ChefPostalCode.objects.filter(chef=chef).values_list('postal_code__code', flat=True)
-        chef_info = {
-            "chef_id": chef.id,
-            "name": chef.user.username,
-            "experience": chef.experience,
-            "bio": chef.bio,
-            "profile_pic": str(chef.profile_pic.url) if chef.profile_pic else None,
-            'service_postal_codes': list(postal_codes_served),
-        }
-        auth_chef_result.append(chef_info)
-    return {"auth_chef_result": auth_chef_result}
+    """
+    DEPRECATED: This endpoint has been disabled for security reasons.
+    Use the new /api/areas/search/ endpoint instead.
+    """
+    return JsonResponse({'error': 'This endpoint has been deprecated'}, status=410)
 
 
 def service_area_chefs(request):
-    """Legacy endpoint - returns chefs serving a user's postal code."""
-    user_id = request.data.get('user_id')
-    user = CustomUser.objects.get(id=user_id)
-    address = Address.objects.get(user=user)
-    user_input_postalcode = address.input_postalcode
-
-    try:
-        user_postalcode = PostalCode.objects.get(code=user_input_postalcode)
-        chefs = Chef.objects.filter(serving_postalcodes=user_postalcode)
-
-        chef_result = []
-        for chef in chefs:
-            postal_codes_served = ChefPostalCode.objects.filter(chef=chef).values_list('postal_code__code', flat=True)
-            chef_info = {
-                "chef_id": chef.id,
-                "name": chef.user.username,
-                "experience": chef.experience,
-                "bio": chef.bio,
-                "profile_pic": str(chef.profile_pic.url) if chef.profile_pic else None,
-                'service_postal_codes': list(postal_codes_served),
-            }
-            chef_result.append(chef_info)
-        return {'chefs': chef_result}
-    except PostalCode.DoesNotExist:
-        return {'message': 'We do not serve your area yet. Please check back later.'}
+    """
+    DEPRECATED: This endpoint has been disabled for security reasons.
+    It exposed user location data without authentication.
+    """
+    return JsonResponse({'error': 'This endpoint has been deprecated'}, status=410)
 
 
 # ============================================================================

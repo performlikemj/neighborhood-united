@@ -268,14 +268,7 @@ def generate_shopping_list(meal_plan_id):
                         pass
             shopping_list_dict = candidate or {}
     except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse shopping list as JSON: {e}")
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(e),
-            'source': 'shopping_list',
-            'traceback': traceback.format_exc()
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        logger.exception(f"Failed to parse shopping list as JSON: {e}")
         return
 
     # Group items by category and aggregate quantities
@@ -540,14 +533,7 @@ def generate_shopping_list(meal_plan_id):
             logger.error(f"Error sending shopping list via assistant for: {user_email}, error: {str(result)}")
 
     except Exception as e:
-        logger.error(f"Error sending shopping list via assistant for: {user_email}, error: {str(e)}")
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(e),
-            'source': 'shopping_list',
-            'traceback': traceback.format_exc()
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        logger.exception(f"Error sending shopping list via assistant for: {user_email}")
 
 @shared_task
 @handle_task_failure
@@ -674,32 +660,13 @@ def generate_user_summary(user_id: int, summary_date=None) -> None:
         legacy_summary.summary = summary_text
         legacy_summary.status = "completed"
         
-    except OpenAIError as err:
+    except Exception as err:
         summary.status = UserDailySummary.ERROR
-        summary.summary = f"OpenAI error: {err}"
+        summary.summary = f"Error: {err}"
         
         legacy_summary.status = "error"
-        legacy_summary.summary = f"OpenAI error: {err}"
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(err),
-            'source': 'user_summary',
-            'traceback': traceback.format_exc()
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
-    except Exception as exc:
-        summary.status = UserDailySummary.ERROR
-        summary.summary = f"Unhandled error: {exc}"
-        
-        legacy_summary.status = "error"
-        legacy_summary.summary = f"Unhandled error: {exc}"
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(exc),
-            'source': 'user_summary',
-            'traceback': traceback.format_exc()
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)    # n8n traceback
+        legacy_summary.summary = f"Error: {err}"
+        logger.exception(f"Error in user_summary: {err}")
 
     summary.save()
     legacy_summary.save()
@@ -941,17 +908,7 @@ def generate_emergency_supply_list(user_id):
             ]
             notes = parsed.notes or ""
         except Exception as e_validate:
-            logger.error(f"EMAIL SERVICE DEBUG: EmergencySupplyList schema validation failed: {e_validate}")
-            # n8n traceback with raw model output for diagnostics
-            try:
-                requests.post(os.getenv('N8N_TRACEBACK_URL'), json={
-                    'error': f'Pydantic validation failed: {str(e_validate)}',
-                    'source': 'emergency_supply_list',
-                    'raw_output': gpt_output_str,
-                    'user_id': user.id,
-                })
-            except Exception:
-                pass
+            logger.exception(f"EmergencySupplyList schema validation failed for user {user.id}: {e_validate}")
 
             # Send a concise error email to the user and exit early
             try:
@@ -1177,24 +1134,10 @@ def generate_emergency_supply_list(user_id):
                 logger.error(f"EMAIL SERVICE DEBUG: Error sending emergency supply list via assistant for user: {user.email}, error: {str(result)}")
                 
         except Exception as e:
-            logger.error(f"EMAIL SERVICE DEBUG: Exception in MealPlanningAssistant send for user: {user.email}, error: {str(e)}")
-            # n8n traceback
-            n8n_traceback = {
-                'error': str(e),
-                'source': 'emergency_supply_list',
-                'traceback': traceback.format_exc()
-            }
-            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+            logger.exception(f"Exception in MealPlanningAssistant send for user: {user.email}")
             
     except Exception as e:
-        logger.error(f"EMAIL SERVICE DEBUG: Exception in OpenAI API call: {str(e)}")
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(e),
-            'source': 'emergency_supply_list',
-            'traceback': traceback.format_exc()
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        logger.exception(f"Exception in generate_emergency_supply_list: {e}")
 
 @shared_task
 @handle_task_failure
@@ -1278,17 +1221,10 @@ def send_system_update_email(subject, message, user_ids=None, template_key='syst
                 logger.error(f"Error processing system update for user {user.id}: {user_error}")
 
     except Exception as e:
-        logger.error(f"Error in send_system_update_email: {str(e)}")
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(e),
-            'source': 'send_system_update_email',
-            'traceback': traceback.format_exc()
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        logger.exception(f"Error in send_system_update_email: {e}")
         raise
 
-# TODO: Set up configuration in n8n
+@shared_task
 @shared_task
 @handle_task_failure
 def send_payment_confirmation_email(payment_data):
@@ -1462,14 +1398,7 @@ def send_refund_notification_email(order_id):
             logger.error(f"Error sending refund notification via assistant for: {user.email}, error: {str(result)}")
             
     except Exception as e:
-        logger.error(f"Error generating or sending refund notification email for order {order_id}: {e}")
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(e),
-            'source': 'send_refund_notification_email',
-            'traceback': traceback.format_exc()
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        logger.exception(f"Error generating or sending refund notification email for order {order_id}")
 
 @shared_task
 @handle_task_failure
@@ -1580,14 +1509,8 @@ def send_order_cancellation_email(order_id):
             logger.error(f"Error sending order cancellation via assistant for: {user.email}, error: {str(result)}")
             
     except Exception as e:
-        logger.error(f"Error generating or sending order cancellation email for order {order_id}: {e}")
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(e),
-            'source': 'send_order_cancellation_email',
-            'traceback': traceback.format_exc()
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        logger.exception(f"Error generating or sending order cancellation email for order {order_id}")
+
 # Optional Groq client factory
 def _get_groq_client():
     try:

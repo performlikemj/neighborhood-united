@@ -21,8 +21,9 @@ env:
   DJANGO_APP: sautai-django-westus2
   CELERY_WORKER_APP: sautai-celery-worker-westus2
   CELERY_BEAT_APP: sautai-beat-westus2
-  # Frontend app
-  FRONTEND_APP: sautai-react-westus2
+  # Frontend (Azure Static Web App)
+  SWA_NAME: sautai-frontend
+  VITE_API_BASE: https://sautai-django-westus2.redcliff-686826f3.westus2.azurecontainerapps.io
 
 jobs:
   # ============================================================================
@@ -217,7 +218,7 @@ jobs:
             --image ${{ env.REGISTRY }}.azurecr.io/celery-beat:${{ github.sha }}
 
   # ============================================================================
-  # Deploy Frontend (only on push to main, after tests pass)
+  # Deploy Frontend to Azure Static Web App (only on push to main, after tests pass)
   # ============================================================================
   deploy-frontend:
     runs-on: ubuntu-latest
@@ -226,24 +227,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure Login
-        uses: azure/login@v2
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          node-version: '20'
 
-      - name: Build and push frontend via ACR
-        run: |
-          az acr build \
-            --registry ${{ env.REGISTRY }} \
-            --image sautai-react-frontend:${{ github.sha }} \
-            --image sautai-react-frontend:latest \
-            --build-arg VITE_API_BASE="" \
-            -f frontend/Dockerfile \
-            frontend/
+      - name: Install pnpm
+        run: npm install -g pnpm
 
-      - name: Deploy frontend to Container Apps
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: frontend
+        env:
+          VITE_API_BASE: ${{ env.VITE_API_BASE }}
+        run: pnpm run build
+
+      - name: Deploy to Azure Static Web App
+        working-directory: frontend
+        env:
+          SWA_CLI_DEPLOYMENT_TOKEN: ${{ secrets.SWA_DEPLOYMENT_TOKEN }}
         run: |
-          az containerapp update \
-            --name ${{ env.FRONTEND_APP }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --image ${{ env.REGISTRY }}.azurecr.io/sautai-react-frontend:${{ github.sha }}
+          npx @azure/static-web-apps-cli deploy dist \
+            --deployment-token "$SWA_CLI_DEPLOYMENT_TOKEN" \
+            --env production

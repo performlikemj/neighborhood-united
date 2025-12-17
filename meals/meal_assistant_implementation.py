@@ -3022,14 +3022,7 @@ class MealPlanningAssistant:
                 requests.post(n8n_traceback_url, json={"error": str(e), "source":"translate_email_content", "traceback": traceback.format_exc()})
             
 
-        # 4. Trigger n8n to send this reply_content back to recipient_email
-        n8n_webhook_url = os.getenv('N8N_EMAIL_REPLY_WEBHOOK_URL')
-        if not n8n_webhook_url:
-            logger.error(f"MealPlanningAssistant: N8N_EMAIL_REPLY_WEBHOOK_URL not configured. Cannot send email reply for user {self.user_id}.")
-            # Log the intended reply locally if n8n is not configured
-            logger.info(f"Intended email reply for {recipient_email} (User ID: {self.user_id}):\nSubject: Re: {original_subject}\nBody:\n{email_html_content}")
-            return {"status": "error", "message": "N8N_EMAIL_REPLY_WEBHOOK_URL not configured."}
-
+        # 4. Send email directly via Django's email framework
         # Ensure original_subject has content
         if not original_subject or original_subject.strip() == "":
             logger.warning(f"Empty subject received for user {self.user_id}. Using default subject.")
@@ -3041,41 +3034,30 @@ class MealPlanningAssistant:
             subject_prefix = ""
         final_subject = f"{subject_prefix}{original_subject}"
 
-        payload = {
-            'status': 'success', 
-            'action': 'send_reply', 
-            'reply_content': email_html_content, # Send the fully rendered HTML
-            'recipient_email': recipient_email,
-            'from_email': user.personal_assistant_email if hasattr(user, 'personal_assistant_email') and user.personal_assistant_email else f"mj+{user_email_token}@sautai.com", 
-            'original_subject': final_subject,
-            'in_reply_to_header': in_reply_to_header,
-            'email_thread_id': email_thread_id,
-            'openai_response_id': new_openai_response_id,
-            'chat_thread_id': chat_thread.id if chat_thread else None
-        }
+        # Determine from email
+        from_email = user.personal_assistant_email if hasattr(user, 'personal_assistant_email') and user.personal_assistant_email else f"mj+{user_email_token}@sautai.com"
 
         try:
-            # if settings.DEBUG:
-            #     logger.info(f"MealPlanningAssistant: Skipping n8n webhook for user {self.user_id} in DEBUG mode.")
-            #     logger.info(f"MealPlanningAssistant: Payload: {json.dumps(payload)}")
-            #     return {"status": "success", "message": "Email reply successfully sent to n8n.", "n8n_response_status": "skipped"}
-            # else:
-            logger.info(f"MealPlanningAssistant: Posting to n8n webhook for user {self.user_id}. URL: {n8n_webhook_url}")
-            response = requests.post(n8n_webhook_url, json=payload, timeout=15)
-            response.raise_for_status() 
-            logger.info(f"MealPlanningAssistant: Successfully posted assistant reply to n8n for user {self.user_id}. Status: {response.status_code}")
-            return {"status": "success", "message": "Email reply successfully sent to n8n.", "n8n_response_status": response.status_code}
-        except requests.RequestException as e:
-            logger.error(f"MealPlanningAssistant: Failed to post assistant reply to n8n for user {self.user_id}: {e}. Payload: {json.dumps(payload)}")
-            # Log the intended reply if n8n call failed
-            logger.info(f"Failed n8n call. Intended email reply for {recipient_email} (User ID: {self.user_id}):\nSubject: {final_subject}\nBody:\n{email_html_content}")
-            return {"status": "error", "message": f"Failed to send email via n8n: {str(e)}"}
-        except Exception as e_general: # Catch any other unexpected errors during payload prep or call
-            logger.error(f"MealPlanningAssistant: Unexpected error during n8n email sending for user {self.user_id}: {e_general}. Payload: {json.dumps(payload if 'payload' in locals() else 'Payload not generated')}", exc_info=True)
-            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-            # Send traceback to N8N via webhook at N8N_TRACEBACK_URL 
-            requests.post(n8n_traceback_url, json={"error": str(e_general), "source":"process_and_reply_to_email", "traceback": traceback.format_exc()})
-            return {"status": "error", "message": f"Unexpected error during email sending preparation: {str(e_general)}"}
+            from utils.email import send_html_email
+            
+            logger.info(f"MealPlanningAssistant: Sending email to {recipient_email} for user {self.user_id}")
+            success = send_html_email(
+                subject=final_subject,
+                html_content=email_html_content,
+                recipient_email=recipient_email,
+                from_email=from_email,
+            )
+            
+            if success:
+                logger.info(f"MealPlanningAssistant: Successfully sent email reply for user {self.user_id}")
+                return {"status": "success", "message": "Email reply sent successfully."}
+            else:
+                logger.error(f"MealPlanningAssistant: Failed to send email for user {self.user_id}")
+                return {"status": "error", "message": "Failed to send email."}
+                
+        except Exception as e_general:
+            logger.exception(f"MealPlanningAssistant: Unexpected error during email sending for user {self.user_id}: {e_general}")
+            return {"status": "error", "message": f"Unexpected error during email sending: {str(e_general)}"}
 
     @classmethod
     def send_notification_via_assistant(

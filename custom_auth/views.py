@@ -573,31 +573,24 @@ def password_reset_request(request):
         </html>
         """
 
-        # Send data to Zapier
-        password_reset_webhook_url = os.getenv('N8N_PW_RESET_URL')
-        email_data = {
-            'subject': mail_subject,
-            'message': message,
-            'to': email,
-            'from': 'support@sautai.com',
-        }
+        # Send email directly via Django
         try:
-            requests.post(password_reset_webhook_url, json=email_data)
+            from utils.email import send_html_email
+            send_html_email(
+                subject=mail_subject,
+                html_content=message,
+                recipient_email=email,
+                from_email='support@sautai.com',
+            )
         except Exception as e:
-            logger.error(f"Error sending password reset email data to Zapier for: {email}, error: {str(e)}")
+            logger.exception(f"Error sending password reset email for: {email}")
 
         return Response({'status': 'success', 'message': 'Password reset email sent.'})
     except CustomUser.DoesNotExist:
         logger.warning(f"Password reset attempted for non-existent email: {email}")
         return Response({'status': 'success', 'message': 'Password reset email sent'})
     except Exception as e:
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(e),
-            'source': 'password_reset_request',
-            'traceback': traceback.format_exc()
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        logger.exception(f"Error in password_reset_request: {e}")
         return Response({'status': 'error', 'message': str(e)})
 
 @api_view(['POST'])
@@ -733,16 +726,17 @@ def update_profile_api(request):
                 </html>
                 """
 
-                n8n_data = {
-                    'recipient_email': user_serializer.validated_data.get('email'),
-                    'subject': 'Verify your email to resume access.',
-                    'message': email_content,
-                    'username': user.username,
-                    'activation_link': activation_link,
-                    'html': True  # Indicate that the message is in HTML format
-                }
-                # Send data to Zapier
-                requests.post(os.getenv("N8N_UPDATE_PROFILE_URL"), json=n8n_data)
+                # Send email directly via Django
+                try:
+                    from utils.email import send_html_email
+                    send_html_email(
+                        subject='Verify your email to resume access.',
+                        html_content=email_content,
+                        recipient_email=user_serializer.validated_data.get('email'),
+                        from_email='support@sautai.com',
+                    )
+                except Exception as e:
+                    logger.exception(f"Error sending profile update email for user {user.id}")
 
             # Store original custom dietary preferences before update for task dispatching
             original_custom_prefs = set()
@@ -925,13 +919,7 @@ def update_profile_api(request):
         else:
             return Response({'status': 'success', 'message': 'Profile updated successfully without address data'})
     except Exception as e:
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(e),
-            'source': 'update_profile_api',
-            'traceback': f"Request data: {request.data} | {traceback.format_exc()}"
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        logger.exception(f"Error in update_profile_api: {e}")
         return Response({'status': 'error', 'message': str(e)}, status=500)
 
 def get_country_code(country_name):
@@ -959,13 +947,7 @@ def login_api_view(request):
             # Use request.data instead of parsing request.body directly
             data = request.data
         except Exception as e:
-            # n8n traceback
-            n8n_traceback = {
-                'error': str(e),
-                'source': 'login_api_view: try block',
-                'traceback': traceback.format_exc()
-            }
-            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+            logger.exception(f"Error processing login request: {e}")
             return JsonResponse({'status': 'error', 'message': f'Error processing request: {str(e)}'}, status=400)
 
         # Extract username and password
@@ -973,13 +955,7 @@ def login_api_view(request):
         password = data.get('password')
 
         if not username or not password:
-            # n8n traceback
-            n8n_traceback = {
-                'error': 'Username and password are required',
-                'source': 'login_api_view: if not username or not password',
-                'traceback': traceback.format_exc()
-            }
-            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+            logger.warning("Login attempt without username or password")
             return JsonResponse({'status': 'error', 'message': 'Username and password are required'}, status=400)
 
         # Authenticate user
@@ -1008,13 +984,7 @@ def login_api_view(request):
                 # User doesn't exist at all
                 pass
             
-            # n8n traceback for failed authentication
-            n8n_traceback = {
-                'error': f'Invalid username or password: authentication failed for {username}',
-                'source': 'login_api_view: if not user',
-                'traceback': traceback.format_exc()
-            }
-            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+            logger.warning(f"Failed authentication attempt for username: {username}")
             return JsonResponse({'status': 'error', 'message': 'Invalid username or password'}, status=400)
 
         # Successful authentication
@@ -1062,25 +1032,11 @@ def login_api_view(request):
 
         except Exception as e:
             # Log the exception details to debug it
-            # n8n traceback
-            n8n_traceback = {
-                'error': str(e),
-                'source': 'user_authentication',
-                'traceback': traceback.format_exc()
-            }
-            requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
-            logger.error(f"Error during authentication: {str(e)}")
+            logger.exception(f"Error during authentication: {e}")
             return JsonResponse({'status': 'error', 'message': 'An error occurred during authentication'}, status=500)
 
     except Exception as e:
-        logger.error(f"Error during authentication: {str(e)}")
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(e),
-            'source': 'login_api_view: try block',
-            'traceback': traceback.format_exc()
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        logger.exception(f"Error during authentication: {e}")
         return JsonResponse({'status': 'error', 'message': 'An error occurred during authentication'}, status=500)
 
 @api_view(['POST'])
@@ -1264,22 +1220,17 @@ def register_api_view(request):
             """
 
             to_email = user_serializer.validated_data.get('email')
-            email_data = {
-                'subject': mail_subject,
-                'message': message,
-                'to': to_email,
-                'from': 'support@sautai.com',
-                'username': user.username,
-                'activation_link': activation_link,
-                'html': True  # Indicate that the message is in HTML format
-            }
+            # Send email directly via Django
             try:
-                requests.post(os.getenv('N8N_REGISTER_URL'), json=email_data)
+                from utils.email import send_html_email
+                send_html_email(
+                    subject=mail_subject,
+                    html_content=message,
+                    recipient_email=to_email,
+                    from_email='support@sautai.com',
+                )
             except Exception as e:
-                # n8n traceback
-                n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-                requests.post(n8n_traceback_url, json={"error": f"Error sending activation email data to n8n for: {to_email}, error: {str(e)}", "source":"register_api_view", "traceback": traceback.format_exc()})
-                logger.error(f"Error sending activation email data to n8n for: {to_email}, error: {str(e)}")
+                logger.exception(f"Error sending activation email for: {to_email}")
                 raise 
         # After successful registration
         refresh = RefreshToken.for_user(user)  # Assuming you have RefreshToken defined or imported
@@ -1296,43 +1247,15 @@ def register_api_view(request):
         country_debug = address_data.get('country', 'NOT_PROVIDED') if address_data else 'NO_ADDRESS_DATA'
         postal_debug = address_data.get('input_postalcode', 'NOT_PROVIDED') if address_data else 'NO_ADDRESS_DATA'
         
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(ve),
-            'source': 'user_registration',
-            'traceback': f"Address data: {address_data} | Country received: '{country_debug}' | Postal code received: '{postal_debug}' | {traceback.format_exc()}"
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        logger.exception(f"Validation Error during user registration: {ve} | Address: {address_data}")
         return Response({'errors': ve.detail}, status=400)
     except IntegrityError as e:
-        logger.error(f"Integrity Error during user registration: {str(e)}")
-        # Include address data in traceback for debugging
         address_data = request.data.get('address', {})
-        country_debug = address_data.get('country', 'NOT_PROVIDED') if address_data else 'NO_ADDRESS_DATA'
-        postal_debug = address_data.get('input_postalcode', 'NOT_PROVIDED') if address_data else 'NO_ADDRESS_DATA'
-        
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(e),
-            'source': 'user_registration',
-            'traceback': f"Address data: {address_data} | Country received: '{country_debug}' | Postal code received: '{postal_debug}' | {traceback.format_exc()}"
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        logger.exception(f"Integrity Error during user registration: {e} | Address: {address_data}")
         return Response({'errors': 'Error occurred while registering. Support team has been notified.'}, status=400)
     except Exception as e:
-        logger.error(f"Exception Error during user registration: {str(e)}")
-        # Include address data in traceback for debugging
         address_data = request.data.get('address', {})
-        country_debug = address_data.get('country', 'NOT_PROVIDED') if address_data else 'NO_ADDRESS_DATA'
-        postal_debug = address_data.get('input_postalcode', 'NOT_PROVIDED') if address_data else 'NO_ADDRESS_DATA'
-        
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(e),
-            'source': 'user_registration',
-            'traceback': f"Address data: {address_data} | Country received: '{country_debug}' | Postal code received: '{postal_debug}' | {traceback.format_exc()}"
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        logger.exception(f"Exception Error during user registration: {e} | Address: {address_data}")
         return Response({'errors': str(e)}, status=500)
 
 @api_view(['POST'])
@@ -1393,21 +1316,18 @@ def send_activation_email_to_user(user, email_subject_prefix=""):
         </html>
         """
         
-        email_data = {
-            'subject': mail_subject,
-            'message': message,
-            'to': user.email,
-            'from': 'support@sautai.com',
-            'username': user.username,
-            'activation_link': activation_link,
-            'html': True
-        }
-        
-        requests.post(os.getenv('N8N_RESEND_URL'), json=email_data)
+        # Send email directly via Django
+        from utils.email import send_html_email
+        send_html_email(
+            subject=mail_subject,
+            html_content=message,
+            recipient_email=user.email,
+            from_email='support@sautai.com',
+        )
         return True
         
     except Exception as e:
-        logger.error(f"Error sending activation email to {user.email}: {str(e)}")
+        logger.exception(f"Error sending activation email to {user.email}")
         return False
 
 @api_view(['POST'])
@@ -1429,22 +1349,10 @@ def resend_activation_link(request):
             return Response({'status': 'error', 'message': 'Error sending activation email.'}, status=500)
     
     except CustomUser.DoesNotExist:
-        # n8n traceback
-        n8n_traceback = {
-            'error': 'User not found.',
-            'source': 'resend_activation_link',
-            'traceback': traceback.format_exc()
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        logger.warning("Resend activation link attempted for non-existent user")
         return Response({'status': 'error', 'message': 'User not found.'}, status=400)
     except Exception as e:
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(e),
-            'source': 'resend_activation_link',
-            'traceback': traceback.format_exc()
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        logger.exception(f"Error in resend_activation_link: {e}")
         return Response({'status': 'error', 'message': str(e)}, status=500)
 
     
@@ -2046,22 +1954,18 @@ def onboarding_complete_registration(request):
             
             to_email = user.email
             
-            # Prepare email data for n8n (SAME FORMAT AS register_api_view)
-            email_data = {
-                'subject': mail_subject,
-                'message': message,
-                'to': to_email,
-                'from': 'support@sautai.com',
-                'username': user.username,
-                'activation_link': activation_link,
-                'html': True  # Indicate that the message is in HTML format
-            }
-            
+            # Send email directly via Django
             try:
-                requests.post(os.getenv('N8N_REGISTER_URL'), json=email_data)
-                logger.info(f"Sent activation email data to n8n for onboarding completion: {to_email}")
+                from utils.email import send_html_email
+                send_html_email(
+                    subject=mail_subject,
+                    html_content=message,
+                    recipient_email=to_email,
+                    from_email='support@sautai.com',
+                )
+                logger.info(f"Sent activation email for onboarding completion: {to_email}")
             except Exception as e:
-                logger.error(f"Error sending activation email data to n8n for onboarding completion: {to_email}, error: {str(e)}")
+                logger.exception(f"Error sending activation email for onboarding completion: {to_email}")
                 # Don't fail registration for email sending errors
             
             # Mark onboarding session as completed
@@ -2083,22 +1987,8 @@ def onboarding_complete_registration(request):
             })
             
     except serializers.ValidationError as ve:
-        logger.error(f"Validation Error during onboarding completion: {str(ve)}")
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(ve),
-            'source': 'onboarding_complete_registration',
-            'traceback': f"Guest ID: {guest_id} | Stored data: {stored_data} | {traceback.format_exc()}"
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        logger.exception(f"Validation Error during onboarding completion: {ve} | Guest ID: {guest_id}")
         return Response({'errors': ve.detail}, status=400)
     except Exception as e:
-        logger.error(f"Exception Error during onboarding completion: {str(e)}")
-        # n8n traceback
-        n8n_traceback = {
-            'error': str(e),
-            'source': 'onboarding_complete_registration',
-            'traceback': f"Guest ID: {guest_id} | {traceback.format_exc()}"
-        }
-        requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
+        logger.exception(f"Exception Error during onboarding completion: {e} | Guest ID: {guest_id}")
         return Response({'errors': str(e)}, status=500)

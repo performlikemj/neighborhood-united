@@ -4,7 +4,7 @@ Custom middleware for request processing.
 import re
 from django.http import HttpResponse
 from django.utils.deprecation import MiddlewareMixin
-from utils.model_selection import choose_model, MODEL_GPT41_MINI, MODEL_GPT41_NANO
+from utils.model_selection import choose_model, _get_groq_model
 from utils.openai_helpers import token_length
 from utils.redis_client import get, set, delete
 import logging
@@ -74,8 +74,8 @@ class ModelSelectionMiddleware(MiddlewareMixin):
         """
         Process the request to determine the appropriate model.
         """
-        # Default to a simpler model if we can't determine the complexity
-        default_model = MODEL_GPT41_MINI
+        # Default to the configured Groq model
+        default_model = _get_groq_model()
         
         # Extract the user (if authenticated)
         user_id = None
@@ -149,8 +149,8 @@ class ModelSelectionMiddleware(MiddlewareMixin):
         if user_id and content:
             model = choose_model(user_id, is_guest, content, history_tokens)
         else:
-            # If we can't determine content complexity, use a reasonable default
-            model = MODEL_GPT41_NANO if is_guest else default_model
+            # If we can't determine content complexity, use the configured Groq model
+            model = default_model
         
         # Attach to the request object for views to access
         request.openai_model = model 

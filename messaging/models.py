@@ -148,3 +148,4 @@ class Message(models.Model):
         if not self.read_at:
             self.read_at = timezone.now()
             self.save(update_fields=['read_at'])
+

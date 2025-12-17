@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext.jsx'
 import { useTheme } from '../context/ThemeContext.jsx'
 import { useMessaging } from '../context/MessagingContext.jsx'
 import { FEATURES } from '../config/features.js'
+import SautaiLogo from './SautaiLogo.jsx'
 
 function PlateStackIcon(){
   const stroke = 'currentColor'
@@ -27,8 +28,6 @@ export default function NavBar(){
   const [switching, setSwitching] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
-  const [brandSrc, setBrandSrc] = useState('/sautai_logo_new.png')
-  const onBrandError = ()=> setBrandSrc('/sautai_logo_transparent_800.png')
   const isAuthed = Boolean(user)
   const inChef = user?.current_role === 'chef'
   
@@ -77,7 +76,7 @@ export default function NavBar(){
       <div className="navbar-inner container">
         <div className="brand">
           <Link to="/" onClick={closeMenu} style={{display:'inline-flex', alignItems:'center', gap:'.5rem', textDecoration:'none'}}>
-            <img src={brandSrc} onError={onBrandError} alt="sautai" style={{height:40, width:'auto'}} />
+            <SautaiLogo size={40} />
             <span style={{color:'inherit', textDecoration:'none'}}>sautai</span>
           </Link>
         </div>

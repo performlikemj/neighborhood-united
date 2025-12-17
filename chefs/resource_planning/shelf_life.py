@@ -316,3 +316,4 @@ def get_default_shelf_life(ingredient_name: str) -> dict:
     return {'shelf_life_days': 5, 'storage_type': 'refrigerated'}
 
 
+

@@ -7,3 +7,4 @@ class MembershipsConfig(AppConfig):
     verbose_name = 'Community Memberships'
 
 
+

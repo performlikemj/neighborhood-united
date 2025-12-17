@@ -244,3 +244,4 @@ class ShelfLifeResultSerializer(serializers.Serializer):
     notes = serializers.CharField(allow_null=True)
 
 
+

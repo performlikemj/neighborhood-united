@@ -286,3 +286,4 @@ def get_unread_counts(request):
         'customer_conversations_unread': customer_unread,
         'chef_conversations_unread': chef_unread,
     })
+

@@ -48,3 +48,4 @@ class ChefMembershipSerializer(serializers.ModelSerializer):
         return total_cents / 100
 
 
+

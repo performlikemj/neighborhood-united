@@ -98,6 +98,16 @@
   background: var(--surface-2);
 }
 
+/* Theme-aware Sautai logo */
+.sautai-logo__pan {
+  fill: #131D1F; /* Dark pan for light mode */
+  transition: fill 0.2s ease;
+}
+
+[data-theme="dark"] .sautai-logo__pan {
+  fill: #E8F1EA; /* Light pan for dark mode */
+}
+
 *{box-sizing:border-box}
 html,body,#root{ height:100% }
 body{

@@ -220,11 +220,12 @@ else:
 
 # Supabase database for migration (dual database support)
 # Uses SUPA_DB_* environment variables
+# Security: Use django_service role which bypasses RLS (not postgres superuser)
 if os.getenv('SUPA_DB_HOST'):
     DATABASES['supabase'] = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': os.getenv('SUPA_DB_NAME', 'postgres'),
-        'USER': os.getenv('SUPA_DB_USER', 'postgres'),
+        'USER': os.getenv('SUPA_DB_USER', 'django_service'),  # Use dedicated service role
         'PASSWORD': os.getenv('SUPA_DB_PASSWORD'),
         'HOST': os.getenv('SUPA_DB_HOST'),
         'PORT': os.getenv('SUPA_DB_PORT', '5432'),

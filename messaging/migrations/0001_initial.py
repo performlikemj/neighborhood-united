@@ -73,3 +73,4 @@ class Migration(migrations.Migration):
             index=models.Index(fields=['sender', 'sent_at'], name='messaging_m_sender__0f8c6f_idx'),
         ),
     ]
+

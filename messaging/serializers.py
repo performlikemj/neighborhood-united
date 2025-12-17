@@ -91,3 +91,4 @@ class ConversationDetailSerializer(ConversationSerializer):
         # Reverse to show oldest first
         messages = list(reversed(messages))
         return MessageSerializer(messages, many=True).data
+

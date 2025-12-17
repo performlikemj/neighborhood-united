@@ -221,3 +221,4 @@ class ChatConsumer(AsyncWebsocketConsumer):
             conversation.mark_read(self.user_type)
         except Conversation.DoesNotExist:
             pass
+

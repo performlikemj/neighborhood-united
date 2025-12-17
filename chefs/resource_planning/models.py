@@ -330,3 +330,4 @@ class ChefPrepPlanCommitment(models.Model):
         return f"{self.commitment_type}: {label} on {self.service_date}"
 
 
+

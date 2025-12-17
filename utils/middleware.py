@@ -2,8 +2,10 @@
 Custom middleware for request processing.
 """
 import re
+import asyncio
 from django.http import HttpResponse
 from django.utils.deprecation import MiddlewareMixin
+from django.utils.decorators import sync_and_async_middleware
 from utils.model_selection import choose_model, _get_groq_model
 from utils.openai_helpers import token_length
 from utils.redis_client import get, set, delete
@@ -12,7 +14,45 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class AzureHealthProbeMiddleware:
+# Regex patterns for Azure internal IPs (compiled once at module load)
+INTERNAL_IP_PATTERNS = [
+    re.compile(r'^10\.'),        # 10.x.x.x - Azure internal network
+    re.compile(r'^100\.'),       # 100.x.x.x - Carrier Grade NAT (health probes)
+    re.compile(r'^172\.(1[6-9]|2[0-9]|3[0-1])\.'),  # 172.16-31.x.x - Private range
+    re.compile(r'^192\.168\.'),  # 192.168.x.x - Private range
+    re.compile(r'^127\.'),       # 127.x.x.x - Localhost
+]
+
+
+def _is_internal_ip(host):
+    """Check if the host is an internal Azure IP."""
+    host_ip = host.split(':')[0] if ':' in host else host
+    return any(pattern.match(host_ip) for pattern in INTERNAL_IP_PATTERNS)
+
+
+def _process_health_probe(request):
+    """
+    Process request for Azure health probes.
+    Returns HttpResponse if handled, None to continue.
+    """
+    # Get the host from the request
+    host = request.META.get('HTTP_HOST', '')
+    
+    # For health check path, respond immediately
+    if request.path in ('/healthz/', '/healthz'):
+        return HttpResponse('ok', content_type='text/plain')
+    
+    # For internal IPs, rewrite the Host header to localhost
+    # This allows the request to pass Django's ALLOWED_HOSTS check
+    if _is_internal_ip(host):
+        request.META['HTTP_HOST'] = 'localhost'
+        request.META['HTTP_X_ORIGINAL_HOST'] = host  # Preserve original for logging
+    
+    return None
+
+
+@sync_and_async_middleware
+def AzureHealthProbeMiddleware(get_response):
     """
     Middleware to handle Azure Container Apps health probes.
     
@@ -24,72 +64,24 @@ class AzureHealthProbeMiddleware:
     
     This middleware MUST be placed BEFORE django.middleware.security.SecurityMiddleware
     
-    Supports both WSGI (sync) and ASGI (async) modes.
+    Uses @sync_and_async_middleware to properly support both WSGI and ASGI.
     """
+    if asyncio.iscoroutinefunction(get_response):
+        # Async mode (ASGI/Uvicorn)
+        async def middleware(request):
+            response = _process_health_probe(request)
+            if response:
+                return response
+            return await get_response(request)
+    else:
+        # Sync mode (WSGI/Gunicorn)
+        def middleware(request):
+            response = _process_health_probe(request)
+            if response:
+                return response
+            return get_response(request)
     
-    # Regex patterns for Azure internal IPs
-    INTERNAL_IP_PATTERNS = [
-        re.compile(r'^10\.'),        # 10.x.x.x - Azure internal network
-        re.compile(r'^100\.'),       # 100.x.x.x - Carrier Grade NAT (health probes)
-        re.compile(r'^172\.(1[6-9]|2[0-9]|3[0-1])\.'),  # 172.16-31.x.x - Private range
-        re.compile(r'^192\.168\.'),  # 192.168.x.x - Private range
-        re.compile(r'^127\.'),       # 127.x.x.x - Localhost
-    ]
-    
-    # Mark as async-capable so Django uses async path
-    sync_capable = True
-    async_capable = True
-    
-    def __init__(self, get_response):
-        self.get_response = get_response
-        # Check if get_response is a coroutine function
-        import asyncio
-        if asyncio.iscoroutinefunction(get_response):
-            self._is_async = True
-        else:
-            self._is_async = False
-    
-    def _process_request(self, request):
-        """Common request processing logic for both sync and async."""
-        # Get the host from the request
-        host = request.META.get('HTTP_HOST', '')
-        
-        # Extract IP (remove port if present)
-        host_ip = host.split(':')[0] if ':' in host else host
-        
-        # Check if this is from an internal Azure IP
-        is_internal_ip = any(pattern.match(host_ip) for pattern in self.INTERNAL_IP_PATTERNS)
-        
-        # For health check path, respond immediately without further processing
-        if request.path == '/healthz/' or request.path == '/healthz':
-            return HttpResponse('ok', content_type='text/plain')
-        
-        # For internal IPs, rewrite the Host header to localhost
-        # This allows the request to pass Django's ALLOWED_HOSTS check
-        if is_internal_ip:
-            request.META['HTTP_HOST'] = 'localhost'
-            request.META['HTTP_X_ORIGINAL_HOST'] = host  # Preserve original for logging
-        
-        return None  # Continue to next middleware
-    
-    def __call__(self, request):
-        # Handle async mode
-        import asyncio
-        if self._is_async:
-            return self.__acall__(request)
-        
-        # Sync mode
-        response = self._process_request(request)
-        if response:
-            return response
-        return self.get_response(request)
-    
-    async def __acall__(self, request):
-        """Async version of __call__ for ASGI."""
-        response = self._process_request(request)
-        if response:
-            return response
-        return await self.get_response(request)
+    return middleware
 
 class ModelSelectionMiddleware(MiddlewareMixin):
     """

@@ -36,8 +36,8 @@ test('NavBar offers a link to the orders page for authenticated users', () => {
   const source = load(navPath)
   assert.match(
     source,
-    /\{\s*to:\s*['"]\/orders['"]/,
-    'Expected NavBar more-menu items to include /orders link.'
+    /to=["']\/orders["']/,
+    'Expected NavBar account menu to include /orders link.'
   )
 })
 

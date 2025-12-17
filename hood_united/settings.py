@@ -69,6 +69,10 @@ AZURE_CONTAINER_INTERNAL_HOSTS = [
 
 ALLOWED_HOSTS = _env_hosts + AZURE_CONTAINER_INTERNAL_HOSTS
 
+# Trust X-Forwarded-Host header from Azure's reverse proxy
+# This allows AzureHealthProbeMiddleware to rewrite the host for internal IPs
+USE_X_FORWARDED_HOST = True
+
 # Model quota limits
 GPT41_AUTH_LIMIT = int(os.getenv('GPT41_AUTH_LIMIT', 5))  # gpt-5 per authenticated user / day
 GPT41_MINI_GUEST_LIMIT = int(os.getenv('GPT41_MINI_GUEST_LIMIT', 10))  # gpt-5-mini per guest / day

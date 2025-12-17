@@ -39,19 +39,19 @@ def _process_health_probe(request):
     host = request.META.get('HTTP_HOST', '')
     path = getattr(request, 'path', 'unknown')
     
-    logger.info(f"AzureHealthProbeMiddleware: Processing request - Host: {host}, Path: {path}")
-    
-    # For health check path, respond immediately
-    if request.path in ('/healthz/', '/healthz'):
-        logger.info(f"AzureHealthProbeMiddleware: Health check path detected, returning 200 OK")
-        return HttpResponse('ok', content_type='text/plain')
-    
-    # For internal IPs, rewrite the Host header to localhost
-    # This allows the request to pass Django's ALLOWED_HOSTS check
+    # For internal IPs (Azure health probes, load balancer checks)
     if _is_internal_ip(host):
-        logger.info(f"AzureHealthProbeMiddleware: Internal IP detected ({host}), rewriting to localhost")
+        # Health check paths - return 200 OK immediately, bypassing all other middleware
+        if path in ('/healthz/', '/healthz', '/health/', '/health', '/'):
+            return HttpResponse('ok', content_type='text/plain', status=200)
+        
+        # For other paths from internal IPs, rewrite the Host header
+        # Store original for logging, then set to localhost
+        request.META['HTTP_X_ORIGINAL_HOST'] = host
         request.META['HTTP_HOST'] = 'localhost'
-        request.META['HTTP_X_ORIGINAL_HOST'] = host  # Preserve original for logging
+        request.META['SERVER_NAME'] = 'localhost'
+        # Also set X-Forwarded-Host which Django checks if USE_X_FORWARDED_HOST is True
+        request.META['HTTP_X_FORWARDED_HOST'] = 'localhost'
     
     return None
 

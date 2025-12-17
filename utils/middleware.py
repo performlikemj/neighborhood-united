@@ -23,6 +23,8 @@ class AzureHealthProbeMiddleware:
     3. Rewrites the Host header for internal IPs so Django's SecurityMiddleware accepts them
     
     This middleware MUST be placed BEFORE django.middleware.security.SecurityMiddleware
+    
+    Supports both WSGI (sync) and ASGI (async) modes.
     """
     
     # Regex patterns for Azure internal IPs
@@ -34,10 +36,21 @@ class AzureHealthProbeMiddleware:
         re.compile(r'^127\.'),       # 127.x.x.x - Localhost
     ]
     
+    # Mark as async-capable so Django uses async path
+    sync_capable = True
+    async_capable = True
+    
     def __init__(self, get_response):
         self.get_response = get_response
+        # Check if get_response is a coroutine function
+        import asyncio
+        if asyncio.iscoroutinefunction(get_response):
+            self._is_async = True
+        else:
+            self._is_async = False
     
-    def __call__(self, request):
+    def _process_request(self, request):
+        """Common request processing logic for both sync and async."""
         # Get the host from the request
         host = request.META.get('HTTP_HOST', '')
         
@@ -57,7 +70,26 @@ class AzureHealthProbeMiddleware:
             request.META['HTTP_HOST'] = 'localhost'
             request.META['HTTP_X_ORIGINAL_HOST'] = host  # Preserve original for logging
         
+        return None  # Continue to next middleware
+    
+    def __call__(self, request):
+        # Handle async mode
+        import asyncio
+        if self._is_async:
+            return self.__acall__(request)
+        
+        # Sync mode
+        response = self._process_request(request)
+        if response:
+            return response
         return self.get_response(request)
+    
+    async def __acall__(self, request):
+        """Async version of __call__ for ASGI."""
+        response = self._process_request(request)
+        if response:
+            return response
+        return await self.get_response(request)
 
 class ModelSelectionMiddleware(MiddlewareMixin):
     """

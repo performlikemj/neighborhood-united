@@ -183,12 +183,18 @@ class ChefServiceOrderSerializer(serializers.ModelSerializer):
 
 # Public variants to avoid exposing stripe_price_id in discovery endpoints
 class PublicChefServicePriceTierSerializer(serializers.ModelSerializer):
+    ready_for_checkout = serializers.SerializerMethodField()
+
     class Meta:
         model = ChefServicePriceTier
         fields = [
             'id', 'household_min', 'household_max', 'currency',
             'is_recurring', 'recurrence_interval', 'active', 'display_label',
+            'ready_for_checkout',
         ]
+
+    def get_ready_for_checkout(self, obj):
+        return bool(obj.stripe_price_id and obj.price_sync_status == 'success')
 
 
 class PublicChefServiceOfferingSerializer(serializers.ModelSerializer):

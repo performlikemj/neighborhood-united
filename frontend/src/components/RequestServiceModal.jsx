@@ -283,13 +283,18 @@ export default function RequestServiceModal({ isOpen, onClose, chefId, chefUsern
                     {selectedService.tiers.map(tier => (
                       <button
                         key={tier.id}
-                        className={`tier-option ${selectedTier?.id === tier.id ? 'selected' : ''}`}
+                        className={`tier-option ${selectedTier?.id === tier.id ? 'selected' : ''}${tier.ready_for_checkout === false ? ' tier-unavailable' : ''}`}
                         onClick={() => handleTierSelect(tier)}
+                        disabled={tier.ready_for_checkout === false}
+                        title={tier.ready_for_checkout === false ? 'This option is being set up' : ''}
                       >
                         <div className="tier-option-main">
                           <div className="tier-option-name">{tier.name}</div>
                           <div className="tier-option-details">
                             {tier.household_min}-{tier.household_max || '∞'} people
+                            {tier.ready_for_checkout === false && (
+                              <span className="tier-pending-badge">Setting up...</span>
+                            )}
                           </div>
                         </div>
                         <div className="tier-option-price">

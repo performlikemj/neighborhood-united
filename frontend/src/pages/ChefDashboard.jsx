@@ -438,6 +438,11 @@ function ChefMessagesSection() {
         conversationId={selectedConversation?.id}
         recipientName={selectedConversation?.customer_name}
         recipientPhoto={selectedConversation?.customer_photo}
+        onSwitchConversation={(newConvId, name, photo) => {
+          // Find the conversation in our local list or create a minimal object
+          const conv = conversations?.find(c => c.id === newConvId)
+          setSelectedConversation(conv || { id: newConvId, customer_name: name, customer_photo: photo })
+        }}
       />
     </div>
   )
@@ -2595,19 +2600,71 @@ export default function ChefDashboard(){
                   You do not have accepted connections yet. Leave this multiselect empty to publish a public offering.
                 </div>
               ) : (
-                <select
-                  className="select"
-                  multiple
-                  value={serviceForm.targetCustomerIds}
-                  onChange={(event)=>{
-                    const values = Array.from(event.target.selectedOptions || []).map(option => option.value)
-                    setServiceForm(f => ({ ...f, targetCustomerIds: values }))
-                  }}
-                >
-                  {acceptedCustomerOptions.map(option => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
+                <div style={{display:'flex', flexDirection:'column', gap:'.5rem'}}>
+                  {/* Selected customers as chips */}
+                  {serviceForm.targetCustomerIds.length > 0 && (
+                    <div style={{display:'flex', flexWrap:'wrap', gap:'.35rem'}}>
+                      {serviceForm.targetCustomerIds.map(id => {
+                        const option = acceptedCustomerOptions.find(o => o.value === id)
+                        if (!option) return null
+                        return (
+                          <span key={id} className="chip" style={{display:'inline-flex', alignItems:'center', gap:'.35rem', paddingRight:'.35rem'}}>
+                            {option.label}
+                            <button
+                              type="button"
+                              onClick={() => setServiceForm(f => ({ ...f, targetCustomerIds: f.targetCustomerIds.filter(cid => cid !== id) }))}
+                              style={{
+                                background:'none',
+                                border:'none',
+                                cursor:'pointer',
+                                padding:'0',
+                                marginLeft:'.1rem',
+                                lineHeight:'1',
+                                fontSize:'1.1rem',
+                                color:'inherit',
+                                opacity:'.7',
+                                borderRadius:'50%',
+                                width:'18px',
+                                height:'18px',
+                                display:'flex',
+                                alignItems:'center',
+                                justifyContent:'center'
+                              }}
+                              onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                              onMouseLeave={e => e.currentTarget.style.opacity = '.7'}
+                              aria-label={`Remove ${option.label}`}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        )
+                      })}
+                    </div>
+                  )}
+                  {/* Dropdown to add customers */}
+                  {(() => {
+                    const unselected = acceptedCustomerOptions.filter(o => !serviceForm.targetCustomerIds.includes(o.value))
+                    if (unselected.length === 0) return null
+                    return (
+                      <select
+                        className="select"
+                        value=""
+                        onChange={e => {
+                          if (!e.target.value) return
+                          setServiceForm(f => ({ ...f, targetCustomerIds: [...f.targetCustomerIds, e.target.value] }))
+                        }}
+                      >
+                        <option value="">Add a customer…</option>
+                        {unselected.map(option => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    )
+                  })()}
+                  {serviceForm.targetCustomerIds.length > 0 && acceptedCustomerOptions.filter(o => !serviceForm.targetCustomerIds.includes(o.value)).length === 0 && (
+                    <div className="muted" style={{fontSize:'.85rem'}}>All accepted customers selected.</div>
+                  )}
+                </div>
               )}
               <p className="muted" style={{margin:'0.35rem 0 0', fontSize:'.82rem'}}>
                 Use the multiselect to target accepted customers. Leave it blank to keep the service visible to everyone.

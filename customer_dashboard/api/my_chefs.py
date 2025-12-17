@@ -385,6 +385,7 @@ def get_chef_catalog(request, chef_id):
                 'household_max': tier.household_max,
                 'is_recurring': tier.is_recurring,
                 'recurrence_interval': tier.recurrence_interval,
+                'ready_for_checkout': bool(tier.stripe_price_id and tier.price_sync_status == 'success'),
             })
         
         if not tiers:

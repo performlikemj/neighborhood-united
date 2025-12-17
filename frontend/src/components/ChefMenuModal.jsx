@@ -303,7 +303,7 @@ export default function ChefMenuModal({ isOpen, onClose, chefId, chefUsername })
                           )}
                           <div className="service-tiers">
                             {service.tiers.map(tier => (
-                              <div key={tier.id} className="service-tier">
+                              <div key={tier.id} className={`service-tier${tier.ready_for_checkout === false ? ' tier-unavailable' : ''}`}>
                                 <div className="tier-info">
                                   <span className="tier-name">{tier.name}</span>
                                   <span className="tier-price">
@@ -314,10 +314,13 @@ export default function ChefMenuModal({ isOpen, onClose, chefId, chefUsername })
                                 <button
                                   className="btn btn-outline btn-sm tier-add-btn"
                                   onClick={() => handleAddService(service, tier)}
-                                  disabled={addingItem === `service-${service.id}-${tier.id}`}
+                                  disabled={addingItem === `service-${service.id}-${tier.id}` || tier.ready_for_checkout === false}
+                                  title={tier.ready_for_checkout === false ? 'This option is being set up' : ''}
                                 >
                                   {addingItem === `service-${service.id}-${tier.id}` ? (
                                     <span className="spinner-sm"></span>
+                                  ) : tier.ready_for_checkout === false ? (
+                                    <span className="tier-pending">Setting up...</span>
                                   ) : (
                                     <i className="fa-solid fa-plus"></i>
                                   )}

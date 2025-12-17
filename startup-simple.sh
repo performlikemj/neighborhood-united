@@ -20,6 +20,6 @@ else
     python manage.py migrate --noinput
 fi
 
-# Start the Django application
-echo "🌐 Starting Django application..."
-exec gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 120 hood_united.wsgi:application 
+# Start the Django application (ASGI) so WebSockets work in local/dev containers
+echo "🌐 Starting Django application (ASGI)..."
+exec gunicorn -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --workers 2 --timeout 120 hood_united.asgi:application 

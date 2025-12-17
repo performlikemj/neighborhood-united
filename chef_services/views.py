@@ -213,9 +213,7 @@ def my_offerings(request):
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])
 def connections(request):
-    print(f"connections request: {request.method}, {request.data}")
     role, actor = _resolve_connection_scope(request)
-    print(f"role: {role}, actor: {actor}")
     if request.method == 'GET':
         if role == 'chef' and actor:
             qs = ChefCustomerConnection.objects.filter(chef=actor)

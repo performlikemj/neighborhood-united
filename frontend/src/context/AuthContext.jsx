@@ -194,6 +194,29 @@ export function AuthProvider({ children }){
     }
   }, [loading, user?.id, user?.current_role, fetchConnectedChefs])
 
+  // Poll for connected chefs every 30 seconds to detect when a chef accepts a connection
+  useEffect(() => {
+    if (loading || !user?.id || user?.current_role === 'chef') return
+    
+    const pollInterval = setInterval(() => {
+      fetchConnectedChefs(true) // Force refresh
+    }, 30000) // 30 seconds
+    
+    return () => clearInterval(pollInterval)
+  }, [loading, user?.id, user?.current_role, fetchConnectedChefs])
+
+  // Listen for connection status changes (e.g., from other components)
+  useEffect(() => {
+    const handleConnectionChange = () => {
+      if (user?.id && user?.current_role !== 'chef') {
+        fetchConnectedChefs(true)
+      }
+    }
+    
+    window.addEventListener('connection-status-changed', handleConnectionChange)
+    return () => window.removeEventListener('connection-status-changed', handleConnectionChange)
+  }, [user?.id, user?.current_role, fetchConnectedChefs])
+
   const login = async (username, password) => {
     // Use URL-encoded form to avoid CORS preflight on Content-Type
     const form = new URLSearchParams()

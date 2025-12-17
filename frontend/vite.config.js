@@ -38,6 +38,16 @@ export default defineConfig({
       '/local_chefs': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true
+      },
+      '/messaging': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true
+      },
+      // WebSocket proxy for real-time chat
+      '/ws': {
+        target: 'ws://127.0.0.1:8000',
+        ws: true,
+        changeOrigin: true
       }
     }
   },

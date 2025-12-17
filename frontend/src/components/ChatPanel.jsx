@@ -4,14 +4,37 @@ import { useAuth } from '../context/AuthContext.jsx'
 import { useMessaging } from '../context/MessagingContext.jsx'
 import useWebSocket from '../hooks/useWebSocket.js'
 
+/** Photo with fallback placeholder - reusable for different sizes */
+function PhotoWithFallback({ src, alt, className, placeholderClass }) {
+  const [failed, setFailed] = useState(false)
+  
+  if (!src || failed) {
+    return (
+      <div className={placeholderClass}>
+        <i className="fa-solid fa-user"></i>
+      </div>
+    )
+  }
+  
+  return (
+    <img 
+      src={src} 
+      alt={alt} 
+      className={className}
+      onError={() => setFailed(true)}
+    />
+  )
+}
+
 /**
  * ChatPanel - Slide-out chat panel for messaging
  * 
  * Supports real-time messaging via WebSocket with REST fallback.
+ * Includes conversation switcher for easy navigation between chats.
  */
-export default function ChatPanel({ isOpen, onClose, conversationId, recipientName, recipientPhoto }) {
+export default function ChatPanel({ isOpen, onClose, conversationId, recipientName, recipientPhoto, onSwitchConversation }) {
   const { user } = useAuth()
-  const { markConversationRead, updateConversationWithMessage, sendMessage: sendMessageRest } = useMessaging()
+  const { markConversationRead, updateConversationWithMessage, sendMessage: sendMessageRest, conversations, fetchConversations } = useMessaging()
   
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(true)
@@ -19,10 +42,12 @@ export default function ChatPanel({ isOpen, onClose, conversationId, recipientNa
   const [inputValue, setInputValue] = useState('')
   const [sending, setSending] = useState(false)
   const [typingUsers, setTypingUsers] = useState(new Set())
+  const [showConversationList, setShowConversationList] = useState(false)
   
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const typingTimeoutRef = useRef(null)
+  const conversationListRef = useRef(null)
 
   // Scroll to bottom of messages
   const scrollToBottom = useCallback(() => {
@@ -120,12 +145,29 @@ export default function ChatPanel({ isOpen, onClose, conversationId, recipientNa
     }
   }, [messages, scrollToBottom])
 
-  // Focus input when panel opens
+  // Focus input when panel opens and fetch conversations
   useEffect(() => {
     if (isOpen) {
       setTimeout(() => inputRef.current?.focus(), 100)
+      // Fetch conversations for the switcher
+      fetchConversations()
+    } else {
+      setShowConversationList(false)
     }
-  }, [isOpen])
+  }, [isOpen, fetchConversations])
+
+  // Close conversation list when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (conversationListRef.current && !conversationListRef.current.contains(e.target)) {
+        setShowConversationList(false)
+      }
+    }
+    if (showConversationList) {
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [showConversationList])
 
   // Handle input change with typing indicator
   const handleInputChange = (e) => {
@@ -233,20 +275,82 @@ export default function ChatPanel({ isOpen, onClose, conversationId, recipientNa
       <aside className="chat-panel" role="dialog" aria-label="Chat">
         {/* Header */}
         <div className="chat-panel-header">
-          <div className="chat-recipient">
-            {recipientPhoto ? (
-              <img src={recipientPhoto} alt={recipientName} className="chat-recipient-photo" />
-            ) : (
-              <div className="chat-recipient-placeholder">
-                <i className="fa-solid fa-user"></i>
+          <div className="chat-recipient-wrapper" ref={conversationListRef}>
+            <button 
+              className="chat-recipient" 
+              onClick={() => onSwitchConversation && setShowConversationList(v => !v)}
+              title={onSwitchConversation ? "Switch conversation" : undefined}
+              style={{ cursor: onSwitchConversation ? 'pointer' : 'default' }}
+            >
+              <PhotoWithFallback 
+                src={recipientPhoto} 
+                alt={recipientName} 
+                className="chat-recipient-photo"
+                placeholderClass="chat-recipient-placeholder"
+              />
+              <div className="chat-recipient-info">
+                <div className="chat-recipient-name">
+                  {recipientName}
+                  {onSwitchConversation && conversations.length > 1 && (
+                    <i className={`fa-solid fa-chevron-down chat-switch-icon ${showConversationList ? 'open' : ''}`}></i>
+                  )}
+                </div>
+                {/* Only show status when connected (real-time) */}
+                {isConnected && (
+                  <div className="chat-status online">
+                    <i className="fa-solid fa-circle" style={{fontSize: '6px', marginRight: '4px'}}></i>
+                    Real-time
+                  </div>
+                )}
+              </div>
+            </button>
+
+            {/* Conversation switcher dropdown */}
+            {showConversationList && onSwitchConversation && (
+              <div className="chat-conversation-list">
+                <div className="chat-conversation-list-header">Recent Chats</div>
+                {conversations.length === 0 ? (
+                  <div className="chat-conversation-empty">No conversations yet</div>
+                ) : (
+                  conversations.map(conv => {
+                    // Determine the other party's info based on current user role
+                    const isCustomer = conv.customer === user?.id
+                    const otherName = isCustomer ? conv.chef_name : conv.customer_name
+                    const otherPhoto = isCustomer ? conv.chef_photo : conv.customer_photo
+                    const isActive = conv.id === conversationId
+                    
+                    return (
+                      <button
+                        key={conv.id}
+                        className={`chat-conversation-item ${isActive ? 'active' : ''}`}
+                        onClick={() => {
+                          if (!isActive) {
+                            onSwitchConversation(conv.id, otherName, otherPhoto)
+                          }
+                          setShowConversationList(false)
+                        }}
+                      >
+                        <PhotoWithFallback 
+                          src={otherPhoto} 
+                          alt={otherName}
+                          className="chat-conv-photo"
+                          placeholderClass="chat-conv-photo-placeholder"
+                        />
+                        <div className="chat-conv-info">
+                          <div className="chat-conv-name">{otherName}</div>
+                          {conv.last_message_preview && (
+                            <div className="chat-conv-preview">{conv.last_message_preview}</div>
+                          )}
+                        </div>
+                        {conv.unread_count > 0 && (
+                          <span className="chat-conv-unread">{conv.unread_count}</span>
+                        )}
+                      </button>
+                    )
+                  })
+                )}
               </div>
             )}
-            <div className="chat-recipient-info">
-              <div className="chat-recipient-name">{recipientName}</div>
-              <div className={`chat-status ${isConnected ? 'online' : ''}`}>
-                {isConnecting ? 'Connecting...' : isConnected ? 'Online' : 'Offline'}
-              </div>
-            </div>
           </div>
           <button className="chat-panel-close" onClick={onClose} aria-label="Close">
             <i className="fa-solid fa-times"></i>
@@ -282,10 +386,17 @@ export default function ChatPanel({ isOpen, onClose, conversationId, recipientNa
           {!loading && !error && messages.length > 0 && (
             <div className="messages-list">
               {messages.map((message, index) => {
-                const isOwn = message.sender_id === user?.id
+                // Check both sender and sender_id for compatibility
+                const senderId = message.sender_id ?? message.sender
+                const isOwn = senderId === user?.id
                 const showDate = index === 0 || 
                   new Date(message.sent_at).toDateString() !== 
                   new Date(messages[index - 1].sent_at).toDateString()
+                
+                // Show sender name for "other" messages
+                const prevMessage = messages[index - 1]
+                const prevSenderId = prevMessage?.sender_id ?? prevMessage?.sender
+                const showSenderName = !isOwn && (index === 0 || prevSenderId !== senderId || showDate)
                 
                 return (
                   <React.Fragment key={message.id}>
@@ -299,6 +410,9 @@ export default function ChatPanel({ isOpen, onClose, conversationId, recipientNa
                       </div>
                     )}
                     <div className={`message-bubble ${isOwn ? 'own' : 'other'} ${message.pending ? 'pending' : ''}`}>
+                      {showSenderName && message.sender_name && (
+                        <div className="message-sender-name">{message.sender_name}</div>
+                      )}
                       <div className="message-content">{message.content}</div>
                       <div className="message-meta">
                         <span className="message-time">{formatTime(message.sent_at)}</span>

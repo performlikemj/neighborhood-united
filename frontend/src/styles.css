@@ -170,6 +170,13 @@ a.btn{ text-decoration:none }
 .brand{ display:flex; align-items:center; gap:.5rem; font-weight:800; font-size:1.125rem }
 .nav-links{ margin-left:auto; display:flex; gap:.5rem; flex-wrap:wrap; align-items:center }
 
+/* Unified chef navigation button with smooth transitions */
+.nav-chef-btn{
+  min-width: 100px;
+  text-align: center;
+  transition: all 0.3s ease;
+}
+
 /* Force-hide hamburger on wide screens */
 .navbar .menu-toggle{ display:none !important }
 
@@ -185,6 +192,42 @@ a.btn{ text-decoration:none }
   .nav-links{ position:absolute; right:1rem; top:64px; background:var(--surface); border:1px solid var(--border); border-radius:14px; box-shadow: var(--shadow-md); padding:.6rem; display:none; flex-direction:column; gap:.4rem; min-width: 220px }
   .nav-links.open{ display:flex }
   .navbar-inner{ position:relative }
+  
+  /* For logged-in users on mobile: hide hamburger, show only account menu */
+  .navbar--logged-in .menu-toggle{ display:none !important }
+  .navbar--logged-in .nav-links{ 
+    position:static; 
+    display:flex !important; 
+    flex-direction:row;
+    background:transparent; 
+    border:none; 
+    box-shadow:none; 
+    padding:0; 
+    min-width:auto;
+    gap: 0.5rem;
+  }
+  
+  /* Hide most nav items for logged-in mobile users - account menu has everything */
+  .navbar--logged-in .nav-links > .btn,
+  .navbar--logged-in .nav-links > .nav-text-link,
+  .navbar--logged-in .nav-links > .nav-icon-link,
+  .navbar--logged-in .nav-links > .menu-wrap:not(.account-menu-wrap),
+  .navbar--logged-in .nav-links > .role-toggle{
+    display: none !important;
+  }
+  
+  /* But keep account menu visible */
+  .navbar--logged-in .nav-links > .account-menu-wrap{
+    display: inline-flex !important;
+  }
+  
+  /* Chef dashboard context on mobile - hide standalone elements, use dropdown */
+  .navbar--chef-context.navbar--logged-in .role-toggle{
+    display: none !important;
+  }
+  .navbar--chef-context.navbar--logged-in .theme-toggle-icon{
+    display: none !important;
+  }
 }
 
 /* Chef Dashboard Context - Streamlined navbar */
@@ -1313,6 +1356,284 @@ a.btn{ text-decoration:none }
 .menu-item{ display:block; width:100%; text-align:left; background:var(--surface); border:0; padding:.45rem .6rem; border-radius:8px; font-weight:600; color:var(--text); cursor:pointer; text-decoration:none }
 .menu-item:hover{ background: color-mix(in oklab, var(--primary) 10%, var(--surface)) }
 .menu-divider{ height:1px; background:var(--border); margin:.35rem 0 }
+
+/* Modern account menu with avatar trigger */
+.account-menu-wrap{
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.account-trigger{
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem 0.35rem 0.35rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.account-trigger:hover{
+  background: color-mix(in oklab, var(--primary) 8%, var(--surface-2));
+  border-color: color-mix(in oklab, var(--primary) 30%, var(--border));
+}
+
+.account-trigger--compact{
+  padding: 0.25rem;
+  background: transparent;
+  border: none;
+}
+
+.account-trigger--compact:hover{
+  background: var(--surface-2);
+}
+
+.account-avatar{
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--primary) 0%, color-mix(in oklab, var(--primary) 70%, #000) 100%);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.account-avatar--sm{
+  width: 28px;
+  height: 28px;
+  font-size: 0.65rem;
+}
+
+.account-avatar--lg{
+  width: 40px;
+  height: 40px;
+  font-size: 0.85rem;
+}
+
+.account-chevron{
+  font-size: 0.6rem;
+  color: var(--muted);
+  transition: transform 0.2s ease;
+}
+
+.account-chevron.open{
+  transform: rotate(180deg);
+}
+
+.account-menu{
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
+  min-width: 260px;
+  padding: 0.5rem;
+  z-index: 100;
+  animation: accountMenuIn 0.15s ease-out;
+}
+
+@keyframes accountMenuIn{
+  from{
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+  }
+  to{
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.account-menu-header{
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 0.6rem;
+}
+
+.account-menu-user{
+  flex: 1;
+  min-width: 0;
+}
+
+.account-menu-name{
+  font-weight: 600;
+  color: var(--text);
+  font-size: 0.95rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-menu-email{
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 0.1rem;
+}
+
+.account-menu-divider{
+  height: 1px;
+  background: var(--border);
+  margin: 0.4rem 0.5rem;
+}
+
+.account-menu-item{
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border: none;
+  background: transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  text-decoration: none;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+
+.account-menu-item i{
+  width: 18px;
+  text-align: center;
+  font-size: 0.9rem;
+  color: var(--muted);
+  transition: color 0.15s ease;
+}
+
+.account-menu-emoji{
+  width: 22px;
+  text-align: center;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.account-menu-item:hover{
+  background: color-mix(in oklab, var(--primary) 8%, var(--surface));
+}
+
+.account-menu-item:hover i{
+  color: var(--primary);
+}
+
+.account-menu-item--danger{
+  color: #dc2626;
+}
+
+.account-menu-item--danger i{
+  color: #dc2626;
+}
+
+.account-menu-item--danger:hover{
+  background: rgba(220, 38, 38, 0.08);
+}
+
+/* Badge for unread count in menu */
+.account-menu-badge{
+  margin-left: auto;
+  background: var(--primary);
+  color: white;
+  font-size: 0.7rem;
+  font-weight: 700;
+  min-width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+}
+
+/* Navigation section in account menu - hidden on desktop, shown on mobile */
+.account-menu-nav-section{
+  display: none;
+}
+
+@media (max-width: 860px){
+  .account-menu-nav-section{
+    display: block;
+  }
+}
+
+/* Theme toggle in account menu - hidden on desktop */
+.account-menu-theme-toggle{
+  display: none;
+}
+
+/* Role section in account menu - hidden on desktop */
+.account-menu-role-section{
+  display: none;
+}
+
+.account-menu-role-label{
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  padding: 0.5rem 0.75rem 0.25rem;
+}
+
+.account-menu-role-toggle{
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.25rem 0.5rem 0.5rem;
+}
+
+.account-menu-role-btn{
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.account-menu-role-btn:hover{
+  background: var(--surface-2);
+}
+
+.account-menu-role-btn.active{
+  background: var(--gradient-brand);
+  color: white;
+  border-color: transparent;
+}
+
+.account-menu-role-btn[disabled]{
+  opacity: 0.6;
+  cursor: progress;
+}
+
+@media (max-width: 860px){
+  .account-menu-theme-toggle{
+    display: flex;
+  }
+  .account-menu-role-section{
+    display: block;
+  }
+}
+
+/* Chef picker in navbar */
+.chef-picker{ min-width: 200px }
+.chef-picker-header{ padding:.5rem .6rem; font-size:.75rem; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.04em }
+.chef-picker-item{ display:flex; align-items:center; gap:.6rem }
+.chef-picker-photo{ width:28px; height:28px; border-radius:50%; object-fit:cover }
+.chef-picker-photo-placeholder{ width:28px; height:28px; border-radius:50%; background:color-mix(in oklab, var(--primary) 12%, var(--surface-2)); display:flex; align-items:center; justify-content:center; color:var(--primary); font-size:.7rem }
 
 /* Listbox (custom dropdown) */
 .listbox-wrap{ position:relative; width:100% }
@@ -6169,6 +6490,40 @@ body.chef-gallery-modal-open {
   justify-content: center;
 }
 
+/* Unavailable tier states (Stripe sync pending) */
+.service-tier.tier-unavailable {
+  opacity: 0.6;
+}
+
+.service-tier.tier-unavailable .tier-add-btn {
+  width: auto;
+  padding: 0 0.5rem;
+}
+
+.tier-pending {
+  font-size: 0.7rem;
+  color: var(--muted);
+  font-style: italic;
+  white-space: nowrap;
+}
+
+.tier-option.tier-unavailable {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.tier-option.tier-unavailable:hover {
+  border-color: var(--border);
+}
+
+.tier-pending-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  color: var(--warning, #f59e0b);
+  font-style: italic;
+  margin-left: 0.5rem;
+}
+
 /* Small spinner for buttons */
 .spinner-sm {
   width: 16px;
@@ -6756,6 +7111,155 @@ body.chef-gallery-modal-open {
   color: var(--text);
 }
 
+/* Conversation switcher styles */
+.chat-recipient-wrapper {
+  position: relative;
+}
+
+button.chat-recipient {
+  background: transparent;
+  border: none;
+  padding: 0.5rem 0.75rem;
+  margin: -0.5rem -0.75rem;
+  border-radius: 12px;
+  transition: background 0.2s ease;
+}
+
+button.chat-recipient:hover {
+  background: var(--surface-2);
+}
+
+.chat-switch-icon {
+  font-size: 0.65rem;
+  margin-left: 0.4rem;
+  color: var(--muted);
+  transition: transform 0.2s ease;
+}
+
+.chat-switch-icon.open {
+  transform: rotate(180deg);
+}
+
+.chat-conversation-list {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 300px;
+  max-height: 400px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+  animation: fadeInDown 0.15s ease-out;
+}
+
+@keyframes fadeInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.chat-conversation-list-header {
+  padding: 0.75rem 1rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-conversation-empty {
+  padding: 1.5rem 1rem;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.chat-conversation-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease;
+}
+
+.chat-conversation-item:hover {
+  background: var(--surface-2);
+}
+
+.chat-conversation-item.active {
+  background: color-mix(in oklab, var(--primary) 10%, var(--surface));
+}
+
+.chat-conv-photo,
+.chat-conv-photo-placeholder {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.chat-conv-photo-placeholder {
+  background: color-mix(in oklab, var(--primary) 12%, var(--surface-2));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary);
+  font-size: 1rem;
+}
+
+.chat-conv-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-conv-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-conv-preview {
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 0.15rem;
+}
+
+.chat-conv-unread {
+  background: var(--primary);
+  color: white;
+  font-size: 0.7rem;
+  font-weight: 700;
+  min-width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  flex-shrink: 0;
+}
+
 /* Messages Area */
 .chat-messages {
   flex: 1;
@@ -6833,6 +7337,13 @@ body.chef-gallery-modal-open {
 
 .message-bubble.pending {
   opacity: 0.7;
+}
+
+.message-sender-name {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--primary);
+  margin-bottom: 0.25rem;
 }
 
 .message-content {

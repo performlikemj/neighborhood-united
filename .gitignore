@@ -10,6 +10,11 @@
 !jsconfig.json
 !**/package.json
 __pycache__/
+
+# Python virtual environments
+.venv/
+.venv-*/
+venv/
 media/
 staticfiles/
 !**/staticwebapp.config.json

@@ -288,3 +288,50 @@ def get_unread_counts(request):
     })
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def websocket_health_check(request):
+    """
+    Diagnostic endpoint to test WebSocket infrastructure.
+    
+    Tests:
+    - Channel layer type (InMemory vs Redis)
+    - Redis connectivity for production channel layer
+    - Returns detailed error info for troubleshooting
+    """
+    from channels.layers import get_channel_layer
+    from asgiref.sync import async_to_sync
+    import os
+    
+    results = {
+        "redis_connected": False,
+        "channel_layer_type": "",
+        "debug_mode": os.getenv('DEBUG', 'unknown'),
+        "error": None,
+        "error_type": None,
+    }
+    
+    try:
+        channel_layer = get_channel_layer()
+        results["channel_layer_type"] = type(channel_layer).__name__
+        
+        # Test Redis connectivity by sending a test message to a unique channel
+        test_channel = f"ws_health_test_{request.user.id}"
+        async_to_sync(channel_layer.send)(test_channel, {"type": "test.message", "data": "ping"})
+        
+        # Try to receive the message we just sent
+        message = async_to_sync(channel_layer.receive)(test_channel)
+        if message and message.get("type") == "test.message":
+            results["redis_connected"] = True
+            results["message_roundtrip"] = True
+        else:
+            results["redis_connected"] = True
+            results["message_roundtrip"] = False
+            
+    except Exception as e:
+        results["error"] = str(e)
+        results["error_type"] = type(e).__name__
+    
+    return Response(results)
+
+

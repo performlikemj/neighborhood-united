@@ -68,20 +68,30 @@ class JWTAuthMiddleware(BaseMiddleware):
         if scope['type'] != 'websocket':
             return await super().__call__(scope, receive, send)
         
+        # Log connection attempt for debugging
+        path = scope.get('path', 'unknown')
+        
         # Try to get token from query string
         query_string = scope.get('query_string', b'').decode('utf-8')
         query_params = parse_qs(query_string)
         token = query_params.get('token', [None])[0]
         
+        # Verbose logging for troubleshooting (TODO: reduce to DEBUG after diagnosis)
+        logger.info(f"[WebSocket] Connection attempt - path: {path}, has_token: {bool(token)}")
+        
         if token:
             # Authenticate using JWT token
             scope['user'] = await get_user_from_token(token)
-            logger.debug(f"[WebSocket] Authenticated user: {scope['user']}")
+            user = scope['user']
+            is_auth = getattr(user, 'is_authenticated', False)
+            user_id = getattr(user, 'id', None)
+            logger.info(f"[WebSocket] JWT auth result - authenticated: {is_auth}, user_id: {user_id}")
         else:
             # Fall back to session-based auth if no token provided
             # This allows backward compatibility for same-origin connections
             if 'user' not in scope or scope['user'] is None:
                 scope['user'] = get_anonymous_user()
+            logger.info(f"[WebSocket] No token provided, using session auth fallback")
         
         return await super().__call__(scope, receive, send)
 

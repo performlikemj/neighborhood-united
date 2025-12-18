@@ -2,9 +2,12 @@
 WebSocket consumer for real-time chat between customers and chefs.
 """
 import json
+import logging
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -24,35 +27,57 @@ class ChatConsumer(AsyncWebsocketConsumer):
         self.room_group_name = f'chat_{self.conversation_id}'
         self.user = self.scope.get('user')
         
+        # Verbose logging for troubleshooting (TODO: reduce to DEBUG after diagnosis)
+        user_id = getattr(self.user, 'id', None) if self.user else None
+        is_auth = getattr(self.user, 'is_authenticated', False) if self.user else False
+        logger.info(f"[WebSocket] ChatConsumer.connect - conv_id: {self.conversation_id}, user_id: {user_id}, is_authenticated: {is_auth}")
+        
         # Check if user is authenticated
         if not self.user or not self.user.is_authenticated:
+            logger.warning(f"[WebSocket] Closing connection - user not authenticated (conv_id: {self.conversation_id})")
             await self.close(code=4001)
             return
         
         # Verify user has access to this conversation
         has_access = await self.verify_conversation_access()
         if not has_access:
+            logger.warning(f"[WebSocket] Closing connection - no access to conversation (conv_id: {self.conversation_id}, user_id: {user_id})")
             await self.close(code=4003)
             return
         
         # Join room group
-        await self.channel_layer.group_add(
-            self.room_group_name,
-            self.channel_name
-        )
+        try:
+            await self.channel_layer.group_add(
+                self.room_group_name,
+                self.channel_name
+            )
+            logger.info(f"[WebSocket] Joined room group: {self.room_group_name}")
+        except Exception as e:
+            logger.error(f"[WebSocket] Failed to join room group: {self.room_group_name}, error: {type(e).__name__}: {e}")
+            await self.close(code=4500)
+            return
         
         await self.accept()
+        logger.info(f"[WebSocket] Connection accepted - conv_id: {self.conversation_id}, user_id: {user_id}")
         
         # Mark messages as read when user connects
         await self.mark_conversation_read()
     
     async def disconnect(self, close_code):
+        # Log disconnection for troubleshooting
+        user_id = getattr(self.user, 'id', None) if hasattr(self, 'user') and self.user else None
+        conv_id = getattr(self, 'conversation_id', None)
+        logger.info(f"[WebSocket] ChatConsumer.disconnect - conv_id: {conv_id}, user_id: {user_id}, close_code: {close_code}")
+        
         # Leave room group
         if hasattr(self, 'room_group_name'):
-            await self.channel_layer.group_discard(
-                self.room_group_name,
-                self.channel_name
-            )
+            try:
+                await self.channel_layer.group_discard(
+                    self.room_group_name,
+                    self.channel_name
+                )
+            except Exception as e:
+                logger.error(f"[WebSocket] Error leaving room group: {type(e).__name__}: {e}")
     
     async def receive(self, text_data):
         """Handle incoming WebSocket messages."""

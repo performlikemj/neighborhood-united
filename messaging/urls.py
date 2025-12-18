@@ -24,6 +24,9 @@ urlpatterns = [
     
     # Get unread message counts
     path('api/unread-counts/', views.get_unread_counts, name='get_unread_counts'),
+    
+    # WebSocket health check (diagnostic endpoint)
+    path('api/ws-health/', views.websocket_health_check, name='websocket_health_check'),
 ]
 
 

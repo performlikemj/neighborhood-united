@@ -597,6 +597,17 @@ LOGGING = {
             'level': 'DEBUG', #TODO: Change to WARNING
             'propagate': True,
         },
+        # WebSocket troubleshooting loggers (TODO: reduce to WARNING after diagnosis)
+        'messaging': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+        'channels': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
     }
 }
 # Email assistant session durations

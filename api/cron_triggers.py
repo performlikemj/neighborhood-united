@@ -4,12 +4,7 @@ QStash webhook handlers for triggering Celery tasks.
 QStash sends HTTP POST requests on a schedule, which this endpoint converts
 to Celery task calls. This replaces Celery Beat with a serverless scheduler.
 """
-import base64
-import hashlib
-import hmac
-import json
 import logging
-import time
 
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -21,19 +16,22 @@ logger = logging.getLogger(__name__)
 
 def verify_qstash_signature(request):
     """
-    Verify the request came from QStash using the signing keys.
+    Verify the request came from QStash using the official SDK.
     
-    QStash uses JWT-based signatures. We verify using both current and next
-    signing keys to handle key rotation gracefully.
-    
+    Uses the qstash Receiver class for proper JWT verification.
     See: https://upstash.com/docs/qstash/howto/signature
     """
+    try:
+        from qstash import Receiver
+    except ImportError:
+        logger.error("qstash package not installed - cannot verify signatures")
+        return False
+    
     signature = request.headers.get('Upstash-Signature')
     if not signature:
         logger.warning("QStash request missing Upstash-Signature header")
         return False
     
-    # Get signing keys from settings
     current_key = getattr(settings, 'QSTASH_CURRENT_SIGNING_KEY', None)
     next_key = getattr(settings, 'QSTASH_NEXT_SIGNING_KEY', None)
     
@@ -41,85 +39,26 @@ def verify_qstash_signature(request):
         logger.error("QSTASH_CURRENT_SIGNING_KEY not configured")
         return False
     
-    body = request.body
-    url = request.build_absolute_uri()
-    
-    # Try to verify with current key first, then next key (for rotation)
-    for signing_key in [current_key, next_key]:
-        if not signing_key:
-            continue
-        if _verify_signature(signature, signing_key, body, url):
-            return True
-    
-    logger.warning("QStash signature verification failed")
-    return False
-
-
-def _verify_signature(signature: str, signing_key: str, body: bytes, url: str) -> bool:
-    """
-    Verify a QStash JWT signature.
-    
-    QStash signatures are JWTs. We verify the HMAC-SHA256 signature
-    and check the claims (url, body hash, expiration).
-    """
     try:
-        # QStash signature is a JWT: header.payload.signature
-        parts = signature.split('.')
-        if len(parts) != 3:
-            return False
+        receiver = Receiver(
+            current_signing_key=current_key,
+            next_signing_key=next_key or current_key,
+        )
         
-        header_b64, payload_b64, sig_b64 = parts
+        # Get the full URL that QStash called
+        url = request.build_absolute_uri()
+        body = request.body.decode('utf-8') if request.body else ""
         
-        # Verify the signature
-        message = f"{header_b64}.{payload_b64}".encode()
-        expected_sig = hmac.new(
-            signing_key.encode(),
-            message,
-            hashlib.sha256
-        ).digest()
-        
-        # URL-safe base64 decode the signature
-        sig_b64_padded = sig_b64 + '=' * (4 - len(sig_b64) % 4)
-        actual_sig = base64.urlsafe_b64decode(sig_b64_padded)
-        
-        if not hmac.compare_digest(expected_sig, actual_sig):
-            return False
-        
-        # Decode and verify payload claims
-        payload_padded = payload_b64 + '=' * (4 - len(payload_b64) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(payload_padded))
-        
-        # Check expiration
-        exp = payload.get('exp', 0)
-        if exp < time.time():
-            logger.warning("QStash signature expired")
-            return False
-        
-        # Verify URL claim (prevents replay attacks to different endpoints)
-        # QStash uses 'sub' claim for the destination URL
-        url_claim = payload.get('sub')
-        if url_claim:
-            # Normalize URLs for comparison (remove trailing slashes, query strings)
-            def normalize_url(u):
-                return u.rstrip('/').split('?')[0]
-            if normalize_url(url_claim) != normalize_url(url):
-                logger.warning(f"QStash URL mismatch: expected {url_claim}, got {url}")
-                return False
-        
-        # Check body hash if present
-        body_hash = payload.get('body')
-        if body_hash:
-            computed_hash = base64.urlsafe_b64encode(
-                hashlib.sha256(body).digest()
-            ).decode().rstrip('=')
-            if body_hash != computed_hash:
-                logger.warning("QStash body hash mismatch")
-                return False
-        
+        # Verify returns True if valid, raises exception if invalid
+        receiver.verify(
+            signature=signature,
+            body=body,
+            url=url,
+        )
         return True
         
     except Exception as e:
-        logger.error(f"Error verifying QStash signature: {e}")
+        logger.warning(f"QStash signature verification failed: {e}")
         return False
 
 

@@ -167,6 +167,7 @@ if DEBUG:
         'http://localhost:5173', 'http://127.0.0.1:5173',
         'http://localhost:5174', 'http://127.0.0.1:5174',
         'http://localhost:3000', 'http://127.0.0.1:3000',
+        'http://localhost:8000', 'http://127.0.0.1:8000',  # Django dev server
         'http://localhost:8501', 'http://127.0.0.1:8501',
     ]
 
@@ -547,9 +548,18 @@ CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 CELERY_TIMEZONE = TIME_ZONE  # or explicit e.g. 'UTC' or 'Asia/Tokyo'
 CELERY_ENABLE_UTC = True
 # Celery broker transport options
-# Upstash and modern Redis providers handle TLS automatically via rediss:// URL scheme
+# Upstash requires SSL with rediss:// URL scheme
 CELERY_BROKER_TRANSPORT_OPTIONS = {
     'visibility_timeout': 3600,
+}
+
+# SSL configuration for Upstash Redis (rediss:// URLs)
+import ssl
+CELERY_BROKER_USE_SSL = {
+    'ssl_cert_reqs': ssl.CERT_REQUIRED,
+}
+CELERY_REDIS_BACKEND_USE_SSL = {
+    'ssl_cert_reqs': ssl.CERT_REQUIRED,
 }
 CELERYD_LOG_FILE = "/var/log/celery/celery.log"
 CELERYD_LOG_LEVEL = "DEBUG"
@@ -602,15 +612,14 @@ LOGGING = {
             'level': 'DEBUG', #TODO: Change to WARNING
             'propagate': True,
         },
-        # WebSocket troubleshooting loggers (TODO: reduce to WARNING after diagnosis)
         'messaging': {
             'handlers': ['console'],
-            'level': 'DEBUG',
+            'level': 'WARNING',
             'propagate': True,
         },
         'channels': {
             'handlers': ['console'],
-            'level': 'DEBUG',
+            'level': 'WARNING',
             'propagate': True,
         },
     }

@@ -38,11 +38,12 @@ function getPostalCodes(areas){
 }
 
 /**
- * Render service areas in a user-friendly summary
+ * Render service areas as an array of user-friendly summary strings
  * Groups by country and shows city names or area counts
+ * Returns array for use in tag display
  */
 function renderAreas(areas){
-  if (!Array.isArray(areas) || areas.length === 0) return ''
+  if (!Array.isArray(areas) || areas.length === 0) return []
   
   // Group by country
   const byCountry = {}
@@ -58,20 +59,22 @@ function renderAreas(areas){
     if (city) byCountry[countryName].cities.add(city)
   }
   
-  // Build summary strings
+  // Build summary strings as array
   const summaries = []
   for (const [country, data] of Object.entries(byCountry)) {
-    const cities = Array.from(data.cities).slice(0, 2)
-    if (cities.length > 0 && data.count <= 5) {
-      summaries.push(cities.join(', '))
+    const cities = Array.from(data.cities).slice(0, 3)
+    if (cities.length > 0 && data.count <= 10) {
+      // Show city names
+      cities.forEach(city => summaries.push(city))
     } else if (data.count > 1) {
+      // Show count for large areas
       summaries.push(`${data.count} areas in ${country}`)
     } else {
       summaries.push(cities[0] || country)
     }
   }
   
-  return summaries.join(' • ')
+  return summaries
 }
 
 function extractCountryCode(chef) {

@@ -34,7 +34,7 @@ function PhotoWithFallback({ src, alt, className, placeholderClass }) {
  */
 export default function ChatPanel({ isOpen, onClose, conversationId, recipientName, recipientPhoto, onSwitchConversation }) {
   const { user } = useAuth()
-  const { markConversationRead, updateConversationWithMessage, sendMessage: sendMessageRest, conversations, fetchConversations } = useMessaging()
+  const { markConversationRead, updateConversationWithMessage, sendMessage: sendMessageRest, conversations, fetchConversations, fetchUnreadCounts } = useMessaging()
   
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(true)
@@ -57,20 +57,39 @@ export default function ChatPanel({ isOpen, onClose, conversationId, recipientNa
   // Handle new message from WebSocket
   const handleNewMessage = useCallback((message) => {
     setMessages(prev => {
-      // Avoid duplicates
+      // Avoid duplicates by ID
       if (prev.find(m => m.id === message.id)) {
         return prev
       }
+      
+      // Check for pending/optimistic messages with same content (sent by current user)
+      // This handles the case where we added an optimistic message and then received
+      // the real message back from the server broadcast
+      const pendingMatch = prev.find(m => 
+        m.pending && 
+        m.content === message.content && 
+        m.sender_id === message.sender_id
+      )
+      
+      if (pendingMatch) {
+        // Replace the pending message with the real one
+        return prev.map(m => m.id === pendingMatch.id ? message : m)
+      }
+      
       return [...prev, message]
     })
     scrollToBottom()
     updateConversationWithMessage(conversationId, message)
     
-    // Mark as read if panel is open
+    // Mark as read if panel is open, otherwise refresh unread counts
     if (isOpen) {
       markConversationRead(conversationId)
     }
-  }, [conversationId, isOpen, markConversationRead, scrollToBottom, updateConversationWithMessage])
+    
+    // Refresh unread counts to update the notification badge
+    // This ensures the badge updates when messages arrive in other conversations
+    fetchUnreadCounts()
+  }, [conversationId, isOpen, markConversationRead, scrollToBottom, updateConversationWithMessage, fetchUnreadCounts])
 
   // Handle typing indicator
   const handleTyping = useCallback((userId, isTyping) => {

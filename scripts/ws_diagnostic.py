@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-WebSocket connection test script for troubleshooting.
+WebSocket connection diagnostic script for troubleshooting.
 
 Usage:
-    python scripts/test_websocket.py <websocket_url> <jwt_token>
+    python scripts/ws_diagnostic.py <websocket_url> <jwt_token>
 
 Examples:
     # Test local development
-    python scripts/test_websocket.py ws://localhost:8000/ws/chat/1/ <your_jwt_token>
+    python scripts/ws_diagnostic.py ws://localhost:8000/ws/chat/1/ <your_jwt_token>
     
     # Test production
-    python scripts/test_websocket.py wss://sautai-django-westus2.redcliff-686826f3.westus2.azurecontainerapps.io/ws/chat/1/ <your_jwt_token>
+    python scripts/ws_diagnostic.py wss://sautai-django-westus2.redcliff-686826f3.westus2.azurecontainerapps.io/ws/chat/1/ <your_jwt_token>
 
 Requirements:
     pip install websockets
@@ -27,7 +27,7 @@ except ImportError:
     sys.exit(1)
 
 
-async def test_websocket(url: str, token: str):
+async def check_websocket_connection(url: str, token: str):
     """
     Test WebSocket connection and basic messaging.
     """
@@ -83,7 +83,7 @@ def main():
     if len(sys.argv) < 3:
         print(__doc__)
         print("\nError: Missing required arguments")
-        print("Usage: python scripts/test_websocket.py <websocket_url> <jwt_token>")
+        print("Usage: python scripts/ws_diagnostic.py <websocket_url> <jwt_token>")
         sys.exit(1)
     
     url = sys.argv[1]
@@ -95,8 +95,8 @@ def main():
         print(f"Got: {url}")
         sys.exit(1)
     
-    # Run the test
-    asyncio.run(test_websocket(url, token))
+    # Run the diagnostic
+    asyncio.run(check_websocket_connection(url, token))
 
 
 if __name__ == "__main__":

@@ -500,11 +500,15 @@ if DEBUG:
     }
 else:
     # Production: Use Redis channel layer
+    # For SSL-enabled Redis (rediss://) like Upstash, we need to pass host config
+    # as a dictionary with ssl_cert_reqs option to handle TLS connections properly
     CHANNEL_LAYERS = {
         "default": {
             "BACKEND": "channels_redis.core.RedisChannelLayer",
             "CONFIG": {
-                "hosts": [RAW_REDIS_URL],
+                "hosts": [{
+                    "address": RAW_REDIS_URL,
+                }],
             },
         },
     }

@@ -298,7 +298,7 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.UserRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '100/day',
+        'anon': '1000/day',
         'auth_burst': '60/min',
         'auth_daily': '15000/day',
         'gpt4': f'{GPT41_AUTH_LIMIT}/day',

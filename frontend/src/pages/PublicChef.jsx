@@ -10,48 +10,15 @@ import MapPanel from '../components/MapPanel.jsx'
 import Carousel from '../components/Carousel.jsx'
 import MultiCarousel from '../components/MultiCarousel.jsx'
 import QuoteRequestModal from '../components/QuoteRequestModal.jsx'
+import ServiceAreasModal, { getAreaSummary } from '../components/ServiceAreasModal.jsx'
 
 /**
- * Render service areas in a user-friendly way
- * - Groups by country
- * - Shows city names when available instead of postal codes
- * - Summarizes when there are many codes (e.g., "139 areas in Japan")
+ * Country flag emoji from code
  */
-function renderAreas(areas){
-  if (!Array.isArray(areas) || areas.length === 0) return null
-  
-  // Group by country
-  const byCountry = {}
-  for (const p of areas) {
-    const countryCode = p?.country?.code || p?.country || ''
-    const countryName = p?.country?.name || countryCode || 'Unknown'
-    const city = (p?.city || p?.place_name || '').trim()
-    
-    if (!byCountry[countryName]) {
-      byCountry[countryName] = { cities: new Set(), count: 0 }
-    }
-    byCountry[countryName].count++
-    if (city) byCountry[countryName].cities.add(city)
-  }
-  
-  // Build summary strings per country
-  const summaries = []
-  for (const [country, data] of Object.entries(byCountry)) {
-    const cities = Array.from(data.cities).slice(0, 3) // Show up to 3 cities
-    if (cities.length > 0 && data.count <= 10) {
-      // Few areas: show city names
-      summaries.push(`${cities.join(', ')}${cities.length < data.cities.size ? ` +${data.cities.size - cities.length} more` : ''}`)
-    } else if (data.count > 1) {
-      // Many areas: show count
-      summaries.push(`${data.count} areas in ${country}`)
-    } else {
-      // Single area
-      const city = cities[0] || ''
-      summaries.push(city ? `${city}, ${country}` : country)
-    }
-  }
-  
-  return summaries.join(' • ') || null
+function countryFlag(code) {
+  if (!code || code.length !== 2) return '🌍'
+  const codePoints = [...code.toUpperCase()].map(char => 127397 + char.charCodeAt(0))
+  return String.fromCodePoint(...codePoints)
 }
 
 function toServiceOfferings(payload){
@@ -203,6 +170,8 @@ export default function PublicChef(){
   const galleryRef = useRef(null)
   // Quote request modal
   const [quoteModalOpen, setQuoteModalOpen] = useState(false)
+  // Service areas modal
+  const [areasModalOpen, setAreasModalOpen] = useState(false)
   const navigate = useNavigate()
   const chefSlug = useMemo(()=>{
     return String(chef?.user?.username || username || '').trim()
@@ -949,7 +918,7 @@ export default function PublicChef(){
     return firstPhoto || chef.profile_pic_url || null
   }, [chef])
 
-  const areaText = useMemo(()=> renderAreas(chef?.serving_postalcodes) || null, [chef])
+  const areaSummary = useMemo(()=> getAreaSummary(chef?.serving_postalcodes), [chef])
   const cityCountry = useMemo(()=>{
     if (!chef) return null
     const isSelf = authUser && (chef?.user?.id === authUser?.id || chef?.user?.username === authUser?.username)
@@ -1146,13 +1115,23 @@ export default function PublicChef(){
               <h1 className="chef-hero-title">{chef?.user?.username || 'Chef'}</h1>
               <p className="chef-hero-tagline">{chef?.bio || 'Your personal chef for delicious, home-cooked meals'}</p>
               
-              {(cityCountry || areaText) && (
-                <div className="chef-hero-location">
-                  <i className="fa-solid fa-location-dot"></i>
-                  <span>
-                    {cityCountry && <strong>{cityCountry}</strong>}
-                    {cityCountry && areaText && <span className="muted"> · Serves {areaText}</span>}
-                  </span>
+              {(cityCountry || areaSummary.totalAreas > 0) && (
+                <div className="chef-hero-location-row">
+                  {cityCountry && (
+                    <div className="chef-hero-location">
+                      <i className="fa-solid fa-location-dot"></i>
+                      <span><strong>{cityCountry}</strong></span>
+                    </div>
+                  )}
+                  {areaSummary.totalAreas > 0 && (
+                    <button 
+                      className="chef-hero-availability-btn"
+                      onClick={() => setAreasModalOpen(true)}
+                    >
+                      <i className="fa-solid fa-map-location-dot"></i>
+                      <span>Check Availability</span>
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -2264,6 +2243,17 @@ export default function PublicChef(){
             onClose={() => setQuoteModalOpen(false)}
             chef={chef}
             authUser={authUser}
+          />
+
+          {/* Service Areas Modal */}
+          <ServiceAreasModal
+            open={areasModalOpen}
+            onClose={() => setAreasModalOpen(false)}
+            areas={chef?.serving_postalcodes || []}
+            chefName={chef?.user?.username || 'Chef'}
+            userPostalCode={authUser?.postal_code || authUser?.address?.postalcode || ''}
+            userCountry={authUser?.address?.country || authUser?.address?.country_code || ''}
+            servesUser={servesMyArea}
           />
         </div>
       )}

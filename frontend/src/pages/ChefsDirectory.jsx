@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext.jsx'
 import { useConnections } from '../hooks/useConnections.js'
 import { countryNameFromCode } from '../utils/geo.js'
 import { getSeededChefEmoji } from '../utils/emojis.js'
+import ServiceAreasModal, { getAreaSummary } from '../components/ServiceAreasModal.jsx'
 
 // Get chef emoji - use their chosen one or a seeded random for consistency
 function getChefEmoji(chef) {
@@ -35,46 +36,6 @@ function getPostalCodes(areas){
   return areas
     .map(p => (p?.postal_code || p?.postalcode || p?.code || p?.name || ''))
     .filter(Boolean)
-}
-
-/**
- * Render service areas as an array of user-friendly summary strings
- * Groups by country and shows city names or area counts
- * Returns array for use in tag display
- */
-function renderAreas(areas){
-  if (!Array.isArray(areas) || areas.length === 0) return []
-  
-  // Group by country
-  const byCountry = {}
-  for (const p of areas) {
-    const countryCode = p?.country?.code || p?.country || ''
-    const countryName = p?.country?.name || countryCode || 'Unknown'
-    const city = (p?.city || p?.place_name || '').trim()
-    
-    if (!byCountry[countryName]) {
-      byCountry[countryName] = { cities: new Set(), count: 0 }
-    }
-    byCountry[countryName].count++
-    if (city) byCountry[countryName].cities.add(city)
-  }
-  
-  // Build summary strings as array
-  const summaries = []
-  for (const [country, data] of Object.entries(byCountry)) {
-    const cities = Array.from(data.cities).slice(0, 3)
-    if (cities.length > 0 && data.count <= 10) {
-      // Show city names
-      cities.forEach(city => summaries.push(city))
-    } else if (data.count > 1) {
-      // Show count for large areas
-      summaries.push(`${data.count} areas in ${country}`)
-    } else {
-      summaries.push(cities[0] || country)
-    }
-  }
-  
-  return summaries
 }
 
 function extractCountryCode(chef) {
@@ -118,7 +79,15 @@ export default function ChefsDirectory(){
   const [userDetailsById, setUserDetailsById] = useState({})
   const [addingChefId, setAddingChefId] = useState(null)
   
+  // Service areas modal state
+  const [areasModalOpen, setAreasModalOpen] = useState(false)
+  const [areasModalChef, setAreasModalChef] = useState(null)
+  
   const isGuest = !user
+  
+  // User's postal code and country for "serves my area" checks
+  const userPostal = user?.postal_code || user?.address?.postalcode || ''
+  const userCountry = user?.address?.country || user?.address?.country_code || ''
   
   // Connection management for quick add button
   const {
@@ -425,7 +394,7 @@ export default function ChefsDirectory(){
               const location = extractCityCountry(chefUser, user)
               const chefCountryCode = extractCountryCode(c)
               const countryInfo = FEATURED_COUNTRIES.find(fc => fc.code === chefCountryCode)
-              const serviceAreas = renderAreas(c.serving_postalcodes)
+              const areaSummary = getAreaSummary(c.serving_postalcodes)
               const photoCount = c?.photos?.length || 0
               const bio = c?.bio || ''
               
@@ -506,18 +475,20 @@ export default function ChefsDirectory(){
                   )}
                   
                   <div className="chef-card-footer">
-                    {serviceAreas.length > 0 && (
-                      <div className="chef-service-areas">
-                        <i className="fa-solid fa-map-pin"></i>
-                        <div className="service-area-tags">
-                          {serviceAreas.slice(0, 3).map((area, idx) => (
-                            <span key={idx} className="service-area-tag">{area}</span>
-                          ))}
-                          {serviceAreas.length > 3 && (
-                            <span className="service-area-tag more">+{serviceAreas.length - 3}</span>
-                          )}
-                        </div>
-                      </div>
+                    {areaSummary.totalAreas > 0 && (
+                      <button
+                        className="chef-check-availability-btn"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          setAreasModalChef(c)
+                          setAreasModalOpen(true)
+                        }}
+                        title="View all service areas"
+                      >
+                        <i className="fa-solid fa-map-location-dot"></i>
+                        <span>Check Availability</span>
+                      </button>
                     )}
                     {photoCount > 0 && (
                       <div className="chef-stat">
@@ -560,6 +531,20 @@ export default function ChefsDirectory(){
           </div>
         </div>
       )}
+      
+      {/* Service Areas Modal */}
+      <ServiceAreasModal
+        open={areasModalOpen}
+        onClose={() => {
+          setAreasModalOpen(false)
+          setAreasModalChef(null)
+        }}
+        areas={areasModalChef?.serving_postalcodes || []}
+        chefName={areasModalChef?.user?.username || 'Chef'}
+        userPostalCode={userPostal}
+        userCountry={userCountry}
+        servesUser={user ? null : null}
+      />
     </div>
   )
 }

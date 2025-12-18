@@ -20,16 +20,30 @@ class PostalCodePublicSerializer(serializers.ModelSerializer):
     postal_code = serializers.SerializerMethodField()
     city = serializers.SerializerMethodField()
     country = serializers.SerializerMethodField()
+    place_name = serializers.SerializerMethodField()
 
     class Meta:
         model = PostalCode
-        fields = ['postal_code', 'city', 'country']
+        fields = ['postal_code', 'city', 'country', 'place_name']
 
     def get_postal_code(self, obj):
         return obj.display_code or obj.code
 
     def get_city(self, obj):
-        # Attempt to infer a representative city from any user Address using this postal code and country
+        # Priority order for city name:
+        # 1. admin_area.name (most reliable - the actual city/ward/district)
+        # 2. place_name from GeoNames
+        # 3. Infer from user Address records (fallback)
+        
+        # Try admin_area first (city/ward/district this postal code belongs to)
+        if obj.admin_area and obj.admin_area.name:
+            return obj.admin_area.name
+        
+        # Try place_name from GeoNames
+        if obj.place_name:
+            return obj.place_name.strip()
+        
+        # Fallback: infer from user addresses
         try:
             city_qs = (
                 Address.objects
@@ -41,6 +55,10 @@ class PostalCodePublicSerializer(serializers.ModelSerializer):
             return city_qs.first() if city_qs.exists() else None
         except Exception:
             return None
+
+    def get_place_name(self, obj):
+        """Return the GeoNames place_name for additional context."""
+        return obj.place_name if obj.place_name else None
 
     def get_country(self, obj):
         return {

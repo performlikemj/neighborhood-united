@@ -4,14 +4,12 @@ import { api } from '../api'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useConnections } from '../hooks/useConnections.js'
 import { countryNameFromCode } from '../utils/geo.js'
+import { getSeededChefEmoji } from '../utils/emojis.js'
 
-// Chef emoji placeholders
-const CHEF_EMOJIS = ['👨‍🍳', '👩‍🍳', '🧑‍🍳', '🍳', '🥘', '🍲', '🥗', '🍝']
+// Get chef emoji - use their chosen one or a seeded random for consistency
 function getChefEmoji(chef) {
-  // Use chef's chosen emoji if available, otherwise use a deterministic random based on ID
   if (chef?.sous_chef_emoji) return chef.sous_chef_emoji
-  const index = (chef?.id || 0) % CHEF_EMOJIS.length
-  return CHEF_EMOJIS[index]
+  return getSeededChefEmoji(chef?.id || 0)
 }
 
 // Countries with flag emojis for the discover filter
@@ -31,16 +29,49 @@ const FEATURED_COUNTRIES = [
   { code: 'BR', label: 'Brazil', flag: '🇧🇷' },
 ]
 
-function renderAreas(areas){
+// Get raw postal codes array for filtering
+function getPostalCodes(areas){
   if (!Array.isArray(areas) || areas.length === 0) return []
   return areas
     .map(p => (p?.postal_code || p?.postalcode || p?.code || p?.name || ''))
     .filter(Boolean)
 }
 
-function renderAreasString(areas){
-  const codes = renderAreas(areas)
-  return codes.join(', ')
+/**
+ * Render service areas in a user-friendly summary
+ * Groups by country and shows city names or area counts
+ */
+function renderAreas(areas){
+  if (!Array.isArray(areas) || areas.length === 0) return ''
+  
+  // Group by country
+  const byCountry = {}
+  for (const p of areas) {
+    const countryCode = p?.country?.code || p?.country || ''
+    const countryName = p?.country?.name || countryCode || 'Unknown'
+    const city = (p?.city || p?.place_name || '').trim()
+    
+    if (!byCountry[countryName]) {
+      byCountry[countryName] = { cities: new Set(), count: 0 }
+    }
+    byCountry[countryName].count++
+    if (city) byCountry[countryName].cities.add(city)
+  }
+  
+  // Build summary strings
+  const summaries = []
+  for (const [country, data] of Object.entries(byCountry)) {
+    const cities = Array.from(data.cities).slice(0, 2)
+    if (cities.length > 0 && data.count <= 5) {
+      summaries.push(cities.join(', '))
+    } else if (data.count > 1) {
+      summaries.push(`${data.count} areas in ${country}`)
+    } else {
+      summaries.push(cities[0] || country)
+    }
+  }
+  
+  return summaries.join(' • ')
 }
 
 function extractCountryCode(chef) {
@@ -152,12 +183,12 @@ export default function ChefsDirectory(){
     const q = (query||'').toLowerCase()
     return chefs.filter(c => {
       const name = c?.user?.username?.toLowerCase?.() || ''
-      const areas = renderAreas(c?.serving_postalcodes)
-      const areasStr = areas.join(', ').toLowerCase()
+      const postalCodes = getPostalCodes(c?.serving_postalcodes)
+      const areasStr = postalCodes.join(', ').toLowerCase()
       const matchQ = !q || name.includes(q) || areasStr.includes(q)
       if (!matchQ) return false
       if (onlyServesMe && mePostal){
-        return areas.includes(mePostal)
+        return postalCodes.includes(mePostal)
       }
       // Country filter (client-side backup for any chefs already loaded)
       if (selectedCountry) {

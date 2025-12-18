@@ -325,50 +325,41 @@ class ServiceAreaRequest(models.Model):
             self.admin_notes = notes
             self.save()
     
-    def partially_approve(self, admin_user, area_ids=None, postal_code_ids=None, notes=''):
+    def partially_approve(self, admin_user, postal_code_ids=None, notes=''):
         """
-        Partially approve request - only approve selected areas/postal codes.
+        Partially approve request - approve specific postal codes.
+        
+        This simplified method accepts a list/set of postal code IDs directly,
+        regardless of whether they came from areas or individual code requests.
         
         Args:
             admin_user: The admin user performing the approval
-            area_ids: List of AdministrativeArea IDs to approve (from requested_areas)
-            postal_code_ids: List of PostalCode IDs to approve (from requested_postal_codes)
+            postal_code_ids: List/set of PostalCode IDs to approve
             notes: Admin notes about the partial approval
+            
+        Returns:
+            int: Number of postal codes approved
         """
         from django.utils import timezone
         from django.db import transaction
         
-        area_ids = area_ids or []
         postal_code_ids = postal_code_ids or []
         
         with transaction.atomic():
-            # Track what was approved and add to chef's service areas
-            approved_area_count = 0
-            approved_code_count = 0
+            approved_count = 0
             
-            # Process approved areas
-            if area_ids:
-                areas_to_approve = self.requested_areas.filter(id__in=area_ids)
-                for area in areas_to_approve:
-                    self.approved_areas.add(area)
-                    approved_area_count += 1
-                    for postal_code in area.get_all_postal_codes():
-                        ChefPostalCode.objects.get_or_create(
-                            chef=self.chef,
-                            postal_code=postal_code
-                        )
-                        approved_code_count += 1
+            # Get all postal codes by ID
+            codes_to_approve = PostalCode.objects.filter(id__in=postal_code_ids)
             
-            # Process approved individual postal codes
-            if postal_code_ids:
-                codes_to_approve = self.requested_postal_codes.filter(id__in=postal_code_ids)
-                for postal_code in codes_to_approve:
-                    self.approved_postal_codes.add(postal_code)
-                    ChefPostalCode.objects.get_or_create(
-                        chef=self.chef,
-                        postal_code=postal_code
-                    )
-                    approved_code_count += 1
+            for postal_code in codes_to_approve:
+                # Add to chef's service areas
+                ChefPostalCode.objects.get_or_create(
+                    chef=self.chef,
+                    postal_code=postal_code
+                )
+                # Track as approved
+                self.approved_postal_codes.add(postal_code)
+                approved_count += 1
             
             self.status = 'partially_approved'
             self.reviewed_by = admin_user
@@ -376,7 +367,7 @@ class ServiceAreaRequest(models.Model):
             self.admin_notes = notes
             self.save()
             
-            return approved_area_count, approved_code_count
+            return approved_count
     
     def reject(self, admin_user, notes=''):
         """Reject the request."""

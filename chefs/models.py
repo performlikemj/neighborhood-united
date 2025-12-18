@@ -47,18 +47,7 @@ class Chef(models.Model):
 
 
     def __str__(self):
-        # Combine chef's information into one string
-        postal_codes = ', '.join([postal_code.code for postal_code in self.serving_postalcodes.all()])
-        info_parts = [
-            f"Username: {self.user.username}",
-            f"Experience: {self.experience}",
-            f"Bio: {self.bio}",
-            f"Serving Postal Codes: {postal_codes}",
-            f"Review Summary: {self.review_summary}"
-        ]
-        # Filter out None or empty strings before joining
-        filtered_info = [part for part in info_parts if part]
-        return '. '.join(filtered_info) + '.'
+        return self.user.username if self.user else f"Chef #{self.pk}"
     
     @property
     def featured_dishes(self):

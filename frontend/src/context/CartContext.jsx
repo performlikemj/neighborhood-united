@@ -96,10 +96,10 @@ export function CartProvider({ children }) {
     const { username, id: chefId } = chefInfo || {}
     const normalizedUsername = username ? String(username).trim() : null
 
-    // If cart has items from different chef, ask to clear first
-    const shouldResetCart = cart.items.length > 0 && cart.chefUsername && cart.chefUsername !== normalizedUsername
+    // If cart has items from different chef, ask to clear first (compare by ID, not username)
+    const shouldResetCart = cart.items.length > 0 && cart.chefId != null && chefId != null && cart.chefId !== chefId
     if (shouldResetCart) {
-      const otherChef = cart.chefUsername
+      const otherChef = cart.chefUsername || 'another chef'
       const confirmed = typeof window !== 'undefined'
         ? window.confirm(`Your cart contains items from ${otherChef}. Clear the cart and add this item from ${normalizedUsername || 'this chef'}?`)
         : false
@@ -139,7 +139,7 @@ export function CartProvider({ children }) {
     }
 
     setCart(prev => {
-      const shouldReset = prev.items.length > 0 && prev.chefUsername && prev.chefUsername !== normalizedUsername
+      const shouldReset = prev.items.length > 0 && prev.chefId != null && chefId != null && prev.chefId !== chefId
       const baseItems = shouldReset ? [] : prev.items.slice()
       const baseChefUsername = shouldReset ? null : prev.chefUsername
       const baseChefId = shouldReset ? null : prev.chefId
@@ -177,12 +177,19 @@ export function CartProvider({ children }) {
     const normalizedUsername = username ? String(username).trim() : null
     console.log('[CartContext] Normalized username', normalizedUsername)
 
-    // If cart has items from different chef, ask to clear first
-    const shouldResetCart = cart.items.length > 0 && cart.chefUsername && cart.chefUsername !== normalizedUsername
-    console.log('[CartContext] Should reset cart?', { shouldResetCart, currentCartChef: cart.chefUsername, newChef: normalizedUsername, cartItemsCount: cart.items.length })
+    // Skip the different-chef check if this exact order is already in the cart
+    const orderAlreadyInCart = cart.items.some(item => item.orderId === order.id)
+    if (orderAlreadyInCart) {
+      console.log('[CartContext] Order already in cart, skipping add - just return true to open cart')
+      return true
+    }
+
+    // If cart has items from different chef, ask to clear first (compare by ID, not username)
+    const shouldResetCart = cart.items.length > 0 && cart.chefId != null && chefId != null && cart.chefId !== chefId
+    console.log('[CartContext] Should reset cart?', { shouldResetCart, currentCartChefId: cart.chefId, newChefId: chefId, cartItemsCount: cart.items.length })
     
     if (shouldResetCart) {
-      const otherChef = cart.chefUsername
+      const otherChef = cart.chefUsername || 'another chef'
       const confirmed = typeof window !== 'undefined'
         ? window.confirm(`Your cart contains items from ${otherChef}. Clear the cart and add this order from ${normalizedUsername || 'this chef'}?`)
         : false
@@ -221,7 +228,7 @@ export function CartProvider({ children }) {
     setCart(prev => {
       console.log('[CartContext] Previous cart state', prev)
       
-      const shouldReset = prev.items.length > 0 && prev.chefUsername && prev.chefUsername !== normalizedUsername
+      const shouldReset = prev.items.length > 0 && prev.chefId != null && chefId != null && prev.chefId !== chefId
       const baseItems = shouldReset ? [] : prev.items.slice()
       
       // Check if this order is already in the cart

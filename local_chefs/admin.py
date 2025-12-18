@@ -1,3 +1,4 @@
+import json
 from django.contrib import admin
 from django.utils.html import format_html
 from django.urls import reverse, path
@@ -8,10 +9,29 @@ from .models import PostalCode, ChefPostalCode, AdministrativeArea, ServiceAreaR
 
 
 class ChefPostalCodeAdmin(admin.ModelAdmin):
-    list_display = ['chef', 'postal_code']
+    list_display = ['chef_username', 'postal_code_display', 'country']
     list_filter = ['postal_code__country']
     search_fields = ['chef__user__username', 'postal_code__code', 'postal_code__place_name']
     raw_id_fields = ['chef', 'postal_code']
+    list_per_page = 50  # Pagination for large datasets
+    list_select_related = ['chef__user', 'postal_code']  # Optimize queries
+    
+    @admin.display(description='Chef', ordering='chef__user__username')
+    def chef_username(self, obj):
+        return obj.chef.user.username if obj.chef and obj.chef.user else '—'
+    
+    @admin.display(description='Postal Code', ordering='postal_code__code')
+    def postal_code_display(self, obj):
+        pc = obj.postal_code
+        if not pc:
+            return '—'
+        code = pc.display_code or pc.code
+        place = pc.place_name or ''
+        return f"{code} ({place})" if place else code
+    
+    @admin.display(description='Country')
+    def country(self, obj):
+        return obj.postal_code.country.name if obj.postal_code else '—'
     
     def save_model(self, request, obj, form, change):
         try:
@@ -229,37 +249,46 @@ class ServiceAreaRequestAdmin(admin.ModelAdmin):
             return HttpResponseRedirect(reverse('admin:local_chefs_servicearearequest_changelist'))
         
         if request.method == 'POST':
-            # Process the form
-            selected_area_ids = request.POST.getlist('areas')
-            selected_code_ids = request.POST.getlist('postal_codes')
+            # Process the form - collect all postal code IDs
             admin_notes = request.POST.get('admin_notes', '')
             
-            # Convert to integers
-            selected_area_ids = [int(x) for x in selected_area_ids if x]
-            selected_code_ids = [int(x) for x in selected_code_ids if x]
+            # Individual postal codes from the individual codes section
+            selected_code_ids = request.POST.getlist('postal_codes')
+            all_code_ids = set(int(x) for x in selected_code_ids if x)
             
-            if not selected_area_ids and not selected_code_ids:
-                messages.warning(request, "No items selected. Select at least one area or postal code to approve.")
+            # Codes selected from within areas (format: "area_id:code_id")
+            area_code_selections = request.POST.getlist('area_postal_codes')
+            for selection in area_code_selections:
+                if ':' in selection:
+                    _, code_id = selection.split(':', 1)
+                    try:
+                        all_code_ids.add(int(code_id))
+                    except ValueError:
+                        pass
+            
+            if not all_code_ids:
+                messages.warning(request, "No postal codes selected. Select at least one postal code to approve.")
             else:
-                # Check if all items are selected (full approval)
-                all_area_ids = set(area_request.requested_areas.values_list('id', flat=True))
-                all_code_ids = set(area_request.requested_postal_codes.values_list('id', flat=True))
+                # Calculate total possible codes for full approval check
+                total_requested_codes = set()
+                for area in area_request.requested_areas.all():
+                    total_requested_codes.update(area.get_all_postal_codes().values_list('id', flat=True))
+                total_requested_codes.update(area_request.requested_postal_codes.values_list('id', flat=True))
                 
-                if set(selected_area_ids) == all_area_ids and set(selected_code_ids) == all_code_ids:
-                    # Full approval
+                if all_code_ids >= total_requested_codes:
+                    # Full approval - all codes selected
                     area_request.approve(request.user, admin_notes)
-                    messages.success(request, f"Request fully approved. All areas and codes added to {area_request.chef.user.username}'s service areas.")
+                    messages.success(request, f"Request fully approved. All codes added to {area_request.chef.user.username}'s service areas.")
                 else:
                     # Partial approval
-                    approved_areas, approved_codes = area_request.partially_approve(
+                    approved_count = area_request.partially_approve(
                         request.user, 
-                        area_ids=selected_area_ids,
-                        postal_code_ids=selected_code_ids,
+                        postal_code_ids=all_code_ids,
                         notes=admin_notes
                     )
                     messages.success(
                         request, 
-                        f"Request partially approved. Added {approved_areas} areas (~{approved_codes} codes) to {area_request.chef.user.username}'s service areas."
+                        f"Request partially approved. Added {approved_count} postal codes to {area_request.chef.user.username}'s service areas."
                     )
                 
                 return HttpResponseRedirect(reverse('admin:local_chefs_servicearearequest_changelist'))
@@ -268,9 +297,12 @@ class ServiceAreaRequestAdmin(admin.ModelAdmin):
         requested_areas = list(area_request.requested_areas.all())
         requested_codes = list(area_request.requested_postal_codes.all())
         
-        # Calculate total codes for each area
+        # Calculate total codes for each area with lazy loading support
+        INITIAL_CODES_LIMIT = 30  # Show first 30, lazy load rest
         areas_with_counts = []
         for area in requested_areas:
+            all_codes = list(area.get_all_postal_codes().values('id', 'code', 'display_code', 'place_name'))
+            remaining_codes = all_codes[INITIAL_CODES_LIMIT:]
             areas_with_counts.append({
                 'obj': area,
                 'id': area.id,
@@ -278,7 +310,10 @@ class ServiceAreaRequestAdmin(admin.ModelAdmin):
                 'name_local': area.name_local,
                 'area_type': area.area_type,
                 'parent_name': area.parent.name if area.parent else '',
-                'postal_code_count': area.get_all_postal_codes().count(),
+                'postal_code_count': len(all_codes),
+                'postal_codes_initial': all_codes[:INITIAL_CODES_LIMIT],
+                'postal_codes_remaining_json': json.dumps(remaining_codes),  # JSON string for template
+                'has_more': len(all_codes) > INITIAL_CODES_LIMIT,
             })
         
         context = {

@@ -11,13 +11,47 @@ import Carousel from '../components/Carousel.jsx'
 import MultiCarousel from '../components/MultiCarousel.jsx'
 import QuoteRequestModal from '../components/QuoteRequestModal.jsx'
 
+/**
+ * Render service areas in a user-friendly way
+ * - Groups by country
+ * - Shows city names when available instead of postal codes
+ * - Summarizes when there are many codes (e.g., "139 areas in Japan")
+ */
 function renderAreas(areas){
   if (!Array.isArray(areas) || areas.length === 0) return null
-  const names = areas
-    .map(p => (p?.postal_code || p?.postalcode || p?.code || p?.name || ''))
-    .filter(Boolean)
-  if (names.length === 0) return null
-  return names.join(', ')
+  
+  // Group by country
+  const byCountry = {}
+  for (const p of areas) {
+    const countryCode = p?.country?.code || p?.country || ''
+    const countryName = p?.country?.name || countryCode || 'Unknown'
+    const city = (p?.city || p?.place_name || '').trim()
+    
+    if (!byCountry[countryName]) {
+      byCountry[countryName] = { cities: new Set(), count: 0 }
+    }
+    byCountry[countryName].count++
+    if (city) byCountry[countryName].cities.add(city)
+  }
+  
+  // Build summary strings per country
+  const summaries = []
+  for (const [country, data] of Object.entries(byCountry)) {
+    const cities = Array.from(data.cities).slice(0, 3) // Show up to 3 cities
+    if (cities.length > 0 && data.count <= 10) {
+      // Few areas: show city names
+      summaries.push(`${cities.join(', ')}${cities.length < data.cities.size ? ` +${data.cities.size - cities.length} more` : ''}`)
+    } else if (data.count > 1) {
+      // Many areas: show count
+      summaries.push(`${data.count} areas in ${country}`)
+    } else {
+      // Single area
+      const city = cities[0] || ''
+      summaries.push(city ? `${city}, ${country}` : country)
+    }
+  }
+  
+  return summaries.join(' • ') || null
 }
 
 function toServiceOfferings(payload){

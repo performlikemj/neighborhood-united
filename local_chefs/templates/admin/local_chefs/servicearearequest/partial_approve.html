@@ -35,11 +35,206 @@
     .selection-section {
         margin-bottom: 25px;
     }
-    .selection-section h3 {
+    .selection-section > h3 {
         border-bottom: 2px solid #79aec8;
         padding-bottom: 8px;
         margin-bottom: 15px;
     }
+    
+    /* Expandable Area Card */
+    .area-card {
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        margin-bottom: 12px;
+        background: #fff;
+        overflow: hidden;
+    }
+    .area-card-header {
+        display: flex;
+        align-items: center;
+        padding: 12px 15px;
+        background: #f8f9fa;
+        cursor: pointer;
+        user-select: none;
+        gap: 12px;
+    }
+    .area-card-header:hover {
+        background: #eef3f7;
+    }
+    .area-card-checkbox {
+        transform: scale(1.2);
+        cursor: pointer;
+    }
+    .area-card-info {
+        flex: 1;
+    }
+    .area-card-name {
+        font-weight: 600;
+        color: #333;
+    }
+    .area-card-local {
+        color: #666;
+        margin-left: 8px;
+    }
+    .area-card-details {
+        font-size: 12px;
+        color: #888;
+        margin-top: 2px;
+    }
+    .area-card-toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 10px;
+        background: #79aec8;
+        color: #fff;
+        border-radius: 4px;
+        font-size: 13px;
+        transition: background 0.15s;
+    }
+    .area-card-toggle:hover {
+        background: #5a9bb8;
+    }
+    .area-card-toggle .arrow {
+        transition: transform 0.2s;
+    }
+    .area-card.expanded .area-card-toggle .arrow {
+        transform: rotate(180deg);
+    }
+    .area-card-count-badge {
+        font-weight: 600;
+    }
+    
+    /* Expanded Panel */
+    .area-card-body {
+        display: none;
+        border-top: 1px solid #ddd;
+        padding: 15px;
+        background: #fff;
+    }
+    .area-card.expanded .area-card-body {
+        display: block;
+    }
+    
+    /* Search Box */
+    .area-search-box {
+        width: 100%;
+        padding: 8px 12px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 14px;
+        margin-bottom: 10px;
+    }
+    .area-search-box:focus {
+        outline: none;
+        border-color: #79aec8;
+        box-shadow: 0 0 0 2px rgba(121, 174, 200, 0.2);
+    }
+    
+    /* Batch Actions */
+    .area-batch-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 10px;
+        flex-wrap: wrap;
+    }
+    .area-batch-actions button {
+        padding: 5px 12px;
+        font-size: 12px;
+        cursor: pointer;
+        border: 1px solid #ccc;
+        border-radius: 3px;
+        background: #fff;
+    }
+    .area-batch-actions button:hover {
+        background: #f0f0f0;
+    }
+    .area-selected-count {
+        margin-left: auto;
+        font-size: 13px;
+        color: #666;
+    }
+    .area-selected-count .count {
+        font-weight: 600;
+        color: #417690;
+    }
+    
+    /* Postal Code List */
+    .area-codes-list {
+        max-height: 250px;
+        overflow-y: auto;
+        border: 1px solid #eee;
+        border-radius: 4px;
+        background: #fafafa;
+    }
+    .area-code-item {
+        display: flex;
+        align-items: center;
+        padding: 8px 12px;
+        border-bottom: 1px solid #eee;
+        gap: 10px;
+    }
+    .area-code-item:last-child {
+        border-bottom: none;
+    }
+    .area-code-item:hover {
+        background: #f0f4f7;
+    }
+    .area-code-item.hidden {
+        display: none;
+    }
+    .area-code-item input[type="checkbox"] {
+        transform: scale(1.1);
+        cursor: pointer;
+    }
+    .area-code-item label {
+        flex: 1;
+        cursor: pointer;
+        display: flex;
+        gap: 12px;
+    }
+    .area-code-number {
+        font-weight: 500;
+        color: #333;
+        min-width: 80px;
+    }
+    .area-code-place {
+        color: #666;
+    }
+    
+    /* Load More */
+    .area-load-more {
+        margin-top: 10px;
+        text-align: center;
+    }
+    .area-load-more button {
+        padding: 8px 20px;
+        font-size: 13px;
+        cursor: pointer;
+        border: 1px solid #79aec8;
+        border-radius: 4px;
+        background: #fff;
+        color: #417690;
+    }
+    .area-load-more button:hover {
+        background: #e7f3ff;
+    }
+    .area-load-more-info {
+        font-size: 12px;
+        color: #888;
+        margin-top: 5px;
+    }
+    
+    /* No Results */
+    .area-no-results {
+        padding: 20px;
+        text-align: center;
+        color: #888;
+        font-style: italic;
+    }
+    
+    /* Individual Postal Codes Section (unchanged) */
     .selection-list {
         max-height: 400px;
         overflow-y: auto;
@@ -71,23 +266,13 @@
         font-weight: 600;
         color: #333;
     }
-    .selection-item-local {
-        color: #666;
-        margin-left: 8px;
-    }
     .selection-item-details {
         font-size: 12px;
         color: #888;
         margin-top: 3px;
     }
-    .selection-item-count {
-        background: #79aec8;
-        color: #fff;
-        padding: 2px 8px;
-        border-radius: 12px;
-        font-size: 12px;
-        white-space: nowrap;
-    }
+    
+    /* Other Styles */
     .select-buttons {
         margin-bottom: 10px;
     }
@@ -183,44 +368,92 @@
         <div class="detail"><strong>Total Requested:</strong> {{ area_request.requested_areas.count }} areas, {{ area_request.requested_postal_codes.count }} individual codes</div>
     </div>
     
-    <form method="post">
+    <form method="post" id="approval-form">
         {% csrf_token %}
         
         {% if areas %}
         <div class="selection-section">
             <h3>Administrative Areas ({{ areas|length }})</h3>
-            <p style="color: #666; font-size: 13px; margin-bottom: 10px;">
-                Select the areas you want to approve. Each area includes all its postal codes.
+            <p style="color: #666; font-size: 13px; margin-bottom: 15px;">
+                Click on an area to expand and select individual postal codes. By default, all codes are selected.
             </p>
             
-            <div class="select-buttons">
-                <button type="button" onclick="selectAllAreas()">Select All</button>
-                <button type="button" onclick="deselectAllAreas()">Deselect All</button>
-            </div>
-            
-            <div class="selection-list" id="areas-list">
+            <div id="areas-container">
                 {% for area in areas %}
-                <div class="selection-item">
-                    <input type="checkbox" name="areas" value="{{ area.id }}" id="area_{{ area.id }}" checked>
-                    <div class="selection-item-content">
-                        <label for="area_{{ area.id }}" style="cursor: pointer;">
-                            <span class="selection-item-name">{{ area.name }}</span>
-                            {% if area.name_local %}
-                            <span class="selection-item-local">({{ area.name_local }})</span>
-                            {% endif %}
-                        </label>
-                        <div class="selection-item-details">
-                            {{ area.area_type|capfirst }}
-                            {% if area.parent_name %} in {{ area.parent_name }}{% endif %}
+                <div class="area-card" data-area-id="{{ area.id }}" data-total-codes="{{ area.postal_code_count }}">
+                    <div class="area-card-header" onclick="toggleAreaCard(this.parentElement)">
+                        <input type="checkbox" class="area-card-checkbox" 
+                               id="area_master_{{ area.id }}" 
+                               checked 
+                               onclick="event.stopPropagation(); toggleAllCodesInArea({{ area.id }}, this.checked)">
+                        <div class="area-card-info">
+                            <div>
+                                <span class="area-card-name">{{ area.name }}</span>
+                                {% if area.name_local %}
+                                <span class="area-card-local">({{ area.name_local }})</span>
+                                {% endif %}
+                            </div>
+                            <div class="area-card-details">
+                                {{ area.area_type|capfirst }}
+                                {% if area.parent_name %} in {{ area.parent_name }}{% endif %}
+                            </div>
+                        </div>
+                        <div class="area-card-toggle">
+                            <span class="area-card-count-badge">{{ area.postal_code_count }} codes</span>
+                            <span class="arrow">▼</span>
                         </div>
                     </div>
-                    <span class="selection-item-count">{{ area.postal_code_count }} codes</span>
+                    
+                    <div class="area-card-body">
+                        <input type="text" 
+                               class="area-search-box" 
+                               placeholder="🔍 Search codes or places..." 
+                               oninput="filterAreaCodes({{ area.id }}, this.value)">
+                        
+                        <div class="area-batch-actions">
+                            <button type="button" onclick="selectAllInArea({{ area.id }})">Select All</button>
+                            <button type="button" onclick="deselectAllInArea({{ area.id }})">Deselect All</button>
+                            <button type="button" onclick="invertSelectionInArea({{ area.id }})">Invert</button>
+                            <div class="area-selected-count">
+                                <span class="count" id="area_{{ area.id }}_selected">{{ area.postal_code_count }}</span> 
+                                of {{ area.postal_code_count }} selected
+                            </div>
+                        </div>
+                        
+                        <div class="area-codes-list" id="area_{{ area.id }}_codes">
+                            {% for pc in area.postal_codes_initial %}
+                            <div class="area-code-item" data-code="{{ pc.code }}" data-place="{{ pc.place_name|default:'' }}">
+                                <input type="checkbox" 
+                                       name="area_postal_codes" 
+                                       value="{{ area.id }}:{{ pc.id }}" 
+                                       id="apc_{{ area.id }}_{{ pc.id }}" 
+                                       checked
+                                       onchange="updateAreaCount({{ area.id }})">
+                                <label for="apc_{{ area.id }}_{{ pc.id }}">
+                                    <span class="area-code-number">{{ pc.display_code|default:pc.code }}</span>
+                                    <span class="area-code-place">{{ pc.place_name|default:"—" }}</span>
+                                </label>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        
+                        <div class="area-no-results" id="area_{{ area.id }}_no_results" style="display: none;">
+                            No codes match your search.
+                        </div>
+                        
+                        {% if area.has_more %}
+                        <div class="area-load-more" id="area_{{ area.id }}_load_more">
+                            <button type="button" onclick="loadMoreCodes({{ area.id }})">Load More</button>
+                            <div class="area-load-more-info">
+                                Showing {{ area.postal_codes_initial|length }} of {{ area.postal_code_count }}
+                            </div>
+                        </div>
+                        <!-- Store remaining codes as JSON for lazy loading -->
+                        <script type="application/json" id="area_{{ area.id }}_remaining">{{ area.postal_codes_remaining_json|safe }}</script>
+                        {% endif %}
+                    </div>
                 </div>
                 {% endfor %}
-            </div>
-            
-            <div class="total-summary" id="areas-summary">
-                <span class="count" id="areas-selected-count">{{ areas|length }}</span> of {{ areas|length }} areas selected
             </div>
         </div>
         {% endif %}
@@ -274,7 +507,7 @@
             <button type="submit" class="submit-button">
                 Approve Selected Items
             </button>
-            <button type="button" class="submit-button approve-all-button" onclick="selectAll(); this.form.submit();">
+            <button type="button" class="submit-button approve-all-button" onclick="selectAllEverything(); document.getElementById('approval-form').submit();">
                 Approve All
             </button>
             <a href="{% url 'admin:local_chefs_servicearearequest_changelist' %}" class="cancel-button">
@@ -285,27 +518,157 @@
 </div>
 
 <script>
-function updateAreasSummary() {
-    const checkboxes = document.querySelectorAll('#areas-list input[type="checkbox"]');
-    const checked = document.querySelectorAll('#areas-list input[type="checkbox"]:checked');
-    document.getElementById('areas-selected-count').textContent = checked.length;
+// Toggle area card expand/collapse
+function toggleAreaCard(card) {
+    card.classList.toggle('expanded');
 }
 
+// Update the selected count for an area
+function updateAreaCount(areaId) {
+    const container = document.getElementById(`area_${areaId}_codes`);
+    const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+    const checked = container.querySelectorAll('input[type="checkbox"]:checked');
+    const countEl = document.getElementById(`area_${areaId}_selected`);
+    if (countEl) {
+        countEl.textContent = checked.length;
+    }
+    
+    // Update master checkbox state
+    const masterCb = document.getElementById(`area_master_${areaId}`);
+    const card = document.querySelector(`.area-card[data-area-id="${areaId}"]`);
+    const totalCodes = parseInt(card.dataset.totalCodes, 10);
+    
+    if (masterCb) {
+        // Check if all loaded codes are checked
+        masterCb.checked = checked.length === checkboxes.length && checkboxes.length > 0;
+        masterCb.indeterminate = checked.length > 0 && checked.length < checkboxes.length;
+    }
+}
+
+// Toggle all codes in an area when master checkbox clicked
+function toggleAllCodesInArea(areaId, checked) {
+    const container = document.getElementById(`area_${areaId}_codes`);
+    container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.checked = checked;
+    });
+    updateAreaCount(areaId);
+}
+
+// Select all codes in an area
+function selectAllInArea(areaId) {
+    // First load all remaining codes if any
+    loadAllRemainingCodes(areaId);
+    
+    const container = document.getElementById(`area_${areaId}_codes`);
+    container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.checked = true;
+    });
+    updateAreaCount(areaId);
+    
+    const masterCb = document.getElementById(`area_master_${areaId}`);
+    if (masterCb) masterCb.checked = true;
+}
+
+// Deselect all codes in an area
+function deselectAllInArea(areaId) {
+    const container = document.getElementById(`area_${areaId}_codes`);
+    container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.checked = false;
+    });
+    updateAreaCount(areaId);
+    
+    const masterCb = document.getElementById(`area_master_${areaId}`);
+    if (masterCb) {
+        masterCb.checked = false;
+        masterCb.indeterminate = false;
+    }
+}
+
+// Invert selection in an area
+function invertSelectionInArea(areaId) {
+    const container = document.getElementById(`area_${areaId}_codes`);
+    container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.checked = !cb.checked;
+    });
+    updateAreaCount(areaId);
+}
+
+// Filter codes in an area by search term
+function filterAreaCodes(areaId, searchTerm) {
+    const container = document.getElementById(`area_${areaId}_codes`);
+    const noResults = document.getElementById(`area_${areaId}_no_results`);
+    const items = container.querySelectorAll('.area-code-item');
+    const term = searchTerm.toLowerCase().trim();
+    
+    let visibleCount = 0;
+    items.forEach(item => {
+        const code = (item.dataset.code || '').toLowerCase();
+        const place = (item.dataset.place || '').toLowerCase();
+        const matches = !term || code.includes(term) || place.includes(term);
+        item.classList.toggle('hidden', !matches);
+        if (matches) visibleCount++;
+    });
+    
+    noResults.style.display = visibleCount === 0 ? 'block' : 'none';
+}
+
+// Load more codes for an area
+function loadMoreCodes(areaId) {
+    loadAllRemainingCodes(areaId);
+}
+
+// Load all remaining codes for an area
+function loadAllRemainingCodes(areaId) {
+    const dataEl = document.getElementById(`area_${areaId}_remaining`);
+    if (!dataEl) return;
+    
+    const container = document.getElementById(`area_${areaId}_codes`);
+    const loadMoreEl = document.getElementById(`area_${areaId}_load_more`);
+    
+    try {
+        const remaining = JSON.parse(dataEl.textContent);
+        
+        remaining.forEach(pc => {
+            const div = document.createElement('div');
+            div.className = 'area-code-item';
+            div.dataset.code = pc.code || '';
+            div.dataset.place = pc.place_name || '';
+            
+            const displayCode = pc.display_code || pc.code;
+            const placeName = pc.place_name || '—';
+            
+            div.innerHTML = `
+                <input type="checkbox" 
+                       name="area_postal_codes" 
+                       value="${areaId}:${pc.id}" 
+                       id="apc_${areaId}_${pc.id}" 
+                       checked
+                       onchange="updateAreaCount(${areaId})">
+                <label for="apc_${areaId}_${pc.id}">
+                    <span class="area-code-number">${displayCode}</span>
+                    <span class="area-code-place">${placeName}</span>
+                </label>
+            `;
+            container.appendChild(div);
+        });
+        
+        // Remove the load more section and data
+        if (loadMoreEl) loadMoreEl.remove();
+        dataEl.remove();
+        
+        // Update count
+        updateAreaCount(areaId);
+        
+    } catch (e) {
+        console.error('Failed to load remaining codes:', e);
+    }
+}
+
+// Individual postal codes section
 function updateCodesSummary() {
-    const checkboxes = document.querySelectorAll('#codes-list input[type="checkbox"]');
     const checked = document.querySelectorAll('#codes-list input[type="checkbox"]:checked');
     const counter = document.getElementById('codes-selected-count');
     if (counter) counter.textContent = checked.length;
-}
-
-function selectAllAreas() {
-    document.querySelectorAll('#areas-list input[type="checkbox"]').forEach(cb => cb.checked = true);
-    updateAreasSummary();
-}
-
-function deselectAllAreas() {
-    document.querySelectorAll('#areas-list input[type="checkbox"]').forEach(cb => cb.checked = false);
-    updateAreasSummary();
 }
 
 function selectAllCodes() {
@@ -318,24 +681,29 @@ function deselectAllCodes() {
     updateCodesSummary();
 }
 
-function selectAll() {
-    selectAllAreas();
+// Select everything (for Approve All button)
+function selectAllEverything() {
+    // Select all codes in all areas
+    document.querySelectorAll('.area-card').forEach(card => {
+        const areaId = card.dataset.areaId;
+        selectAllInArea(areaId);
+    });
+    
+    // Select all individual codes
     selectAllCodes();
 }
 
-// Add event listeners for real-time count updates
-document.querySelectorAll('#areas-list input[type="checkbox"]').forEach(cb => {
-    cb.addEventListener('change', updateAreasSummary);
-});
-document.querySelectorAll('#codes-list input[type="checkbox"]').forEach(cb => {
-    cb.addEventListener('change', updateCodesSummary);
+// Initialize event listeners
+document.addEventListener('DOMContentLoaded', function() {
+    // Individual codes section listeners
+    document.querySelectorAll('#codes-list input[type="checkbox"]').forEach(cb => {
+        cb.addEventListener('change', updateCodesSummary);
+    });
+    
+    // Initialize counts for all areas
+    document.querySelectorAll('.area-card').forEach(card => {
+        updateAreaCount(card.dataset.areaId);
+    });
 });
 </script>
 {% endblock %}
-
-
-
-
-
-
-

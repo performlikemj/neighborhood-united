@@ -2,12 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx'
 import { api } from '../api'
-
-// Random chef emojis for placeholder
-const CHEF_EMOJIS = ['👨‍🍳', '👩‍🍳', '🧑‍🍳', '🍳', '🥘', '🍲', '🥗', '🍝']
-function getRandomChefEmoji() {
-  return CHEF_EMOJIS[Math.floor(Math.random() * CHEF_EMOJIS.length)]
-}
+import { getSeededChefEmoji } from '../utils/emojis.js'
 
 // Animated counter hook for trust metrics
 function useAnimatedCounter(targetValue, duration = 2000) {
@@ -49,8 +44,8 @@ function ChefCard({ chef }) {
   const location = chef?.city || chef?.location_city || ''
   const country = chef?.country || ''
   const photoCount = chef?.photos?.length || 0
-  // Use chef's chosen emoji, or fall back to a random chef emoji
-  const chefEmoji = chef?.sous_chef_emoji || getRandomChefEmoji()
+  // Use chef's chosen emoji, or fall back to a seeded random for consistency
+  const chefEmoji = chef?.sous_chef_emoji || getSeededChefEmoji(chef?.id || username)
 
   return (
     <Link to={`/c/${encodeURIComponent(username)}`} className="home-chef-card">

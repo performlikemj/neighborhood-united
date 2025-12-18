@@ -114,23 +114,19 @@ def _verify_signature(signature: str, signing_key: str, body: bytes, url: str) -
 
 # Map of URL-safe task names to Celery task paths
 TASK_MAP = {
-    # Meal-related tasks
-    "send_daily_meal_instructions": "meals.meal_instructions.send_daily_meal_instructions",
+    # Meal/embedding tasks
     "update_embeddings": "meals.meal_embedding.update_embeddings",
     "submit_weekly_meal_plan_batch": "meals.tasks.submit_weekly_meal_plan_batch",
     "poll_incomplete_meal_plan_batches": "meals.tasks.poll_incomplete_meal_plan_batches",
-    "sync_all_chef_payments": "meals.tasks.sync_all_chef_payments",
-    "process_chef_meal_price_adjustments": "meals.tasks.process_chef_meal_price_adjustments",
-    "generate_daily_user_summaries": "meals.tasks.generate_daily_user_summaries",
-    "create_weekly_chat_threads": "meals.tasks.create_weekly_chat_threads",
     "cleanup_old_meal_plans_and_meals": "meals.tasks.cleanup_old_meal_plans_and_meals",
     
-    # Customer dashboard tasks
-    "summarize_user_chat_sessions": "customer_dashboard.tasks.summarize_user_chat_sessions",
-    "cleanup_expired_sessions": "customer_dashboard.tasks.cleanup_expired_sessions",
-    
-    # Chef services tasks
+    # Chef payment tasks
+    "sync_all_chef_payments": "meals.tasks.sync_all_chef_payments",
+    "process_chef_meal_price_adjustments": "meals.tasks.process_chef_meal_price_adjustments",
     "sync_service_tier_prices": "chef_services.tasks.sync_pending_service_tiers",
+    
+    # Cleanup tasks
+    "cleanup_expired_sessions": "customer_dashboard.tasks.cleanup_expired_sessions",
 }
 
 

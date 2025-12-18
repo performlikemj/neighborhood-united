@@ -18,69 +18,47 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 # Load task modules from all registered Django app configs.
 app.autodiscover_tasks(lambda: settings.INSTALLED_APPS)
 
+# NOTE: Celery Beat has been replaced by QStash serverless scheduler.
+# These schedules are kept here as documentation only - actual scheduling
+# is done via QStash (see api/cron_triggers.py for the task mappings).
+# The Celery Beat container has been decommissioned.
 app.conf.beat_schedule = {
-    'send-daily-meal-instructions-hourly': {
-        'task': 'meals.meal_instructions.send_daily_meal_instructions',
-        'schedule': crontab(minute=0),  # Runs every hour
-    },
+    # Meal/embedding tasks
     'update-embeddings-daily': {
         'task': 'meals.meal_embedding.update_embeddings',
-        'schedule': crontab(hour=0, minute=0),  # Runs every day at midnight
+        'schedule': crontab(hour=0, minute=0),  # Daily at midnight
     },
-    # Weekly Groq batch submission kicks off early Friday so results are
-    # ready for Saturday publishing.
     'submit-weekly-meal-plan-batch': {
         'task': 'meals.tasks.submit_weekly_meal_plan_batch',
-        'schedule': crontab(day_of_week='fri', hour=0, minute=5),
+        'schedule': crontab(day_of_week='fri', hour=0, minute=5),  # Friday 00:05
     },
-    # Poll in-flight batches twice an hour to ingest completed results or
-    # trigger synchronous fallback when needed.
     'poll-incomplete-meal-plan-batches': {
         'task': 'meals.tasks.poll_incomplete_meal_plan_batches',
-        'schedule': crontab(minute='*/30'),
-    },
-    # Removed: meal plan reminders are no longer sent
-
-    'sync-all-chef-payments': {
-        'task': 'meals.tasks.sync_all_chef_payments',
-        'schedule': crontab(hour=0, minute=0),  # Runs daily at midnight
-    },
-    'process-chef-meal-price-adjustments': {
-        'task': 'meals.tasks.process_chef_meal_price_adjustments',
-        'schedule': crontab(day_of_week='monday', hour=3, minute=0),  # Run every Monday at 3:00 AM
-        'args': (),
-    },
-    'generate-daily-user-summaries': {
-        'task': 'meals.tasks.generate_daily_user_summaries',
-        'schedule': crontab(minute=0),  # Run hourly to catch users in all time zones
-        'args': (),
-    },
-    'summarize-user-chat-sessions': {
-        'task': 'customer_dashboard.tasks.summarize_user_chat_sessions',
-        'schedule': crontab(minute=30),  # Run every hour at X:30 to check for users in different timezones
-    },
-    'create-weekly-chat-threads': {
-        'task': 'meals.tasks.create_weekly_chat_threads',
-        'schedule': crontab(day_of_week='monday', hour=0, minute=5),  # Run every Monday at 00:05
-        'args': (),
-    },
-    'cleanup-expired-sessions': {
-        'task': 'customer_dashboard.tasks.cleanup_expired_sessions',
-        'schedule': crontab(hour=2, minute=0),  # Run daily at 2 AM
+        'schedule': crontab(minute='*/30'),  # Every 30 minutes
     },
     'cleanup-old-meal-plans-and-meals': {
         'task': 'meals.tasks.cleanup_old_meal_plans_and_meals',
-        'schedule': crontab(hour=3, minute=0),  # Run daily at 3 AM
-        'args': (),
+        'schedule': crontab(hour=3, minute=0),  # Daily at 3 AM
     },
-    # Heartbeat every minute to confirm Beat is running
-    # 'celery-beat-heartbeat': {
-    #     'task': 'meals.tasks.celery_beat_heartbeat',
-    #     'schedule': crontab(),  # every minute
-    # },
+    
+    # Chef payment tasks
+    'sync-all-chef-payments': {
+        'task': 'meals.tasks.sync_all_chef_payments',
+        'schedule': crontab(hour=0, minute=0),  # Daily at midnight
+    },
+    'process-chef-meal-price-adjustments': {
+        'task': 'meals.tasks.process_chef_meal_price_adjustments',
+        'schedule': crontab(day_of_week='monday', hour=3, minute=0),  # Monday 3 AM
+    },
     'sync-service-tier-prices': {
         'task': 'chef_services.tasks.sync_pending_service_tiers',
-        'schedule': crontab(minute='*/5'),  # every 5 minutes
+        'schedule': crontab(minute='*/5'),  # Every 5 minutes
+    },
+    
+    # Cleanup tasks
+    'cleanup-expired-sessions': {
+        'task': 'customer_dashboard.tasks.cleanup_expired_sessions',
+        'schedule': crontab(hour=2, minute=0),  # Daily at 2 AM
     },
 }
 

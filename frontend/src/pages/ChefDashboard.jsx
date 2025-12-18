@@ -27,40 +27,12 @@ function toArray(payload){
   return []
 }
 
-/**
- * Render service areas in a user-friendly summary
- */
 function renderAreas(areas){
   if (!Array.isArray(areas) || areas.length === 0) return ''
-  
-  // Group by country
-  const byCountry = {}
-  for (const p of areas) {
-    const countryCode = p?.country?.code || p?.country || ''
-    const countryName = p?.country?.name || countryCode || 'Unknown'
-    const city = (p?.city || p?.place_name || '').trim()
-    
-    if (!byCountry[countryName]) {
-      byCountry[countryName] = { cities: new Set(), count: 0 }
-    }
-    byCountry[countryName].count++
-    if (city) byCountry[countryName].cities.add(city)
-  }
-  
-  // Build summary strings
-  const summaries = []
-  for (const [country, data] of Object.entries(byCountry)) {
-    const cities = Array.from(data.cities).slice(0, 3)
-    if (cities.length > 0 && data.count <= 10) {
-      summaries.push(`${cities.join(', ')}${cities.length < data.cities.size ? ` +${data.cities.size - cities.length} more` : ''}`)
-    } else if (data.count > 1) {
-      summaries.push(`${data.count} areas in ${country}`)
-    } else {
-      summaries.push(cities[0] || country)
-    }
-  }
-  
-  return summaries.join(' • ')
+  const names = areas
+    .map(p => (p?.postal_code || p?.postalcode || p?.code || p?.name || ''))
+    .filter(Boolean)
+  return names.join(', ')
 }
 
 const SERVICE_TYPES = [

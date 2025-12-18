@@ -185,15 +185,8 @@ jobs:
           docker push ${{ env.REGISTRY }}.azurecr.io/celery-worker:${{ github.sha }}
           docker push ${{ env.REGISTRY }}.azurecr.io/celery-worker:latest
 
-      - name: Build and push Celery beat image
-        run: |
-          docker build --platform linux/amd64 \
-            -f Dockerfile.celery-beat \
-            -t ${{ env.REGISTRY }}.azurecr.io/celery-beat:${{ github.sha }} \
-            -t ${{ env.REGISTRY }}.azurecr.io/celery-beat:latest \
-            .
-          docker push ${{ env.REGISTRY }}.azurecr.io/celery-beat:${{ github.sha }}
-          docker push ${{ env.REGISTRY }}.azurecr.io/celery-beat:latest
+      # Note: Celery Beat has been replaced by QStash serverless scheduler
+      # No beat image build needed - schedules are managed via QStash
 
       - name: Deploy Django to Container Apps
         run: |
@@ -208,13 +201,6 @@ jobs:
             --name ${{ env.CELERY_WORKER_APP }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --image ${{ env.REGISTRY }}.azurecr.io/celery-worker:${{ github.sha }}
-
-      - name: Deploy Celery Beat to Container Apps
-        run: |
-          az containerapp update \
-            --name ${{ env.CELERY_BEAT_APP }} \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --image ${{ env.REGISTRY }}.azurecr.io/celery-beat:${{ github.sha }}
 
   # ============================================================================
   # Deploy Frontend to Azure Static Web App (only on push to main, after tests pass)

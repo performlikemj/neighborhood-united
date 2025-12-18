@@ -552,7 +552,7 @@ export default function NavBar(){
       </div>
       
       {/* Chat Panel for customers - rendered via portal to avoid navbar stacking context issues */}
-      {!inChef && chatOpen && createPortal(
+      {!inChef && chatOpen && typeof document !== 'undefined' && document.body && createPortal(
         <ChatPanel
           isOpen={chatOpen}
           onClose={() => {

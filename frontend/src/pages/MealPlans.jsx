@@ -1946,6 +1946,7 @@ function Overview({ plan, weekStart, chefMeals, isApproved, mealPlanId, onChange
 
 function ToastOverlay({ toasts }){
   if (!toasts || toasts.length===0) return null
+  if (typeof document === 'undefined' || !document.body) return null
   return createPortal(
     <div className="toast-container" role="status" aria-live="polite">
       {toasts.map(t => (

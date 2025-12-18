@@ -125,7 +125,7 @@ export default function Listbox({
             ))}
           </div>
         </div>
-      ) : createPortal(
+      ) : (typeof document !== 'undefined' && document.body ? createPortal(
         <div className="listbox-pop" role="listbox" aria-activedescendant={normalized[activeIndex]?.key} tabIndex={-1} ref={listRef} onKeyDown={onKeyDown}
           style={{ position:'fixed', top: pos.top, left: pos.left, width: pos.width, zIndex: 1000 }}
         >
@@ -162,7 +162,7 @@ export default function Listbox({
           </div>
         </div>,
         document.body
-      ))}
+      ) : null))}
     </div>
   )
 }

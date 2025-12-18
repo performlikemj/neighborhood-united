@@ -38,6 +38,14 @@ export default function ChefHub() {
     fetchHubData()
   }, [chefId])
   
+  // Set page title with chef name (must be before early returns to follow hooks rules)
+  useEffect(() => {
+    if (hubData?.chef) {
+      const chefName = hubData.chef.display_name || hubData.chef.username || 'Chef'
+      document.title = `sautai — Chef ${chefName}`
+    }
+  }, [hubData?.chef?.display_name, hubData?.chef?.username])
+  
   // Handle opening chat
   const handleOpenChat = useCallback(async () => {
     if (chatLoading) return
@@ -105,12 +113,6 @@ export default function ChefHub() {
   }
   
   const { chef, connected_since, current_plan, upcoming_orders, pending_suggestions } = hubData
-  
-  // Set page title with chef name
-  useEffect(() => {
-    const chefName = chef?.display_name || chef?.username || 'Chef'
-    document.title = `sautai — Chef ${chefName}`
-  }, [chef?.display_name, chef?.username])
   
   return (
     <div className="page-chef-hub">

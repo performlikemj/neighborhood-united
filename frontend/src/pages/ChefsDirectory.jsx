@@ -5,6 +5,15 @@ import { useAuth } from '../context/AuthContext.jsx'
 import { useConnections } from '../hooks/useConnections.js'
 import { countryNameFromCode } from '../utils/geo.js'
 
+// Chef emoji placeholders
+const CHEF_EMOJIS = ['👨‍🍳', '👩‍🍳', '🧑‍🍳', '🍳', '🥘', '🍲', '🥗', '🍝']
+function getChefEmoji(chef) {
+  // Use chef's chosen emoji if available, otherwise use a deterministic random based on ID
+  if (chef?.sous_chef_emoji) return chef.sous_chef_emoji
+  const index = (chef?.id || 0) % CHEF_EMOJIS.length
+  return CHEF_EMOJIS[index]
+}
+
 // Countries with flag emojis for the discover filter
 const FEATURED_COUNTRIES = [
   { code: '', label: 'All Countries', flag: '🌍' },
@@ -442,8 +451,8 @@ export default function ChefsDirectory(){
                           className="chef-avatar"
                         />
                       ) : (
-                        <div className="chef-avatar-placeholder">
-                          <i className="fa-solid fa-user"></i>
+                        <div className="chef-avatar-emoji">
+                          <span role="img" aria-label="chef">{getChefEmoji(c)}</span>
                         </div>
                       )}
                     </div>

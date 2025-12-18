@@ -9,6 +9,7 @@
 !tsconfig.json
 !jsconfig.json
 !**/package.json
+!**/manifest.json
 __pycache__/
 
 # Python virtual environments

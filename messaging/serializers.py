@@ -93,3 +93,4 @@ class ConversationDetailSerializer(ConversationSerializer):
         return MessageSerializer(messages, many=True).data
 
 
+

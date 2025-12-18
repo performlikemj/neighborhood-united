@@ -33,3 +33,4 @@ class MessageAdmin(admin.ModelAdmin):
     content_preview.short_description = 'Content'
 
 
+

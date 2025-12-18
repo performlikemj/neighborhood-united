@@ -150,3 +150,4 @@ class Message(models.Model):
             self.save(update_fields=['read_at'])
 
 
+

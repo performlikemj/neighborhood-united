@@ -20,7 +20,6 @@ env:
   # Backend apps
   DJANGO_APP: sautai-django-westus2
   CELERY_WORKER_APP: sautai-celery-worker-westus2
-  CELERY_BEAT_APP: sautai-beat-westus2
   # Frontend (Azure Static Web App)
   SWA_NAME: sautai-frontend
   VITE_API_BASE: https://sautai-django-westus2.redcliff-686826f3.westus2.azurecontainerapps.io

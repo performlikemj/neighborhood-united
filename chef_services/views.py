@@ -1,7 +1,7 @@
 import json
 import logging
 import stripe
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as tz
 from django.db import transaction
 from django.db.models import Prefetch, Q
 from django.shortcuts import get_object_or_404
@@ -31,10 +31,61 @@ from .serializers import (
     ChefCustomerConnectionSerializer,
 )
 from .payments import create_service_checkout_session
-from .tasks import sync_pending_service_tiers
+from .tasks import sync_pending_service_tiers, _ensure_product
+from django.conf import settings
 
 
 logger = logging.getLogger(__name__)
+
+
+def _sync_tier_to_stripe(tier):
+    """
+    Synchronously sync a tier to Stripe.
+    
+    Creates/updates the Stripe Product and Price for the given tier.
+    Updates tier fields (stripe_price_id, price_sync_status, etc.) in place.
+    
+    Args:
+        tier: ChefServicePriceTier instance (must be saved first to have an ID)
+        
+    Returns:
+        bool: True if sync succeeded, False if it failed
+    """
+    try:
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        
+        # Ensure the offering has a Stripe product
+        product_id = _ensure_product(tier.offering)
+        
+        # Build Price creation kwargs
+        kwargs = dict(
+            product=product_id,
+            currency=tier.currency,
+            unit_amount=int(tier.desired_unit_amount_cents)
+        )
+        if tier.is_recurring:
+            kwargs['recurring'] = {'interval': tier.recurrence_interval or 'week'}
+        
+        # Create the Stripe Price with idempotency key
+        idempotency_key = f"service_tier_{tier.id}_{tier.desired_unit_amount_cents}_{'rec' if tier.is_recurring else 'ot'}"
+        price = stripe.Price.create(**kwargs, idempotency_key=idempotency_key)
+        
+        # Update tier with success
+        tier.stripe_price_id = price.id
+        tier.price_sync_status = 'success'
+        tier.price_synced_at = datetime.now(tz.utc)
+        tier.last_price_sync_error = None
+        tier.save(update_fields=['stripe_price_id', 'price_sync_status', 'price_synced_at', 'last_price_sync_error'])
+        
+        return True
+        
+    except Exception as e:
+        # Record the error on the tier
+        tier.price_sync_status = 'error'
+        tier.last_price_sync_error = str(e)[:500]
+        tier.save(update_fields=['price_sync_status', 'last_price_sync_error'])
+        logger.exception("Stripe sync failed for tier %s", tier.id)
+        return False
 
 
 def _haversine_miles(lat1, lon1, lat2, lon2):
@@ -419,15 +470,15 @@ def add_tier(request, offering_id):
         )
         try:
             tier.full_clean()
-            # New tier should be marked pending for sync
+            # Save tier first (needed for idempotency key)
             tier.price_sync_status = 'pending'
             tier.last_price_sync_error = None
             tier.price_synced_at = None
             tier.save()
-            try:
-                sync_pending_service_tiers.delay()
-            except Exception:
-                logger.exception("Failed to enqueue service tier sync task")
+            
+            # Sync to Stripe synchronously for immediate feedback
+            _sync_tier_to_stripe(tier)
+            
         except Exception as e:
             return Response({"error": str(e)}, status=400)
         return Response(ChefServicePriceTierSerializer(tier).data, status=201)
@@ -460,11 +511,11 @@ def update_tier(request, tier_id):
             tier.last_price_sync_error = None
             tier.price_synced_at = None
         tier.save()
+        
+        # Sync to Stripe synchronously if price-related fields changed
         if touched_price:
-            try:
-                sync_pending_service_tiers.delay()
-            except Exception:
-                logger.exception("Failed to enqueue service tier sync task")
+            _sync_tier_to_stripe(tier)
+            
     except Exception as e:
         return Response({"error": str(e)}, status=400)
     return Response(ChefServicePriceTierSerializer(tier).data)

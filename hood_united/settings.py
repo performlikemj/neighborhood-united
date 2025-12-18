@@ -554,6 +554,11 @@ CELERY_BROKER_TRANSPORT_OPTIONS = {
 CELERYD_LOG_FILE = "/var/log/celery/celery.log"
 CELERYD_LOG_LEVEL = "DEBUG"
 
+# QStash settings (serverless cron scheduler - replaces Celery Beat)
+# Get signing keys from Upstash QStash console: https://console.upstash.com/qstash
+QSTASH_CURRENT_SIGNING_KEY = os.getenv('QSTASH_CURRENT_SIGNING_KEY')
+QSTASH_NEXT_SIGNING_KEY = os.getenv('QSTASH_NEXT_SIGNING_KEY')
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,

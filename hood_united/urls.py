@@ -26,6 +26,8 @@ urlpatterns = [
     # Simple health check endpoint for load balancers and CI smoke tests
     path('healthz/', lambda request: HttpResponse('ok'), name='healthz'),
     path('admin/', admin.site.urls),
+    # API endpoints including QStash cron triggers
+    path('api/', include('api.urls')),
     path('chefs/', include('chefs.urls')),
     path('chef_admin/', include('chef_admin.urls')),
     path('customer_dashboard/', include('customer_dashboard.urls')),

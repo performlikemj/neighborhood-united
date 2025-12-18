@@ -10,21 +10,21 @@ from chef_services.models import ChefServiceOffering, ChefServicePriceTier
 
 
 class SupportedCurrenciesEndpointTests(TestCase):
-    """Tests for GET /chef-services/currencies/ endpoint."""
+    """Tests for GET /services/currencies/ endpoint."""
 
     def setUp(self):
         self.client = APIClient()
 
     def test_currencies_endpoint_returns_list(self):
         """Endpoint should return a list of supported currencies."""
-        response = self.client.get('/chef-services/currencies/')
+        response = self.client.get('/services/currencies/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn('currencies', response.data)
         self.assertIsInstance(response.data['currencies'], list)
 
     def test_currencies_include_required_fields(self):
         """Each currency should have code, symbol, name, min_amount, min_display, zero_decimal."""
-        response = self.client.get('/chef-services/currencies/')
+        response = self.client.get('/services/currencies/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         
         for currency in response.data['currencies']:
@@ -37,7 +37,7 @@ class SupportedCurrenciesEndpointTests(TestCase):
 
     def test_jpy_is_zero_decimal(self):
         """JPY should be marked as zero_decimal."""
-        response = self.client.get('/chef-services/currencies/')
+        response = self.client.get('/services/currencies/')
         jpy = next((c for c in response.data['currencies'] if c['code'] == 'jpy'), None)
         self.assertIsNotNone(jpy)
         self.assertTrue(jpy['zero_decimal'])
@@ -45,7 +45,7 @@ class SupportedCurrenciesEndpointTests(TestCase):
 
     def test_usd_is_not_zero_decimal(self):
         """USD should NOT be zero_decimal."""
-        response = self.client.get('/chef-services/currencies/')
+        response = self.client.get('/services/currencies/')
         usd = next((c for c in response.data['currencies'] if c['code'] == 'usd'), None)
         self.assertIsNotNone(usd)
         self.assertFalse(usd['zero_decimal'])
@@ -53,14 +53,14 @@ class SupportedCurrenciesEndpointTests(TestCase):
 
     def test_currencies_sorted_by_code(self):
         """Currencies should be sorted alphabetically by code."""
-        response = self.client.get('/chef-services/currencies/')
+        response = self.client.get('/services/currencies/')
         codes = [c['code'] for c in response.data['currencies']]
         self.assertEqual(codes, sorted(codes))
 
     def test_endpoint_allows_anonymous_access(self):
         """Endpoint should be accessible without authentication."""
         # Don't authenticate
-        response = self.client.get('/chef-services/currencies/')
+        response = self.client.get('/services/currencies/')
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
 
@@ -84,7 +84,7 @@ class TierCreationCurrencyValidationTests(TestCase):
     def test_create_tier_valid_usd(self):
         """Creating a tier with valid USD should succeed."""
         response = self.client.post(
-            f'/chef-services/offerings/{self.offering.id}/tiers/',
+            f'/services/offerings/{self.offering.id}/tiers/',
             {
                 'household_min': 1,
                 'household_max': 4,
@@ -100,7 +100,7 @@ class TierCreationCurrencyValidationTests(TestCase):
     def test_create_tier_valid_jpy(self):
         """Creating a tier with valid JPY should succeed."""
         response = self.client.post(
-            f'/chef-services/offerings/{self.offering.id}/tiers/',
+            f'/services/offerings/{self.offering.id}/tiers/',
             {
                 'household_min': 1,
                 'household_max': 4,
@@ -116,7 +116,7 @@ class TierCreationCurrencyValidationTests(TestCase):
     def test_create_tier_invalid_currency_rejected(self):
         """Creating a tier with invalid currency should fail."""
         response = self.client.post(
-            f'/chef-services/offerings/{self.offering.id}/tiers/',
+            f'/services/offerings/{self.offering.id}/tiers/',
             {
                 'household_min': 1,
                 'household_max': 4,
@@ -131,7 +131,7 @@ class TierCreationCurrencyValidationTests(TestCase):
     def test_create_tier_usd_below_minimum_rejected(self):
         """Creating USD tier below minimum amount should fail."""
         response = self.client.post(
-            f'/chef-services/offerings/{self.offering.id}/tiers/',
+            f'/services/offerings/{self.offering.id}/tiers/',
             {
                 'household_min': 1,
                 'household_max': 4,
@@ -146,7 +146,7 @@ class TierCreationCurrencyValidationTests(TestCase):
     def test_create_tier_jpy_below_minimum_rejected(self):
         """Creating JPY tier below minimum amount should fail."""
         response = self.client.post(
-            f'/chef-services/offerings/{self.offering.id}/tiers/',
+            f'/services/offerings/{self.offering.id}/tiers/',
             {
                 'household_min': 1,
                 'household_max': 4,
@@ -161,7 +161,7 @@ class TierCreationCurrencyValidationTests(TestCase):
     def test_create_tier_uppercase_currency_normalized(self):
         """Uppercase currency code should be normalized to lowercase."""
         response = self.client.post(
-            f'/chef-services/offerings/{self.offering.id}/tiers/',
+            f'/services/offerings/{self.offering.id}/tiers/',
             {
                 'household_min': 5,
                 'household_max': None,

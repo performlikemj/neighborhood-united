@@ -42,21 +42,40 @@ class ChefServiceOffering(models.Model):
 class ChefServicePriceTier(models.Model):
     """Represents a Stripe-backed price option for a service offering.
 
-    Each tier covers a household size range, stores the amount billed in Stripe
-    cents, and records whether the booking recurs. The associated ``stripe_price_id``
-    links this tier directly to the synced Stripe Price so updates can be
-    propagated to Checkout sessions.
+    Each tier covers a household size range, stores the amount billed in Stripe's
+    smallest currency unit (cents for USD, whole units for JPY), and records 
+    whether the booking recurs. The associated ``stripe_price_id`` links this 
+    tier directly to the synced Stripe Price so updates can be propagated to 
+    Checkout sessions.
     """
     RECURRENCE_CHOICES = [
         ("week", "Per Week"),
     ]
+    
+    # Stripe-supported currencies with their minimum amounts (in smallest unit)
+    # https://stripe.com/docs/currencies#minimum-and-maximum-charge-amounts
+    SUPPORTED_CURRENCIES = {
+        'usd': {'min': 50, 'zero_decimal': False},      # $0.50 minimum
+        'eur': {'min': 50, 'zero_decimal': False},      # €0.50 minimum
+        'gbp': {'min': 30, 'zero_decimal': False},      # £0.30 minimum
+        'jpy': {'min': 50, 'zero_decimal': True},       # ¥50 minimum
+        'cad': {'min': 50, 'zero_decimal': False},      # C$0.50 minimum
+        'aud': {'min': 50, 'zero_decimal': False},      # A$0.50 minimum
+        'chf': {'min': 50, 'zero_decimal': False},      # CHF 0.50 minimum
+        'hkd': {'min': 400, 'zero_decimal': False},     # HK$4.00 minimum
+        'sgd': {'min': 50, 'zero_decimal': False},      # S$0.50 minimum
+        'nzd': {'min': 50, 'zero_decimal': False},      # NZ$0.50 minimum
+        'mxn': {'min': 1000, 'zero_decimal': False},    # MX$10.00 minimum
+    }
 
     offering = models.ForeignKey(ChefServiceOffering, on_delete=models.CASCADE, related_name="tiers")
     household_min = models.PositiveIntegerField()
     household_max = models.PositiveIntegerField(null=True, blank=True, help_text="Null means no upper bound")
 
-    currency = models.CharField(max_length=10, default="usd")
-    desired_unit_amount_cents = models.PositiveIntegerField()
+    currency = models.CharField(max_length=10, default="usd", help_text="ISO 4217 currency code (lowercase)")
+    desired_unit_amount_cents = models.PositiveIntegerField(
+        help_text="Amount in smallest currency unit (cents for USD, whole units for JPY)"
+    )
     # ``stripe_price_id`` binds the tier to the live Stripe Price used for checkout
     stripe_price_id = models.CharField(max_length=200, blank=True, null=True, help_text="Linked Stripe Price ID")
 
@@ -119,6 +138,28 @@ class ChefServicePriceTier(models.Model):
             raise ValidationError({"recurrence_interval": "Required when is_recurring is True."})
         if not self.is_recurring and self.recurrence_interval:
             raise ValidationError({"recurrence_interval": "Must be null for one-time tiers."})
+        
+        # Currency validation
+        currency_lower = (self.currency or '').lower().strip()
+        if currency_lower not in self.SUPPORTED_CURRENCIES:
+            supported = ', '.join(sorted(self.SUPPORTED_CURRENCIES.keys()))
+            raise ValidationError({
+                "currency": f"Unsupported currency '{self.currency}'. Supported: {supported}"
+            })
+        self.currency = currency_lower  # Normalize to lowercase
+        
+        # Currency-specific minimum amount validation
+        currency_info = self.SUPPORTED_CURRENCIES[currency_lower]
+        min_amount = currency_info['min']
+        if self.desired_unit_amount_cents < min_amount:
+            if currency_info['zero_decimal']:
+                raise ValidationError({
+                    "desired_unit_amount_cents": f"Minimum amount for {currency_lower.upper()} is {min_amount} (e.g., ¥{min_amount})"
+                })
+            else:
+                raise ValidationError({
+                    "desired_unit_amount_cents": f"Minimum amount for {currency_lower.upper()} is {min_amount} cents (e.g., ${min_amount/100:.2f})"
+                })
 
         # Overlap validation: prevent overlapping ranges within the same offering for ACTIVE tiers only
         # Allow overlapping drafts/inactive tiers to exist simultaneously

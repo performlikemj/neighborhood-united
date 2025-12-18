@@ -8,18 +8,6 @@ import { FEATURES } from '../config/features.js'
 import SautaiLogo from './SautaiLogo.jsx'
 import ChatPanel from './ChatPanel.jsx'
 
-function PlateStackIcon(){
-  const stroke = 'currentColor'
-  return (
-    <svg width="24" height="20" viewBox="0 0 24 20" aria-hidden focusable="false">
-      <g fill="none" stroke={stroke} strokeWidth="1.8">
-        <ellipse cx="12" cy="5" rx="8.5" ry="2.4" />
-        <ellipse cx="12" cy="10" rx="8.5" ry="2.4" />
-        <ellipse cx="12" cy="15" rx="8.5" ry="2.4" />
-      </g>
-    </svg>
-  )
-}
 
 export default function NavBar(){
   const { user, logout, switchRole, hasChefAccess, connectedChefs, hasChefConnection } = useAuth()
@@ -181,7 +169,7 @@ export default function NavBar(){
           title="Menu"
           type="button"
         >
-          <PlateStackIcon />
+          <i className={`fa-solid ${menuOpen ? 'fa-xmark' : 'fa-bars'}`}></i>
         </button>
 
         <div id="site-menu" className={"nav-links" + (menuOpen ? " open" : "") }>

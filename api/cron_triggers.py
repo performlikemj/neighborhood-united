@@ -95,6 +95,17 @@ def _verify_signature(signature: str, signing_key: str, body: bytes, url: str) -
             logger.warning("QStash signature expired")
             return False
         
+        # Verify URL claim (prevents replay attacks to different endpoints)
+        # QStash uses 'sub' claim for the destination URL
+        url_claim = payload.get('sub')
+        if url_claim:
+            # Normalize URLs for comparison (remove trailing slashes, query strings)
+            def normalize_url(u):
+                return u.rstrip('/').split('?')[0]
+            if normalize_url(url_claim) != normalize_url(url):
+                logger.warning(f"QStash URL mismatch: expected {url_claim}, got {url}")
+                return False
+        
         # Check body hash if present
         body_hash = payload.get('body')
         if body_hash:
@@ -218,8 +229,13 @@ def list_tasks(request):
     """
     List all available tasks that can be triggered.
     
+    Only available in DEBUG mode to prevent information disclosure.
+    
     URL: /api/cron/tasks/
     """
+    if not settings.DEBUG:
+        return JsonResponse({"error": "Endpoint disabled"}, status=403)
+    
     return JsonResponse({
         "tasks": list(TASK_MAP.keys()),
         "count": len(TASK_MAP)

@@ -3,6 +3,9 @@ from . import views
 
 
 urlpatterns = [
+    # Configuration / Metadata
+    path('currencies/', views.supported_currencies, name='service_supported_currencies'),
+    
     # Offerings
     path('offerings/', views.offerings, name='service_offerings'),
     path('offerings/<int:offering_id>/', views.update_offering, name='service_offering_update'),

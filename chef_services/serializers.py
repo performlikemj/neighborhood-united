@@ -11,26 +11,56 @@ from .models import (
 )
 
 
+# Currency symbols for all supported currencies
+# Must stay in sync with ChefServicePriceTier.SUPPORTED_CURRENCIES
 _CURRENCY_SYMBOLS = {
     "usd": "$",
-    "cad": "CA$",
     "eur": "€",
     "gbp": "£",
     "jpy": "¥",
+    "cad": "CA$",
+    "aud": "A$",
+    "chf": "CHF ",
+    "hkd": "HK$",
+    "sgd": "S$",
+    "nzd": "NZ$",
+    "mxn": "MX$",
 }
 
+# Zero-decimal currencies (no cents - amount is in whole units)
+# https://stripe.com/docs/currencies#zero-decimal
+_ZERO_DECIMAL_CURRENCIES = {"jpy"}
 
-def _format_amount(amount_cents, currency_code):
-    if amount_cents is None:
+
+def _format_amount(amount_smallest_unit, currency_code):
+    """
+    Format an amount for display.
+    
+    Args:
+        amount_smallest_unit: Amount in smallest currency unit (cents for USD, whole yen for JPY)
+        currency_code: ISO 4217 currency code (e.g., 'usd', 'jpy')
+    
+    Returns:
+        Formatted string like "$50" or "¥5,000"
+    """
+    if amount_smallest_unit is None:
         return "Price TBD"
 
-    amount = (Decimal(amount_cents) / Decimal(100)).quantize(Decimal("0.01"))
-    if amount == amount.to_integral():
+    currency_lower = (currency_code or "").lower()
+    
+    # Handle zero-decimal currencies (like JPY) vs decimal currencies (like USD)
+    if currency_lower in _ZERO_DECIMAL_CURRENCIES:
+        # JPY: amount is already in whole units (e.g., 5000 = ¥5000)
+        amount = Decimal(amount_smallest_unit)
         amount_text = f"{int(amount):,}"
     else:
-        amount_text = f"{amount:,.2f}".rstrip("0").rstrip(".")
+        # USD/EUR/etc: amount is in cents (e.g., 5000 = $50.00)
+        amount = (Decimal(amount_smallest_unit) / Decimal(100)).quantize(Decimal("0.01"))
+        if amount == amount.to_integral():
+            amount_text = f"{int(amount):,}"
+        else:
+            amount_text = f"{amount:,.2f}".rstrip("0").rstrip(".")
 
-    currency_lower = (currency_code or "").lower()
     symbol = _CURRENCY_SYMBOLS.get(currency_lower)
     if symbol:
         return f"{symbol}{amount_text}"
@@ -167,6 +197,10 @@ class ChefServiceOrderSerializer(serializers.ModelSerializer):
     offering_title = serializers.CharField(source='offering.title', read_only=True)
     service_type = serializers.CharField(source='offering.service_type', read_only=True)
     chef_id = serializers.IntegerField(read_only=True)
+    customer_username = serializers.CharField(source='customer.username', read_only=True)
+    customer_first_name = serializers.CharField(source='customer.first_name', read_only=True)
+    customer_last_name = serializers.CharField(source='customer.last_name', read_only=True)
+    customer_email = serializers.EmailField(source='customer.email', read_only=True)
 
     class Meta:
         model = ChefServiceOrder
@@ -176,7 +210,8 @@ class ChefServiceOrderSerializer(serializers.ModelSerializer):
             'schedule_preferences',
             'stripe_session_id', 'stripe_subscription_id', 'is_subscription',
             'status', 'created_at', 'updated_at',
-            'offering_title', 'service_type', 'chef_id'
+            'offering_title', 'service_type', 'chef_id',
+            'customer_username', 'customer_first_name', 'customer_last_name', 'customer_email'
         ]
         read_only_fields = ['customer', 'chef', 'stripe_session_id', 'stripe_subscription_id', 'is_subscription', 'status', 'created_at', 'updated_at']
 

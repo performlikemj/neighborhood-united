@@ -826,3 +826,70 @@ def cancel_order(request, order_id):
     order.status = 'cancelled'
     order.save(update_fields=['status'])
     return Response({"status": "cancelled"})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def supported_currencies(request):
+    """
+    Return list of supported currencies for service tier pricing.
+    
+    This endpoint helps frontends populate currency dropdowns and
+    display appropriate validation messages.
+    
+    Response format:
+    {
+        "currencies": [
+            {
+                "code": "usd",
+                "symbol": "$",
+                "name": "US Dollar",
+                "min_amount": 50,
+                "min_display": "$0.50",
+                "zero_decimal": false
+            },
+            ...
+        ]
+    }
+    """
+    from .serializers import _CURRENCY_SYMBOLS, _ZERO_DECIMAL_CURRENCIES
+    
+    currency_names = {
+        'usd': 'US Dollar',
+        'eur': 'Euro',
+        'gbp': 'British Pound',
+        'jpy': 'Japanese Yen',
+        'cad': 'Canadian Dollar',
+        'aud': 'Australian Dollar',
+        'chf': 'Swiss Franc',
+        'hkd': 'Hong Kong Dollar',
+        'sgd': 'Singapore Dollar',
+        'nzd': 'New Zealand Dollar',
+        'mxn': 'Mexican Peso',
+    }
+    
+    currencies = []
+    for code, info in ChefServicePriceTier.SUPPORTED_CURRENCIES.items():
+        is_zero_decimal = info['zero_decimal']
+        min_amount = info['min']
+        symbol = _CURRENCY_SYMBOLS.get(code, code.upper())
+        
+        # Format minimum for display
+        if is_zero_decimal:
+            min_display = f"{symbol}{min_amount:,}"
+        else:
+            min_display = f"{symbol}{min_amount / 100:.2f}".rstrip('0').rstrip('.')
+        
+        currencies.append({
+            'code': code,
+            'symbol': symbol,
+            'name': currency_names.get(code, code.upper()),
+            'min_amount': min_amount,
+            'min_display': min_display,
+            'zero_decimal': is_zero_decimal,
+        })
+    
+    # Sort by code for consistent ordering
+    currencies.sort(key=lambda c: c['code'])
+    
+    return Response({'currencies': currencies})

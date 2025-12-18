@@ -61,33 +61,17 @@ export default function ChatPanel({ isOpen, onClose, conversationId, recipientNa
       if (prev.find(m => m.id === message.id)) {
         return prev
       }
-      
-      // Check for pending/optimistic messages with same content (sent by current user)
-      // This handles the case where we added an optimistic message and then received
-      // the real message back from the server broadcast
-      const pendingMatch = prev.find(m => 
-        m.pending && 
-        m.content === message.content && 
-        m.sender_id === message.sender_id
-      )
-      
-      if (pendingMatch) {
-        // Replace the pending message with the real one
-        return prev.map(m => m.id === pendingMatch.id ? message : m)
-      }
-      
       return [...prev, message]
     })
     scrollToBottom()
     updateConversationWithMessage(conversationId, message)
     
-    // Mark as read if panel is open, otherwise refresh unread counts
+    // Mark as read if panel is open
     if (isOpen) {
       markConversationRead(conversationId)
     }
     
     // Refresh unread counts to update the notification badge
-    // This ensures the badge updates when messages arrive in other conversations
     fetchUnreadCounts()
   }, [conversationId, isOpen, markConversationRead, scrollToBottom, updateConversationWithMessage, fetchUnreadCounts])
 
@@ -222,33 +206,23 @@ export default function ChatPanel({ isOpen, onClose, conversationId, recipientNa
     }
     sendTyping(false)
     
-    // Optimistic update
-    const tempMessage = {
-      id: `temp-${Date.now()}`,
-      sender_id: user?.id,
-      sender_type: user?.is_chef ? 'chef' : 'customer',
-      content,
-      sent_at: new Date().toISOString(),
-      is_read: false,
-      pending: true,
-    }
-    setMessages(prev => [...prev, tempMessage])
-    scrollToBottom()
-    
     try {
       // Try WebSocket first, fall back to REST
       if (isConnected && wsSendMessage(content)) {
-        // Message sent via WebSocket - server will broadcast back
-        // Remove temp message when real one arrives (handled in handleNewMessage)
+        // Message sent via WebSocket - server will broadcast back to all participants
+        // including sender, so no need for optimistic update (avoids duplicates)
       } else {
-        // REST fallback
+        // REST fallback - add message directly since no WebSocket broadcast
         const message = await sendMessageRest(conversationId, content)
-        setMessages(prev => prev.filter(m => m.id !== tempMessage.id).concat(message))
+        setMessages(prev => {
+          // Avoid duplicates
+          if (prev.find(m => m.id === message.id)) return prev
+          return [...prev, message]
+        })
+        scrollToBottom()
       }
     } catch (err) {
       console.error('Failed to send message:', err)
-      // Remove temp message and show error
-      setMessages(prev => prev.filter(m => m.id !== tempMessage.id))
       showToast('Failed to send message', 'error')
     } finally {
       setSending(false)

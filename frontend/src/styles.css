@@ -1070,6 +1070,32 @@ a.btn{ text-decoration:none }
   color: #a11919;
 }
 
+/* Clickable Order Cards */
+.clickable-order-card{
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+.clickable-order-card:hover{
+  background: color-mix(in oklab, var(--surface-2) 90%, var(--primary)) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0,0,0,.08);
+}
+.clickable-order-card:focus-visible{
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Focused/Highlighted Order */
+.order-card-focused{
+  animation: orderHighlight 2.5s ease-out;
+  box-shadow: 0 0 0 2px var(--primary), 0 4px 12px rgba(0,0,0,.12) !important;
+}
+@keyframes orderHighlight{
+  0%{ background: color-mix(in oklab, var(--surface-2) 70%, var(--primary)); }
+  70%{ background: color-mix(in oklab, var(--surface-2) 85%, var(--primary)); }
+  100%{ background: var(--surface-2); }
+}
+
 /* Responsive adjustments */
 @media (max-width: 1400px){
   .chef-main-content{
@@ -7927,6 +7953,29 @@ button.chat-recipient:hover {
   min-width: 0;
 }
 
+.connection-card-link {
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+  flex: 1;
+  border-radius: 8px;
+  padding: 0.25rem;
+  margin: -0.25rem;
+  transition: background-color 0.15s ease;
+}
+
+.connection-card-link:hover {
+  background-color: color-mix(in oklab, var(--primary) 8%, transparent);
+}
+
+.connection-card-link .connection-name {
+  color: var(--text);
+}
+
+.connection-card-link:hover .connection-name {
+  color: var(--primary);
+}
+
 .connection-avatar {
   position: relative;
   width: 52px;
@@ -12622,4 +12671,109 @@ button.chat-recipient:hover {
   .service-areas-footer {
     padding: 0.875rem 1rem;
   }
+}
+
+/* ========================================
+   Hero Stats - Reusable Dashboard Component
+   ======================================== */
+.hero-stats {
+  display: flex;
+  gap: 2rem;
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid color-mix(in oklab, var(--border) 50%, transparent);
+  justify-content: center;
+}
+
+.hero-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.hero-stat-value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--primary);
+  line-height: 1;
+}
+
+.hero-stat-label {
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+@media (max-width: 768px) {
+  .hero-stats {
+    gap: 1.5rem;
+  }
+  .hero-stat-value {
+    font-size: 1.5rem;
+  }
+}
+
+/* ========================================
+   Dashboard Hero Texture Overlay
+   Adds subtle visual interest to hero sections
+   ======================================== */
+
+/* Shared hero texture mixin via class */
+.hero-textured {
+  position: relative;
+  overflow: hidden;
+}
+
+.hero-textured::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  /* Subtle noise grain texture */
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  opacity: 0.03;
+  pointer-events: none;
+  mix-blend-mode: overlay;
+}
+
+.hero-textured::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  /* Food-themed icon pattern */
+  background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%2368a867' fill-opacity='0.04'%3E%3Cpath d='M15 8c0-1.1.9-2 2-2h2c1.1 0 2 .9 2 2v8c0 1.1-.9 2-2 2h-2c-1.1 0-2-.9-2-2V8zm-4 14h14v2H11v-2z'/%3E%3Ccircle cx='45' cy='15' r='6'/%3E%3Cpath d='M42 25h6v2h-6z'/%3E%3Cpath d='M8 45l6-6 4 4 8-8 6 6v9H8z'/%3E%3Ccircle cx='48' cy='48' r='4'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: 60px 60px;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Dashboard Hero Background Images - Unsplash utensils */
+.my-chefs-hero,
+.chef-hub-hero,
+.page-orders .orders-hero {
+  position: relative;
+  overflow: hidden;
+}
+
+.my-chefs-hero::before,
+.chef-hub-hero::before,
+.page-orders .orders-hero::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: url("https://images.unsplash.com/photo-1495195134817-aeb325a55b65?w=1200&q=80") center center / cover no-repeat;
+  opacity: 0.15;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.my-chefs-hero-content,
+.chef-hub-hero-content,
+.page-orders .orders-hero-content {
+  position: relative;
+  z-index: 1;
 }

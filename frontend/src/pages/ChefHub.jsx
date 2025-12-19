@@ -294,6 +294,14 @@ export default function ChefHub() {
                 <span className="quick-action-label">Request Service</span>
                 <i className="fa-solid fa-chevron-right quick-action-arrow"></i>
               </button>
+              
+              <Link to="/orders" className="quick-action-item">
+                <div className="quick-action-icon">
+                  <i className="fa-solid fa-receipt"></i>
+                </div>
+                <span className="quick-action-label">View All Orders</span>
+                <i className="fa-solid fa-chevron-right quick-action-arrow"></i>
+              </Link>
             </div>
           </div>
         </section>

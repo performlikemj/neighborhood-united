@@ -16,6 +16,7 @@ from rest_framework.pagination import PageNumberPagination
 
 from chefs.models import Chef
 from chefs.services import get_revenue_breakdown, get_upcoming_orders
+from chefs.services.client_insights import get_analytics_time_series
 from .serializers import RevenueBreakdownSerializer, UpcomingOrderSerializer
 
 logger = logging.getLogger(__name__)
@@ -200,4 +201,70 @@ def upcoming_orders(request):
             status=500
         )
 
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def time_series(request):
+    """
+    GET /api/chefs/analytics/time-series/
+    
+    Returns time-series data for analytics charts.
+    
+    Query params:
+    - metric: 'revenue' | 'orders' | 'clients' (required)
+    - range: '7d' | '30d' | '90d' | '1y' (default: '30d')
+    
+    Response:
+    ```json
+    {
+        "metric": "revenue",
+        "range": "30d",
+        "data": [
+            {"date": "2025-12-01", "value": 150.00, "label": "Dec 1"},
+            {"date": "2025-12-02", "value": 200.00, "label": "Dec 2"},
+            ...
+        ],
+        "total": 3500.00
+    }
+    ```
+    """
+    chef, error_response = _get_chef_or_403(request)
+    if error_response:
+        return error_response
+    
+    # Parse query params
+    metric = request.query_params.get('metric', 'revenue')
+    if metric not in ('revenue', 'orders', 'clients'):
+        return Response(
+            {"error": f"Invalid metric '{metric}'. Must be 'revenue', 'orders', or 'clients'."},
+            status=400
+        )
+    
+    range_param = request.query_params.get('range', '30d')
+    range_to_days = {
+        '7d': 7,
+        '30d': 30,
+        '90d': 90,
+        '1y': 365,
+    }
+    days = range_to_days.get(range_param, 30)
+    
+    try:
+        data = get_analytics_time_series(chef, metric=metric, days=days)
+        
+        # Calculate total
+        total = sum(point['value'] for point in data)
+        
+        return Response({
+            "metric": metric,
+            "range": range_param,
+            "data": data,
+            "total": total
+        })
+    except Exception as e:
+        logger.exception(f"Error fetching analytics time series for chef {chef.id}: {e}")
+        return Response(
+            {"error": "Failed to fetch analytics data. Please try again."},
+            status=500
+        )
 

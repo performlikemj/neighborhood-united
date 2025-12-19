@@ -3200,14 +3200,14 @@ def api_get_chef_meals_by_postal_code(request):
         user = request.user
         
         # Check if user has an address with postal code
-        if not hasattr(user, 'address') or not user.address.input_postalcode:
+        if not hasattr(user, 'address') or not user.address or not user.address.normalized_postalcode:
             return Response({
                 'status': 'error',
                 'message': 'User does not have a postal code set in their profile',
                 'code': 'missing_postal_code'
             }, status=400)
-        
-        user_postal_code = user.address.input_postalcode
+
+        user_postal_code = user.address.normalized_postalcode
         
         # Get query parameters
         meal_type = request.query_params.get('meal_type')

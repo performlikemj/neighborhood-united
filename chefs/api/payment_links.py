@@ -33,6 +33,40 @@ logger = logging.getLogger(__name__)
 # Set Stripe API key
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
+# Zero-decimal currencies (amount is not in cents but whole units)
+ZERO_DECIMAL_CURRENCIES = {
+    'bif', 'clp', 'djf', 'gnf', 'jpy', 'kmf', 'krw', 'mga', 'pyg', 
+    'rwf', 'ugx', 'vnd', 'vuv', 'xaf', 'xof', 'xpf'
+}
+
+# Currency symbols mapping
+CURRENCY_SYMBOLS = {
+    'usd': '$', 'eur': '€', 'gbp': '£', 'jpy': '¥', 'cny': '¥',
+    'krw': '₩', 'inr': '₹', 'rub': '₽', 'brl': 'R$', 'aud': 'A$',
+    'cad': 'C$', 'chf': 'CHF', 'hkd': 'HK$', 'sgd': 'S$', 'sek': 'kr',
+    'nok': 'kr', 'dkk': 'kr', 'pln': 'zł', 'thb': '฿', 'mxn': 'MX$',
+    'nzd': 'NZ$', 'zar': 'R', 'php': '₱', 'idr': 'Rp', 'myr': 'RM',
+    'vnd': '₫', 'twd': 'NT$', 'aed': 'د.إ', 'sar': '﷼', 'ils': '₪',
+    'try': '₺', 'cop': 'COL$', 'clp': 'CLP$', 'ars': 'AR$', 'pen': 'S/',
+}
+
+
+def format_currency(amount_cents, currency='usd'):
+    """
+    Format amount in cents to a display string with currency symbol.
+    Handles zero-decimal currencies like JPY.
+    """
+    currency_lower = (currency or 'usd').lower()
+    symbol = CURRENCY_SYMBOLS.get(currency_lower, currency_lower.upper() + ' ')
+    
+    if currency_lower in ZERO_DECIMAL_CURRENCIES:
+        # Zero-decimal currencies: amount is already in whole units
+        return f"{symbol}{amount_cents:,}"
+    else:
+        # Standard currencies: convert cents to main unit
+        amount = amount_cents / 100
+        return f"{symbol}{amount:,.2f}"
+
 
 def _get_chef_or_403(request):
     """Get the Chef instance for the authenticated user."""
@@ -64,7 +98,7 @@ def _serialize_payment_link(link):
             'email_verified': link.lead.email_verified if link.lead else True,
         } if link.lead or link.customer else None,
         'amount_cents': link.amount_cents,
-        'amount_display': f"${link.amount_cents / 100:.2f}",
+        'amount_display': format_currency(link.amount_cents, link.currency),
         'currency': link.currency.upper(),
         'description': link.description,
         'status': link.status,
@@ -189,9 +223,13 @@ def _create_payment_link(request, chef):
         
         # Validate required fields
         amount_cents = data.get('amount_cents')
-        if not amount_cents or amount_cents < 50:
+        currency = data.get('currency', 'usd').lower()
+        # Minimum amount varies by currency - Stripe requires 50 cents for most currencies
+        min_amount = 1 if currency in ZERO_DECIMAL_CURRENCIES else 50
+        if not amount_cents or amount_cents < min_amount:
+            min_display = format_currency(min_amount, currency)
             return Response(
-                {"error": "Amount must be at least $0.50 (50 cents)."},
+                {"error": f"Amount must be at least {min_display}."},
                 status=400
             )
         
@@ -313,12 +351,15 @@ def _create_stripe_payment_link(chef, payment_link, destination_account_id):
         currency=payment_link.currency,
     )
     
-    # Calculate platform fee
+    # Calculate platform fee as a fixed amount (application_fee_percent only works with recurring prices)
     platform_fee_percent = get_platform_fee_percentage()
+    platform_fee_cents = 0
+    if platform_fee_percent > 0:
+        platform_fee_cents = int(payment_link.amount_cents * platform_fee_percent / 100)
     
     # Build the return URL
     frontend_url = os.getenv('STREAMLIT_URL', 'http://localhost:8501')
-    success_url = f"{frontend_url}/payment-success?link_id={payment_link.id}"
+    success_url = f"{frontend_url}/payment-success?link_id={payment_link.id}&session_id={{CHECKOUT_SESSION_ID}}"
     
     # Create the payment link with transfer to connected account
     payment_link_params = {
@@ -337,9 +378,9 @@ def _create_stripe_payment_link(chef, payment_link, destination_account_id):
         },
     }
     
-    # Add application fee if platform fee is configured
-    if platform_fee_percent > 0:
-        payment_link_params['application_fee_percent'] = float(platform_fee_percent)
+    # Add application fee as fixed amount if platform fee is configured
+    if platform_fee_cents > 0:
+        payment_link_params['application_fee_amount'] = platform_fee_cents
     
     stripe_payment_link = stripe.PaymentLink.create(**payment_link_params)
     
@@ -490,7 +531,7 @@ def _send_payment_link_email(payment_link, chef, recipient_email):
         
         chef_name = chef.user.get_full_name() or chef.user.username
         recipient_name = payment_link.get_recipient_name()
-        amount_display = f"${payment_link.amount_cents / 100:.2f}"
+        amount_display = format_currency(payment_link.amount_cents, payment_link.currency)
         
         message_content = (
             f"Please send a payment request email to {recipient_name}. "
@@ -537,7 +578,7 @@ def _send_simple_payment_link_email(payment_link, chef, recipient_email):
     
     chef_name = chef.user.get_full_name() or chef.user.username
     recipient_name = payment_link.get_recipient_name()
-    amount_display = f"${payment_link.amount_cents / 100:.2f}"
+    amount_display = format_currency(payment_link.amount_cents, payment_link.currency)
     
     html_body = render_to_string('meals/chef_payment_link_email.html', {
         'recipient_name': recipient_name,
@@ -567,6 +608,7 @@ def payment_link_stats(request):
     GET /api/chefs/me/payment-links/stats/
     
     Returns summary statistics for the chef's payment links.
+    Amounts are filtered by the chef's default currency to avoid mixing currencies.
     
     Response:
     ```json
@@ -576,7 +618,9 @@ def payment_link_stats(request):
         "paid_count": 18,
         "expired_count": 2,
         "total_pending_amount_cents": 75000,
-        "total_paid_amount_cents": 450000
+        "total_paid_amount_cents": 450000,
+        "currency": "USD",
+        "default_currency": "usd"
     }
     ```
     """
@@ -595,20 +639,35 @@ def payment_link_stats(request):
             expires_at__lt=now
         ).update(status=ChefPaymentLink.Status.EXPIRED)
         
+        # Filter amounts by chef's default currency to avoid mixing currencies
+        default_currency = chef.default_currency or 'usd'
+        currency_filter = Q(currency=default_currency)
+        
         stats = ChefPaymentLink.objects.filter(chef=chef).aggregate(
             total_count=Count('id'),
             pending_count=Count('id', filter=Q(status=ChefPaymentLink.Status.PENDING)),
             paid_count=Count('id', filter=Q(status=ChefPaymentLink.Status.PAID)),
             expired_count=Count('id', filter=Q(status=ChefPaymentLink.Status.EXPIRED)),
             cancelled_count=Count('id', filter=Q(status=ChefPaymentLink.Status.CANCELLED)),
-            total_pending_amount_cents=Sum('amount_cents', filter=Q(status=ChefPaymentLink.Status.PENDING)),
-            total_paid_amount_cents=Sum('paid_amount_cents', filter=Q(status=ChefPaymentLink.Status.PAID)),
+            # Only sum amounts for payment links in the chef's default currency
+            total_pending_amount_cents=Sum(
+                'amount_cents', 
+                filter=Q(status=ChefPaymentLink.Status.PENDING) & currency_filter
+            ),
+            total_paid_amount_cents=Sum(
+                'paid_amount_cents', 
+                filter=Q(status=ChefPaymentLink.Status.PAID) & currency_filter
+            ),
         )
         
         # Handle None values
         for key in stats:
             if stats[key] is None:
                 stats[key] = 0
+        
+        # Include currency info so frontend can format correctly
+        stats['currency'] = default_currency.upper()
+        stats['default_currency'] = default_currency
         
         return Response(stats)
         
@@ -620,6 +679,150 @@ def payment_link_stats(request):
         )
 
 
+@api_view(['POST'])
+@permission_classes([])  # Allow unauthenticated - payer may not be a platform user
+def verify_payment_link(request, link_id):
+    """
+    POST /api/chefs/payment-links/{link_id}/verify/
+    
+    Verify and update payment link status by checking Stripe directly.
+    This serves as a fallback when webhooks fail or are delayed.
+    
+    Query Parameters:
+    - session_id: The Stripe checkout session ID from the success redirect
+    
+    Returns:
+    ```json
+    {
+        "status": "paid",
+        "payment_link_id": 123,
+        "amount_display": "$50.00",
+        "paid_at": "2025-12-19T14:30:00Z"
+    }
+    ```
+    """
+    session_id = request.query_params.get('session_id') or request.data.get('session_id')
+    
+    if not session_id:
+        return Response(
+            {"error": "session_id is required"},
+            status=400
+        )
+    
+    try:
+        # Get the payment link
+        payment_link = ChefPaymentLink.objects.select_related('chef').get(id=link_id)
+    except ChefPaymentLink.DoesNotExist:
+        return Response({"error": "Payment link not found"}, status=404)
+    
+    # If already paid, return success immediately
+    if payment_link.status == ChefPaymentLink.Status.PAID:
+        return Response({
+            "status": "paid",
+            "payment_link_id": payment_link.id,
+            "amount_display": format_currency(payment_link.amount_cents, payment_link.currency),
+            "paid_at": payment_link.paid_at.isoformat() if payment_link.paid_at else None,
+            "message": "Payment already confirmed"
+        })
+    
+    try:
+        # Retrieve the checkout session from Stripe
+        checkout_session = stripe.checkout.Session.retrieve(
+            session_id,
+            expand=['payment_intent']
+        )
+        
+        # Verify metadata matches this payment link
+        md = checkout_session.metadata or {}
+        if md.get('payment_link_id') != str(link_id):
+            logger.warning(
+                f"Session {session_id} payment_link_id mismatch: "
+                f"expected {link_id}, got {md.get('payment_link_id')}"
+            )
+            return Response(
+                {"error": "Session does not match this payment link"},
+                status=400
+            )
+        
+        # Check if payment was successful
+        if checkout_session.status == 'complete' and checkout_session.payment_status == 'paid':
+            from django.db import transaction
+            
+            with transaction.atomic():
+                # Re-fetch with lock to prevent race conditions
+                payment_link = ChefPaymentLink.objects.select_for_update().get(id=link_id)
+                
+                # Double-check it wasn't already updated
+                if payment_link.status == ChefPaymentLink.Status.PAID:
+                    return Response({
+                        "status": "paid",
+                        "payment_link_id": payment_link.id,
+                        "amount_display": format_currency(payment_link.amount_cents, payment_link.currency),
+                        "paid_at": payment_link.paid_at.isoformat() if payment_link.paid_at else None,
+                        "message": "Payment already confirmed"
+                    })
+                
+                # Update the payment link
+                payment_link.status = ChefPaymentLink.Status.PAID
+                payment_link.paid_at = timezone.now()
+                payment_link.stripe_checkout_session_id = session_id
+                
+                if checkout_session.payment_intent:
+                    pi = checkout_session.payment_intent
+                    if isinstance(pi, str):
+                        payment_link.stripe_payment_intent_id = pi
+                    else:
+                        payment_link.stripe_payment_intent_id = pi.id
+                
+                if checkout_session.amount_total:
+                    payment_link.paid_amount_cents = checkout_session.amount_total
+                
+                payment_link.save(update_fields=[
+                    'status', 'paid_at', 'stripe_checkout_session_id',
+                    'stripe_payment_intent_id', 'paid_amount_cents', 'updated_at'
+                ])
+                
+                logger.info(
+                    f"Payment link {link_id} verified and marked as paid via fallback. "
+                    f"Session: {session_id}"
+                )
+            
+            return Response({
+                "status": "paid",
+                "payment_link_id": payment_link.id,
+                "amount_display": format_currency(payment_link.amount_cents, payment_link.currency),
+                "paid_at": payment_link.paid_at.isoformat() if payment_link.paid_at else None,
+                "message": "Payment verified successfully"
+            })
+        
+        else:
+            # Payment not complete yet
+            return Response({
+                "status": payment_link.status,
+                "payment_link_id": payment_link.id,
+                "checkout_status": checkout_session.status,
+                "payment_status": checkout_session.payment_status,
+                "message": "Payment not yet completed"
+            })
+        
+    except stripe.error.InvalidRequestError as e:
+        logger.warning(f"Invalid Stripe session {session_id}: {e}")
+        return Response(
+            {"error": "Invalid or expired session"},
+            status=400
+        )
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error verifying payment link {link_id}: {e}")
+        return Response(
+            {"error": "Failed to verify payment with Stripe"},
+            status=500
+        )
+    except Exception as e:
+        logger.exception(f"Error verifying payment link {link_id}: {e}")
+        return Response(
+            {"error": "Failed to verify payment. Please try again."},
+            status=500
+        )
 
 
 

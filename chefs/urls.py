@@ -73,6 +73,7 @@ urlpatterns = [
     # Revenue & Analytics
     path('api/me/revenue/', analytics_api.revenue_breakdown, name='chef_revenue'),
     path('api/me/orders/upcoming/', analytics_api.upcoming_orders, name='chef_upcoming_orders'),
+    path('api/analytics/time-series/', analytics_api.time_series, name='chef_analytics_time_series'),
     
     # Lead Pipeline (CRM) - Contacts / Off-Platform Clients
     path('api/me/leads/', leads_api.lead_list, name='chef_leads'),
@@ -96,6 +97,9 @@ urlpatterns = [
     path('api/me/payment-links/stats/', payment_links_api.payment_link_stats, name='chef_payment_link_stats'),
     path('api/me/payment-links/<int:link_id>/', payment_links_api.payment_link_detail, name='chef_payment_link_detail'),
     path('api/me/payment-links/<int:link_id>/send/', payment_links_api.send_payment_link, name='chef_send_payment_link'),
+    
+    # Public payment link verification (for payers who may not be logged in)
+    path('api/payment-links/<int:link_id>/verify/', payment_links_api.verify_payment_link, name='verify_payment_link'),
     
     # Unified Clients View (All Clients - Platform + Manual)
     path('api/me/all-clients/', unified_api.unified_client_list, name='chef_all_clients'),

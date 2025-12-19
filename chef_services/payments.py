@@ -37,6 +37,12 @@ def create_service_checkout_session(service_order_id, customer_email=None):
         return False, {"message": str(exc), "status": "error"}
 
     return_urls = get_stripe_return_urls(success_path="", cancel_path="")
+    
+    # Ensure success_url includes session_id for payment verification
+    # This allows the frontend to verify payment status after Stripe redirects back
+    if 'success_url' in return_urls and '{CHECKOUT_SESSION_ID}' not in return_urls['success_url']:
+        separator = '&' if '?' in return_urls['success_url'] else '?'
+        return_urls['success_url'] = f"{return_urls['success_url']}{separator}session_id={{CHECKOUT_SESSION_ID}}"
 
     mode = 'subscription' if order.tier.is_recurring else 'payment'
     line_items = [{
@@ -132,8 +138,11 @@ def create_service_checkout_session(service_order_id, customer_email=None):
             order.stripe_session_id = session_id
             order.status = 'awaiting_payment'
             order.save(update_fields=['stripe_session_id', 'status'])
-    except Exception:
-        # Non-fatal; webhook will still process
-        pass
+    except Exception as e:
+        logger.error(
+            f"Failed to save checkout session {session_id} for order {service_order_id}: {e}",
+            exc_info=True
+        )
+        return False, {"message": "Failed to initialize checkout. Please try again.", "status": "error"}
 
     return True, {"session_id": session_id, "session_url": session_url}

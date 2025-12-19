@@ -4,6 +4,8 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 // Layout
 import NavBar from './components/NavBar.jsx'
 import ProtectedRoute from './components/ProtectedRoute.jsx'
+import CartButton from './components/CartButton.jsx'
+import CartSidebar from './components/CartSidebar.jsx'
 
 // Config
 import { FEATURES } from './config/features.js'
@@ -32,6 +34,7 @@ import RefundPolicy from './pages/RefundPolicy.jsx'
 import AccessDenied from './pages/AccessDenied.jsx'
 import NotFound from './pages/NotFound.jsx'
 import GetReady from './pages/GetReady.jsx'
+import PaymentSuccess from './pages/PaymentSuccess.jsx'
 
 // Client Portal Pages (Multi-Chef Support)
 import MyChefs from './pages/MyChefs.jsx'
@@ -46,6 +49,8 @@ export default function App(){
   return (
     <>
       <NavBar />
+      <CartButton />
+      <CartSidebar />
       <Routes>
         {/* Public routes */}
         <Route path="/" element={<Home />} />
@@ -61,6 +66,7 @@ export default function App(){
         <Route path="/terms" element={<Terms />} />
         <Route path="/refund-policy" element={<RefundPolicy />} />
         <Route path="/email-auth" element={<EmailAuth />} />
+        <Route path="/payment-success" element={<PaymentSuccess />} />
         <Route path="/403" element={<AccessDenied />} />
 
         {/* Protected routes - require authentication */}

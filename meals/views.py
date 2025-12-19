@@ -1868,15 +1868,15 @@ def get_user_postal_code(user):
     
     if postal_code is None:
         try:
-            if hasattr(user, 'address'):
-                postal_code = user.address.input_postalcode
+            if hasattr(user, 'address') and user.address:
+                postal_code = user.address.normalized_postalcode
                 # Cache for 1 day (86400 seconds) as this rarely changes
                 set(cache_key, postal_code, 86400)
                 logger.debug(f"Cached postal code for user {user.id}")
         except Exception as e:
             logger.error(f"Error fetching postal code for user {user.id}: {str(e)}")
             postal_code = None
-    
+
     return postal_code
 
 @api_view(['POST'])
@@ -2726,10 +2726,8 @@ def cancel_chef_meal_event(request, event_id):
 def browse_chef_meals(request):
     """Browse available chef meal events"""
     # Get the user's location/postal code to filter by service area
-    user_address = None
-    if hasattr(request.user, 'addresses'):
-        user_address = request.user.addresses.filter(is_default=True).first()
-    
+    user_address = getattr(request.user, 'address', None)
+
     # Get all upcoming meal events
     now = timezone.now()
     upcoming_events = ChefMealEvent.objects.filter(
@@ -2737,11 +2735,11 @@ def browse_chef_meals(request):
         status__in=['scheduled', 'open'],
         order_cutoff_time__gt=now
     ).select_related('chef', 'meal').order_by('event_date', 'event_time')
-    
+
     # Filter by postal code if the user has an address
-    if user_address and hasattr(user_address, 'postal_code'):
+    if user_address and user_address.normalized_postalcode:
         # Get all chefs serving this postal code
-        postal_code_obj = PostalCode.objects.filter(code=user_address.postal_code).first()
+        postal_code_obj = PostalCode.objects.filter(code=user_address.normalized_postalcode).first()
         if postal_code_obj:
             chef_ids = ChefPostalCode.objects.filter(
                 postal_code=postal_code_obj
@@ -2774,20 +2772,18 @@ def chef_meal_detail(request, event_id):
     
     # Check if user is in chef's service area
     user_can_order = True
-    user_address = None
-    if hasattr(request.user, 'addresses'):
-        user_address = request.user.addresses.filter(is_default=True).first()
-        
-        if user_address and hasattr(user_address, 'postal_code'):
-            postal_code_obj = PostalCode.objects.filter(code=user_address.postal_code).first()
-            if postal_code_obj:
-                chef_serves_area = ChefPostalCode.objects.filter(
-                    chef=event.chef,
-                    postal_code=postal_code_obj
-                ).exists()
-                
-                user_can_order = chef_serves_area
-    
+    user_address = getattr(request.user, 'address', None)
+
+    if user_address and user_address.normalized_postalcode:
+        postal_code_obj = PostalCode.objects.filter(code=user_address.normalized_postalcode).first()
+        if postal_code_obj:
+            chef_serves_area = ChefPostalCode.objects.filter(
+                chef=event.chef,
+                postal_code=postal_code_obj
+            ).exists()
+
+            user_can_order = chef_serves_area
+
     # Check if user already has an order for this event
     user_order = None
     if request.user.is_authenticated:
@@ -2827,21 +2823,19 @@ def place_chef_meal_order(request, event_id):
         return redirect('chef_meal_detail', event_id=event.id)
     
     # Check if user is in chef's service area
-    user_address = None
-    if hasattr(request.user, 'addresses'):
-        user_address = request.user.addresses.filter(is_default=True).first()
-        
-        if user_address and hasattr(user_address, 'postal_code'):
-            postal_code_obj = PostalCode.objects.filter(code=user_address.postal_code).first()
-            if postal_code_obj:
-                chef_serves_area = ChefPostalCode.objects.filter(
-                    chef=event.chef,
-                    postal_code=postal_code_obj
-                ).exists()
-                
-                if not chef_serves_area:
-                    messages.error(request, "This chef does not deliver to your area.")
-                    return redirect('chef_meal_detail', event_id=event.id)
+    user_address = getattr(request.user, 'address', None)
+
+    if user_address and user_address.normalized_postalcode:
+        postal_code_obj = PostalCode.objects.filter(code=user_address.normalized_postalcode).first()
+        if postal_code_obj:
+            chef_serves_area = ChefPostalCode.objects.filter(
+                chef=event.chef,
+                postal_code=postal_code_obj
+            ).exists()
+
+            if not chef_serves_area:
+                messages.error(request, "This chef does not deliver to your area.")
+                return redirect('chef_meal_detail', event_id=event.id)
     
     # Handle form submission
     if request.method == 'POST':
@@ -4078,6 +4072,16 @@ def api_stripe_webhook(request):
                 logger.error(f"Service order webhook handling failed: {svc_err}", exc_info=True)
             return Response({"status": "success"})
 
+        # Route chef payment links by metadata
+        if md.get('type') == 'chef_payment_link' and md.get('payment_link_id'):
+            try:
+                from chefs.webhooks import handle_payment_link_completed
+                handle_payment_link_completed(session)
+                logger.info(f"Delegated payment link webhook for payment_link_id={md.get('payment_link_id')}")
+            except Exception as pl_err:
+                logger.error(f"Payment link webhook handling failed: {pl_err}", exc_info=True)
+            return Response({"status": "success"})
+
         # Extract order details from metadata
         order_id = session.metadata.get('order_id')
         order_type = session.metadata.get('order_type', '')
@@ -4468,10 +4472,10 @@ def api_replace_meal_plan_meal(request):
                     }, status=status.HTTP_400_BAD_REQUEST)
 
                 # Validate the chef serves the user's postal code (if applicable)
-                if hasattr(user, 'address') and user.address and user.address.input_postalcode:
-                    postal_code = user.address.input_postalcode
+                if hasattr(user, 'address') and user.address and user.address.normalized_postalcode:
+                    postal_code = user.address.normalized_postalcode
                     country = user.address.country
-                    
+
                     chef_serves_area = ChefPostalCode.objects.filter(
                         chef=replacement_meal.chef,
                         postal_code__code=postal_code,

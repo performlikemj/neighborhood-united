@@ -10,6 +10,7 @@ import ChefPaymentLinks from '../components/ChefPaymentLinks.jsx'
 import SousChefWidget from '../components/SousChefWidget.jsx'
 import ServiceAreaPicker from '../components/ServiceAreaPicker.jsx'
 import ChatPanel from '../components/ChatPanel.jsx'
+import AnalyticsDrawer from '../components/AnalyticsDrawer.jsx'
 import { SousChefNotificationProvider } from '../contexts/SousChefNotificationContext.jsx'
 import { useMessaging } from '../context/MessagingContext.jsx'
 
@@ -454,6 +455,11 @@ export default function ChefDashboard(){
   const [notice, setNotice] = useState(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   
+  // Analytics drawer state
+  const [analyticsDrawer, setAnalyticsDrawer] = useState({ open: false, metric: null, title: '' })
+  const openAnalyticsDrawer = (metric, title) => setAnalyticsDrawer({ open: true, metric, title })
+  const closeAnalyticsDrawer = () => setAnalyticsDrawer(prev => ({ ...prev, open: false }))
+  
   // Handle navigation state changes (e.g., clicking messages icon from navbar)
   useEffect(() => {
     if (location.state?.tab && location.state.tab !== tab) {
@@ -529,6 +535,8 @@ export default function ChefDashboard(){
   const [serviceOrdersLoading, setServiceOrdersLoading] = useState(false)
   const [serviceCustomerDetails, setServiceCustomerDetails] = useState({})
   const serviceCustomerPending = useRef(new Set())
+  const [focusedOrderId, setFocusedOrderId] = useState(null)
+  const orderRefs = useRef({})
 
   const {
     connections,
@@ -842,6 +850,23 @@ export default function ChefDashboard(){
     fetchDetails()
     return ()=>{ cancelled = true }
   }, [serviceOrders, serviceCustomerDetails])
+
+  // Auto-scroll to focused order and clear highlight after delay
+  useEffect(()=>{
+    if (!focusedOrderId) return
+    // Wait for tab change and render
+    const scrollTimer = setTimeout(()=>{
+      const el = orderRefs.current[focusedOrderId]
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+    }, 100)
+    // Clear highlight after 2.5 seconds
+    const clearTimer = setTimeout(()=>{
+      setFocusedOrderId(null)
+    }, 2500)
+    return ()=>{ clearTimeout(scrollTimer); clearTimeout(clearTimer) }
+  }, [focusedOrderId])
 
   const loadServiceOfferings = async ()=>{
     setServiceLoading(true)
@@ -1387,24 +1412,50 @@ export default function ChefDashboard(){
 
           {/* Key Metrics Cards */}
           <div className="chef-metrics-grid">
-            <div className="chef-metric-card">
+            <div 
+              className="chef-metric-card clickable" 
+              onClick={() => openAnalyticsDrawer('revenue', 'Revenue')}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => e.key === 'Enter' && openAnalyticsDrawer('revenue', 'Revenue')}
+            >
               <div className="metric-label">Total Revenue</div>
               <div className="metric-value">
                 {toCurrencyDisplay(
-                  [...serviceOrders, ...orders].reduce((sum, o)=> sum + (Number(o.total_value_for_chef)||0), 0),
+                  [...serviceOrders, ...orders]
+                    .filter(o => ['confirmed', 'completed', 'paid'].includes(String(o.status || '').toLowerCase()))
+                    .reduce((sum, o)=> sum + (Number(o.total_value_for_chef)||0), 0),
                   'USD'
                 )}
               </div>
-              <div className="metric-change positive">+12% from last month</div>
+              <div className="metric-change positive">
+                <i className="fa-solid fa-chart-line" style={{marginRight:'.35rem', opacity:.7}} />
+                Click to view trends
+              </div>
             </div>
-            <div className="chef-metric-card">
+            <div 
+              className="chef-metric-card clickable"
+              onClick={() => openAnalyticsDrawer('clients', 'New Clients')}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => e.key === 'Enter' && openAnalyticsDrawer('clients', 'New Clients')}
+            >
               <div className="metric-label">Active Families</div>
               <div className="metric-value">
                 {new Set([...serviceOrders, ...orders].map(o=> o.customer).filter(Boolean)).size}
               </div>
-              <div className="metric-change positive">+3 this month</div>
+              <div className="metric-change positive">
+                <i className="fa-solid fa-chart-line" style={{marginRight:'.35rem', opacity:.7}} />
+                Click to view trends
+              </div>
             </div>
-            <div className="chef-metric-card">
+            <div 
+              className="chef-metric-card clickable"
+              onClick={() => openAnalyticsDrawer('orders', 'Orders')}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => e.key === 'Enter' && openAnalyticsDrawer('orders', 'Orders')}
+            >
               <div className="metric-label">Service Orders</div>
               <div className="metric-value">{serviceOrders.length}</div>
               <div className="metric-change">{serviceOrdersLoading ? 'Loading...' : `${serviceOrders.filter(o=> ['confirmed','completed'].includes(String(o.status||'').toLowerCase())).length} confirmed`}</div>
@@ -1452,8 +1503,18 @@ export default function ChefDashboard(){
                       const statusMeta = serviceStatusTone(order.status)
                       const detail = serviceCustomerDetails?.[order.customer] || null
                       const displayName = serviceCustomerName(order, detail)
+                      const orderId = order.id || order.order_id
                       return (
-                        <div key={order.id} className="card" style={{padding:'.6rem', background:'var(--surface-2)'}}>
+                        <div
+                          key={orderId}
+                          className="card clickable-order-card"
+                          style={{padding:'.6rem', background:'var(--surface-2)', cursor:'pointer', transition:'background 0.15s ease, transform 0.15s ease'}}
+                          onClick={()=>{ setFocusedOrderId(orderId); setTab('orders') }}
+                          onKeyDown={(e)=> e.key === 'Enter' && (setFocusedOrderId(orderId), setTab('orders'))}
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`View order from ${displayName}`}
+                        >
                           <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'.5rem'}}>
                             <div style={{fontWeight:700, fontSize:'.9rem'}}>{displayName}</div>
                             <span className="chip" style={{...statusMeta.style, fontSize:'.7rem', padding:'.1rem .4rem'}}>{statusMeta.label}</span>
@@ -3030,8 +3091,15 @@ export default function ChefDashboard(){
                   const detail = serviceCustomerDetails?.[order.customer] || serviceCustomerDetails?.[String(order.customer)] || null
                   const displayName = serviceCustomerName(order, detail)
                   const contactLine = detail?.email || order.customer_email || detail?.username || order.customer_username || ''
+                  const orderId = order.id || order.order_id
+                  const isFocused = focusedOrderId === orderId
                   return (
-                    <div key={order.id || order.order_id} className="card" style={{border:'1px solid var(--border)', borderRadius:'12px', padding:'.75rem', background:'var(--surface-2)'}}>
+                    <div
+                      key={orderId}
+                      ref={el => { orderRefs.current[orderId] = el }}
+                      className={`card${isFocused ? ' order-card-focused' : ''}`}
+                      style={{border:'1px solid var(--border)', borderRadius:'12px', padding:'.75rem', background:'var(--surface-2)'}}
+                    >
                       <div style={{display:'flex', justifyContent:'space-between', flexWrap:'wrap', gap:'.5rem'}}>
                         <div>
                           <div style={{fontWeight:700}}>{displayName}</div>
@@ -3091,6 +3159,14 @@ export default function ChefDashboard(){
           }}
         />
       )}
+
+      {/* Analytics Drawer */}
+      <AnalyticsDrawer
+        open={analyticsDrawer.open}
+        onClose={closeAnalyticsDrawer}
+        metric={analyticsDrawer.metric}
+        title={analyticsDrawer.title}
+      />
     </div>
     </SousChefNotificationProvider>
   )

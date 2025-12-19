@@ -110,7 +110,7 @@ class ChefPublicSerializer(serializers.ModelSerializer):
                   'serving_postalcodes', 'profile_pic_url', 'banner_url',
                   'review_summary', 'photos',
                   'is_verified', 'background_checked', 'insured', 'insurance_expiry',
-                  'food_handlers_cert', 'sous_chef_emoji', 'calendly_url']
+                  'food_handlers_cert', 'sous_chef_emoji', 'calendly_url', 'default_currency']
 
     def get_profile_pic_url(self, obj):
         # Safe check: ImageFieldFile.url raises if no file; rely on name to detect presence
@@ -147,7 +147,15 @@ class ChefPublicSerializer(serializers.ModelSerializer):
 class ChefMeUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Chef
-        fields = ['experience', 'bio', 'profile_pic', 'banner_image', 'is_on_break', 'sous_chef_emoji', 'calendly_url']
+        fields = ['experience', 'bio', 'profile_pic', 'banner_image', 'is_on_break', 'sous_chef_emoji', 'calendly_url', 'default_currency']
+    
+    def validate_default_currency(self, value):
+        if value:
+            value = value.lower().strip()
+            # Validate it's a valid 3-letter currency code
+            if len(value) != 3 or not value.isalpha():
+                raise serializers.ValidationError('Currency must be a 3-letter ISO 4217 code (e.g., usd, eur, jpy)')
+        return value
 
     def validate_calendly_url(self, value):
         if value:

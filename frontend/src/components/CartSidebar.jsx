@@ -1,50 +1,24 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useCart } from '../context/CartContext'
 import { useAuth } from '../context/AuthContext.jsx'
 import { api, buildErrorMessage } from '../api'
 import { rememberServiceOrderId } from '../utils/serviceOrdersStorage.js'
 
-function formatPrice(cents) {
-  if (typeof cents !== 'number') return '$0.00'
-  return `$${(cents / 100).toFixed(2)}`
+function formatPrice(cents, currency = 'USD') {
+  if (typeof cents !== 'number') {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(0)
+  }
+  // Zero-decimal currencies like JPY don't divide by 100
+  const zeroDecimal = ['JPY', 'KRW', 'VND', 'BIF', 'CLP', 'DJF', 'GNF', 'KMF', 'PYG', 'RWF', 'UGX', 'VUV', 'XAF', 'XOF', 'XPF']
+  const divisor = zeroDecimal.includes(currency.toUpperCase()) ? 1 : 100
+  return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(cents / divisor)
 }
 
 function normalizeInteger(value, fallback = 1) {
   const numeric = Number(value)
   if (!Number.isFinite(numeric) || numeric < 1) return fallback
   return Math.floor(numeric)
-}
-
-function normalizeAddressList(payload){
-  if (!payload) return []
-  if (Array.isArray(payload)) return payload
-  if (Array.isArray(payload?.results)) return payload.results
-  if (Array.isArray(payload?.data?.results)) return payload.data.results
-  if (Array.isArray(payload?.addresses)) return payload.addresses
-  if (Array.isArray(payload?.data?.addresses)) return payload.data.addresses
-  if (payload?.address && typeof payload.address === 'object') return [payload.address]
-  if (payload?.id != null) return [payload]
-  return []
-}
-
-function formatAddressSummary(address){
-  if (!address || typeof address !== 'object') return ''
-  const parts = []
-  const nickname = address.nickname || address.label || ''
-  const line1 = address.street || address.address_line1 || address.address1 || ''
-  const line2 = address.address_line2 || address.address2 || ''
-  const city = address.city || address.locality || ''
-  const state = address.state || address.region || address.province || ''
-  const postal = address.postal_code || address.postalcode || address.zip || address.zip_code || ''
-  const country = address.country_code || address.country || ''
-  if (nickname) parts.push(nickname)
-  const location = [line1, line2, city].filter(Boolean).join(', ')
-  if (location) parts.push(location)
-  const region = [state, postal].filter(Boolean).join(' ')
-  if (region) parts.push(region)
-  if (country) parts.push(String(country).toUpperCase())
-  if (!parts.length && address.id != null) return `Address #${address.id}`
-  return parts.join(' • ')
 }
 
 export default function CartSidebar() {
@@ -54,135 +28,81 @@ export default function CartSidebar() {
   const [error, setError] = useState('')
   const [itemErrors, setItemErrors] = useState({})
   const [validationDetails, setValidationDetails] = useState(null)
-  const [addresses, setAddresses] = useState([])
-  const [addressesLoading, setAddressesLoading] = useState(false)
-  const [addressesError, setAddressesError] = useState('')
-  const [addressForm, setAddressForm] = useState({ street:'', city:'', state:'', postal_code:'', country:'' })
-  const [addressFormState, setAddressFormState] = useState({ open:false, targetIndex:null })
-  const [addressFormError, setAddressFormError] = useState('')
-  const [addressSaving, setAddressSaving] = useState(false)
-  const addressesFetchedRef = useRef(false)
   const isDev = Boolean(import.meta?.env?.DEV)
-  const addressesCount = Array.isArray(addresses) ? addresses.length : 0
+
+  // Get user's profile address (single address per user)
+  const userAddress = useMemo(() => {
+    const addr = authUser?.address || null
+    if (isDev) {
+      console.log('[CartSidebar] User address from profile:', {
+        hasAddress: Boolean(addr),
+        addressId: addr?.id,
+        street: addr?.street,
+        city: addr?.city,
+        postal: addr?.postal_code || addr?.postalcode || addr?.input_postalcode,
+        country: addr?.country
+      })
+    }
+    return addr
+  }, [authUser?.address, isDev])
+
+  const addressId = useMemo(() => {
+    const id = userAddress?.id ?? userAddress?.address_id ?? null
+    return id != null ? String(id) : null
+  }, [userAddress])
+
+  // Check if address is complete enough for checkout (needs street)
+  const addressComplete = useMemo(() => {
+    if (!userAddress) return false
+    const hasStreet = Boolean(userAddress.street)
+    const hasCity = Boolean(userAddress.city)
+    const hasPostal = Boolean(userAddress.postal_code || userAddress.postalcode || userAddress.input_postalcode)
+    const complete = hasStreet && hasCity && hasPostal
+    if (isDev) {
+      console.log('[CartSidebar] Address completeness check:', { hasStreet, hasCity, hasPostal, complete })
+    }
+    return complete
+  }, [userAddress, isDev])
+
+  // Format address for display
+  const addressDisplay = useMemo(() => {
+    if (!userAddress) return null
+    const parts = []
+    if (userAddress.street) parts.push(userAddress.street)
+    if (userAddress.city) parts.push(userAddress.city)
+    const postal = userAddress.postal_code || userAddress.postalcode || userAddress.input_postalcode
+    if (postal) parts.push(postal)
+    if (userAddress.country) parts.push(String(userAddress.country).toUpperCase())
+    return parts.length > 0 ? parts.join(', ') : null
+  }, [userAddress])
   
-  if (isDev){
+  if (isDev) {
     console.debug('[CartSidebar] Render', {
       isOpen,
-      cartCount: Array.isArray(cart?.items) ? cart.items.length : 0
+      cartCount: Array.isArray(cart?.items) ? cart.items.length : 0,
+      addressId,
+      addressComplete
     })
   }
 
-  const defaultAddressId = useMemo(() => {
-    const addr = authUser?.address || {}
-    const id = addr.id ?? addr.address_id ?? null
-    if (isDev){
-      console.debug('[CartSidebar] defaultAddressId resolved', { id, hasAuthUser: Boolean(authUser) })
-    }
-    return id != null ? String(id) : null
-  }, [authUser])
-
-  const primaryAddressId = useMemo(()=>{
-    if (!Array.isArray(addresses) || addresses.length === 0) return null
-    const preferred = addresses.find(a => a?.is_default) || addresses[0]
-    return preferred?.id != null ? String(preferred.id) : null
-  }, [addresses])
-
-  const fetchAddresses = useCallback(async (force = false)=>{
-    const existingCount = addressesCount
-    const devStack = isDev
-      ? (new Error('fetchAddresses trace').stack || '').split('\n').slice(2, 7).map(line => line.trim())
-      : null
-    if (isDev){
-      console.debug('[CartSidebar] fetchAddresses invoked', {
-        force,
-        hasFetchedOnce: addressesFetchedRef.current,
-        existingCount,
-        stack: devStack
-      })
-    }
-    if (!force && addressesFetchedRef.current && existingCount > 0){
-      if (isDev){
-        console.debug('[CartSidebar] fetchAddresses skipped (cached)', {
-          hasFetchedOnce: addressesFetchedRef.current,
-          existingCount
-        })
-      }
-      return
-    }
-    setAddressesLoading(true)
-    setAddressesError('')
-    let nextCount = existingCount
-    try{
-      if (isDev){
-        console.debug('[CartSidebar] Fetching addresses from API…')
-      }
-      const resp = await api.get('/auth/api/address_details/')
-      const list = normalizeAddressList(resp?.data)
-      const filtered = Array.isArray(list) ? list.filter(Boolean) : []
-      if (isDev){
-        console.debug('[CartSidebar] fetchAddresses response received', {
-          rawType: Array.isArray(resp?.data) ? 'array' : typeof resp?.data,
-          normalizedCount: filtered.length
-        })
-      }
-      setAddresses(filtered)
-      nextCount = filtered.length
-    }catch(err){
-      if (isDev){
-        console.debug('[CartSidebar] fetchAddresses failed', {
-          status: err?.response?.status,
-          message: err?.message
-        })
-      }
-      const message = err?.response
-        ? buildErrorMessage(err.response.data, 'Unable to load saved addresses. Please try again.', err.response.status)
-        : (err?.message || 'Unable to load saved addresses. Please try again.')
-      setAddresses([])
-      setAddressesError(message)
-    }finally{
-      addressesFetchedRef.current = true  // Mark as fetched regardless of success/failure
-      if (isDev){
-        console.debug('[CartSidebar] fetchAddresses finished', {
-          loading: false,
-          finalCount: nextCount,
-          hasFetchedOnce: addressesFetchedRef.current
-        })
-      }
-      setAddressesLoading(false)
-    }
-  }, [addressesCount, isDev])
-
+  // Auto-fill addressId for service items when cart opens
   useEffect(() => {
     if (!Array.isArray(cart.items)) return
+    if (!addressId) return
     cart.items.forEach((item, index) => {
       if (item?.type !== 'service_tier') return
       const updates = {}
       if (!item.householdSize || normalizeInteger(item.householdSize) !== Number(item.householdSize)) {
         updates.householdSize = normalizeInteger(item.householdSize)
       }
-      if (!item.addressId && defaultAddressId) {
-        updates.addressId = defaultAddressId
+      if (!item.addressId && addressId) {
+        updates.addressId = addressId
       }
       if (Object.keys(updates).length > 0) {
         updateCartItem(index, updates)
       }
     })
-  }, [cart.items, defaultAddressId, updateCartItem])
-
-  useEffect(()=>{
-    if (!Array.isArray(addresses) || addresses.length === 0) return
-    if (!primaryAddressId) return
-    cart.items.forEach((item, index)=>{
-      if (item?.type !== 'service_tier') return
-      if (item.addressId != null && String(item.addressId).trim() !== '') return
-      updateCartItem(index, { addressId: primaryAddressId })
-    })
-  }, [addresses, cart.items, primaryAddressId, updateCartItem])
-
-  useEffect(()=>{
-    if (!isOpen) return
-    fetchAddresses()
-  }, [isOpen, fetchAddresses])
+  }, [cart.items, addressId, updateCartItem])
 
   if (!isOpen) return null
 
@@ -204,20 +124,6 @@ export default function CartSidebar() {
   }
 
   const handleServiceFieldChange = (index, field, value) => {
-    if (field === 'addressId' && value === '__add__'){
-      const base = authUser?.address || {}
-      setAddressForm({
-        street: '',
-        city: '',
-        state: '',
-        postal_code: '',
-        country: String(base.country || base.country_code || '').toUpperCase()
-      })
-      setAddressFormError('')
-      setAddressFormState({ open:true, targetIndex:index })
-      clearFieldError(index, 'address_id')
-      return
-    }
     updateCartItem(index, { [field]: value })
     clearFieldError(index, field)
     if (validationDetails) setValidationDetails(null)
@@ -259,56 +165,13 @@ export default function CartSidebar() {
     if (needsScheduleNotes && !item.scheduleNotes) {
       errors.schedule_preferences = 'Add scheduling preferences for this recurring service.'
     }
+    // Check address - need both addressId AND complete address (with street)
     if (!item.addressId) {
-      errors.address_id = 'Choose an address for this service.'
+      errors.address_id = 'Add your address in Profile to continue.'
+    } else if (!addressComplete) {
+      errors.address_id = 'Complete your address (including street) in Profile to continue.'
     }
     return errors
-  }
-
-  const submitNewAddress = async (event)=>{
-    if (event && typeof event.preventDefault === 'function') event.preventDefault()
-    if (addressSaving) return
-    setAddressFormError('')
-    const normalized = {
-      street: (addressForm.street || '').trim(),
-      city: (addressForm.city || '').trim(),
-      state: (addressForm.state || '').trim(),
-      postal_code: (addressForm.postal_code || '').trim(),
-      country: (addressForm.country || '').trim()
-    }
-    if (!normalized.street || !normalized.city || !normalized.postal_code || !normalized.country){
-      setAddressFormError('Please complete street, city, postal code, and country to add a new address.')
-      return
-    }
-    setAddressSaving(true)
-    try{
-      const resp = await api.post('/auth/api/address_details/', normalized)
-      const created = resp?.data || null
-      await fetchAddresses(true)
-      const newId = created?.id ?? created?.address_id ?? null
-      if (newId != null && typeof addressFormState.targetIndex === 'number'){
-        updateCartItem(addressFormState.targetIndex, { addressId: String(newId) })
-        clearFieldError(addressFormState.targetIndex, 'address_id')
-      }
-      setAddressFormState({ open:false, targetIndex:null })
-      setAddressForm({ street:'', city:'', state:'', postal_code:'', country:'' })
-      try{
-        window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text:'Address added.', tone:'success' } }))
-      }catch{}
-    }catch(err){
-      const message = err?.response
-        ? buildErrorMessage(err.response.data, 'Unable to add address.', err.response.status)
-        : (err?.message || 'Unable to add address.')
-      setAddressFormError(message)
-    }finally{
-      setAddressSaving(false)
-    }
-  }
-
-  const cancelAddressForm = ()=>{
-    setAddressFormState({ open:false, targetIndex:null })
-    setAddressForm({ street:'', city:'', state:'', postal_code:'', country:'' })
-    setAddressFormError('')
   }
 
   const handleCheckout = async () => {
@@ -340,10 +203,48 @@ export default function CartSidebar() {
 
         for (const serviceItem of serviceItems) {
           const indexInCart = cart.items.indexOf(serviceItem)
-          if (!serviceItem.orderId) {
-            const err = new Error('Service item is missing a draft order. Remove it from your cart and add it again.')
-            err._cartItemIndex = indexInCart
-            throw err
+          
+          // Lazy order creation: create the order now if it doesn't exist
+          let orderId = serviceItem.orderId
+          if (!orderId) {
+            try {
+              const createPayload = {
+                offering_id: serviceItem.offering_id,
+                tier_id: serviceItem.tier_id,
+                household_size: normalizeInteger(serviceItem.householdSize)
+              }
+              if (serviceItem.addressId) {
+                const addrNumeric = Number(serviceItem.addressId)
+                createPayload.address_id = Number.isFinite(addrNumeric) ? addrNumeric : serviceItem.addressId
+              }
+              if (serviceItem.serviceDate) createPayload.service_date = serviceItem.serviceDate
+              if (serviceItem.serviceStartTime) createPayload.service_start_time = serviceItem.serviceStartTime
+              if (serviceItem.durationMinutes) createPayload.duration_minutes = Number(serviceItem.durationMinutes)
+              if (serviceItem.specialRequests) createPayload.special_requests = serviceItem.specialRequests
+              if (serviceItem.scheduleNotes) {
+                createPayload.schedule_preferences = { notes: serviceItem.scheduleNotes }
+              }
+              
+              const createResp = await api.post('/services/orders/', createPayload)
+              const createdOrder = createResp?.data || {}
+              orderId = createdOrder?.id
+              
+              if (!orderId) {
+                const err = new Error('Failed to create order. Please try again.')
+                err._cartItemIndex = indexInCart
+                throw err
+              }
+              
+              // Update cart item with the new orderId for potential retry
+              updateCartItem(indexInCart, { 
+                orderId, 
+                orderStatus: createdOrder.status || 'draft' 
+              })
+              rememberServiceOrderId(orderId)
+            } catch (err) {
+              err._cartItemIndex = indexInCart
+              throw err
+            }
           }
 
           const payload = {
@@ -367,10 +268,11 @@ export default function CartSidebar() {
 
           let updatedOrder = null
           try{
-            const updateResp = await api.patch(`/services/orders/${serviceItem.orderId}/update/`, payload)
+            const updateResp = await api.patch(`/services/orders/${orderId}/update/`, payload)
             updatedOrder = updateResp?.data || null
             if (updatedOrder) {
               updateCartItem(indexInCart, {
+                orderId,
                 serviceDate: updatedOrder.service_date ?? serviceItem.serviceDate,
                 serviceStartTime: updatedOrder.service_start_time ?? serviceItem.serviceStartTime,
                 durationMinutes: updatedOrder.duration_minutes ?? serviceItem.durationMinutes,
@@ -382,14 +284,14 @@ export default function CartSidebar() {
                 orderStatus: updatedOrder.status || serviceItem.orderStatus || 'draft'
               })
             }
-            rememberServiceOrderId(serviceItem.orderId)
+            rememberServiceOrderId(orderId)
           }catch(err){
             err._cartItemIndex = indexInCart
             throw err
           }
 
           try{
-            const checkoutResp = await api.post(`/services/orders/${serviceItem.orderId}/checkout/`, {})
+            const checkoutResp = await api.post(`/services/orders/${orderId}/checkout/`, {})
             const checkoutData = checkoutResp?.data || {}
             if (checkoutData?.validation_errors) {
               setValidationDetails(checkoutData.validation_errors)
@@ -404,6 +306,8 @@ export default function CartSidebar() {
             if (checkoutData?.session_id) {
               try { localStorage.setItem('lastServiceCheckoutSessionId', String(checkoutData.session_id)) } catch {}
             }
+            // Save order ID so CustomerOrders page can verify payment after redirect
+            try { localStorage.setItem('lastServiceOrderId', String(orderId)) } catch {}
             const sessionUrl = checkoutData?.session_url || checkoutData?.url
             if (sessionUrl) {
               redirectUrl = sessionUrl
@@ -470,7 +374,9 @@ export default function CartSidebar() {
   }
 
   const renderCartItem = (item, index) => {
-    console.log('[CartSidebar] Rendering cart item', { index, type: item.type, addressId: item.addressId, item })
+    if (isDev) {
+      console.log('[CartSidebar] Rendering cart item', { index, type: item.type, addressId: item.addressId })
+    }
     
     if (item.type === 'service_tier') {
       return (
@@ -531,63 +437,49 @@ export default function CartSidebar() {
                 </label>
               </div>
             ) : null}
-            <label style={{ display: 'flex', flexDirection: 'column', gap: '.25rem', fontSize: '.85rem' }}>
+            
+            {/* Service Address - Read-only display with link to Profile */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '.25rem', fontSize: '.85rem' }}>
               <span>Service address</span>
-              {(() => {
-                const currentAddressId = item.addressId ?? ''
-                const availableIds = addresses.map(a => String(a?.id || '')).filter(Boolean)
-                console.log('[CartSidebar] Address dropdown state:', { 
-                  currentAddressId, 
-                  availableIds, 
-                  addressesCount: addresses.length,
-                  addressesLoading,
-                  addressesError 
-                })
-                return null
-              })()}
-              <select
-                value={item.addressId ?? ''}
-                onChange={(e) => handleServiceFieldChange(index, 'addressId', e.target.value)}
-                style={{ padding: '.45rem', borderRadius: '6px', border: fieldError(index, 'address_id') ? '1px solid #c0392b' : '1px solid var(--border-subtle)' }}
-              >
-                <option value="">Select an address…</option>
-                {addresses.map(addr => {
-                  const id = addr?.id != null ? String(addr.id) : null
-                  if (!id) return null
-                  return (
-                    <option key={id} value={id}>
-                      {formatAddressSummary(addr)}
-                    </option>
-                  )
-                })}
-                <option value="__add__">+ Add new address</option>
-              </select>
-              {addressesLoading && <span className="muted" style={{ fontSize: '.75rem' }}>Loading addresses…</span>}
-              {addressesError && <span style={{ color: '#c0392b', fontSize: '.75rem' }}>{addressesError}</span>}
-              {fieldError(index, 'address_id') && <span style={{ color: '#c0392b', fontSize: '.75rem' }}>{fieldError(index, 'address_id')}</span>}
-              {!addressesLoading && !addressesError && addresses.length === 0 && (
-                <span className="muted" style={{ fontSize: '.75rem' }}>You haven’t saved any addresses yet. Add one below to keep checkout moving.</span>
+              {addressDisplay ? (
+                <div style={{ 
+                  padding: '.45rem .6rem', 
+                  borderRadius: '6px', 
+                  border: fieldError(index, 'address_id') ? '1px solid #c0392b' : '1px solid var(--border-subtle)',
+                  background: 'var(--surface-2, #f5f5f5)',
+                  fontSize: '.85rem'
+                }}>
+                  {addressDisplay}
+                  {!addressComplete && (
+                    <div style={{ marginTop: '.35rem', color: '#c0392b', fontSize: '.75rem' }}>
+                      Missing street address for checkout
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ 
+                  padding: '.45rem .6rem', 
+                  borderRadius: '6px', 
+                  border: '1px solid #c0392b',
+                  background: 'var(--surface-2, #f5f5f5)',
+                  color: '#666',
+                  fontSize: '.85rem'
+                }}>
+                  No address saved
+                </div>
               )}
-              <button
-                type="button"
-                className="btn btn-link"
-                onClick={() => {
-                  const base = authUser?.address || {}
-                  setAddressForm({
-                    street: '',
-                    city: '',
-                    state: '',
-                    postal_code: '',
-                    country: String(base.country || base.country_code || '').toUpperCase()
-                  })
-                  setAddressFormError('')
-                  setAddressFormState({ open:true, targetIndex:index })
-                }}
-                style={{ alignSelf:'flex-start', padding:0, fontSize:'.8rem' }}
+              {fieldError(index, 'address_id') && (
+                <span style={{ color: '#c0392b', fontSize: '.75rem' }}>{fieldError(index, 'address_id')}</span>
+              )}
+              <Link 
+                to="/profile" 
+                onClick={closeCart}
+                style={{ alignSelf: 'flex-start', fontSize: '.8rem', color: 'var(--primary, #16a34a)' }}
               >
-                Add new address
-              </button>
-            </label>
+                {addressDisplay ? 'Edit address in Profile' : 'Add address in Profile'} →
+              </Link>
+            </div>
+            
             <label style={{ display: 'flex', flexDirection: 'column', gap: '.25rem', fontSize: '.85rem' }}>
               <span>Special requests (optional)</span>
               <textarea
@@ -710,15 +602,15 @@ export default function CartSidebar() {
                 {error}
               </div>
             )}
-            <button className="btn btn-outline btn-block" onClick={clearCart} style={{ marginTop: '.5rem' }}>
+            <button type="button" className="btn btn-outline btn-block" onClick={clearCart} style={{ marginTop: '.5rem' }}>
               Clear Cart
             </button>
             {checkingOut ? (
-              <button className="btn btn-primary btn-block" disabled style={{ marginTop: '.5rem' }}>
+              <button type="button" className="btn btn-primary btn-block" disabled style={{ marginTop: '.5rem' }}>
                 Processing…
               </button>
             ) : (
-              <button className="btn btn-primary btn-block" onClick={handleCheckout} style={{ marginTop: '.5rem' }}>
+              <button type="button" className="btn btn-primary btn-block" onClick={handleCheckout} style={{ marginTop: '.5rem' }}>
                 Proceed to Checkout
               </button>
             )}
@@ -727,71 +619,6 @@ export default function CartSidebar() {
                 Some required details are missing. Update the highlighted fields above, then try again.
               </div>
             ) : null}
-            {addressFormState.open && (
-              <div className="card" style={{ marginTop: '1rem', background: 'var(--surface-2)', padding: '.75rem' }}>
-                <h3 style={{ marginTop: 0, fontSize: '1rem' }}>Add a new address</h3>
-                <form onSubmit={submitNewAddress} style={{ display: 'flex', flexDirection: 'column', gap: '.6rem' }}>
-                  <label style={{ display:'flex', flexDirection:'column', gap:'.25rem', fontSize:'.85rem' }}>
-                    <span>Street address</span>
-                    <input
-                      className="input"
-                      value={addressForm.street}
-                      onChange={(e)=> setAddressForm(prev => ({ ...prev, street: e.target.value }))}
-                      placeholder="123 Main St"
-                    />
-                  </label>
-                  <label style={{ display:'flex', flexDirection:'column', gap:'.25rem', fontSize:'.85rem' }}>
-                    <span>City</span>
-                    <input
-                      className="input"
-                      value={addressForm.city}
-                      onChange={(e)=> setAddressForm(prev => ({ ...prev, city: e.target.value }))}
-                      placeholder="City"
-                    />
-                  </label>
-                  <div style={{ display:'flex', gap:'.6rem', flexWrap:'wrap' }}>
-                    <label style={{ flex:'1 1 120px', display:'flex', flexDirection:'column', gap:'.25rem', fontSize:'.85rem' }}>
-                      <span>State / Region</span>
-                      <input
-                        className="input"
-                        value={addressForm.state}
-                        onChange={(e)=> setAddressForm(prev => ({ ...prev, state: e.target.value }))}
-                        placeholder="State"
-                      />
-                    </label>
-                    <label style={{ flex:'1 1 120px', display:'flex', flexDirection:'column', gap:'.25rem', fontSize:'.85rem' }}>
-                      <span>Postal code</span>
-                      <input
-                        className="input"
-                        value={addressForm.postal_code}
-                        onChange={(e)=> setAddressForm(prev => ({ ...prev, postal_code: e.target.value }))}
-                        placeholder="Postal code"
-                      />
-                    </label>
-                    <label style={{ flex:'1 1 120px', display:'flex', flexDirection:'column', gap:'.25rem', fontSize:'.85rem' }}>
-                      <span>Country</span>
-                      <input
-                        className="input"
-                        value={addressForm.country}
-                        onChange={(e)=> setAddressForm(prev => ({ ...prev, country: e.target.value }))}
-                        placeholder="US"
-                      />
-                    </label>
-                  </div>
-                  {addressFormError && (
-                    <div style={{ color:'#c0392b', fontSize:'.8rem' }}>{addressFormError}</div>
-                  )}
-                  <div style={{ display:'flex', gap:'.5rem', justifyContent:'flex-end' }}>
-                    <button type="button" className="btn btn-outline btn-sm" onClick={cancelAddressForm} disabled={addressSaving}>
-                      Cancel
-                    </button>
-                    <button type="submit" className="btn btn-primary btn-sm" disabled={addressSaving}>
-                      {addressSaving ? 'Saving…' : 'Save address'}
-                    </button>
-                  </div>
-                </form>
-              </div>
-            )}
           </div>
         )}
       </aside>

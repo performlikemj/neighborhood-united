@@ -5,7 +5,7 @@ import { useConnections } from '../hooks/useConnections.js'
 import { rememberServiceOrderId } from '../utils/serviceOrdersStorage.js'
 import { useAuth } from '../context/AuthContext.jsx'
 import { useCart } from '../context/CartContext.jsx'
-import { countryNameFromCode, codeFromCountryName } from '../utils/geo.js'
+import { COUNTRIES, countryNameFromCode, codeFromCountryName } from '../utils/geo.js'
 import MapPanel from '../components/MapPanel.jsx'
 import Carousel from '../components/Carousel.jsx'
 import MultiCarousel from '../components/MultiCarousel.jsx'
@@ -42,7 +42,40 @@ const EMPTY_BOOKING_FORM = {
   serviceStartTime: '',
   durationMinutes: '',
   specialRequests: '',
-  scheduleNotes: ''
+  scheduleNotes: '',
+  addressId: ''
+}
+
+function normalizeAddressList(payload){
+  if (!payload) return []
+  if (Array.isArray(payload)) return payload
+  if (Array.isArray(payload?.results)) return payload.results
+  if (Array.isArray(payload?.data?.results)) return payload.data.results
+  if (Array.isArray(payload?.addresses)) return payload.addresses
+  if (Array.isArray(payload?.data?.addresses)) return payload.data.addresses
+  if (payload?.address && typeof payload.address === 'object') return [payload.address]
+  if (payload?.id != null) return [payload]
+  return []
+}
+
+function formatAddressSummary(address){
+  if (!address || typeof address !== 'object') return ''
+  const parts = []
+  const nickname = address.nickname || address.label || ''
+  const line1 = address.street || address.address_line1 || address.address1 || ''
+  const line2 = address.address_line2 || address.address2 || ''
+  const city = address.city || address.locality || ''
+  const state = address.state || address.region || address.province || ''
+  const postal = address.postal_code || address.postalcode || address.zip || address.zip_code || ''
+  const country = address.country_code || address.country || ''
+  if (nickname) parts.push(nickname)
+  const location = [line1, line2, city].filter(Boolean).join(', ')
+  if (location) parts.push(location)
+  const region = [state, postal].filter(Boolean).join(' ')
+  if (region) parts.push(region)
+  if (country) parts.push(String(country).toUpperCase())
+  if (!parts.length && address.id != null) return `Address #${address.id}`
+  return parts.join(' • ')
 }
 
 const HALF_HOUR_TIMES = Array.from({ length: 48 }, (_, index) => {
@@ -165,6 +198,16 @@ export default function PublicChef(){
   const [bookingForm, setBookingForm] = useState({ ...EMPTY_BOOKING_FORM })
   const [bookingSubmitting, setBookingSubmitting] = useState(false)
   const [bookingError, setBookingError] = useState('')
+  const [bookingFieldErrors, setBookingFieldErrors] = useState({})
+  // Address state for inline booking form
+  const [bookingAddresses, setBookingAddresses] = useState([])
+  const [bookingAddressesLoading, setBookingAddressesLoading] = useState(false)
+  const [bookingAddressesError, setBookingAddressesError] = useState('')
+  const [bookingAddressForm, setBookingAddressForm] = useState({ street:'', city:'', state:'', postal_code:'', country:'' })
+  const [bookingAddressFormOpen, setBookingAddressFormOpen] = useState(false)
+  const [bookingAddressFormError, setBookingAddressFormError] = useState('')
+  const [bookingAddressSaving, setBookingAddressSaving] = useState(false)
+  const bookingAddressesFetchedRef = useRef(false)
   // Gallery infinite scroll
   const [visiblePhotos, setVisiblePhotos] = useState(12)
   const galleryRef = useRef(null)
@@ -298,6 +341,10 @@ export default function PublicChef(){
     setBookingTier(null)
     setBookingForm({ ...EMPTY_BOOKING_FORM })
     setBookingError('')
+    setBookingFieldErrors({})
+    setBookingAddressFormOpen(false)
+    setBookingAddressForm({ street:'', city:'', state:'', postal_code:'', country:'' })
+    setBookingAddressFormError('')
   }
 
   function closeBooking(){
@@ -305,7 +352,69 @@ export default function PublicChef(){
     resetBooking()
   }
 
-  function startServiceBooking(offering, tier){
+  async function fetchBookingAddresses(force = false){
+    if (!force && bookingAddressesFetchedRef.current && bookingAddresses.length > 0) return
+    setBookingAddressesLoading(true)
+    setBookingAddressesError('')
+    try{
+      const resp = await api.get('/auth/api/address_details/')
+      const list = normalizeAddressList(resp?.data)
+      const filtered = Array.isArray(list) ? list.filter(Boolean) : []
+      setBookingAddresses(filtered)
+      bookingAddressesFetchedRef.current = true
+      return filtered
+    }catch(err){
+      const message = err?.response
+        ? buildErrorMessage(err.response.data, 'Unable to load saved addresses.', err.response.status)
+        : (err?.message || 'Unable to load saved addresses.')
+      setBookingAddresses([])
+      setBookingAddressesError(message)
+      return []
+    }finally{
+      setBookingAddressesLoading(false)
+    }
+  }
+
+  async function submitBookingAddress(event){
+    if (event && typeof event.preventDefault === 'function') event.preventDefault()
+    if (bookingAddressSaving) return
+    setBookingAddressFormError('')
+    const normalized = {
+      street: (bookingAddressForm.street || '').trim(),
+      city: (bookingAddressForm.city || '').trim(),
+      state: (bookingAddressForm.state || '').trim(),
+      postal_code: (bookingAddressForm.postal_code || '').trim(),
+      country: (bookingAddressForm.country || '').trim()
+    }
+    if (!normalized.street || !normalized.city || !normalized.postal_code || !normalized.country){
+      setBookingAddressFormError('Please complete street, city, postal code, and country.')
+      return
+    }
+    setBookingAddressSaving(true)
+    try{
+      const resp = await api.post('/auth/api/address_details/', normalized)
+      const created = resp?.data || null
+      const addresses = await fetchBookingAddresses(true)
+      const newId = created?.id ?? created?.address_id ?? null
+      if (newId != null){
+        updateBookingField('addressId', String(newId))
+      }
+      setBookingAddressFormOpen(false)
+      setBookingAddressForm({ street:'', city:'', state:'', postal_code:'', country:'' })
+      try{
+        window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text:'Address added.', tone:'success' } }))
+      }catch{}
+    }catch(err){
+      const message = err?.response
+        ? buildErrorMessage(err.response.data, 'Unable to add address.', err.response.status)
+        : (err?.message || 'Unable to add address.')
+      setBookingAddressFormError(message)
+    }finally{
+      setBookingAddressSaving(false)
+    }
+  }
+
+  async function startServiceBooking(offering, tier){
     if (!offering || !tier) return
     if (bookingOffering?.id === offering?.id && bookingTier?.id === tier?.id){
       closeBooking()
@@ -326,44 +435,62 @@ export default function PublicChef(){
       ? Number(tier.duration_minutes)
       : (Number(offering?.default_duration_minutes) > 0 ? Number(offering.default_duration_minutes) : '')
     const defaultStartTime = getDefaultServiceTime(tier)
+    
+    // Fetch addresses and determine default
+    const addresses = await fetchBookingAddresses()
+    const defaultAddressId = authUser?.address?.id ?? authUser?.address_id ?? null
+    const primaryAddress = addresses.find(a => a?.is_default) || addresses[0]
+    const selectedAddressId = defaultAddressId ? String(defaultAddressId) : (primaryAddress?.id != null ? String(primaryAddress.id) : '')
+    
     setBookingOffering(offering)
     setBookingTier(tier)
+    setBookingFieldErrors({})
     setBookingForm({
       householdSize: defaultSize ? String(defaultSize) : '',
       serviceDate: '',
       serviceStartTime: defaultStartTime,
       durationMinutes: durationCandidate ? String(durationCandidate) : '',
       specialRequests: '',
-      scheduleNotes: ''
+      scheduleNotes: '',
+      addressId: selectedAddressId
     })
     setBookingError('')
   }
 
   function updateBookingField(field, value){
     setBookingForm(prev => ({ ...prev, [field]: value }))
+    // Clear field-specific error when field is updated
+    if (bookingFieldErrors[field]) {
+      setBookingFieldErrors(prev => {
+        const next = { ...prev }
+        delete next[field]
+        return next
+      })
+    }
   }
 
   async function submitBooking(e){
     if (e && typeof e.preventDefault === 'function') e.preventDefault()
     if (!bookingOffering || !bookingTier || bookingSubmitting) return
     setBookingError('')
+    setBookingFieldErrors({})
+
+    // Client-side validation
+    const fieldErrors = {}
 
     let householdSize = Number(bookingForm.householdSize)
     if (!Number.isFinite(householdSize)) householdSize = 0
     householdSize = Math.floor(householdSize)
     if (householdSize < 1){
-      setBookingError('Enter a household size of at least 1.')
-      return
+      fieldErrors.household_size = 'Enter a household size of at least 1.'
     }
     const tierMin = Number(bookingTier?.household_min)
     const tierMax = Number(bookingTier?.household_max)
     if (Number.isFinite(tierMin) && householdSize < tierMin){
-      setBookingError(`This tier starts at ${tierMin} people.`)
-      return
+      fieldErrors.household_size = `This tier starts at ${tierMin} people.`
     }
     if (Number.isFinite(tierMax) && tierMax > 0 && householdSize > tierMax){
-      setBookingError(`This tier supports up to ${tierMax} people.`)
-      return
+      fieldErrors.household_size = `This tier supports up to ${tierMax} people.`
     }
 
     const hasDate = Boolean(bookingForm.serviceDate)
@@ -371,17 +498,29 @@ export default function PublicChef(){
     const scheduleNotes = bookingForm.scheduleNotes.trim()
 
     if (hasTime && !isHalfHourTime(bookingForm.serviceStartTime)){
-      setBookingError('Choose a start time on the half hour (for example, 12:00 or 12:30).')
-      return
+      fieldErrors.service_start_time = 'Choose a start time on the half hour (for example, 12:00 or 12:30).'
     }
 
-    if (bookingRequiresDateTime && (!hasDate || !hasTime)){
-      setBookingError('Select a service date and start time for this tier.')
-      return
+    if (bookingRequiresDateTime && !hasDate){
+      fieldErrors.service_date = 'Service date is required.'
+    }
+    if (bookingRequiresDateTime && !hasTime){
+      fieldErrors.service_start_time = 'Start time is required.'
     }
 
     if (bookingNeedsScheduleChoice && !scheduleNotes && (!hasDate || !hasTime)){
-      setBookingError('Add scheduling preferences or provide a date and start time.')
+      fieldErrors.schedule_preferences = 'Add scheduling preferences or provide a date and start time.'
+    }
+
+    // Validate address
+    if (!bookingForm.addressId) {
+      fieldErrors.address = 'Please select a service address.'
+    }
+
+    // If there are validation errors, show them and stop
+    if (Object.keys(fieldErrors).length > 0) {
+      setBookingFieldErrors(fieldErrors)
+      setBookingError('Please fill in the required fields highlighted above.')
       return
     }
 
@@ -398,6 +537,11 @@ export default function PublicChef(){
     if (requests) payload.special_requests = requests
     if (scheduleNotes){
       payload.schedule_preferences = { notes: scheduleNotes }
+    }
+    // Add address_id to the payload
+    if (bookingForm.addressId) {
+      const addrNumeric = Number(bookingForm.addressId)
+      payload.address_id = Number.isFinite(addrNumeric) ? addrNumeric : bookingForm.addressId
     }
 
     setBookingSubmitting(true)
@@ -428,11 +572,18 @@ export default function PublicChef(){
       }
     }catch(err){
       let message = 'Unable to start checkout. Please try again.'
-      if (err?.response){
-        message = buildErrorMessage(err.response.data, message, err.response.status)
-      }else if (err?.message){
+      const respData = err?.response?.data || {}
+      
+      // Extract field-specific validation errors from backend
+      if (respData.validation_errors && typeof respData.validation_errors === 'object') {
+        setBookingFieldErrors(respData.validation_errors)
+        message = 'Please review and correct the highlighted fields.'
+      } else if (err?.response){
+        message = buildErrorMessage(respData, message, err.response.status)
+      } else if (err?.message){
         message = err.message
       }
+      
       setBookingError(message)
       if (typeof window !== 'undefined'){
         try{ window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: message, tone: 'error' } })) }catch{}
@@ -1135,16 +1286,26 @@ export default function PublicChef(){
                 </div>
               )}
 
-              {/* Primary Actions - Clean two-button layout */}
+              {/* Primary Actions - Relationship-aware buttons */}
               <div className="chef-hero-actions">
-                <a href="#services" className="btn btn-primary btn-lg">
-                  <i className="fa-solid fa-concierge-bell" style={{marginRight:'.5rem'}}></i>
-                  Book Services
-                </a>
-                <a href="#meals" className="btn btn-outline btn-lg" style={{background:'rgba(255,255,255,0.15)',borderColor:'rgba(255,255,255,0.4)',color:'#fff'}}>
-                  <i className="fa-solid fa-utensils" style={{marginRight:'.5rem'}}></i>
-                  View Menu
-                </a>
+                {connectionAccepted ? (
+                  <Link to={`/my-chefs/${chef?.id}`} className="btn btn-primary btn-lg">
+                    <i className="fa-solid fa-house-user" style={{marginRight:'.5rem'}}></i>
+                    Go to My Chef Hub
+                    <i className="fa-solid fa-arrow-right" style={{marginLeft:'.5rem'}}></i>
+                  </Link>
+                ) : (
+                  <>
+                    <a href="#services" className="btn btn-primary btn-lg">
+                      <i className="fa-solid fa-concierge-bell" style={{marginRight:'.5rem'}}></i>
+                      Book Services
+                    </a>
+                    <a href="#meals" className="btn btn-outline btn-lg" style={{background:'rgba(255,255,255,0.15)',borderColor:'rgba(255,255,255,0.4)',color:'#fff'}}>
+                      <i className="fa-solid fa-utensils" style={{marginRight:'.5rem'}}></i>
+                      View Menu
+                    </a>
+                  </>
+                )}
               </div>
 
               {/* Compact Trust & Info Row */}
@@ -1199,10 +1360,11 @@ export default function PublicChef(){
                 )}
                 <span className="sticky-name">{chef?.user?.username || 'Chef'}</span>
                 {connectionAccepted ? (
-                  <div className="sticky-add-btn connected">
+                  <Link to={`/my-chefs/${chef?.id}`} className="sticky-add-btn connected">
                     <i className="fa-solid fa-check"></i>
-                    <span>Connected</span>
-                  </div>
+                    <span>My Chef Hub</span>
+                    <i className="fa-solid fa-arrow-right" style={{marginLeft:'.25rem', fontSize:'.75rem'}}></i>
+                  </Link>
                 ) : connectionPending ? (
                   <div className="sticky-add-btn pending">
                     <i className="fa-solid fa-clock"></i>
@@ -1636,17 +1798,20 @@ export default function PublicChef(){
                                         className="btn btn-primary btn-sm"
                                         type="button"
                                         onClick={()=> addServiceToCart(offering, tier)}
+                                        title="Add to cart and fill in details in the cart sidebar"
                                       >
                                         <i className="fa-solid fa-cart-plus" style={{marginRight:'.35rem'}}></i>
-                                        Book this service tier
+                                        Add to Cart
                                       </button>
                                       <button
                                         className="btn btn-outline btn-sm"
                                         type="button"
                                         onClick={()=> startServiceBooking(offering, tier)}
                                         aria-expanded={isActiveTier}
+                                        title="Fill in booking details here and proceed directly to checkout"
                                       >
-                                        Book Now
+                                        <i className="fa-solid fa-bolt" style={{marginRight:'.35rem'}}></i>
+                                        {isActiveTier ? 'Close Form' : 'Quick Book'}
                                       </button>
                                     </div>
                                   </div>
@@ -1654,7 +1819,7 @@ export default function PublicChef(){
                                     <form onSubmit={submitBooking} style={{marginTop:'.75rem', display:'flex', flexDirection:'column', gap:'.5rem'}}>
                                       <div className="grid" style={{gridTemplateColumns:'repeat(auto-fit, minmax(180px,1fr))', gap:'.5rem'}}>
                                         <div>
-                                          <div className="label">Household size</div>
+                                          <div className="label">Household size <span style={{color:'#b00020'}}>*</span></div>
                                           <input
                                             className="input"
                                             type="number"
@@ -1662,26 +1827,37 @@ export default function PublicChef(){
                                             value={bookingForm.householdSize}
                                             onChange={e=> updateBookingField('householdSize', e.target.value)}
                                             required
+                                            style={{
+                                              border: bookingFieldErrors.household_size ? '1px solid #b00020' : undefined
+                                            }}
                                           />
+                                          {bookingFieldErrors.household_size && <span style={{color:'#b00020', fontSize:'.8rem', display:'block', marginTop:'.25rem'}}>{bookingFieldErrors.household_size}</span>}
                                         </div>
                                         <div>
-                                          <div className="label">Service date</div>
+                                          <div className="label">Service date {bookingRequiresDateTime && <span style={{color:'#b00020'}}>*</span>}</div>
                                           <input
                                             className="input"
                                             type="date"
                                             value={bookingForm.serviceDate}
                                             onChange={e=> updateBookingField('serviceDate', e.target.value)}
                                             required={bookingRequiresDateTime}
+                                            style={{
+                                              border: bookingFieldErrors.service_date ? '1px solid #b00020' : undefined
+                                            }}
                                           />
+                                          {bookingFieldErrors.service_date && <span style={{color:'#b00020', fontSize:'.8rem', display:'block', marginTop:'.25rem'}}>{bookingFieldErrors.service_date}</span>}
                                         </div>
                                         <div>
-                                          <div className="label">Start time</div>
+                                          <div className="label">Start time {bookingRequiresDateTime && <span style={{color:'#b00020'}}>*</span>}</div>
                                           <select
                                             className="select time-select"
                                             name="serviceStartTime"
                                             value={bookingForm.serviceStartTime || ''}
                                             onChange={e=> updateBookingField('serviceStartTime', e.target.value)}
                                             required={bookingRequiresDateTime}
+                                            style={{
+                                              border: bookingFieldErrors.service_start_time ? '1px solid #b00020' : undefined
+                                            }}
                                           >
                                             {!bookingRequiresDateTime && (
                                               <option value="">No preference</option>
@@ -1690,6 +1866,7 @@ export default function PublicChef(){
                                               <option key={time} value={time}>{formatHalfHourLabel(time)}</option>
                                             ))}
                                           </select>
+                                          {bookingFieldErrors.service_start_time && <span style={{color:'#b00020', fontSize:'.8rem', display:'block', marginTop:'.25rem'}}>{bookingFieldErrors.service_start_time}</span>}
                                         </div>
                                       </div>
                                       <div>
@@ -1703,15 +1880,146 @@ export default function PublicChef(){
                                         />
                                       </div>
                                       <div>
-                                        <div className="label">Scheduling preferences (optional)</div>
+                                        <div className="label">Scheduling preferences {bookingNeedsScheduleChoice ? <span style={{color:'#b00020'}}>*</span> : '(optional)'}</div>
                                         <textarea
                                           className="textarea"
                                           rows={2}
                                           value={bookingForm.scheduleNotes}
                                           onChange={e=> updateBookingField('scheduleNotes', e.target.value)}
                                           placeholder="Preferred weekday or cadence for recurring services"
+                                          style={{
+                                            border: bookingFieldErrors.schedule_preferences ? '1px solid #b00020' : undefined
+                                          }}
                                         />
+                                        {bookingFieldErrors.schedule_preferences && <span style={{color:'#b00020', fontSize:'.8rem', display:'block', marginTop:'.25rem'}}>{bookingFieldErrors.schedule_preferences}</span>}
                                       </div>
+                                      <div>
+                                        <div className="label">Service address <span style={{color:'#b00020'}}>*</span></div>
+                                        <select
+                                          className="select"
+                                          value={bookingForm.addressId || ''}
+                                          onChange={e => {
+                                            if (e.target.value === '__add__') {
+                                              const base = authUser?.address || {}
+                                              setBookingAddressForm({
+                                                street: '',
+                                                city: '',
+                                                state: '',
+                                                postal_code: '',
+                                                country: String(base.country || base.country_code || '').toUpperCase()
+                                              })
+                                              setBookingAddressFormError('')
+                                              setBookingAddressFormOpen(true)
+                                            } else {
+                                              updateBookingField('addressId', e.target.value)
+                                            }
+                                          }}
+                                          required
+                                          style={{
+                                            border: bookingFieldErrors.address ? '1px solid #b00020' : undefined
+                                          }}
+                                        >
+                                          <option value="">Select an address…</option>
+                                          {bookingAddresses.map(addr => {
+                                            const id = addr?.id != null ? String(addr.id) : null
+                                            if (!id) return null
+                                            return (
+                                              <option key={id} value={id}>
+                                                {formatAddressSummary(addr)}
+                                              </option>
+                                            )
+                                          })}
+                                          <option value="__add__">+ Add new address</option>
+                                        </select>
+                                        {bookingAddressesLoading && <span className="muted" style={{fontSize:'.8rem'}}>Loading addresses…</span>}
+                                        {bookingAddressesError && <span style={{color:'#b00020', fontSize:'.8rem'}}>{bookingAddressesError}</span>}
+                                        {bookingFieldErrors.address && <span style={{color:'#b00020', fontSize:'.8rem', display:'block', marginTop:'.25rem'}}>{bookingFieldErrors.address}</span>}
+                                        {!bookingAddressesLoading && !bookingAddressesError && bookingAddresses.length === 0 && (
+                                          <span className="muted" style={{fontSize:'.8rem', display:'block', marginTop:'.25rem'}}>No saved addresses. Add one below.</span>
+                                        )}
+                                      </div>
+                                      {bookingAddressFormOpen && (
+                                        <div className="card" style={{background:'var(--surface-2)', padding:'.75rem', marginTop:'.25rem'}}>
+                                          <div style={{fontWeight:600, marginBottom:'.5rem'}}>Add new address</div>
+                                          <div style={{display:'flex', flexDirection:'column', gap:'.5rem'}}>
+                                            <div>
+                                              <div className="label">Street address</div>
+                                              <input
+                                                className="input"
+                                                value={bookingAddressForm.street}
+                                                onChange={e => setBookingAddressForm(prev => ({ ...prev, street: e.target.value }))}
+                                                placeholder="123 Main St"
+                                              />
+                                            </div>
+                                            <div className="grid" style={{gridTemplateColumns:'1fr 1fr', gap:'.5rem'}}>
+                                              <div>
+                                                <div className="label">City</div>
+                                                <input
+                                                  className="input"
+                                                  value={bookingAddressForm.city}
+                                                  onChange={e => setBookingAddressForm(prev => ({ ...prev, city: e.target.value }))}
+                                                  placeholder="City"
+                                                />
+                                              </div>
+                                              <div>
+                                                <div className="label">State / Region</div>
+                                                <input
+                                                  className="input"
+                                                  value={bookingAddressForm.state}
+                                                  onChange={e => setBookingAddressForm(prev => ({ ...prev, state: e.target.value }))}
+                                                  placeholder="State"
+                                                />
+                                              </div>
+                                            </div>
+                                            <div className="grid" style={{gridTemplateColumns:'1fr 1fr', gap:'.5rem'}}>
+                                              <div>
+                                                <div className="label">Postal code</div>
+                                                <input
+                                                  className="input"
+                                                  value={bookingAddressForm.postal_code}
+                                                  onChange={e => setBookingAddressForm(prev => ({ ...prev, postal_code: e.target.value }))}
+                                                  placeholder="12345"
+                                                />
+                                              </div>
+                                              <div>
+                                                <div className="label">Country</div>
+                                                <select
+                                                  className="select"
+                                                  value={bookingAddressForm.country}
+                                                  onChange={e => setBookingAddressForm(prev => ({ ...prev, country: e.target.value }))}
+                                                >
+                                                  <option value="">Select country…</option>
+                                                  {COUNTRIES.map(c => (
+                                                    <option key={c.code} value={c.code}>
+                                                      {c.name} ({c.code})
+                                                    </option>
+                                                  ))}
+                                                </select>
+                                              </div>
+                                            </div>
+                                            {bookingAddressFormError && (
+                                              <div style={{color:'#b00020', fontSize:'.85rem'}}>{bookingAddressFormError}</div>
+                                            )}
+                                            <div style={{display:'flex', gap:'.5rem', justifyContent:'flex-end'}}>
+                                              <button
+                                                type="button"
+                                                className="btn btn-outline btn-sm"
+                                                onClick={() => {
+                                                  setBookingAddressFormOpen(false)
+                                                  setBookingAddressForm({ street:'', city:'', state:'', postal_code:'', country:'' })
+                                                  setBookingAddressFormError('')
+                                                }}
+                                                disabled={bookingAddressSaving}
+                                              >
+                                                Cancel
+                                              </button>
+                                              <button type="button" onClick={submitBookingAddress} className="btn btn-primary btn-sm" disabled={bookingAddressSaving}>
+                                                {bookingAddressSaving ? 'Saving…' : 'Save address'}
+                                              </button>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      )}
                                       {bookingNeedsScheduleChoice && (
                                         <div className="muted" style={{fontSize:'.85rem'}}>
                                           Add your preferred recurring cadence here, or provide a specific date and start time above.

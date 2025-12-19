@@ -436,10 +436,42 @@ class Command(BaseCommand):
                         admin_area=item['admin_area'],
                     )
         
-        # Update postal code counts on areas
-        self.stdout.write('  Updating postal code counts...')
-        for area in AdministrativeArea.objects.filter(country=country_code):
+        # Update postal code counts on areas (including counts from child areas)
+        # Process from bottom-up: wards/districts first, then cities, then prefectures
+        self.stdout.write('  Updating postal code counts (including child areas)...')
+        
+        # Get areas ordered by hierarchy depth (deepest first)
+        # Areas with parents are processed before their parents
+        areas = list(AdministrativeArea.objects.filter(country=country_code).select_related('parent'))
+        
+        # Sort by depth: areas with no children first (leaf nodes)
+        # We do this by processing areas that have no children in the current set first
+        area_ids_with_children = set(
+            AdministrativeArea.objects.filter(country=country_code, parent__isnull=False)
+            .values_list('parent_id', flat=True)
+        )
+        
+        # Leaf areas (no children) first, then parents
+        leaf_areas = [a for a in areas if a.id not in area_ids_with_children]
+        parent_areas = [a for a in areas if a.id in area_ids_with_children]
+        
+        # Process leaf areas first (they only have direct postal codes)
+        for area in leaf_areas:
             count = area.postal_codes.count()
+            if count != area.postal_code_count:
+                area.postal_code_count = count
+                area.save(update_fields=['postal_code_count'])
+        
+        # Process parent areas (they need to include children's postal codes)
+        # Sort by depth - areas with grandchildren should be processed after their children
+        # Simple approach: process areas with children multiple times won't hurt, 
+        # but we need level-2 before level-1
+        level2_areas = [a for a in parent_areas if a.parent is not None]
+        level1_areas = [a for a in parent_areas if a.parent is None]
+        
+        for area in level2_areas + level1_areas:
+            # Use get_all_postal_codes() to include children's postal codes
+            count = area.get_all_postal_codes().count()
             if count != area.postal_code_count:
                 area.postal_code_count = count
                 area.save(update_fields=['postal_code_count'])

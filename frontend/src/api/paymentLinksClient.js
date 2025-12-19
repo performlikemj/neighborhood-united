@@ -142,12 +142,26 @@ export async function getEmailVerificationStatus(leadId) {
 // =============================================================================
 
 /**
- * Format cents to dollars for display.
- * @param {number} cents - Amount in cents
- * @returns {string} Formatted amount (e.g., "$50.00")
+ * Format cents to currency for display using Intl.NumberFormat.
+ * @param {number} cents - Amount in cents (smallest currency unit)
+ * @param {string} currency - ISO 4217 currency code (e.g., 'USD', 'EUR', 'JPY')
+ * @returns {string} Formatted amount (e.g., "$50.00", "€50.00", "¥5000")
  */
-export function formatAmount(cents) {
-  return `$${(cents / 100).toFixed(2)}`
+export function formatAmount(cents, currency = 'USD') {
+  const currencyCode = (currency || 'USD').toUpperCase()
+  // Most currencies use 2 decimal places, but some like JPY use 0
+  const zeroDecimalCurrencies = ['JPY', 'KRW', 'VND', 'BIF', 'CLP', 'DJF', 'GNF', 'ISK', 'KMF', 'PYG', 'RWF', 'UGX', 'VUV', 'XAF', 'XOF', 'XPF']
+  const divisor = zeroDecimalCurrencies.includes(currencyCode) ? 1 : 100
+  
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency: currencyCode,
+    }).format(cents / divisor)
+  } catch {
+    // Fallback if currency code is invalid
+    return `${currencyCode} ${(cents / 100).toFixed(2)}`
+  }
 }
 
 /**

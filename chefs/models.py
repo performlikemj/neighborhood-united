@@ -11,6 +11,12 @@ class Chef(models.Model):
     bio = models.TextField(blank=True)
     # Simple availability flag: when True, the chef is temporarily not accepting orders
     is_on_break = models.BooleanField(default=False, help_text="Temporarily not accepting orders")
+    # Default currency for payment links and stats
+    default_currency = models.CharField(
+        max_length=3,
+        default='usd',
+        help_text="Default currency for payment links and stats (ISO 4217 code)"
+    )
     # Verification & compliance
     is_verified = models.BooleanField(default=False, help_text="Admin approval for platform listing")
     background_checked = models.BooleanField(default=False)

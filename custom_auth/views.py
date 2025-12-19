@@ -619,25 +619,48 @@ def user_details_view(request):
     serializer = CustomUserSerializer(request.user)
     return Response(serializer.data)
 
-@api_view(['GET'])
+@api_view(['GET', 'POST', 'PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 @throttle_classes([])
 def address_details_view(request):
     """
-    POTENTIALLY REDUNDANT: As of Dec 2024, address is now included in the
-    /auth/api/user_details/ response via CustomUserSerializer.get_address().
-    
-    This endpoint is kept for backwards compatibility but can be removed once
-    all clients have migrated to using user_details. Check for active usage
-    before removing.
+    GET: Retrieve user's address (also included in /auth/api/user_details/)
+    POST: Create address if none exists, or update existing
+    PUT/PATCH: Update existing address
     """
+    if request.method == 'GET':
+        try:
+            address = request.user.address
+        except Address.DoesNotExist:
+            return Response({"detail": "Address not found for this user."}, status=404)
+        
+        serializer = AddressSerializer(address)
+        return Response(serializer.data)
+    
+    # POST, PUT, PATCH - create or update address
     try:
         address = request.user.address
+        # Update existing address
+        serializer = AddressSerializer(address, data=request.data, partial=True)
     except Address.DoesNotExist:
-        return Response({"detail": "Address not found for this user."})
+        # Create new address
+        data = {**request.data, 'user': request.user.id}
+        serializer = AddressSerializer(data=data)
     
-    serializer = AddressSerializer(address)
-    return Response(serializer.data)
+    if serializer.is_valid():
+        is_new = not serializer.instance  # True if creating new address
+        address = serializer.save()
+        # Return address with ID for frontend to use
+        return Response({
+            'id': address.id,
+            'street': address.street,
+            'city': address.city,
+            'state': address.state,
+            'postal_code': address.input_postalcode,
+            'country': str(address.country) if address.country else None,
+        }, status=201 if is_new else 200)
+    
+    return Response(serializer.errors, status=400)
 
 @api_view(['GET', 'POST'])
 @permission_classes([IsAuthenticated])

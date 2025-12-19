@@ -1594,8 +1594,8 @@ def find_existing_meal(
     from django.db.models import F
     
     user_postal_code = None
-    if hasattr(user, 'address'):
-        user_postal_code = user.address.input_postalcode
+    if hasattr(user, 'address') and user.address:
+        user_postal_code = user.address.normalized_postalcode
         user_country = user.address.country if hasattr(user.address, 'country') else None
     current_date = timezone.now().date()
         

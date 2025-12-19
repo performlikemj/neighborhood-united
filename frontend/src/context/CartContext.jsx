@@ -1,5 +1,4 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
-import { api } from '../api'
 import { rememberServiceOrderId } from '../utils/serviceOrdersStorage.js'
 
 const CartContext = createContext()
@@ -60,39 +59,9 @@ export function CartProvider({ children }) {
     return Math.floor(numeric)
   }
 
-  async function ensureServiceOrder(item){
-    const orderPayload = {
-      offering_id: item.offering_id,
-      household_size: normalizeHouseholdSize(item.householdSize || item.household_size || 1)
-    }
-    if (item.tier_id != null) orderPayload.tier_id = item.tier_id
-    if (item.specialRequests) orderPayload.special_requests = item.specialRequests
-    if (item.scheduleNotes) orderPayload.schedule_preferences = { notes: item.scheduleNotes }
-    if (item.durationMinutes) orderPayload.duration_minutes = item.durationMinutes
-    if (item.serviceDate) orderPayload.service_date = item.serviceDate
-    if (item.serviceStartTime) orderPayload.service_start_time = item.serviceStartTime
-    const resp = await api.post('/services/orders/', orderPayload)
-    const order = resp?.data || {}
-    if (order?.id == null) {
-      throw new Error('Order created but missing id from response.')
-    }
-    rememberServiceOrderId(order.id)
-    return {
-      orderId: order.id,
-      orderStatus: order.status || 'draft',
-      serviceDate: order.service_date || '',
-      serviceStartTime: order.service_start_time || '',
-      durationMinutes: order.duration_minutes ?? null,
-      specialRequests: order.special_requests || '',
-      scheduleNotes: order.schedule_preferences?.notes || '',
-      schedulePreferences: order.schedule_preferences || null,
-      householdSize: normalizeHouseholdSize(order.household_size || item.householdSize || 1),
-      addressId: order.address_id ?? order.address ?? item.addressId ?? null
-    }
-  }
-
   // Add item to cart (service tier, meal event, or custom item)
-  const addToCart = useCallback(async (item, chefInfo) => {
+  // Note: Order creation is deferred until checkout (lazy creation)
+  const addToCart = useCallback((item, chefInfo) => {
     const { username, id: chefId } = chefInfo || {}
     const normalizedUsername = username ? String(username).trim() : null
 
@@ -120,12 +89,9 @@ export function CartProvider({ children }) {
       if (existingItem?.orderId) {
         enrichedItem = { ...existingItem, ...enrichedItem, orderId: existingItem.orderId, orderStatus: existingItem.orderStatus }
       }
-      if (!enrichedItem.orderId) {
-        const ensured = await ensureServiceOrder(enrichedItem)
-        enrichedItem = { ...enrichedItem, ...ensured }
-      } else {
-        enrichedItem.householdSize = normalizeHouseholdSize(enrichedItem.householdSize || enrichedItem.household_size || 1)
-      }
+      // Normalize household size
+      enrichedItem.householdSize = normalizeHouseholdSize(enrichedItem.householdSize || enrichedItem.household_size || 1)
+      // Set defaults for cart item (order will be created at checkout)
       if (!enrichedItem.price) enrichedItem.price = item.price || 0
       if (!enrichedItem.serviceDate) enrichedItem.serviceDate = ''
       if (!enrichedItem.serviceStartTime) enrichedItem.serviceStartTime = ''
@@ -135,7 +101,6 @@ export function CartProvider({ children }) {
       if (!enrichedItem.needsScheduleNotes) enrichedItem.needsScheduleNotes = Boolean(item.needsScheduleNotes)
       if (!enrichedItem.serviceType) enrichedItem.serviceType = item.serviceType || null
       if (!enrichedItem.tierRecurring) enrichedItem.tierRecurring = Boolean(item.tierRecurring)
-      if (!enrichedItem.orderStatus) enrichedItem.orderStatus = 'draft'
     }
 
     setCart(prev => {

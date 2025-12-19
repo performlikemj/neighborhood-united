@@ -444,8 +444,8 @@ def generate_instacart_link(user_id: int, meal_plan_id: int, postal_code: str = 
         if not postal_code:
             try:
                 # The postal code is stored in the Address model which has a one-to-one relationship with CustomUser
-                if hasattr(user, 'address'):
-                    postal_code = user.address.input_postalcode
+                if hasattr(user, 'address') and user.address:
+                    postal_code = user.address.normalized_postalcode
                     if postal_code:
                         logger.info(f"Using postal code {postal_code} from user's address for Instacart")
                     else:

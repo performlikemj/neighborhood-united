@@ -13,6 +13,30 @@ if [ "$DEBUG" = "False" ] || [ "$DEBUG" = "false" ]; then
     echo "🔄 Running database migrations..."
     python manage.py migrate --noinput
     
+    # Import GeoNames data if administrative areas table is empty
+    # This is a one-time import of geographic reference data for the service area picker
+    # Supported countries: JP (Japan), US (United States), GB (UK), CA (Canada), AU (Australia), etc.
+    echo "🗺️ Checking if GeoNames data needs to be imported..."
+    NEEDS_COUNT_UPDATE=false
+    for COUNTRY in JP US; do
+        python manage.py shell -c "
+from local_chefs.models import AdministrativeArea
+if AdministrativeArea.objects.filter(country='$COUNTRY').count() == 0:
+    print('NEEDS_IMPORT')
+" 2>/dev/null | grep -q "NEEDS_IMPORT" && {
+            echo "📍 Importing GeoNames data for $COUNTRY (this may take a few minutes)..."
+            python manage.py import_geonames $COUNTRY || echo "⚠️ GeoNames import for $COUNTRY failed"
+            NEEDS_COUNT_UPDATE=true
+            echo "✅ GeoNames import for $COUNTRY complete!"
+        } || echo "✅ GeoNames data for $COUNTRY already exists, skipping"
+    done
+    
+    # Update postal code counts if any imports happened (ensures prefectures show totals)
+    if [ "$NEEDS_COUNT_UPDATE" = true ]; then
+        echo "📊 Updating area postal code counts..."
+        python manage.py update_area_counts || echo "⚠️ Count update failed"
+    fi
+    
     # Collect static files to Azure Blob Storage with optimizations
     echo "📤 Collecting static files to Azure Blob Storage..."
     # Use --clear to remove old files and reduce conflicts

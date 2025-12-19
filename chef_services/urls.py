@@ -21,6 +21,7 @@ urlpatterns = [
     path('orders/', views.create_order, name='service_create_order'),
     path('orders/<int:order_id>/', views.get_order, name='service_get_order'),
     path('orders/<int:order_id>/update/', views.update_order, name='service_update_order'),
-    path('orders/<int:order_id>/checkout', views.checkout_order, name='service_checkout_order'),
-    path('orders/<int:order_id>/cancel', views.cancel_order, name='service_cancel_order'),
+    path('orders/<int:order_id>/checkout/', views.checkout_order, name='service_checkout_order'),
+    path('orders/<int:order_id>/verify-payment/', views.verify_service_payment, name='service_verify_payment'),
+    path('orders/<int:order_id>/cancel/', views.cancel_order, name='service_cancel_order'),
 ]

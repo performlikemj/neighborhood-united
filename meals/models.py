@@ -166,7 +166,7 @@ class PostalCodeManager(models.Manager):
     def for_user(self, user):
         if user.is_authenticated:
             try:
-                user_postal_code = user.address.input_postalcode
+                user_postal_code = user.address.normalized_postalcode
                 user_country = user.address.country
                 if user_postal_code and user_country:
                     # Get all chefs that serve this postal code with the user's country

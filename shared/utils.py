@@ -319,7 +319,7 @@ def find_nearby_supermarkets(request):
     if not latitude or not longitude:
         try:
             from shared.pydantic_models import GeoCoordinates
-            user_address_string = f"The user's postal code is {address.input_postalcode} in the country of {address.country}"
+            user_address_string = f"The user's postal code is {address.normalized_postalcode} in the country of {address.country}"
             response = get_groq_client().chat.completions.create(
                 model=settings.GROQ_MODEL,
                 messages=[
@@ -1142,7 +1142,7 @@ def get_user_info(request):
             return ({'status': 'error', 'message': 'Chefs in their chef role are not allowed to use the assistant.'})
 
         address = Address.objects.get(user=user)
-        postal_code = address.input_postalcode if address.input_postalcode else 'Not provided'
+        postal_code = address.normalized_postalcode if address.normalized_postalcode else 'Not provided'
         if isinstance(postal_code, str) and postal_code.isdigit():
             postal_code = int(postal_code)
 
@@ -2450,7 +2450,7 @@ def auth_search_chefs(request, query):
 
     # Retrieve user's primary postal code from Address model
     user_addresses = Address.objects.filter(user=user.id)
-    user_postal_code = user_addresses[0].input_postalcode if user_addresses.exists() else None
+    user_postal_code = user_addresses[0].normalized_postalcode if user_addresses.exists() else None
     
     # Retrieve chefs based on cosine similarity with the query embedding
     similar_chefs = Chef.objects.annotate(

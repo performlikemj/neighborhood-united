@@ -2479,10 +2479,10 @@ class MealPlanningAssistant:
         """
         try:
             # Get user's postal code from their address
-            if not hasattr(user, 'address') or not user.address or not user.address.input_postalcode:
+            if not hasattr(user, 'address') or not user.address or not user.address.normalized_postalcode:
                 return "No local chef information available (address not set)."
 
-            postal_code = user.address.input_postalcode
+            postal_code = user.address.normalized_postalcode
 
             # Find chefs that serve this postal code
             chef_ids = ChefPostalCode.objects.filter(

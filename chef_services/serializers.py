@@ -201,6 +201,8 @@ class ChefServiceOrderSerializer(serializers.ModelSerializer):
     customer_first_name = serializers.CharField(source='customer.first_name', read_only=True)
     customer_last_name = serializers.CharField(source='customer.last_name', read_only=True)
     customer_email = serializers.EmailField(source='customer.email', read_only=True)
+    total_value_for_chef = serializers.SerializerMethodField()
+    currency = serializers.SerializerMethodField()
 
     class Meta:
         model = ChefServiceOrder
@@ -211,9 +213,22 @@ class ChefServiceOrderSerializer(serializers.ModelSerializer):
             'stripe_session_id', 'stripe_subscription_id', 'is_subscription',
             'status', 'created_at', 'updated_at',
             'offering_title', 'service_type', 'chef_id',
-            'customer_username', 'customer_first_name', 'customer_last_name', 'customer_email'
+            'customer_username', 'customer_first_name', 'customer_last_name', 'customer_email',
+            'total_value_for_chef', 'currency'
         ]
         read_only_fields = ['customer', 'chef', 'stripe_session_id', 'stripe_subscription_id', 'is_subscription', 'status', 'created_at', 'updated_at']
+
+    def get_total_value_for_chef(self, obj):
+        """Calculate total value from tier price (in dollars, not cents)."""
+        if obj.tier and obj.tier.desired_unit_amount_cents:
+            return float(obj.tier.desired_unit_amount_cents) / 100
+        return 0
+
+    def get_currency(self, obj):
+        """Get currency from tier."""
+        if obj.tier and obj.tier.currency:
+            return obj.tier.currency.upper()
+        return 'USD'
 
 
 # Public variants to avoid exposing stripe_price_id in discovery endpoints

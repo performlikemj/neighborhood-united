@@ -498,3 +498,183 @@ def get_upcoming_orders(chef, limit: int = 20) -> list[dict[str, Any]]:
     return results[:limit]
 
 
+def get_analytics_time_series(chef, metric: str, days: int = 30) -> list[dict[str, Any]]:
+    """
+    Generate time-series data for analytics charts.
+    
+    Args:
+        chef: Chef instance
+        metric: 'revenue', 'orders', or 'clients'
+        days: Number of days to include (7, 30, 90, 365)
+    
+    Returns:
+        List of daily data points:
+        [{"date": "2025-12-01", "value": 150.00, "label": "Dec 1"}, ...]
+    """
+    now = timezone.now()
+    end_date = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+    start_date = (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    if metric == 'revenue':
+        return _get_revenue_time_series(chef, start_date, end_date, days)
+    elif metric == 'orders':
+        return _get_orders_time_series(chef, start_date, end_date, days)
+    elif metric == 'clients':
+        return _get_clients_time_series(chef, start_date, end_date, days)
+    else:
+        logger.warning(f"Unknown analytics metric: {metric}")
+        return []
+
+
+def _get_revenue_time_series(chef, start_date, end_date, days: int) -> list[dict]:
+    """Generate daily revenue data points."""
+    from django.db.models.functions import TruncDate
+    
+    # Get meal order revenue by day
+    meal_by_day = (
+        ChefMealOrder.objects
+        .filter(
+            meal_event__chef=chef,
+            status__in=['confirmed', 'completed'],
+            created_at__gte=start_date,
+            created_at__lte=end_date
+        )
+        .annotate(day=TruncDate('created_at'))
+        .values('day')
+        .annotate(total=Sum(F('price_paid') * F('quantity')))
+        .order_by('day')
+    )
+    
+    # Get service order revenue by day
+    service_by_day = (
+        ChefServiceOrder.objects
+        .filter(
+            chef=chef,
+            status__in=['confirmed', 'completed'],
+            created_at__gte=start_date,
+            created_at__lte=end_date
+        )
+        .annotate(day=TruncDate('created_at'))
+        .values('day')
+        .annotate(total=Sum('tier__desired_unit_amount_cents'))
+        .order_by('day')
+    )
+    
+    # Combine into a dict by date
+    revenue_by_date = {}
+    for item in meal_by_day:
+        if item['day']:
+            date_str = item['day'].strftime('%Y-%m-%d')
+            revenue_by_date[date_str] = float(item['total'] or 0)
+    
+    for item in service_by_day:
+        if item['day']:
+            date_str = item['day'].strftime('%Y-%m-%d')
+            cents = item['total'] or 0
+            revenue_by_date[date_str] = revenue_by_date.get(date_str, 0) + (cents / 100)
+    
+    # Generate all days in range
+    return _fill_date_range(start_date, days, revenue_by_date)
+
+
+def _get_orders_time_series(chef, start_date, end_date, days: int) -> list[dict]:
+    """Generate daily order count data points."""
+    from django.db.models.functions import TruncDate
+    
+    # Get meal order count by day
+    meal_by_day = (
+        ChefMealOrder.objects
+        .filter(
+            meal_event__chef=chef,
+            status__in=['confirmed', 'completed'],
+            created_at__gte=start_date,
+            created_at__lte=end_date
+        )
+        .annotate(day=TruncDate('created_at'))
+        .values('day')
+        .annotate(count=Count('id'))
+        .order_by('day')
+    )
+    
+    # Get service order count by day
+    service_by_day = (
+        ChefServiceOrder.objects
+        .filter(
+            chef=chef,
+            status__in=['confirmed', 'completed'],
+            created_at__gte=start_date,
+            created_at__lte=end_date
+        )
+        .annotate(day=TruncDate('created_at'))
+        .values('day')
+        .annotate(count=Count('id'))
+        .order_by('day')
+    )
+    
+    # Combine into a dict by date
+    orders_by_date = {}
+    for item in meal_by_day:
+        if item['day']:
+            date_str = item['day'].strftime('%Y-%m-%d')
+            orders_by_date[date_str] = item['count'] or 0
+    
+    for item in service_by_day:
+        if item['day']:
+            date_str = item['day'].strftime('%Y-%m-%d')
+            orders_by_date[date_str] = orders_by_date.get(date_str, 0) + (item['count'] or 0)
+    
+    return _fill_date_range(start_date, days, orders_by_date)
+
+
+def _get_clients_time_series(chef, start_date, end_date, days: int) -> list[dict]:
+    """Generate daily new client count data points."""
+    from django.db.models.functions import TruncDate
+    
+    # Get new accepted connections by day
+    connections_by_day = (
+        ChefCustomerConnection.objects
+        .filter(
+            chef=chef,
+            status=ChefCustomerConnection.STATUS_ACCEPTED,
+            responded_at__gte=start_date,
+            responded_at__lte=end_date
+        )
+        .annotate(day=TruncDate('responded_at'))
+        .values('day')
+        .annotate(count=Count('id'))
+        .order_by('day')
+    )
+    
+    clients_by_date = {}
+    for item in connections_by_day:
+        if item['day']:
+            date_str = item['day'].strftime('%Y-%m-%d')
+            clients_by_date[date_str] = item['count'] or 0
+    
+    return _fill_date_range(start_date, days, clients_by_date)
+
+
+def _fill_date_range(start_date, days: int, data_by_date: dict) -> list[dict]:
+    """Fill in all dates in range, using 0 for missing days."""
+    results = []
+    
+    for i in range(days):
+        current_date = start_date + timedelta(days=i)
+        date_str = current_date.strftime('%Y-%m-%d')
+        
+        # Format label based on range
+        if days <= 7:
+            label = current_date.strftime('%a')  # Mon, Tue, etc.
+        elif days <= 31:
+            label = current_date.strftime('%b %d')  # Dec 19
+        else:
+            label = current_date.strftime('%b %d')  # Dec 19
+        
+        results.append({
+            'date': date_str,
+            'value': data_by_date.get(date_str, 0),
+            'label': label
+        })
+    
+    return results
+

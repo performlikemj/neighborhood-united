@@ -313,6 +313,8 @@ export default function Profile(){
           <input className="input" value={form.email||''} onChange={set('email')} />
           <div className="label">Phone</div>
           <input className="input" value={form.phone||''} onChange={set('phone')} />
+          <div className="label">Street Address <span className="muted" style={{fontWeight:400}}>(optional, required for ordering)</span></div>
+          <input className="input" value={form.street||''} onChange={set('street')} placeholder={user?.address?.street ? user.address.street : '123 Main St'} />
           <div className="label">City</div>
           <input className="input" value={form.city||''} onChange={set('city')} placeholder={user?.address?.city ? user.address.city : ''} />
           <div className="label">Country</div>

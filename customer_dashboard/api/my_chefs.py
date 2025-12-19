@@ -281,8 +281,9 @@ def get_chef_catalog(request, chef_id):
     # Get user's postal code for service filtering
     user_postal_code = None
     if hasattr(request.user, 'address') and request.user.address:
-        user_postal_code = getattr(request.user.address, 'postal_code', None) or \
-                          getattr(request.user.address, 'postalcode', None)
+        # Address model uses normalized_postalcode (preferred) or original_postalcode
+        user_postal_code = getattr(request.user.address, 'normalized_postalcode', None) or \
+                          getattr(request.user.address, 'original_postalcode', None)
     
     # 1. Get chef's dishes
     dishes_qs = Dish.objects.filter(chef=chef).select_related('chef')

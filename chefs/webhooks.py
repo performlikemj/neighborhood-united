@@ -109,10 +109,11 @@ def _send_payment_confirmation(payment_link):
     """Send a payment confirmation notification to the chef."""
     try:
         from meals.meal_assistant_implementation import MealPlanningAssistant
+        from chefs.api.payment_links import format_currency
         
         chef = payment_link.chef
         recipient_name = payment_link.get_recipient_name()
-        amount_display = f"${payment_link.amount_cents / 100:.2f}"
+        amount_display = format_currency(payment_link.amount_cents, payment_link.currency)
         
         message_content = (
             f"Great news! {recipient_name} has completed their payment of {amount_display} "

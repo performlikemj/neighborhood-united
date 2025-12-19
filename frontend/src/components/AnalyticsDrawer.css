@@ -1,0 +1,516 @@
+/* Analytics Drawer - Slide-out panel */
+
+.analytics-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 300ms ease-out, visibility 300ms ease-out;
+  z-index: 999;
+}
+
+.analytics-drawer-backdrop.open {
+  opacity: 1;
+  visibility: visible;
+}
+
+.analytics-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 480px;
+  max-width: 100vw;
+  height: 100vh;
+  background: var(--surface, #fff);
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.15);
+  transform: translateX(100%);
+  transition: transform 300ms ease-out;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.analytics-drawer.open {
+  transform: translateX(0);
+}
+
+/* Header */
+.analytics-drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 1.5rem;
+  border-bottom: 1px solid var(--border-subtle, #e5e7eb);
+  flex-shrink: 0;
+}
+
+.drawer-title-section {
+  flex: 1;
+}
+
+.drawer-title {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text, #1f2937);
+}
+
+.drawer-total {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.total-value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--text, #1f2937);
+}
+
+.total-label {
+  font-size: 0.8rem;
+  color: var(--text-muted, #6b7280);
+}
+
+.total-skeleton {
+  display: inline-block;
+  width: 100px;
+  height: 2rem;
+  background: linear-gradient(90deg, var(--surface-2, #f3f4f6) 25%, var(--surface-3, #e5e7eb) 50%, var(--surface-2, #f3f4f6) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 4px;
+}
+
+.drawer-close-btn {
+  background: none;
+  border: none;
+  padding: 0.5rem;
+  cursor: pointer;
+  color: var(--text-muted, #6b7280);
+  font-size: 1.25rem;
+  border-radius: 8px;
+  transition: background 150ms, color 150ms;
+}
+
+.drawer-close-btn:hover {
+  background: var(--surface-2, #f3f4f6);
+  color: var(--text, #1f2937);
+}
+
+/* Controls */
+.analytics-drawer-controls {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border-subtle, #e5e7eb);
+  flex-shrink: 0;
+}
+
+.range-selector {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.range-btn {
+  padding: 0.5rem 1rem;
+  background: var(--surface-2, #f3f4f6);
+  border: 1px solid var(--border-subtle, #e5e7eb);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-muted, #6b7280);
+  cursor: pointer;
+  transition: all 150ms;
+}
+
+.range-btn:hover {
+  background: var(--surface-3, #e5e7eb);
+  color: var(--text, #1f2937);
+}
+
+.range-btn.active {
+  background: var(--primary, #10b981);
+  border-color: var(--primary, #10b981);
+  color: white;
+}
+
+/* Chart Container */
+.analytics-drawer-chart {
+  flex: 1;
+  padding: 1.5rem;
+  overflow: hidden;
+  min-height: 320px;
+}
+
+.chart-loading,
+.chart-error,
+.chart-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 300px;
+  gap: 1rem;
+  color: var(--text-muted, #6b7280);
+}
+
+.chart-skeleton {
+  width: 100%;
+  height: 300px;
+  background: linear-gradient(90deg, var(--surface-2, #f3f4f6) 25%, var(--surface-3, #e5e7eb) 50%, var(--surface-2, #f3f4f6) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 8px;
+}
+
+.chart-error i,
+.chart-empty i {
+  font-size: 2rem;
+  opacity: 0.5;
+}
+
+/* Tooltip */
+.analytics-tooltip {
+  background: var(--surface, #fff);
+  border: 1px solid var(--border-subtle, #e5e7eb);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.tooltip-label {
+  font-size: 0.8rem;
+  color: var(--text-muted, #6b7280);
+  margin-bottom: 0.25rem;
+}
+
+.tooltip-value {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+/* Footer */
+.analytics-drawer-footer {
+  padding: 1.5rem;
+  border-top: 1px solid var(--border-subtle, #e5e7eb);
+  flex-shrink: 0;
+}
+
+.insight-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+
+.insight-card {
+  text-align: center;
+  padding: 0.75rem;
+  background: var(--surface-2, #f3f4f6);
+  border-radius: 8px;
+}
+
+.insight-label {
+  font-size: 0.75rem;
+  color: var(--text-muted, #6b7280);
+  margin-bottom: 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.insight-value {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text, #1f2937);
+}
+
+/* Animations */
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* Mobile responsiveness */
+@media (max-width: 520px) {
+  .analytics-drawer {
+    width: 100vw;
+  }
+
+  .analytics-drawer-header {
+    padding: 1rem;
+  }
+
+  .analytics-drawer-controls {
+    padding: 0.75rem 1rem;
+  }
+
+  .analytics-drawer-chart {
+    padding: 1rem;
+  }
+
+  .analytics-drawer-footer {
+    padding: 1rem;
+  }
+
+  .insight-cards {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.5rem;
+  }
+
+  .insight-card {
+    padding: 0.5rem;
+  }
+
+  .insight-label {
+    font-size: 0.65rem;
+  }
+
+  .insight-value {
+    font-size: 0.85rem;
+  }
+
+  .range-btn {
+    padding: 0.4rem 0.75rem;
+    font-size: 0.8rem;
+  }
+}
+
+/* Clickable metric cards */
+.chef-metric-card.clickable {
+  cursor: pointer;
+  transition: transform 150ms, box-shadow 150ms;
+}
+
+.chef-metric-card.clickable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.chef-metric-card.clickable:active {
+  transform: translateY(0);
+}
+
+/* Visual indicator for clickable cards */
+.chef-metric-card.clickable::after {
+  content: '';
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  width: 1.25rem;
+  height: 1.25rem;
+  background: var(--surface-2, #f3f4f6);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
+  transition: opacity 150ms;
+}
+
+.chef-metric-card.clickable:hover::after {
+  opacity: 1;
+}
+
+/* ========================================
+   Dark Mode Support
+   ======================================== */
+
+/* Dark mode drawer background */
+@media (prefers-color-scheme: dark) {
+  .analytics-drawer {
+    background: var(--surface, #1a1a2e);
+    box-shadow: -4px 0 32px rgba(0, 0, 0, 0.5);
+  }
+
+  .analytics-drawer-header {
+    border-bottom-color: var(--border-subtle, #2d2d44);
+  }
+
+  .drawer-title {
+    color: var(--text, #f0f0f0);
+  }
+
+  .total-value {
+    color: var(--text, #f0f0f0);
+  }
+
+  .total-label {
+    color: var(--text-muted, #9ca3af);
+  }
+
+  .drawer-close-btn {
+    color: var(--text-muted, #9ca3af);
+  }
+
+  .drawer-close-btn:hover {
+    background: var(--surface-2, #2d2d44);
+    color: var(--text, #f0f0f0);
+  }
+
+  .analytics-drawer-controls {
+    border-bottom-color: var(--border-subtle, #2d2d44);
+  }
+
+  .range-btn {
+    background: var(--surface-2, #2d2d44);
+    border-color: var(--border-subtle, #3d3d5c);
+    color: var(--text-muted, #9ca3af);
+  }
+
+  .range-btn:hover {
+    background: var(--surface-3, #3d3d5c);
+    color: var(--text, #f0f0f0);
+  }
+
+  .analytics-tooltip {
+    background: var(--surface, #1a1a2e);
+    border-color: var(--border-subtle, #3d3d5c);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  }
+
+  .tooltip-label {
+    color: var(--text-muted, #9ca3af);
+  }
+
+  .analytics-drawer-footer {
+    border-top-color: var(--border-subtle, #2d2d44);
+  }
+
+  .insight-card {
+    background: var(--surface-2, #2d2d44);
+  }
+
+  .insight-label {
+    color: var(--text-muted, #9ca3af);
+  }
+
+  .insight-value {
+    color: var(--text, #f0f0f0);
+  }
+
+  .chart-loading,
+  .chart-error,
+  .chart-empty {
+    color: var(--text-muted, #9ca3af);
+  }
+
+  .chart-skeleton,
+  .total-skeleton {
+    background: linear-gradient(90deg, #2d2d44 25%, #3d3d5c 50%, #2d2d44 75%);
+    background-size: 200% 100%;
+  }
+}
+
+/* Also support dark class on body/html */
+html.dark .analytics-drawer,
+body.dark .analytics-drawer,
+[data-theme="dark"] .analytics-drawer {
+  background: var(--surface, #1a1a2e);
+  box-shadow: -4px 0 32px rgba(0, 0, 0, 0.5);
+}
+
+html.dark .analytics-drawer-header,
+body.dark .analytics-drawer-header,
+[data-theme="dark"] .analytics-drawer-header {
+  border-bottom-color: var(--border-subtle, #2d2d44);
+}
+
+html.dark .drawer-title,
+body.dark .drawer-title,
+[data-theme="dark"] .drawer-title,
+html.dark .total-value,
+body.dark .total-value,
+[data-theme="dark"] .total-value {
+  color: var(--text, #f0f0f0);
+}
+
+html.dark .total-label,
+body.dark .total-label,
+[data-theme="dark"] .total-label,
+html.dark .drawer-close-btn,
+body.dark .drawer-close-btn,
+[data-theme="dark"] .drawer-close-btn {
+  color: var(--text-muted, #9ca3af);
+}
+
+html.dark .drawer-close-btn:hover,
+body.dark .drawer-close-btn:hover,
+[data-theme="dark"] .drawer-close-btn:hover {
+  background: var(--surface-2, #2d2d44);
+  color: var(--text, #f0f0f0);
+}
+
+html.dark .analytics-drawer-controls,
+body.dark .analytics-drawer-controls,
+[data-theme="dark"] .analytics-drawer-controls {
+  border-bottom-color: var(--border-subtle, #2d2d44);
+}
+
+html.dark .range-btn,
+body.dark .range-btn,
+[data-theme="dark"] .range-btn {
+  background: var(--surface-2, #2d2d44);
+  border-color: var(--border-subtle, #3d3d5c);
+  color: var(--text-muted, #9ca3af);
+}
+
+html.dark .range-btn:hover,
+body.dark .range-btn:hover,
+[data-theme="dark"] .range-btn:hover {
+  background: var(--surface-3, #3d3d5c);
+  color: var(--text, #f0f0f0);
+}
+
+html.dark .analytics-tooltip,
+body.dark .analytics-tooltip,
+[data-theme="dark"] .analytics-tooltip {
+  background: var(--surface, #1a1a2e);
+  border-color: var(--border-subtle, #3d3d5c);
+}
+
+html.dark .tooltip-label,
+body.dark .tooltip-label,
+[data-theme="dark"] .tooltip-label {
+  color: var(--text-muted, #9ca3af);
+}
+
+html.dark .analytics-drawer-footer,
+body.dark .analytics-drawer-footer,
+[data-theme="dark"] .analytics-drawer-footer {
+  border-top-color: var(--border-subtle, #2d2d44);
+}
+
+html.dark .insight-card,
+body.dark .insight-card,
+[data-theme="dark"] .insight-card {
+  background: var(--surface-2, #2d2d44);
+}
+
+html.dark .insight-label,
+body.dark .insight-label,
+[data-theme="dark"] .insight-label {
+  color: var(--text-muted, #9ca3af);
+}
+
+html.dark .insight-value,
+body.dark .insight-value,
+[data-theme="dark"] .insight-value {
+  color: var(--text, #f0f0f0);
+}
+
+html.dark .chart-loading,
+body.dark .chart-loading,
+[data-theme="dark"] .chart-loading,
+html.dark .chart-error,
+body.dark .chart-error,
+[data-theme="dark"] .chart-error,
+html.dark .chart-empty,
+body.dark .chart-empty,
+[data-theme="dark"] .chart-empty {
+  color: var(--text-muted, #9ca3af);
+}

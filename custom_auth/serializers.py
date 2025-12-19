@@ -141,11 +141,13 @@ class CustomUserSerializer(serializers.ModelSerializer):
             if not address:
                 return None
             return {
+                'id': address.id,
                 'street': address.street,
                 'city': address.city,
                 'state': address.state,
                 'input_postalcode': address.input_postalcode,
                 'postalcode': address.input_postalcode,  # Alias for frontend compatibility
+                'postal_code': address.input_postalcode,  # Another common alias
                 'normalized_postalcode': address.normalized_postalcode,
                 'original_postalcode': address.original_postalcode,
                 'country': str(address.country) if address.country else None,
@@ -261,20 +263,31 @@ class CustomUserSerializer(serializers.ModelSerializer):
         return value
 
 class AddressSerializer(serializers.ModelSerializer):
-    user = serializers.PrimaryKeyRelatedField(queryset=CustomUser.objects.all(), write_only=True)
+    user = serializers.PrimaryKeyRelatedField(queryset=CustomUser.objects.all(), write_only=True, required=False)
     street = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     city = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     state = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     input_postalcode = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    # Accept postal_code as an alias for input_postalcode (frontend compatibility)
+    postal_code = serializers.CharField(required=False, allow_blank=True, allow_null=True, write_only=True)
     country = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
     class Meta:
         model = Address
-        fields = ['user', 'street', 'city', 'state', 'input_postalcode', 'country']
+        fields = ['id', 'user', 'street', 'city', 'state', 'input_postalcode', 'postal_code', 'country']
+
+    def validate(self, data):
+        # Handle postal_code alias - copy to input_postalcode if provided
+        if 'postal_code' in data and data['postal_code']:
+            data['input_postalcode'] = data.pop('postal_code')
+        elif 'postal_code' in data:
+            data.pop('postal_code')
+        return data
 
     def to_representation(self, instance):
         """
         Convert the country code back to the country name for output.
+        Also include postal_code alias for frontend compatibility.
         """
         representation = super().to_representation(instance)
         country_code = representation.get('country')
@@ -282,11 +295,13 @@ class AddressSerializer(serializers.ModelSerializer):
             # Replace the country code with the full name
             country_name = dict(countries).get(country_code, country_code)
             representation['country'] = country_name
+        # Add postal_code alias
+        representation['postal_code'] = representation.get('input_postalcode')
         return representation
 
     def create(self, validated_data):
         user = validated_data.get('user')
-        if Address.objects.filter(user=user).exists():
+        if user and Address.objects.filter(user=user).exists():
             raise serializers.ValidationError("An address for this user already exists.")
         return super().create(validated_data)
 

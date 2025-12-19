@@ -83,6 +83,12 @@ export default function MyChefs() {
           <p className="my-chefs-subtitle">
             Your personal chef connections
           </p>
+          <div className="hero-stats">
+            <div className="hero-stat">
+              <span className="hero-stat-value">{connectedChefs.length}</span>
+              <span className="hero-stat-label">{connectedChefs.length === 1 ? 'Chef' : 'Chefs'} Connected</span>
+            </div>
+          </div>
         </div>
       </header>
       

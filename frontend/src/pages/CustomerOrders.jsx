@@ -294,6 +294,13 @@ export default function CustomerOrders(){
   const [verifyingServiceId, setVerifyingServiceId] = useState(null)
   const [cancellingOrder, setCancellingOrder] = useState(null)
   const [searchParams] = useSearchParams()
+  
+  // Status filtering and pagination
+  const [statusFilter, setStatusFilter] = useState('active')
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
+  const [totalOrders, setTotalOrders] = useState(0)
+  const PAGE_SIZE = 10
   const {
     connections,
     pendingConnections,
@@ -321,53 +328,34 @@ export default function CustomerOrders(){
     setServiceLoading(true)
     setServiceError(null)
     try{
-      const resp = await api.get('/services/my/customer-orders/', { params: { page_size: 100 } })
+      const resp = await api.get('/services/my/customer-orders/', { 
+        params: { 
+          status: statusFilter, 
+          page: currentPage, 
+          page_size: PAGE_SIZE 
+        } 
+      })
       let orders = []
       const payload = resp?.data
       if (Array.isArray(payload)){
         orders = payload
+        setTotalPages(1)
+        setTotalOrders(payload.length)
       }else if (payload && typeof payload === 'object'){
         if (Array.isArray(payload.results)) orders = payload.results
         else if (Array.isArray(payload.data?.results)) orders = payload.data.results
+        // Set pagination info from response
+        setTotalPages(payload.total_pages || 1)
+        setTotalOrders(payload.total || orders.length)
       }
-      if (orders.length > 0){
-        orders.forEach(order => {
-          if (order?.id != null) rememberServiceOrderId(order.id)
-        })
-        setServiceOrders(orders)
-        return
-      }
-      // Fallback to stored draft ids if the list is empty
-      let ids = getStoredServiceOrderIds()
-      if (ids.length === 0){
-        try{
-          const last = localStorage.getItem('lastServiceOrderId')
-          if (last){
-            ids = [last]
-            replaceServiceOrderIds(ids)
-          }
-        }catch{}
-      }
-      if (ids.length === 0){
-        setServiceOrders([])
-        return
-      }
-      const results = await Promise.all(ids.map(async id => {
-        try{
-          const respById = await api.get(`/services/orders/${id}/`)
-          const order = respById?.data
-          if (order && order.id != null){
-            rememberServiceOrderId(order.id)
-            return order
-          }
-        }catch(e){
-          if (e?.response?.status === 404){
-            removeServiceOrderId(id)
-          }
-        }
-        return null
-      }))
-      setServiceOrders(results.filter(Boolean))
+      
+      // Remember order IDs from successful response
+      orders.forEach(order => {
+        if (order?.id != null) rememberServiceOrderId(order.id)
+      })
+      
+      // Set orders from API response (even if empty - that's a valid filtered result)
+      setServiceOrders(orders)
     }catch{
       setServiceOrders([])
       setServiceError('Unable to load service orders right now.')
@@ -400,7 +388,8 @@ export default function CustomerOrders(){
     }
   }
 
-  useEffect(()=>{ loadServiceOrders() }, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(()=>{ loadServiceOrders() }, [statusFilter, currentPage])
 
   useEffect(()=>{
     let alive = true
@@ -464,33 +453,59 @@ export default function CustomerOrders(){
     try{
       const last = localStorage.getItem('lastServiceOrderId')
       if (last){
+        // Get session_id from URL if present (returned from Stripe checkout)
+        const sessionId = searchParams.get('session_id') || null
         setVerifyingServiceId(last)
-        pollServiceOrderStatus(last)
+        pollServiceOrderStatus(last, sessionId)
       }
     }catch{}
-  }, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
 
-  const pollServiceOrderStatus = async (orderId)=>{
+  const pollServiceOrderStatus = async (orderId, sessionId = null)=>{
     try{
       for (let attempt = 0; attempt < SERVICE_POLL_ATTEMPTS; attempt++){
         try{
-          const resp = await api.get(`/services/orders/${orderId}/`)
-          const order = resp?.data
-          const status = String(order?.status || '').toLowerCase()
-          if (CONFIRMED_STATUSES.has(status)){
-            notify('Service order confirmed.', 'success')
+          // Call verify-payment endpoint which checks Stripe session and updates order status
+          const params = sessionId ? { session_id: sessionId } : {}
+          const verifyResp = await api.get(`/services/orders/${orderId}/verify-payment/`, { params })
+          const verifyData = verifyResp?.data
+          
+          if (verifyData?.success && verifyData?.status === 'confirmed'){
+            notify('Service order confirmed!', 'success')
             setVerifyingServiceId(null)
             try{ localStorage.removeItem('lastServiceOrderId') }catch{}
-            rememberServiceOrderId(order?.id || orderId)
+            rememberServiceOrderId(orderId)
             loadServiceOrders()
             return
           }
-          if (!PAYABLE_STATUSES.has(status)){
+          
+          // If already confirmed (from a previous verification)
+          if (verifyData?.already_confirmed){
+            setVerifyingServiceId(null)
+            try{ localStorage.removeItem('lastServiceOrderId') }catch{}
+            loadServiceOrders()
+            return
+          }
+          
+          // Check if session status shows payment not complete yet
+          const sessionStatus = verifyData?.session_status
+          const paymentStatus = verifyData?.payment_status
+          
+          // If session is expired or cancelled, stop polling
+          if (sessionStatus === 'expired' || paymentStatus === 'unpaid'){
             setVerifyingServiceId(null)
             loadServiceOrders()
             return
           }
-        }catch{}
+        }catch(e){
+          // If 404 or 403, stop polling
+          if (e?.response?.status === 404 || e?.response?.status === 403){
+            setVerifyingServiceId(null)
+            loadServiceOrders()
+            return
+          }
+        }
         await new Promise(resolve => setTimeout(resolve, SERVICE_POLL_DELAY_MS))
       }
       notify('Payment not confirmed yet. You may need to try again.', 'error')
@@ -582,9 +597,14 @@ export default function CustomerOrders(){
     if (serviceLoading) return <div className="card">Loading service orders…</div>
     if (serviceError) return <div className="card" style={{ borderColor:'#d9534f' }}>{serviceError} <button className="btn btn-link" onClick={()=> loadServiceOrders()}>Retry</button></div>
     if (!serviceOrders || serviceOrders.length === 0){
+      const emptyMessages = {
+        active: 'No active orders. Browse chefs to book a service!',
+        completed: 'No completed orders yet.',
+        cancelled: 'No cancelled orders.'
+      }
       return (
         <div className="card">
-          <div className="muted">No service orders yet.</div>
+          <div className="muted">{emptyMessages[statusFilter] || 'No service orders yet.'}</div>
           <button className="btn btn-link" onClick={()=> loadServiceOrders()} style={{marginTop:'.5rem'}}>Refresh</button>
         </div>
       )
@@ -646,7 +666,7 @@ export default function CustomerOrders(){
         })}
       </div>
     )
-  }, [serviceOrders, serviceLoading, serviceError, verifyingServiceId, chefDetails])
+  }, [serviceOrders, serviceLoading, serviceError, verifyingServiceId, chefDetails, statusFilter])
 
   const pollMealOrderPayment = async (orderId, sessionId=null)=>{
     try{
@@ -706,6 +726,10 @@ export default function CustomerOrders(){
     }catch{}
   }, [])
 
+  // Calculate stats for hero section
+  const activeOrders = serviceOrders.filter(o => ['confirmed', 'awaiting_payment'].includes(o.status))
+  const completedOrders = serviceOrders.filter(o => o.status === 'completed')
+
   return (
     <div className="page-orders">
       {/* Hero Header */}
@@ -716,6 +740,20 @@ export default function CustomerOrders(){
             Your Orders
           </h1>
           <p className="orders-subtitle">Track your chef-service bookings and meal-plan orders in one place.</p>
+          <div className="hero-stats">
+            <div className="hero-stat">
+              <span className="hero-stat-value">{activeOrders.length}</span>
+              <span className="hero-stat-label">Active</span>
+            </div>
+            <div className="hero-stat">
+              <span className="hero-stat-value">{completedOrders.length}</span>
+              <span className="hero-stat-label">Completed</span>
+            </div>
+            <div className="hero-stat">
+              <span className="hero-stat-value">{acceptedConnections.length}</span>
+              <span className="hero-stat-label">{acceptedConnections.length === 1 ? 'Chef' : 'Chefs'}</span>
+            </div>
+          </div>
         </div>
       </header>
       
@@ -836,10 +874,10 @@ export default function CustomerOrders(){
                         const busy = connectionUpdating && String(connectionActionId) === String(connection?.id)
                         const chefName = connectionChefName(connection)
                         const chefPhoto = connection?.chef_photo
-                        const link = getChefProfilePath(connection, connection?.chef, connection?.chefId)
+                        const chefHubLink = connection?.chefId ? `/my-chefs/${connection.chefId}` : '/my-chefs'
                         return (
                           <div key={connection?.id || `accepted-${connection?.chefId || connection?.id}`} className="connection-card active">
-                            <div className="connection-card-main">
+                            <Link to={chefHubLink} className="connection-card-main connection-card-link">
                               <div className="connection-avatar">
                                 {chefPhoto ? (
                                   <img src={chefPhoto} alt={chefName} />
@@ -853,15 +891,13 @@ export default function CustomerOrders(){
                                 </span>
                               </div>
                               <div className="connection-info">
-                                <div className="connection-name">
-                                  {link ? <Link to={link}>{chefName}</Link> : chefName}
-                                </div>
+                                <div className="connection-name">{chefName}</div>
                                 <div className="connection-status active">
                                   <i className="fa-solid fa-circle"></i>
                                   Connected
                                 </div>
                               </div>
-                            </div>
+                            </Link>
                             <div className="connection-actions">
                               <button className="btn btn-outline btn-sm" disabled={busy} onClick={()=> handleConnectionAction(connection.id, 'end')}>
                                 {busy ? 'Ending…' : 'End Service'}
@@ -908,9 +944,75 @@ export default function CustomerOrders(){
                 Refresh
               </button>
             </div>
+            
+            {/* Status filter tabs */}
+            <div className="status-tabs" style={{ 
+              display: 'flex', 
+              gap: '.5rem', 
+              padding: '1rem 0', 
+              borderBottom: '1px solid var(--border-subtle)',
+              marginBottom: '1rem'
+            }}>
+              <button 
+                type="button"
+                className={`btn btn-sm ${statusFilter === 'active' ? 'btn-primary' : 'btn-outline'}`}
+                onClick={() => { setStatusFilter('active'); setCurrentPage(1) }}
+              >
+                Active
+              </button>
+              <button 
+                type="button"
+                className={`btn btn-sm ${statusFilter === 'completed' ? 'btn-primary' : 'btn-outline'}`}
+                onClick={() => { setStatusFilter('completed'); setCurrentPage(1) }}
+              >
+                Completed
+              </button>
+              <button 
+                type="button"
+                className={`btn btn-sm ${statusFilter === 'cancelled' ? 'btn-primary' : 'btn-outline'}`}
+                onClick={() => { setStatusFilter('cancelled'); setCurrentPage(1) }}
+              >
+                Cancelled
+              </button>
+            </div>
+            
             <div className="orders-section-body">
               {serviceOrdersView}
             </div>
+            
+            {/* Pagination controls */}
+            {totalPages > 1 && (
+              <div className="pagination-controls" style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '1rem',
+                padding: '1rem 0',
+                marginTop: '1rem',
+                borderTop: '1px solid var(--border-subtle)'
+              }}>
+                <button 
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  disabled={currentPage === 1 || serviceLoading}
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                >
+                  <i className="fa-solid fa-chevron-left"></i> Previous
+                </button>
+                <span style={{ fontSize: '.9rem', color: 'var(--text-muted)' }}>
+                  Page {currentPage} of {totalPages}
+                  {totalOrders > 0 && <span style={{ marginLeft: '.5rem' }}>({totalOrders} total)</span>}
+                </span>
+                <button 
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  disabled={currentPage >= totalPages || serviceLoading}
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                >
+                  Next <i className="fa-solid fa-chevron-right"></i>
+                </button>
+              </div>
+            )}
           </section>
         </>
       ) : (

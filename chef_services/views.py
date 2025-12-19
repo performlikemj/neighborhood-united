@@ -128,8 +128,11 @@ def _resolve_viewer_coordinates(request):
     if address.latitude is not None and address.longitude is not None:
         return float(address.latitude), float(address.longitude)
 
-    if address.input_postalcode and address.country:
-        postal_row = ensure_postal_code_coordinates(address.input_postalcode, address.country)
+    # Try normalized_postalcode first (preferred), then fall back to original_postalcode
+    postal_code = getattr(address, 'normalized_postalcode', None) or getattr(address, 'original_postalcode', None)
+    country = getattr(address, 'country', None)
+    if postal_code and country:
+        postal_row = ensure_postal_code_coordinates(postal_code, country)
         if postal_row and postal_row.latitude is not None and postal_row.longitude is not None:
             return float(postal_row.latitude), float(postal_row.longitude)
 
@@ -154,8 +157,9 @@ def _chef_coordinates(chef):
     if address:
         if address.latitude is not None and address.longitude is not None:
             return float(address.latitude), float(address.longitude)
-        if address.input_postalcode and address.country:
-            ensured = ensure_postal_code_coordinates(address.input_postalcode, address.country)
+        postal_code = getattr(address, 'normalized_postalcode', None) or getattr(address, 'original_postalcode', None)
+        if postal_code and address.country:
+            ensured = ensure_postal_code_coordinates(postal_code, address.country)
             if ensured and ensured.latitude is not None and ensured.longitude is not None:
                 return float(ensured.latitude), float(ensured.longitude)
 
@@ -722,16 +726,51 @@ def my_orders(request):
 @permission_classes([IsAuthenticated])
 def my_customer_orders(request):
     """
-    Get all service orders for the authenticated customer.
-    Includes draft, awaiting payment, confirmed, and completed orders.
+    Get service orders for the authenticated customer with filtering and pagination.
+    
+    Query params:
+    - status: 'active' (default), 'completed', 'cancelled', or 'all'
+    - page: page number (default 1)
+    - page_size: items per page (default 10, max 100)
     """
-    qs = (
-        ChefServiceOrder.objects
-        .filter(customer=request.user)
-        .select_related('offering', 'tier', 'chef', 'chef__user', 'address')
-        .order_by('-created_at')
-    )
-    return Response(ChefServiceOrderSerializer(qs, many=True).data)
+    status_filter = request.query_params.get('status', 'active')
+    try:
+        page = max(1, int(request.query_params.get('page', 1)))
+    except (ValueError, TypeError):
+        page = 1
+    try:
+        page_size = min(100, max(1, int(request.query_params.get('page_size', 10))))
+    except (ValueError, TypeError):
+        page_size = 10
+    
+    qs = ChefServiceOrder.objects.filter(customer=request.user)
+    
+    # Apply status filter
+    if status_filter == 'active':
+        qs = qs.filter(status__in=['draft', 'awaiting_payment', 'confirmed'])
+    elif status_filter == 'completed':
+        qs = qs.filter(status='completed')
+    elif status_filter == 'cancelled':
+        qs = qs.filter(status__in=['cancelled', 'refunded'])
+    # 'all' returns everything (no filter)
+    
+    qs = qs.select_related('offering', 'tier', 'chef', 'chef__user', 'address')
+    qs = qs.order_by('-created_at')
+    
+    # Pagination
+    total = qs.count()
+    start = (page - 1) * page_size
+    end = start + page_size
+    orders = qs[start:end]
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+    
+    return Response({
+        'results': ChefServiceOrderSerializer(orders, many=True).data,
+        'total': total,
+        'page': page,
+        'page_size': page_size,
+        'total_pages': total_pages
+    })
 
 
 @api_view(['POST'])
@@ -798,11 +837,10 @@ def checkout_order(request, order_id):
             "validation_errors": validation_errors
         }, status=400)
 
-    # Update order status to awaiting_payment before creating checkout session
-    order.status = 'awaiting_payment'
+    # Validate the order can transition to awaiting_payment (don't save yet - 
+    # create_service_checkout_session will save status + session_id atomically)
     try:
-        order.full_clean()  # This will now validate with the new status
-        order.save()
+        order.full_clean()
     except Exception as e:
         return Response({"error": str(e)}, status=400)
 
@@ -810,7 +848,85 @@ def checkout_order(request, order_id):
     if not ok:
         return Response(payload, status=400)
     return Response({"success": True, **payload})
- 
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def verify_service_payment(request, order_id):
+    """
+    Verify payment status for a service order by checking the Stripe session.
+    This is a fallback for when webhooks don't reach the server (e.g., local development).
+    
+    Query params:
+    - session_id: Optional Stripe session ID to check (uses order's stored session if not provided)
+    """
+    order = get_object_or_404(ChefServiceOrder, id=order_id)
+    if order.customer_id != request.user.id and not request.user.is_staff:
+        return Response({"error": "Forbidden"}, status=403)
+    
+    # If already confirmed, just return success
+    if order.status == 'confirmed':
+        return Response({
+            "success": True,
+            "status": order.status,
+            "already_confirmed": True
+        })
+    
+    # Get session ID from query params or order
+    session_id = request.query_params.get('session_id') or order.stripe_session_id
+    if not session_id:
+        return Response({
+            "success": False,
+            "status": order.status,
+            "error": "No checkout session found for this order"
+        }, status=400)
+    
+    try:
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        session = stripe.checkout.Session.retrieve(session_id)
+        
+        session_status = getattr(session, 'status', None)
+        payment_status = getattr(session, 'payment_status', None)
+        
+        # Check if payment is complete
+        if session_status == 'complete' and payment_status == 'paid':
+            # Update order status to confirmed
+            with transaction.atomic():
+                order = ChefServiceOrder.objects.select_for_update().get(id=order_id)
+                if order.status != 'confirmed':
+                    order.status = 'confirmed'
+                    if not order.stripe_session_id:
+                        order.stripe_session_id = session_id
+                    # Store subscription ID if present
+                    subscription_id = getattr(session, 'subscription', None)
+                    if subscription_id and not order.stripe_subscription_id:
+                        order.stripe_subscription_id = subscription_id
+                    order.save(update_fields=['status', 'stripe_session_id', 'stripe_subscription_id'])
+                    logger.info(f"Service order {order_id} confirmed via verify_service_payment endpoint")
+            
+            return Response({
+                "success": True,
+                "status": "confirmed",
+                "session_status": session_status,
+                "payment_status": payment_status
+            })
+        else:
+            return Response({
+                "success": False,
+                "status": order.status,
+                "session_status": session_status,
+                "payment_status": payment_status,
+                "message": "Payment not yet complete"
+            })
+    
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error verifying payment for order {order_id}: {e}")
+        return Response({
+            "success": False,
+            "status": order.status,
+            "error": str(e)
+        }, status=400)
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])

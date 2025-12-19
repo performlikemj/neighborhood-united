@@ -41,6 +41,7 @@ export default function ChefPaymentLinks() {
     description: '',
     lead_id: '',
     customer_id: '',
+    currency: 'usd',
     expires_days: 30,
     internal_notes: '',
   })
@@ -101,11 +102,21 @@ export default function ChefPaymentLinks() {
     loadStats()
   }, [loadPaymentLinks, loadStats])
 
+  // Pre-populate create form with chef's default currency when stats load
+  useEffect(() => {
+    if (stats?.default_currency) {
+      setCreateForm(prev => ({ ...prev, currency: stats.default_currency }))
+    }
+  }, [stats?.default_currency])
+
   useEffect(() => {
     const timeout = setTimeout(() => loadPaymentLinks(), 300)
     return () => clearTimeout(timeout)
   }, [searchQuery, loadPaymentLinks])
 
+  // Zero-decimal currencies don't use cents
+  const ZERO_DECIMAL_CURRENCIES = ['jpy', 'krw', 'vnd', 'bif', 'clp', 'djf', 'gnf', 'kmf', 'mga', 'pyg', 'rwf', 'ugx', 'vuv', 'xaf', 'xof', 'xpf']
+  
   const handleCreate = async (e) => {
     e.preventDefault()
     if (!createForm.amount || !createForm.description) {
@@ -113,9 +124,16 @@ export default function ChefPaymentLinks() {
       return
     }
     
-    const amountCents = Math.round(parseFloat(createForm.amount) * 100)
-    if (isNaN(amountCents) || amountCents < 50) {
-      alert('Minimum amount is $0.50')
+    const currency = (createForm.currency || 'usd').toLowerCase()
+    const isZeroDecimal = ZERO_DECIMAL_CURRENCIES.includes(currency)
+    const amountCents = isZeroDecimal 
+      ? Math.round(parseFloat(createForm.amount))
+      : Math.round(parseFloat(createForm.amount) * 100)
+    
+    const minAmount = isZeroDecimal ? 1 : 50
+    if (isNaN(amountCents) || amountCents < minAmount) {
+      const minDisplay = formatAmount(minAmount, currency)
+      alert(`Minimum amount is ${minDisplay}`)
       return
     }
     
@@ -128,6 +146,7 @@ export default function ChefPaymentLinks() {
     try {
       const data = {
         amount_cents: amountCents,
+        currency: currency,
         description: createForm.description,
         expires_days: createForm.expires_days,
         internal_notes: createForm.internal_notes,
@@ -146,6 +165,7 @@ export default function ChefPaymentLinks() {
         description: '',
         lead_id: '',
         customer_id: '',
+        currency: stats?.default_currency || 'usd',
         expires_days: 30,
         internal_notes: '',
       })
@@ -509,245 +529,6 @@ export default function ChefPaymentLinks() {
     )
   }
 
-  // Create Modal
-  const CreateModal = () => {
-    if (!showCreateModal) return null
-
-    return (
-      <div style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1000
-      }}>
-        <div style={{
-          backgroundColor: 'var(--surface, #fff)',
-          borderRadius: '12px',
-          width: '90%',
-          maxWidth: '500px',
-          maxHeight: '90vh',
-          overflow: 'auto',
-          border: '1px solid var(--border, #eee)'
-        }}>
-          <div style={{
-            padding: '20px',
-            borderBottom: '1px solid var(--border, #eee)',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center'
-          }}>
-            <h3 style={{ margin: 0, color: 'var(--text, #333)' }}>Create Payment Link</h3>
-            <button
-              onClick={() => setShowCreateModal(false)}
-              style={{
-                background: 'none',
-                border: 'none',
-                fontSize: '24px',
-                cursor: 'pointer',
-                color: 'var(--muted, #666)'
-              }}
-            >
-              ×
-            </button>
-          </div>
-
-          <form onSubmit={handleCreate} style={{ padding: '20px' }}>
-            {/* Amount */}
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, color: 'var(--text, #333)' }}>
-                Amount ($) *
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                min="0.50"
-                value={createForm.amount}
-                onChange={(e) => setCreateForm({ ...createForm, amount: e.target.value })}
-                placeholder="0.00"
-                required
-                style={{
-                  width: '100%',
-                  padding: '10px 12px',
-                  border: '1px solid var(--border, #ddd)',
-                  borderRadius: '6px',
-                  fontSize: '16px',
-                  backgroundColor: 'var(--surface, #fff)',
-                  color: 'var(--text, #333)'
-                }}
-              />
-            </div>
-
-            {/* Description */}
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, color: 'var(--text, #333)' }}>
-                Description *
-              </label>
-              <input
-                type="text"
-                value={createForm.description}
-                onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })}
-                placeholder="e.g., Weekly meal prep service"
-                required
-                maxLength={500}
-                style={{
-                  width: '100%',
-                  padding: '10px 12px',
-                  border: '1px solid var(--border, #ddd)',
-                  borderRadius: '6px',
-                  fontSize: '14px',
-                  backgroundColor: 'var(--surface, #fff)',
-                  color: 'var(--text, #333)'
-                }}
-              />
-            </div>
-
-            {/* Client Selection */}
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, color: 'var(--text, #333)' }}>
-                Select Client *
-              </label>
-              <select
-                value={createForm.lead_id ? `lead_${createForm.lead_id}` : createForm.customer_id ? `customer_${createForm.customer_id}` : ''}
-                onChange={(e) => {
-                  const [type, id] = e.target.value.split('_')
-                  if (type === 'lead') {
-                    setCreateForm({ ...createForm, lead_id: id, customer_id: '' })
-                  } else if (type === 'customer') {
-                    setCreateForm({ ...createForm, customer_id: id, lead_id: '' })
-                  } else {
-                    setCreateForm({ ...createForm, lead_id: '', customer_id: '' })
-                  }
-                }}
-                required
-                style={{
-                  width: '100%',
-                  padding: '10px 12px',
-                  border: '1px solid var(--border, #ddd)',
-                  borderRadius: '6px',
-                  fontSize: '14px',
-                  backgroundColor: 'var(--surface, #fff)',
-                  color: 'var(--text, #333)'
-                }}
-              >
-                <option value="">Select a client...</option>
-                {leadClients.length > 0 && (
-                  <optgroup label="Manual Contacts">
-                    {leadClients.map(client => (
-                      <option key={`lead_${client.lead_id}`} value={`lead_${client.lead_id}`}>
-                        {client.name} {client.email ? `(${client.email})` : '(No email)'}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {platformClients.length > 0 && (
-                  <optgroup label="Platform Users">
-                    {platformClients.map(client => (
-                      <option key={`customer_${client.customer_id}`} value={`customer_${client.customer_id}`}>
-                        {client.name} ({client.email})
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
-            </div>
-
-            {/* Expiration */}
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, color: 'var(--text, #333)' }}>
-                Expires In (days)
-              </label>
-              <select
-                value={createForm.expires_days}
-                onChange={(e) => setCreateForm({ ...createForm, expires_days: parseInt(e.target.value) })}
-                style={{
-                  width: '100%',
-                  padding: '10px 12px',
-                  border: '1px solid var(--border, #ddd)',
-                  borderRadius: '6px',
-                  fontSize: '14px',
-                  backgroundColor: 'var(--surface, #fff)',
-                  color: 'var(--text, #333)'
-                }}
-              >
-                <option value={7}>7 days</option>
-                <option value={14}>14 days</option>
-                <option value={30}>30 days</option>
-                <option value={60}>60 days</option>
-                <option value={90}>90 days</option>
-              </select>
-            </div>
-
-            {/* Internal Notes */}
-            <div style={{ marginBottom: '24px' }}>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, color: 'var(--text, #333)' }}>
-                Internal Notes (optional)
-              </label>
-              <textarea
-                value={createForm.internal_notes}
-                onChange={(e) => setCreateForm({ ...createForm, internal_notes: e.target.value })}
-                placeholder="Notes for your reference (not shown to client)"
-                rows={3}
-                style={{
-                  width: '100%',
-                  padding: '10px 12px',
-                  border: '1px solid var(--border, #ddd)',
-                  borderRadius: '6px',
-                  fontSize: '14px',
-                  resize: 'vertical',
-                  backgroundColor: 'var(--surface, #fff)',
-                  color: 'var(--text, #333)'
-                }}
-              />
-            </div>
-
-            {/* Submit */}
-            <div style={{ display: 'flex', gap: '12px' }}>
-              <button
-                type="button"
-                onClick={() => setShowCreateModal(false)}
-                style={{
-                  flex: 1,
-                  padding: '12px',
-                  backgroundColor: 'var(--surface-2, #f8f9fa)',
-                  color: 'var(--text, #333)',
-                  border: '1px solid var(--border, #ddd)',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  fontWeight: 500
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={creating}
-                style={{
-                  flex: 1,
-                  padding: '12px',
-                  backgroundColor: 'var(--primary, #5cb85c)',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: creating ? 'not-allowed' : 'pointer',
-                  fontWeight: 500,
-                  opacity: creating ? 0.7 : 1
-                }}
-              >
-                {creating ? 'Creating...' : 'Create Payment Link'}
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
-    )
-  }
-
   return (
     <div style={{ padding: isDesktop ? '24px' : '16px' }}>
       {/* Header */}
@@ -792,12 +573,12 @@ export default function ChefPaymentLinks() {
           <StatCard label="Paid" value={stats.paid_count || 0} color="#28a745" />
           <StatCard
             label="Pending Amount"
-            value={formatAmount(stats.total_pending_amount_cents || 0)}
+            value={formatAmount(stats.total_pending_amount_cents || 0, stats.currency || 'USD')}
             color="var(--link, #007bff)"
           />
           <StatCard
             label="Collected"
-            value={formatAmount(stats.total_paid_amount_cents || 0)}
+            value={formatAmount(stats.total_paid_amount_cents || 0, stats.currency || 'USD')}
             color="#28a745"
           />
         </div>
@@ -930,7 +711,276 @@ export default function ChefPaymentLinks() {
         </div>
       )}
 
-      <CreateModal />
+      {/* Create Modal - inline to prevent remounting on state changes */}
+      {showCreateModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: 'var(--surface, #fff)',
+            borderRadius: '12px',
+            width: '90%',
+            maxWidth: '500px',
+            maxHeight: '90vh',
+            overflow: 'auto',
+            border: '1px solid var(--border, #eee)'
+          }}>
+            <div style={{
+              padding: '20px',
+              borderBottom: '1px solid var(--border, #eee)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <h3 style={{ margin: 0, color: 'var(--text, #333)' }}>Create Payment Link</h3>
+              <button
+                onClick={() => setShowCreateModal(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '24px',
+                  cursor: 'pointer',
+                  color: 'var(--muted, #666)'
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <form onSubmit={handleCreate} style={{ padding: '20px' }}>
+              {/* Amount and Currency */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, color: 'var(--text, #333)' }}>
+                  Amount *
+                </label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <select
+                    value={createForm.currency}
+                    onChange={(e) => setCreateForm({ ...createForm, currency: e.target.value })}
+                    style={{
+                      padding: '10px 12px',
+                      border: '1px solid var(--border, #ddd)',
+                      borderRadius: '6px',
+                      fontSize: '14px',
+                      backgroundColor: 'var(--surface, #fff)',
+                      color: 'var(--text, #333)',
+                      minWidth: '90px'
+                    }}
+                  >
+                    <option value="usd">USD $</option>
+                    <option value="eur">EUR €</option>
+                    <option value="gbp">GBP £</option>
+                    <option value="jpy">JPY ¥</option>
+                    <option value="cad">CAD $</option>
+                    <option value="aud">AUD $</option>
+                    <option value="chf">CHF</option>
+                    <option value="cny">CNY ¥</option>
+                    <option value="inr">INR ₹</option>
+                    <option value="mxn">MXN $</option>
+                    <option value="brl">BRL R$</option>
+                    <option value="krw">KRW ₩</option>
+                    <option value="sgd">SGD $</option>
+                    <option value="hkd">HKD $</option>
+                    <option value="nzd">NZD $</option>
+                    <option value="sek">SEK kr</option>
+                    <option value="nok">NOK kr</option>
+                    <option value="dkk">DKK kr</option>
+                    <option value="pln">PLN zł</option>
+                    <option value="thb">THB ฿</option>
+                  </select>
+                  <input
+                    type="number"
+                    step={ZERO_DECIMAL_CURRENCIES.includes(createForm.currency) ? '1' : '0.01'}
+                    min={ZERO_DECIMAL_CURRENCIES.includes(createForm.currency) ? '1' : '0.50'}
+                    value={createForm.amount}
+                    onChange={(e) => setCreateForm({ ...createForm, amount: e.target.value })}
+                    placeholder={ZERO_DECIMAL_CURRENCIES.includes(createForm.currency) ? '100' : '0.00'}
+                    required
+                    style={{
+                      flex: 1,
+                      padding: '10px 12px',
+                      border: '1px solid var(--border, #ddd)',
+                      borderRadius: '6px',
+                      fontSize: '16px',
+                      backgroundColor: 'var(--surface, #fff)',
+                      color: 'var(--text, #333)'
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Description */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, color: 'var(--text, #333)' }}>
+                  Description *
+                </label>
+                <input
+                  type="text"
+                  value={createForm.description}
+                  onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })}
+                  placeholder="e.g., Weekly meal prep service"
+                  required
+                  maxLength={500}
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    border: '1px solid var(--border, #ddd)',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    backgroundColor: 'var(--surface, #fff)',
+                    color: 'var(--text, #333)'
+                  }}
+                />
+              </div>
+
+              {/* Client Selection */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, color: 'var(--text, #333)' }}>
+                  Select Client *
+                </label>
+                <select
+                  value={createForm.lead_id ? `lead_${createForm.lead_id}` : createForm.customer_id ? `customer_${createForm.customer_id}` : ''}
+                  onChange={(e) => {
+                    const [type, id] = e.target.value.split('_')
+                    if (type === 'lead') {
+                      setCreateForm({ ...createForm, lead_id: id, customer_id: '' })
+                    } else if (type === 'customer') {
+                      setCreateForm({ ...createForm, customer_id: id, lead_id: '' })
+                    } else {
+                      setCreateForm({ ...createForm, lead_id: '', customer_id: '' })
+                    }
+                  }}
+                  required
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    border: '1px solid var(--border, #ddd)',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    backgroundColor: 'var(--surface, #fff)',
+                    color: 'var(--text, #333)'
+                  }}
+                >
+                  <option value="">Select a client...</option>
+                  {leadClients.length > 0 && (
+                    <optgroup label="Manual Contacts">
+                      {leadClients.map(client => (
+                        <option key={`lead_${client.lead_id}`} value={`lead_${client.lead_id}`}>
+                          {client.name} {client.email ? `(${client.email})` : '(No email)'}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {platformClients.length > 0 && (
+                    <optgroup label="Platform Users">
+                      {platformClients.map(client => (
+                        <option key={`customer_${client.customer_id}`} value={`customer_${client.customer_id}`}>
+                          {client.name} ({client.email})
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+              </div>
+
+              {/* Expiration */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, color: 'var(--text, #333)' }}>
+                  Expires In (days)
+                </label>
+                <select
+                  value={createForm.expires_days}
+                  onChange={(e) => setCreateForm({ ...createForm, expires_days: parseInt(e.target.value) })}
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    border: '1px solid var(--border, #ddd)',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    backgroundColor: 'var(--surface, #fff)',
+                    color: 'var(--text, #333)'
+                  }}
+                >
+                  <option value={7}>7 days</option>
+                  <option value={14}>14 days</option>
+                  <option value={30}>30 days</option>
+                  <option value={60}>60 days</option>
+                  <option value={90}>90 days</option>
+                </select>
+              </div>
+
+              {/* Internal Notes */}
+              <div style={{ marginBottom: '24px' }}>
+                <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, color: 'var(--text, #333)' }}>
+                  Internal Notes (optional)
+                </label>
+                <textarea
+                  value={createForm.internal_notes}
+                  onChange={(e) => setCreateForm({ ...createForm, internal_notes: e.target.value })}
+                  placeholder="Notes for your reference (not shown to client)"
+                  rows={3}
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    border: '1px solid var(--border, #ddd)',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                    resize: 'vertical',
+                    backgroundColor: 'var(--surface, #fff)',
+                    color: 'var(--text, #333)'
+                  }}
+                />
+              </div>
+
+              {/* Submit */}
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowCreateModal(false)}
+                  style={{
+                    flex: 1,
+                    padding: '12px',
+                    backgroundColor: 'var(--surface-2, #f8f9fa)',
+                    color: 'var(--text, #333)',
+                    border: '1px solid var(--border, #ddd)',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    fontWeight: 500
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={creating}
+                  style={{
+                    flex: 1,
+                    padding: '12px',
+                    backgroundColor: 'var(--primary, #5cb85c)',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '6px',
+                    cursor: creating ? 'not-allowed' : 'pointer',
+                    fontWeight: 500,
+                    opacity: creating ? 0.7 : 1
+                  }}
+                >
+                  {creating ? 'Creating...' : 'Create Payment Link'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

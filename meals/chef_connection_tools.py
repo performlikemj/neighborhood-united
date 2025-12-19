@@ -208,7 +208,7 @@ def find_local_chefs(
             address = None
 
         # 3. Determine which postal code to use
-        code = address.input_postalcode if address and address.input_postalcode else None
+        code = address.normalized_postalcode if address and address.normalized_postalcode else None
         country = address.country if address and address.country else None
 
         if not code:
@@ -739,8 +739,8 @@ def replace_meal_plan_meal(
                 }
 
             # Postal‑code eligibility
-            if getattr(user, "address", None) and user.address.input_postalcode:
-                pc = user.address.input_postalcode
+            if getattr(user, "address", None) and user.address.normalized_postalcode:
+                pc = user.address.normalized_postalcode
                 country = user.address.country
                 serves = ChefPostalCode.objects.filter(
                     chef=chef_meal.chef,

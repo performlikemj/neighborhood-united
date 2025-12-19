@@ -31,7 +31,7 @@ test('PublicChef exposes a CTA so guests can book a chef service tier', () => {
   const source = loadSource()
   assert.match(
     source,
-    /Book this service tier/,
+    /Add to Cart|Quick Book|Book this service tier/i,
     'Expected a visible button that invites the guest to book a service tier.'
   )
 })

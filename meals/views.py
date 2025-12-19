@@ -3387,7 +3387,10 @@ def api_create_stripe_account_link(request):
                 },
                 capabilities={
                     "transfers": {"requested": True},
-                    "card_payments": {"requested": True}  # Often needed for Express accounts
+                    # Chefs only receive transfers from platform, not process payments directly
+                },
+                tos_acceptance={
+                    "service_agreement": "recipient"  # Recipient agreement for transfer-only accounts
                 }
             )
             
@@ -5670,7 +5673,7 @@ def api_fix_restricted_stripe_account(request):
                 "details": "Address and country code are required"
             }, status=400)
 
-        # Create NEW account with PROPER controller configuration
+        # Create NEW account with recipient service agreement (transfers only)
         account = stripe.Account.create(
             controller={
                 "stripe_dashboard": {
@@ -5692,7 +5695,10 @@ def api_fix_restricted_stripe_account(request):
             },
             capabilities={
                 "transfers": {"requested": True},
-                "card_payments": {"requested": True}
+                # Chefs only receive transfers from platform, not process payments directly
+            },
+            tos_acceptance={
+                "service_agreement": "recipient"  # Recipient agreement for transfer-only accounts
             }
         )
         

@@ -1303,7 +1303,8 @@ class StripeIntegrationTestCase(TestCase):
         mock_pl_create.assert_called_once()
         pl_call = mock_pl_create.call_args
         self.assertEqual(pl_call.kwargs['transfer_data']['destination'], 'acct_test123')
-        self.assertEqual(pl_call.kwargs['application_fee_percent'], 10.0)
+        # application_fee_amount = 5000 * 10% = 500 cents
+        self.assertEqual(pl_call.kwargs['application_fee_amount'], 500)
 
     @patch('chefs.api.payment_links.stripe.Product.create')
     def test_stripe_product_creation_includes_metadata(self, mock_product_create):

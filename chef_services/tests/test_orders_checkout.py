@@ -322,6 +322,9 @@ class ChefServicesOrdersCheckoutTests(TestCase):
 
     def test_customer_can_list_their_orders(self):
         """Test that customers can list their own service orders"""
+        # Clean up any existing orders for this user to ensure test isolation
+        ChefServiceOrder.objects.filter(customer=self.user).delete()
+
         order = ChefServiceOrder.objects.create(
             customer=self.user,
             chef=self.chef,

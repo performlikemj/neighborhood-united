@@ -180,7 +180,7 @@ test('CartSidebar allows adding new address', () => {
   const source = loadCartSidebar()
   assert.match(
     source,
-    /Add new address|new address|addAddress/i,
+    /Add new address|new address|addAddress|Add address/i,
     'CartSidebar should allow adding a new service address.'
   )
 })

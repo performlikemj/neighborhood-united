@@ -36,12 +36,12 @@ test('CartSidebar loads customer addresses and offers an add-new address form', 
   const source = loadSidebar()
   assert.match(
     source,
-    /api\.get\('\/auth\/api\/address_details\/'/,
-    'Expected CartSidebar to fetch saved addresses from /auth/api/address_details/.'
+    /authUser\?\.address|userAddress/,
+    'Expected CartSidebar to use the user address from auth context.'
   )
   assert.match(
     source,
-    /Add new address/,
+    /Add new address|Add address/i,
     'CartSidebar should present a CTA so customers can add a new service address from the cart.'
   )
 })

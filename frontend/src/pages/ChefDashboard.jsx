@@ -14,6 +14,13 @@ import AnalyticsDrawer from '../components/AnalyticsDrawer.jsx'
 import { SousChefNotificationProvider } from '../contexts/SousChefNotificationContext.jsx'
 import { useMessaging } from '../context/MessagingContext.jsx'
 
+// Contextual AI Suggestions
+import { ChefContextProvider, useChefContextSafe } from '../contexts/ChefContextContext.jsx'
+import { useSuggestions } from '../hooks/useSuggestions.js'
+import GhostInput from '../components/GhostInput.jsx'
+import GhostTextarea from '../components/GhostTextarea.jsx'
+import { SuggestionIndicator } from '../components/SuggestionBadge.jsx'
+
 function toArray(payload){
   if (!payload) return []
   if (Array.isArray(payload)) return payload
@@ -449,7 +456,7 @@ function ChefMessagesSection() {
   )
 }
 
-export default function ChefDashboard(){
+function ChefDashboardContent(){
   const location = useLocation()
   const [tab, setTab] = useState(() => location.state?.tab || 'dashboard')
   const [notice, setNotice] = useState(null)
@@ -519,6 +526,9 @@ export default function ChefDashboard(){
   const [showEventForm, setShowEventForm] = useState(false)
   const [showServiceForm, setShowServiceForm] = useState(false)
 
+  // Sous Chef action state - for navigation and form prefill
+  const [pendingPrefill, setPendingPrefill] = useState(null)
+
   // Meals
   const [meals, setMeals] = useState([])
   const [mealForm, setMealForm] = useState({ name:'', description:'', meal_type:'Dinner', price:'', start_date:'', dishes:[], dietary_preferences:[] })
@@ -553,6 +563,132 @@ export default function ChefDashboard(){
   } = useConnections('chef')
   const [connectionActionId, setConnectionActionId] = useState(null)
   const connectionMutating = respondStatus === 'pending'
+
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // Contextual AI Suggestions (Sous Chef)
+  // ═══════════════════════════════════════════════════════════════════════════════
+  
+  const chefContext = useChefContextSafe()
+  const { 
+    suggestions, 
+    priority: suggestionPriority, 
+    hasSuggestions,
+    fetchSuggestions,
+    getSuggestionForField,
+    acceptSuggestion,
+    dismissSuggestion 
+  } = useSuggestions({ enabled: true })
+  
+  // Track tab changes for context
+  useEffect(() => {
+    if (chefContext) {
+      chefContext.setTab(tab)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab])  // Don't include chefContext - it changes on every state update
+  
+  // Track form open/close for context AND fetch suggestions immediately
+  useEffect(() => {
+    if (!chefContext) return
+    
+    if (showDishForm) {
+      chefContext.openForm('dish', dishForm)
+      // Fetch suggestions immediately when form opens
+      fetchSuggestions({
+        currentTab: tab,
+        openForms: [{ type: 'dish', fields: dishForm, completion: 0.1 }],
+        recentActions: [],
+        isIdle: false
+      })
+    } else {
+      chefContext.closeForm('dish')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showDishForm, tab])  // Don't include chefContext
+  
+  useEffect(() => {
+    if (!chefContext) return
+    
+    if (showMealForm) {
+      chefContext.openForm('meal', mealForm)
+      // Fetch suggestions immediately when form opens
+      fetchSuggestions({
+        currentTab: tab,
+        openForms: [{ type: 'meal', fields: mealForm, completion: 0.1 }],
+        recentActions: [],
+        isIdle: false
+      })
+    } else {
+      chefContext.closeForm('meal')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showMealForm, tab])  // Don't include chefContext
+  
+  // Also fetch suggestions when meal form values change significantly
+  useEffect(() => {
+    if (!showMealForm || !chefContext) return
+    
+    // Only fetch if we have some data filled in
+    if (mealForm.name || mealForm.description) {
+      const timeoutId = setTimeout(() => {
+        fetchSuggestions({
+          currentTab: tab,
+          openForms: [{ type: 'meal', fields: mealForm, completion: 0.3 }],
+          recentActions: [],
+          isIdle: false
+        })
+      }, 800)  // Small delay to avoid spamming
+      return () => clearTimeout(timeoutId)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mealForm.name, mealForm.description, showMealForm, tab])  // Don't include chefContext
+  
+  useEffect(() => {
+    if (!chefContext) return
+    
+    if (showEventForm) {
+      chefContext.openForm('event', eventForm)
+      fetchSuggestions({
+        currentTab: tab,
+        openForms: [{ type: 'event', fields: eventForm, completion: 0.1 }],
+        recentActions: [],
+        isIdle: false
+      })
+    } else {
+      chefContext.closeForm('event')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showEventForm, tab])  // Don't include chefContext
+  
+  useEffect(() => {
+    if (!chefContext) return
+    
+    if (showServiceForm) {
+      chefContext.openForm('service', serviceForm)
+      fetchSuggestions({
+        currentTab: tab,
+        openForms: [{ type: 'service', fields: serviceForm, completion: 0.1 }],
+        recentActions: [],
+        isIdle: false
+      })
+    } else {
+      chefContext.closeForm('service')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showServiceForm, tab])  // Don't include chefContext
+  // Get ghost values for forms
+  const dishNameGhost = getSuggestionForField('dish', 'name')?.value || ''
+  const mealNameGhost = getSuggestionForField('meal', 'name')?.value || ''
+  const mealDescGhost = getSuggestionForField('meal', 'description')?.value || ''
+  const serviceNameGhost = getSuggestionForField('service', 'title')?.value || ''
+  const serviceDescGhost = getSuggestionForField('service', 'description')?.value || ''
+  
+  // Debug: Log when ghost values change
+  useEffect(() => {
+    if (mealNameGhost || mealDescGhost) {
+      console.log('[SousChef] Ghost values available:', { mealNameGhost, mealDescGhost })
+    }
+  }, [mealNameGhost, mealDescGhost])
 
   // Chef services
   const [serviceOfferings, setServiceOfferings] = useState([])
@@ -684,6 +820,111 @@ export default function ChefDashboard(){
       setProfileInit(true)
     }
   }
+
+  // Handle Sous Chef action blocks (navigation and form prefill)
+  const handleSousChefAction = useCallback((action) => {
+    if (action.action_type === 'navigate') {
+      // Navigate to the specified tab
+      setTab(action.payload.tab)
+      setNotice(`Navigated to ${action.payload.tab.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase())}`)
+      setTimeout(() => setNotice(null), 3000)
+    } 
+    else if (action.action_type === 'prefill') {
+      // Navigate to the appropriate tab first
+      const tabMap = {
+        ingredient: 'kitchen',
+        dish: 'kitchen', 
+        meal: 'meals',
+        event: 'events',
+        service: 'services'
+      }
+      const targetTab = action.payload.target_tab || tabMap[action.payload.form_type] || 'dashboard'
+      setTab(targetTab)
+      
+      // Store prefill data to be consumed by the effect below
+      setPendingPrefill(action.payload)
+    }
+  }, [])
+
+  // Effect to handle pending prefill data - opens form and populates fields
+  useEffect(() => {
+    if (!pendingPrefill) return
+    
+    const { form_type, fields } = pendingPrefill
+    
+    // Small delay to ensure we're on the right tab first
+    const timer = setTimeout(() => {
+      switch (form_type) {
+        case 'ingredient':
+          setIngForm({
+            name: fields.name || '',
+            calories: fields.calories || '',
+            fat: fields.fat || '',
+            carbohydrates: fields.carbohydrates || '',
+            protein: fields.protein || ''
+          })
+          setShowIngredientForm(true)
+          break
+          
+        case 'dish':
+          setDishForm({
+            name: fields.name || '',
+            featured: fields.featured || false,
+            ingredient_ids: fields.ingredient_ids || []
+          })
+          setShowDishForm(true)
+          break
+          
+        case 'meal':
+          setMealForm({
+            name: fields.name || '',
+            description: fields.description || '',
+            meal_type: fields.meal_type || 'Dinner',
+            price: fields.price || '',
+            start_date: fields.start_date || '',
+            dishes: fields.dishes || [],
+            dietary_preferences: fields.dietary_preferences || []
+          })
+          setShowMealForm(true)
+          break
+          
+        case 'event':
+          setEventForm(prev => ({
+            ...prev,
+            event_date: fields.event_date || '',
+            event_time: fields.event_time || '18:00',
+            base_price: fields.base_price || '',
+            max_orders: fields.max_orders || 10,
+            description: fields.description || '',
+            special_instructions: fields.special_instructions || ''
+          }))
+          setShowEventForm(true)
+          break
+          
+        case 'service':
+          setServiceForm(prev => ({
+            ...prev,
+            title: fields.title || '',
+            description: fields.description || '',
+            service_type: fields.service_type || 'home_chef',
+            default_duration_minutes: fields.default_duration_minutes || '',
+            notes: fields.notes || ''
+          }))
+          setShowServiceForm(true)
+          break
+      }
+      
+      // Clear the pending prefill
+      setPendingPrefill(null)
+      
+      // Show success notice
+      const formLabel = form_type?.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase()) || 'item'
+      setNotice(`Form pre-filled for new ${formLabel}`)
+      setTimeout(() => setNotice(null), 3000)
+    }, 100)
+    
+    return () => clearTimeout(timer)
+  }, [pendingPrefill])
 
   // Load service area status
   const loadAreaStatus = useCallback(async () => {
@@ -1294,7 +1535,6 @@ export default function ChefDashboard(){
   )
 
   return (
-    <SousChefNotificationProvider>
     <div className={`chef-dashboard-layout ${sidebarCollapsed?'sidebar-collapsed':''}`}>
       {/* Sidebar Navigation */}
       <aside className={`chef-sidebar ${sidebarCollapsed?'collapsed':''}`}>
@@ -2310,7 +2550,19 @@ export default function ChefDashboard(){
                 <h3 style={{marginTop:0}}>Create dish</h3>
                 <form onSubmit={createDish}>
                   <div className="label">Name</div>
-                  <input className="input" value={dishForm.name} onChange={e=> setDishForm(f=>({ ...f, name:e.target.value }))} required placeholder="e.g., Grilled Salmon" />
+                  <GhostInput
+                    className="input"
+                    value={dishForm.name}
+                    onChange={val => setDishForm(f=>({ ...f, name: val }))}
+                    ghostValue={dishNameGhost}
+                    onAccept={(val) => {
+                      setDishForm(f=>({ ...f, name: val }))
+                      acceptSuggestion('ai_dish_name')
+                    }}
+                    onDismiss={() => dismissSuggestion('ai_dish_name')}
+                    required
+                    placeholder="e.g., Grilled Salmon"
+                  />
                   <div className="label">Ingredients</div>
                   <select className="select" multiple value={dishForm.ingredient_ids} onChange={e=> {
                     const opts = Array.from(e.target.selectedOptions).map(o=>o.value); setDishForm(f=>({ ...f, ingredient_ids: opts }))
@@ -2371,9 +2623,33 @@ export default function ChefDashboard(){
                 <h3 style={{marginTop:0}}>Create meal</h3>
                 <form onSubmit={createMeal} aria-busy={mealSaving}>
                   <div className="label">Name</div>
-                  <input className="input" value={mealForm.name} onChange={e=> setMealForm(f=>({ ...f, name:e.target.value }))} required placeholder="e.g., Sunday Family Dinner" />
+                  <GhostInput
+                    className="input"
+                    value={mealForm.name}
+                    onChange={val => setMealForm(f=>({ ...f, name: val }))}
+                    ghostValue={mealNameGhost}
+                    onAccept={(val) => {
+                      setMealForm(f=>({ ...f, name: val }))
+                      acceptSuggestion('ai_meal_name')
+                    }}
+                    onDismiss={() => dismissSuggestion('ai_meal_name')}
+                    required
+                    placeholder="e.g., Sunday Family Dinner"
+                  />
                   <div className="label">Description</div>
-                  <textarea className="textarea" rows={2} value={mealForm.description} onChange={e=> setMealForm(f=>({ ...f, description:e.target.value }))} placeholder="Describe this meal..." />
+                  <GhostTextarea
+                    className="textarea"
+                    rows={2}
+                    value={mealForm.description}
+                    onChange={val => setMealForm(f=>({ ...f, description: val }))}
+                    ghostValue={mealDescGhost}
+                    onAccept={(val) => {
+                      setMealForm(f=>({ ...f, description: val }))
+                      acceptSuggestion('ai_meal_description')
+                    }}
+                    onDismiss={() => dismissSuggestion('ai_meal_description')}
+                    placeholder="Describe this meal..."
+                  />
                   <div className="grid" style={{gridTemplateColumns:'1fr 1fr', gap:'.5rem', marginTop:'.5rem'}}>
                     <div>
                       <div className="label">Meal type</div>
@@ -2579,9 +2855,33 @@ export default function ChefDashboard(){
           <h3 style={{marginTop:0}}>Create meal</h3>
           <form onSubmit={createMeal} aria-busy={mealSaving}>
             <div className="label">Name</div>
-                <input className="input" value={mealForm.name} onChange={e=> setMealForm(f=>({ ...f, name:e.target.value }))} required placeholder="e.g., Sunday Family Dinner" />
+                <GhostInput
+                  className="input"
+                  value={mealForm.name}
+                  onChange={val => setMealForm(f=>({ ...f, name: val }))}
+                  ghostValue={mealNameGhost}
+                  onAccept={(val) => {
+                    setMealForm(f=>({ ...f, name: val }))
+                    acceptSuggestion('ai_meal_name')
+                  }}
+                  onDismiss={() => dismissSuggestion('ai_meal_name')}
+                  required
+                  placeholder="e.g., Sunday Family Dinner"
+                />
                 <div className="label">Description</div>
-                <textarea className="textarea" rows={2} value={mealForm.description} onChange={e=> setMealForm(f=>({ ...f, description:e.target.value }))} placeholder="Describe this meal..." />
+                <GhostTextarea
+                  className="textarea"
+                  rows={2}
+                  value={mealForm.description}
+                  onChange={val => setMealForm(f=>({ ...f, description: val }))}
+                  ghostValue={mealDescGhost}
+                  onAccept={(val) => {
+                    setMealForm(f=>({ ...f, description: val }))
+                    acceptSuggestion('ai_meal_description')
+                  }}
+                  onDismiss={() => dismissSuggestion('ai_meal_description')}
+                  placeholder="Describe this meal..."
+                />
                 <div className="grid" style={{gridTemplateColumns:'1fr 1fr', gap:'.5rem', marginTop:'.5rem'}}>
                   <div>
                     <div className="label">Meal type</div>
@@ -3157,6 +3457,9 @@ export default function ChefDashboard(){
           onEmojiChange={(emoji) => {
             setChef(prev => prev ? { ...prev, sous_chef_emoji: emoji } : prev)
           }}
+          onAction={handleSousChefAction}
+          suggestionCount={suggestions.length}
+          suggestionPriority={suggestionPriority}
         />
       )}
 
@@ -3168,6 +3471,19 @@ export default function ChefDashboard(){
         title={analyticsDrawer.title}
       />
     </div>
-    </SousChefNotificationProvider>
+  )
+}
+
+/**
+ * ChefDashboard Wrapper
+ * Provides context for the dashboard content.
+ */
+export default function ChefDashboard() {
+  return (
+    <ChefContextProvider>
+      <SousChefNotificationProvider>
+        <ChefDashboardContent />
+      </SousChefNotificationProvider>
+    </ChefContextProvider>
   )
 }

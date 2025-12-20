@@ -13,7 +13,8 @@ export default function FamilySelector({
   selectedFamilyId,
   selectedFamilyType,
   onFamilySelect,
-  className = ''
+  className = '',
+  openDirection = 'down'  // 'down' or 'up' - controls dropdown direction
 }) {
   const [customers, setCustomers] = useState([])
   const [leads, setLeads] = useState([])
@@ -220,7 +221,7 @@ export default function FamilySelector({
       </div>
 
       {isOpen && (
-        <div className="family-selector-dropdown">
+        <div className={`family-selector-dropdown ${openDirection === 'up' ? 'open-up' : 'open-down'}`}>
           <div className="search-wrapper">
             <input
               type="text"
@@ -388,7 +389,6 @@ export default function FamilySelector({
         
         .family-selector-dropdown {
           position: absolute;
-          top: calc(100% + 4px);
           left: 0;
           right: 0;
           background: var(--bg-card, #fff);
@@ -400,6 +400,29 @@ export default function FamilySelector({
           display: flex;
           flex-direction: column;
           overflow: hidden;
+        }
+        
+        /* Dropdown opens downward (default) */
+        .family-selector-dropdown.open-down {
+          top: calc(100% + 4px);
+        }
+        
+        /* Dropdown opens upward */
+        .family-selector-dropdown.open-up {
+          bottom: calc(100% + 4px);
+          top: auto;
+          flex-direction: column-reverse;
+        }
+        
+        /* When opening up, reverse the internal order */
+        .family-selector-dropdown.open-up .family-list {
+          display: flex;
+          flex-direction: column-reverse;
+        }
+        
+        .family-selector-dropdown.open-up .search-wrapper {
+          border-bottom: none;
+          border-top: 1px solid var(--border-color, #ddd);
         }
         
         .search-wrapper {

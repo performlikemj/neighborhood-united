@@ -550,3 +550,85 @@ def sous_chef_family_context(request, family_type, family_id):
         logger.error(f"Sous Chef context error: {e}")
         return Response({"status": "error", "message": str(e)}, status=500)
 
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def sous_chef_get_suggestions(request):
+    """
+    POST /api/chefs/me/sous-chef/suggest/
+    
+    Get contextual suggestions based on current chef activity.
+    Uses a hybrid approach: rule-based suggestions (fast, free) and 
+    AI-powered suggestions (for complex scenarios when idle).
+    
+    Request Body:
+    {
+        "context": {
+            "currentTab": "kitchen",
+            "openForms": [{ "type": "dish", "fields": {...}, "completion": 0.4 }],
+            "recentActions": ["created_ingredient", "viewed_events"],
+            "timeOnScreen": 45000,
+            "validationErrors": [],
+            "isIdle": false
+        }
+    }
+    
+    Response:
+    {
+        "status": "success",
+        "suggestions": [
+            {
+                "id": "dish_name_suggestion",
+                "type": "field",
+                "formType": "dish",
+                "field": "name",
+                "value": "Jamaican Jerk Chicken",
+                "reason": "Based on your recent ingredients",
+                "priority": "medium"
+            },
+            {
+                "id": "create_first_dish",
+                "type": "action",
+                "action": "navigate",
+                "target": "kitchen",
+                "label": "Create your first dish",
+                "reason": "Build your menu by adding dishes",
+                "priority": "high"
+            }
+        ],
+        "priority": "medium"
+    }
+    """
+    chef, error_response = _get_chef_or_403(request)
+    if error_response:
+        return error_response
+    
+    context = request.data.get('context', {})
+    
+    if not context:
+        return Response({
+            "status": "success",
+            "suggestions": [],
+            "priority": "low"
+        })
+    
+    try:
+        from meals.sous_chef_suggestions import SuggestionEngine
+        
+        engine = SuggestionEngine(chef)
+        result = engine.get_suggestions(context)
+        
+        return Response({
+            "status": "success",
+            **result
+        })
+        
+    except Exception as e:
+        logger.error(f"Sous Chef suggestions error: {e}")
+        logger.error(traceback.format_exc())
+        return Response({
+            "status": "error",
+            "message": str(e),
+            "suggestions": [],
+            "priority": "low"
+        }, status=500)

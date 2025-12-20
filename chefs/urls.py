@@ -128,6 +128,9 @@ urlpatterns = [
     # Get family context for display
     path('api/me/sous-chef/context/<str:family_type>/<int:family_id>/', sous_chef_api.sous_chef_family_context, name='sous_chef_context'),
     
+    # Contextual suggestions endpoint
+    path('api/me/sous-chef/suggest/', sous_chef_api.sous_chef_get_suggestions, name='sous_chef_suggest'),
+    
     # ==========================================================================
     # Collaborative Meal Plans API (Chef endpoints)
     # ==========================================================================

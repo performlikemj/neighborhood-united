@@ -346,6 +346,53 @@ SOUS_CHEF_TOOLS = [
             },
             "required": ["topic"]
         }
+    },
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # NAVIGATION & UI ACTION TOOLS
+    # ═══════════════════════════════════════════════════════════════════════════════
+    {
+        "type": "function",
+        "name": "navigate_to_dashboard_tab",
+        "description": "Navigate the chef to a specific dashboard tab. Use when the chef asks how to do something or wants help with a specific feature. The chef will see a button they can click to navigate.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "tab": {
+                    "type": "string",
+                    "enum": ["dashboard", "prep", "profile", "photos", "kitchen", "connections", "clients", "messages", "payments", "services", "events", "orders", "meals"],
+                    "description": "The dashboard tab to navigate to"
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Brief explanation of why navigating here helps (shown to the chef)"
+                }
+            },
+            "required": ["tab", "reason"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "prefill_form",
+        "description": "Pre-fill a form with suggested values and navigate to it. Use when helping the chef create something new like a dish, meal, or event. The chef will see a button to create the item with pre-filled data.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "form_type": {
+                    "type": "string",
+                    "enum": ["ingredient", "dish", "meal", "event", "service"],
+                    "description": "Which form to prefill"
+                },
+                "fields": {
+                    "type": "object",
+                    "description": "Key-value pairs of field names and suggested values. For ingredient: name, calories, fat, carbohydrates, protein. For dish: name, featured. For meal: name, description, meal_type, price. For event: event_date, event_time, base_price, max_orders. For service: title, description, service_type."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Brief explanation of the suggestion (shown to the chef)"
+                }
+            },
+            "required": ["form_type", "fields", "reason"]
+        }
     }
 ]
 
@@ -471,6 +518,9 @@ def handle_sous_chef_tool_call(
         "get_upcoming_commitments": _get_upcoming_commitments_tool,
         # Chef Hub help tool
         "lookup_chef_hub_help": _lookup_chef_hub_help,
+        # Navigation & UI action tools
+        "navigate_to_dashboard_tab": _navigate_to_dashboard_tab,
+        "prefill_form": _prefill_form,
     }
     
     handler = tool_map.get(name)
@@ -1557,4 +1607,113 @@ def _get_upcoming_commitments_tool(
         },
         "commitments_by_date": by_date,
         "summary": summary
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NAVIGATION & UI ACTION TOOL IMPLEMENTATIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Tab name to display label mapping
+TAB_LABELS = {
+    "dashboard": "Dashboard",
+    "prep": "Prep Planning",
+    "profile": "Profile",
+    "photos": "Photos",
+    "kitchen": "Kitchen",
+    "connections": "Connections",
+    "clients": "Clients",
+    "messages": "Messages",
+    "payments": "Payment Links",
+    "services": "Services",
+    "events": "Events",
+    "orders": "Orders",
+    "meals": "Meals",
+}
+
+# Form type to tab mapping
+FORM_TAB_MAP = {
+    "ingredient": "kitchen",
+    "dish": "kitchen",
+    "meal": "meals",
+    "event": "events",
+    "service": "services",
+}
+
+
+def _navigate_to_dashboard_tab(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """
+    Navigate the chef to a specific dashboard tab.
+    Returns action metadata that the frontend will render as an interactive button.
+    """
+    tab = args.get("tab", "dashboard")
+    reason = args.get("reason", "")
+    
+    # Validate tab
+    if tab not in TAB_LABELS:
+        return {
+            "status": "error",
+            "message": f"Unknown tab: {tab}. Valid tabs: {', '.join(TAB_LABELS.keys())}"
+        }
+    
+    tab_label = TAB_LABELS[tab]
+    
+    return {
+        "status": "success",
+        "action_type": "navigate",
+        "tab": tab,
+        "label": f"Go to {tab_label}",
+        "reason": reason,
+        "render_as_action": True  # Flag for response builder to render as clickable action
+    }
+
+
+def _prefill_form(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """
+    Pre-fill a form with suggested values.
+    Returns action metadata that the frontend will render as an interactive button.
+    """
+    form_type = args.get("form_type", "")
+    fields = args.get("fields", {})
+    reason = args.get("reason", "")
+    
+    # Validate form type
+    if form_type not in FORM_TAB_MAP:
+        return {
+            "status": "error",
+            "message": f"Unknown form type: {form_type}. Valid types: {', '.join(FORM_TAB_MAP.keys())}"
+        }
+    
+    # Get the destination tab
+    target_tab = FORM_TAB_MAP[form_type]
+    
+    # Create a friendly label
+    form_labels = {
+        "ingredient": "Ingredient",
+        "dish": "Dish",
+        "meal": "Meal",
+        "event": "Event",
+        "service": "Service",
+    }
+    label = f"Create {form_labels.get(form_type, form_type.title())}"
+    
+    return {
+        "status": "success",
+        "action_type": "prefill",
+        "form_type": form_type,
+        "target_tab": target_tab,
+        "fields": fields,
+        "label": label,
+        "reason": reason,
+        "render_as_action": True  # Flag for response builder to render as clickable action
     }

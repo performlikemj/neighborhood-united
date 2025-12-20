@@ -60,3 +60,4 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(
                 f'Deleted {count} draft order(s) older than {hours} hours.'
             ))
+

@@ -242,13 +242,43 @@ function ListBlock({ items, ordered }) {
 }
 
 /**
+ * Render an action block (navigation or form prefill button).
+ * These are clickable buttons that trigger navigation or form actions.
+ */
+function ActionBlock({ action_type, label, payload, reason, onAction }) {
+  // Icon based on action type
+  const icon = action_type === 'navigate' ? '→' : '+'
+  
+  const handleClick = () => {
+    if (onAction) {
+      onAction({ action_type, payload })
+    }
+  }
+  
+  return (
+    <div className="action-block">
+      {reason && <p className="action-reason">{reason}</p>}
+      <button 
+        className="action-button"
+        onClick={handleClick}
+        type="button"
+      >
+        <span className="action-icon">{icon}</span>
+        <span className="action-label">{label}</span>
+      </button>
+    </div>
+  )
+}
+
+/**
  * Main StructuredContent component.
  * 
  * @param {Object} props
  * @param {string} props.content - The content string (JSON or plain text)
  * @param {string} props.className - Optional additional CSS class
+ * @param {function} props.onAction - Optional callback for action blocks (navigation/prefill)
  */
-export default function StructuredContent({ content, className = '' }) {
+export default function StructuredContent({ content, className = '', onAction }) {
   // Parse content to blocks or detect legacy markdown
   const parsed = useMemo(() => parseContent(content), [content])
   
@@ -311,6 +341,19 @@ export default function StructuredContent({ content, className = '' }) {
             // Handle heading blocks (edge case: model might use this type)
             const HeadingTag = `h${Math.min(Math.max(block.level || 3, 1), 6)}`
             return <HeadingTag key={index}>{String(block.content || block.text || '')}</HeadingTag>
+          
+          case 'action':
+            // Handle action blocks (navigation or form prefill buttons)
+            return (
+              <ActionBlock
+                key={index}
+                action_type={block.action_type}
+                label={block.label}
+                payload={block.payload}
+                reason={block.reason}
+                onAction={onAction}
+              />
+            )
           
           case 'text':
           default:
@@ -426,6 +469,57 @@ export default function StructuredContent({ content, className = '' }) {
         /* First/last element spacing */
         .structured-content > *:first-child { margin-top: 0 !important; }
         .structured-content > *:last-child { margin-bottom: 0 !important; }
+        
+        /* Action Block Styles */
+        .action-block {
+          margin: 0.75em 0;
+          padding: 0.75em;
+          background: linear-gradient(135deg, rgba(92, 184, 92, 0.08), rgba(92, 184, 92, 0.04));
+          border: 1px solid rgba(92, 184, 92, 0.2);
+          border-radius: 8px;
+        }
+        
+        .action-reason {
+          margin: 0 0 0.5em 0;
+          font-size: 0.85em;
+          color: var(--text);
+          line-height: 1.4;
+        }
+        
+        .action-button {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.5em;
+          padding: 0.6em 1.2em;
+          background: linear-gradient(135deg, var(--primary, #5cb85c), var(--primary-700, #3E8F3E));
+          color: white;
+          border: none;
+          border-radius: 6px;
+          font-size: 0.9em;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          box-shadow: 0 2px 4px rgba(92, 184, 92, 0.2);
+        }
+        
+        .action-button:hover {
+          transform: translateY(-1px);
+          box-shadow: 0 4px 8px rgba(92, 184, 92, 0.3);
+        }
+        
+        .action-button:active {
+          transform: translateY(0);
+          box-shadow: 0 1px 2px rgba(92, 184, 92, 0.2);
+        }
+        
+        .action-icon {
+          font-size: 1.1em;
+          font-weight: 600;
+        }
+        
+        .action-label {
+          font-weight: 500;
+        }
       `}</style>
     </div>
   )

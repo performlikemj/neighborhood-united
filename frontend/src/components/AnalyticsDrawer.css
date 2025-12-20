@@ -514,3 +514,4 @@ body.dark .chart-empty,
 [data-theme="dark"] .chart-empty {
   color: var(--text-muted, #9ca3af);
 }
+

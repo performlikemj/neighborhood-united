@@ -43,6 +43,26 @@ class Chef(models.Model):
         blank=True,
         help_text="Emoji icon for the Sous Chef assistant widget"
     )
+    # Sous Chef suggestion preferences
+    sous_chef_suggestions_enabled = models.BooleanField(
+        default=True,
+        help_text="Enable contextual AI suggestions from Sous Chef"
+    )
+    sous_chef_suggestion_frequency = models.CharField(
+        max_length=20,
+        choices=[
+            ('often', 'Often'),
+            ('sometimes', 'Sometimes'),
+            ('rarely', 'Rarely')
+        ],
+        default='sometimes',
+        help_text="How often to show contextual suggestions"
+    )
+    dismissed_suggestion_types = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="List of suggestion types the chef has dismissed permanently"
+    )
     # Calendly booking link
     calendly_url = models.URLField(
         blank=True,

@@ -37,7 +37,8 @@ export default function SousChefChat({
   initialContext,  // Pre-populated context from notifications
   onContextHandled, // Callback when context has been used
   initialInput,     // Pre-populated input text (from widget expansion)
-  externalInputRef  // External ref to access the input element
+  externalInputRef, // External ref to access the input element
+  onAction          // Callback for action blocks (navigation/prefill)
 }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState(initialInput || '')
@@ -409,6 +410,7 @@ export default function SousChefChat({
                 key={msg.id}
                 role={msg.role}
                 content={msg.content}
+                onAction={onAction}
                 finalized={msg.finalized}
                 isThinking={msg.isThinking}
               />
@@ -1184,7 +1186,7 @@ export default function SousChefChat({
  * Message bubble component with structured content rendering.
  * Uses StructuredContent for assistant messages to render JSON blocks.
  */
-function MessageBubble({ role, content, finalized, isThinking }) {
+function MessageBubble({ role, content, finalized, isThinking, onAction }) {
   const isChef = role === 'chef'
   
   return (
@@ -1199,7 +1201,7 @@ function MessageBubble({ role, content, finalized, isThinking }) {
             <span className="thinking-dot"></span>
           </div>
         ) : (
-          <StructuredContent content={content} />
+          <StructuredContent content={content} onAction={onAction} />
         )}
       </div>
     </div>

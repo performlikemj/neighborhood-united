@@ -184,6 +184,7 @@ export default function SousChefPage() {
               selectedFamilyId={selectedFamily.familyId}
               selectedFamilyType={selectedFamily.familyType}
               onFamilySelect={handleFamilySelect}
+              openDirection="up"
             />
           </div>
         )}
@@ -538,7 +539,8 @@ export default function SousChefPage() {
           padding: 1rem;
           box-shadow: 0 8px 32px rgba(0,0,0,0.15);
           border: 1px solid var(--border, #e0e0e0);
-          max-width: 320px;
+          width: 320px;
+          max-width: calc(100vw - 2rem);
         }
 
         .floating-family-selector::before {
@@ -550,6 +552,11 @@ export default function SousChefPage() {
           margin-bottom: 0.5rem;
           text-transform: uppercase;
           letter-spacing: 0.5px;
+        }
+
+        /* Upward-opening dropdown styling */
+        .floating-family-selector .family-selector-dropdown {
+          max-height: min(50vh, 400px);
         }
 
         /* Header general mode indicator */

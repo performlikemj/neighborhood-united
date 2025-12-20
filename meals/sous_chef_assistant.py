@@ -44,9 +44,18 @@ class ListBlock(BaseModel):
     ordered: bool = Field(default=False, description="True for numbered list, False for bulleted")
 
 
+class ActionBlock(BaseModel):
+    """An interactive action the chef can execute (navigation or form prefill)."""
+    type: Literal["action"] = "action"
+    action_type: str = Field(description="Type of action: 'navigate' or 'prefill'")
+    label: str = Field(description="Button label to display")
+    payload: Dict[str, Any] = Field(description="Action-specific data (tab for navigate, form_type+fields for prefill)")
+    reason: str = Field(default="", description="Brief explanation of why this action is suggested")
+
+
 class SousChefResponse(BaseModel):
     """Structured response from Sous Chef containing content blocks."""
-    blocks: List[Union[TextBlock, TableBlock, ListBlock]] = Field(
+    blocks: List[Union[TextBlock, TableBlock, ListBlock, ActionBlock]] = Field(
         description="Array of content blocks that make up the response"
     )
 
@@ -193,6 +202,24 @@ SOUS_CHEF_PROMPT_TEMPLATE = """
       
       For detailed step-by-step guidance on any feature, use the `lookup_chef_hub_help` tool to retrieve accurate documentation.
     </ChefHubReference>
+
+    <!-- 5-G. NAVIGATION ASSISTANCE -->
+    <NavigationGuidance>
+      You can help {chef_name} navigate the Chef Hub dashboard and create items:
+      
+      • When the chef asks "how do I..." or "where can I..." questions about platform features,
+        offer to navigate them to the right tab using `navigate_to_dashboard_tab`
+      • When helping create new items (dishes, meals, events, services, ingredients),
+        use `prefill_form` to pre-fill the form with suggested values
+      • Always explain WHY you're suggesting navigation in the reason field
+      • The chef will see a clickable button — they control when to navigate
+      • After calling a navigation/prefill tool, provide context about what they'll find there
+      
+      Navigation Examples:
+      - "Help me add a new dish" → Use prefill_form with form_type="dish"
+      - "How do I set up my prices?" → Use navigate_to_dashboard_tab with tab="services"
+      - "Take me to my meal events" → Use navigate_to_dashboard_tab with tab="events"
+    </NavigationGuidance>
 
   </OperatingInstructions>
 </PromptTemplate>
@@ -346,6 +373,39 @@ class SousChefAssistant:
         """
         from .sous_chef_tools import get_sous_chef_tools
         return get_sous_chef_tools(include_family_tools=self.has_family_context)
+
+    def _build_action_block(self, tool_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Convert a tool result with render_as_action=True into an ActionBlock.
+        
+        Returns None if the tool result is not an action type or is invalid.
+        """
+        action_type = tool_result.get("action_type")
+        
+        if action_type == "navigate":
+            return {
+                "type": "action",
+                "action_type": "navigate",
+                "label": tool_result.get("label", f"Go to {tool_result.get('tab', 'tab')}"),
+                "payload": {
+                    "tab": tool_result.get("tab")
+                },
+                "reason": tool_result.get("reason", "")
+            }
+        elif action_type == "prefill":
+            return {
+                "type": "action",
+                "action_type": "prefill",
+                "label": tool_result.get("label", f"Create {tool_result.get('form_type', 'item')}"),
+                "payload": {
+                    "form_type": tool_result.get("form_type"),
+                    "target_tab": tool_result.get("target_tab"),
+                    "fields": tool_result.get("fields", {})
+                },
+                "reason": tool_result.get("reason", "")
+            }
+        
+        return None
 
     def _get_or_create_thread(self) -> SousChefThread:
         """Get or create a conversation thread for this chef + optional family."""
@@ -944,12 +1004,18 @@ Conversation:
         Two-phase approach:
         1. First, loop with tools enabled until all tool calls are resolved
         2. Then, make final call with JSON mode for structured output
+        
+        Special handling for action tools (navigate_to_dashboard_tab, prefill_form):
+        These return render_as_action=True and are converted to clickable action blocks.
         """
         try:
             model = _get_groq_model()
             tools = self._get_tools()
             max_iterations = 10
             iteration = 0
+            
+            # Collect action-type tool results to append as action blocks
+            pending_action_blocks = []
             
             # Phase 1: Handle tool calls (tools and JSON mode can't be used together)
             while iteration < max_iterations:
@@ -1009,6 +1075,12 @@ Conversation:
                     except Exception as e:
                         logger.error(f"Tool call error: {e}")
                         result = {"status": "error", "message": str(e)}
+                    
+                    # Check if this is an action-type result that should be rendered as a button
+                    if result.get("render_as_action") and result.get("status") == "success":
+                        action_block = self._build_action_block(result)
+                        if action_block:
+                            pending_action_blocks.append(action_block)
                     
                     # Add tool result to history
                     chat_messages.append({
@@ -1087,6 +1159,14 @@ Respond ONLY with valid JSON, no other text."""
                 chat_messages.append({"role": "assistant", "content": history_text})
                 thread.openai_input_history = chat_messages
                 thread.save(update_fields=['openai_input_history', 'updated_at'])
+                
+                # Append any pending action blocks from tool calls
+                if pending_action_blocks:
+                    if "blocks" not in parsed:
+                        parsed["blocks"] = []
+                    parsed["blocks"].extend(pending_action_blocks)
+                    # Update response_json with the added action blocks
+                    response_json = json.dumps(parsed)
                 
                 # Save structured JSON to database for UI rendering
                 self._save_message(thread, 'assistant', response_json)

@@ -59,7 +59,10 @@ function getExpandThresholds() {
 
 export default function SousChefWidget({ 
   sousChefEmoji = '🧑‍🍳',
-  onEmojiChange
+  onEmojiChange,
+  onAction,  // Callback for action blocks (navigation/prefill)
+  suggestionCount = 0,  // Number of contextual suggestions available
+  suggestionPriority = 'low'  // Priority of suggestions: 'high', 'medium', 'low'
 }) {
   const navigate = useNavigate()
   const location = useLocation()
@@ -138,10 +141,17 @@ export default function SousChefWidget({
 
   // Track if this is the initial mount
   const isInitialMountRef = useRef(true)
+  const isMountedRef = useRef(false)
+  
+  // Set mounted flag after first render completes
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => { isMountedRef.current = false }
+  }, [])
   
   // Watch for new notifications and show toast
   useEffect(() => {
-    if (!notifications) return
+    if (!notifications || !isMountedRef.current) return
     
     const currentCount = notifications.unreadCount
     
@@ -152,23 +162,29 @@ export default function SousChefWidget({
       return
     }
     
-    const latestUnread = notifications.getLatestUnread()
-    
-    // New notification arrived
-    if (currentCount > prevUnreadCount.current && latestUnread) {
-      setToastNotification(latestUnread)
-      setShowToast(true)
+    // Defer the state updates to avoid render-phase updates
+    const timeoutId = setTimeout(() => {
+      if (!isMountedRef.current) return
       
-      // Auto-hide toast after 8 seconds
-      const timer = setTimeout(() => {
-        setShowToast(false)
-      }, 8000)
+      const latestUnread = notifications.getLatestUnread()
+      
+      // New notification arrived
+      if (currentCount > prevUnreadCount.current && latestUnread) {
+        setToastNotification(latestUnread)
+        setShowToast(true)
+        
+        // Auto-hide toast after 8 seconds
+        setTimeout(() => {
+          if (isMountedRef.current) {
+            setShowToast(false)
+          }
+        }, 8000)
+      }
       
       prevUnreadCount.current = currentCount
-      return () => clearTimeout(timer)
-    }
+    }, 0)
     
-    prevUnreadCount.current = currentCount
+    return () => clearTimeout(timeoutId)
   }, [notifications?.unreadCount])
 
   // Handle clicking on toast notification
@@ -489,6 +505,7 @@ export default function SousChefWidget({
               initialContext={pendingContext}
               onContextHandled={() => setPendingContext(null)}
               externalInputRef={chatInputRef}
+              onAction={onAction}
             />
           </div>
         </div>
@@ -496,7 +513,7 @@ export default function SousChefWidget({
 
       {/* Floating Action Button */}
       <button
-        className={`sous-chef-fab ${isOpen ? 'open' : ''}`}
+        className={`sous-chef-fab ${isOpen ? 'open' : ''} ${suggestionCount > 0 && !isOpen ? `has-suggestions priority-${suggestionPriority}` : ''}`}
         onClick={toggleWidget}
         aria-label={isOpen ? 'Close Sous Chef' : 'Open Sous Chef'}
         title="Sous Chef Assistant"
@@ -508,6 +525,9 @@ export default function SousChefWidget({
             <span className="fab-icon emoji">{currentEmoji}</span>
             {unreadCount > 0 && (
               <span className="fab-badge">{unreadCount > 9 ? '9+' : unreadCount}</span>
+            )}
+            {suggestionCount > 0 && unreadCount === 0 && (
+              <span className="fab-suggestion-indicator">✨</span>
             )}
           </>
         )}
@@ -556,6 +576,47 @@ export default function SousChefWidget({
 
         .fab-icon.emoji {
           font-size: 1.75rem;
+        }
+
+        /* Suggestion Indicator */
+        .fab-suggestion-indicator {
+          position: absolute;
+          top: -2px;
+          right: -2px;
+          font-size: 0.9rem;
+          animation: sparkle 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes sparkle {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.7; transform: scale(1.2); }
+        }
+        
+        /* Suggestion glow effect */
+        .sous-chef-fab.has-suggestions {
+          animation: suggestionGlow 2s ease-in-out infinite;
+        }
+        
+        .sous-chef-fab.has-suggestions.priority-high {
+          animation: suggestionGlowHigh 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes suggestionGlow {
+          0%, 100% {
+            box-shadow: 0 4px 16px rgba(92, 184, 92, 0.35);
+          }
+          50% {
+            box-shadow: 0 4px 20px rgba(92, 184, 92, 0.5), 0 0 30px rgba(92, 184, 92, 0.3);
+          }
+        }
+        
+        @keyframes suggestionGlowHigh {
+          0%, 100% {
+            box-shadow: 0 4px 16px rgba(245, 158, 11, 0.4);
+          }
+          50% {
+            box-shadow: 0 4px 20px rgba(245, 158, 11, 0.6), 0 0 30px rgba(245, 158, 11, 0.4);
+          }
         }
 
         /* Notification Badge */

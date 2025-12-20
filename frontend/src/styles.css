@@ -4175,7 +4175,7 @@ body.chef-gallery-modal-open {
   padding: 1.5rem 0;
   position: sticky;
   top: 64px;
-  z-index: 100;
+  z-index: 15;
   backdrop-filter: blur(10px);
 }
 

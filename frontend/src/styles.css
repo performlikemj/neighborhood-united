@@ -8847,6 +8847,7 @@ button.chat-recipient:hover {
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
   z-index: 1101;
   max-height: 90vh;
+  max-height: 90dvh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -9133,6 +9134,7 @@ button.chat-recipient:hover {
   .modal-container {
     width: 95%;
     max-height: 95vh;
+    max-height: 95dvh;
   }
   
   .modal-header {
@@ -9183,6 +9185,12 @@ button.chat-recipient:hover {
     max-width: 100%;
     border-radius: 0;
     max-height: 100vh;
+    max-height: 100dvh;
+  }
+  
+  .modal-body {
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
   }
   
   .meal-slot-picker {
@@ -12551,6 +12559,7 @@ button.chat-recipient:hover {
   display: flex;
   justify-content: flex-end;
   padding: 1rem 1.5rem;
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
   border-top: 1px solid var(--border);
   background: var(--surface);
   flex-shrink: 0;
@@ -12690,6 +12699,7 @@ button.chat-recipient:hover {
 
   .service-areas-footer {
     padding: 0.875rem 1rem;
+    padding-bottom: max(0.875rem, env(safe-area-inset-bottom));
   }
 }
 

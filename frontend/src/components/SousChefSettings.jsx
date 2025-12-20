@@ -271,6 +271,7 @@ export default function SousChefSettings({
           width: 90%;
           max-width: 420px;
           max-height: 80vh;
+          max-height: 80dvh;
           display: flex;
           flex-direction: column;
           box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
@@ -321,6 +322,7 @@ export default function SousChefSettings({
           flex: 1;
           overflow-y: auto;
           padding: 1.25rem;
+          -webkit-overflow-scrolling: touch;
         }
         
         .setting-group {
@@ -505,7 +507,9 @@ export default function SousChefSettings({
           justify-content: flex-end;
           gap: 0.75rem;
           padding: 1rem 1.25rem;
+          padding-bottom: max(1rem, env(safe-area-inset-bottom));
           border-top: 1px solid var(--border, #e5e5e5);
+          flex-shrink: 0;
         }
         
         .settings-footer .btn {

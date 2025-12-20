@@ -681,8 +681,10 @@ export default function ChefPaymentLinks() {
             borderTopLeftRadius: '16px',
             borderTopRightRadius: '16px',
             width: '100%',
-            maxHeight: '80vh',
+            maxHeight: '80dvh',
             overflow: 'auto',
+            WebkitOverflowScrolling: 'touch',
+            paddingBottom: 'max(16px, env(safe-area-inset-bottom))',
             border: '1px solid var(--border, #eee)'
           }}>
             <div style={{
@@ -730,8 +732,9 @@ export default function ChefPaymentLinks() {
             borderRadius: '12px',
             width: '90%',
             maxWidth: '500px',
-            maxHeight: '90vh',
+            maxHeight: '90dvh',
             overflow: 'auto',
+            WebkitOverflowScrolling: 'touch',
             border: '1px solid var(--border, #eee)'
           }}>
             <div style={{

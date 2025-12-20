@@ -578,6 +578,7 @@ export default function MealSlotPicker({
             left: 0;
             right: 0;
             max-height: 85vh;
+            max-height: 85dvh;
             border-radius: 16px 16px 0 0;
           }
         }
@@ -591,6 +592,7 @@ export default function MealSlotPicker({
             width: 90%;
             max-width: 480px;
             max-height: 80vh;
+            max-height: 80dvh;
             border-radius: 16px;
             animation: mspFadeIn 0.2s ease;
           }
@@ -668,6 +670,8 @@ export default function MealSlotPicker({
           flex: 1;
           overflow-y: auto;
           padding: 1rem;
+          padding-bottom: max(1rem, env(safe-area-inset-bottom));
+          -webkit-overflow-scrolling: touch;
         }
 
         /* Meals Tab */

@@ -11,6 +11,7 @@ import SousChefWidget from '../components/SousChefWidget.jsx'
 import ServiceAreaPicker from '../components/ServiceAreaPicker.jsx'
 import ChatPanel from '../components/ChatPanel.jsx'
 import AnalyticsDrawer from '../components/AnalyticsDrawer.jsx'
+import MealDetailSlideout from '../components/MealDetailSlideout.jsx'
 import { SousChefNotificationProvider } from '../contexts/SousChefNotificationContext.jsx'
 import { useMessaging } from '../context/MessagingContext.jsx'
 
@@ -20,6 +21,8 @@ import { useSuggestions } from '../hooks/useSuggestions.js'
 import GhostInput from '../components/GhostInput.jsx'
 import GhostTextarea from '../components/GhostTextarea.jsx'
 import { SuggestionIndicator } from '../components/SuggestionBadge.jsx'
+import ScaffoldPreview from '../components/ScaffoldPreview.jsx'
+import { useScaffold } from '../hooks/useScaffold.js'
 
 function toArray(payload){
   if (!payload) return []
@@ -533,6 +536,8 @@ function ChefDashboardContent(){
   const [meals, setMeals] = useState([])
   const [mealForm, setMealForm] = useState({ name:'', description:'', meal_type:'Dinner', price:'', start_date:'', dishes:[], dietary_preferences:[] })
   const [mealSaving, setMealSaving] = useState(false)
+  const [selectedMeal, setSelectedMeal] = useState(null)
+  const [mealSlideoutOpen, setMealSlideoutOpen] = useState(false)
 
   // Events
   const [events, setEvents] = useState([])
@@ -576,9 +581,24 @@ function ChefDashboardContent(){
     fetchSuggestions,
     getSuggestionForField,
     acceptSuggestion,
-    dismissSuggestion 
+    dismissSuggestion
   } = useSuggestions({ enabled: true })
-  
+
+  // Scaffold state for meal creation
+  const {
+    scaffold,
+    isGenerating: isScaffoldGenerating,
+    isExecuting: isScaffoldExecuting,
+    isFetchingIngredients,
+    includeIngredients,
+    generateScaffold,
+    toggleIngredients,
+    updateScaffold,
+    executeScaffold,
+    clearScaffold
+  } = useScaffold()
+  const [showScaffoldPreview, setShowScaffoldPreview] = useState(false)
+
   // Track tab changes for context
   useEffect(() => {
     if (chefContext) {
@@ -2623,19 +2643,42 @@ function ChefDashboardContent(){
                 <h3 style={{marginTop:0}}>Create meal</h3>
                 <form onSubmit={createMeal} aria-busy={mealSaving}>
                   <div className="label">Name</div>
-                  <GhostInput
-                    className="input"
-                    value={mealForm.name}
-                    onChange={val => setMealForm(f=>({ ...f, name: val }))}
-                    ghostValue={mealNameGhost}
-                    onAccept={(val) => {
-                      setMealForm(f=>({ ...f, name: val }))
-                      acceptSuggestion('ai_meal_name')
-                    }}
-                    onDismiss={() => dismissSuggestion('ai_meal_name')}
-                    required
-                    placeholder="e.g., Sunday Family Dinner"
-                  />
+                  <div style={{display:'flex', gap:'8px', alignItems:'center'}}>
+                    <GhostInput
+                      className="input"
+                      style={{flex:1}}
+                      value={mealForm.name}
+                      onChange={val => setMealForm(f=>({ ...f, name: val }))}
+                      ghostValue={mealNameGhost}
+                      onAccept={(val) => {
+                        setMealForm(f=>({ ...f, name: val }))
+                        acceptSuggestion('ai_meal_name')
+                      }}
+                      onDismiss={() => dismissSuggestion('ai_meal_name')}
+                      required
+                      placeholder="e.g., Sunday Family Dinner"
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      onClick={async () => {
+                        if (!mealForm.name?.trim()) {
+                          setNotice('Enter a meal name first to scaffold')
+                          setTimeout(() => setNotice(null), 3000)
+                          return
+                        }
+                        const result = await generateScaffold(mealForm.name, {
+                          mealType: mealForm.meal_type || 'Dinner'
+                        })
+                        if (result) setShowScaffoldPreview(true)
+                      }}
+                      disabled={isScaffoldGenerating || !mealForm.name?.trim()}
+                      title="Generate dishes and ingredients with AI"
+                      style={{whiteSpace:'nowrap'}}
+                    >
+                      {isScaffoldGenerating ? '...' : '✨ Scaffold'}
+                    </button>
+                  </div>
                   <div className="label">Description</div>
                   <GhostTextarea
                     className="textarea"
@@ -2680,7 +2723,12 @@ function ChefDashboardContent(){
             ) : (
               <div className="chef-items-list">
                 {meals.map(m => (
-                  <div key={m.id} className="chef-item-card">
+                  <div 
+                    key={m.id} 
+                    className="chef-item-card chef-item-card-clickable"
+                    onClick={() => { setSelectedMeal(m); setMealSlideoutOpen(true) }}
+                    style={{ cursor: 'pointer' }}
+                  >
                     <div className="chef-item-info">
                       <div className="chef-item-name">{m.name}</div>
                       <div className="chef-item-meta">
@@ -2688,7 +2736,9 @@ function ChefDashboardContent(){
                         {m.description && ` • ${m.description.slice(0,60)}${m.description.length>60?'...':''}`}
                       </div>
                     </div>
-                    <button className="btn btn-outline btn-sm" onClick={()=> deleteMeal(m.id)}>Delete</button>
+                    <div className="chef-item-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <span className="view-details-hint" style={{ fontSize: '0.8rem', color: 'var(--text-muted, #6b7280)' }}>View →</span>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -2855,20 +2905,43 @@ function ChefDashboardContent(){
           <h3 style={{marginTop:0}}>Create meal</h3>
           <form onSubmit={createMeal} aria-busy={mealSaving}>
             <div className="label">Name</div>
-                <GhostInput
-                  className="input"
-                  value={mealForm.name}
-                  onChange={val => setMealForm(f=>({ ...f, name: val }))}
-                  ghostValue={mealNameGhost}
-                  onAccept={(val) => {
-                    setMealForm(f=>({ ...f, name: val }))
-                    acceptSuggestion('ai_meal_name')
-                  }}
-                  onDismiss={() => dismissSuggestion('ai_meal_name')}
-                  required
-                  placeholder="e.g., Sunday Family Dinner"
-                />
-                <div className="label">Description</div>
+            <div style={{display:'flex', gap:'8px', alignItems:'center'}}>
+              <GhostInput
+                className="input"
+                style={{flex:1}}
+                value={mealForm.name}
+                onChange={val => setMealForm(f=>({ ...f, name: val }))}
+                ghostValue={mealNameGhost}
+                onAccept={(val) => {
+                  setMealForm(f=>({ ...f, name: val }))
+                  acceptSuggestion('ai_meal_name')
+                }}
+                onDismiss={() => dismissSuggestion('ai_meal_name')}
+                required
+                placeholder="e.g., Sunday Family Dinner"
+              />
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={async () => {
+                  if (!mealForm.name?.trim()) {
+                    setNotice('Enter a meal name first to scaffold')
+                    setTimeout(() => setNotice(null), 3000)
+                    return
+                  }
+                  const result = await generateScaffold(mealForm.name, {
+                    mealType: mealForm.meal_type || 'Dinner'
+                  })
+                  if (result) setShowScaffoldPreview(true)
+                }}
+                disabled={isScaffoldGenerating || !mealForm.name?.trim()}
+                title="Generate dishes and ingredients with AI"
+                style={{whiteSpace:'nowrap'}}
+              >
+                {isScaffoldGenerating ? '...' : '✨ Scaffold'}
+              </button>
+            </div>
+            <div className="label">Description</div>
                 <GhostTextarea
                   className="textarea"
                   rows={2}
@@ -2919,7 +2992,12 @@ function ChefDashboardContent(){
             ) : (
               <div className="chef-items-list">
                 {meals.map(m => (
-                  <div key={m.id} className="chef-item-card">
+                  <div 
+                    key={m.id} 
+                    className="chef-item-card chef-item-card-clickable"
+                    onClick={() => { setSelectedMeal(m); setMealSlideoutOpen(true) }}
+                    style={{ cursor: 'pointer' }}
+                  >
                     <div className="chef-item-info">
                       <div className="chef-item-name">{m.name}</div>
                       <div className="chef-item-meta">
@@ -2927,7 +3005,9 @@ function ChefDashboardContent(){
                         {m.description && ` • ${m.description.slice(0,60)}${m.description.length>60?'...':''}`}
                       </div>
                     </div>
-                    <button className="btn btn-outline btn-sm" onClick={()=> deleteMeal(m.id)}>Delete</button>
+                    <div className="chef-item-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <span className="view-details-hint" style={{ fontSize: '0.8rem', color: 'var(--text-muted, #6b7280)' }}>View →</span>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -3464,11 +3544,96 @@ function ChefDashboardContent(){
       )}
 
       {/* Analytics Drawer */}
+      {/* Scaffold Preview Modal */}
+      {showScaffoldPreview && scaffold && (
+        <div className="scaffold-modal-overlay" onClick={() => setShowScaffoldPreview(false)}>
+          <div onClick={(e) => e.stopPropagation()}>
+            <ScaffoldPreview
+              scaffold={scaffold}
+              onUpdate={updateScaffold}
+              includeIngredients={includeIngredients}
+              onToggleIngredients={toggleIngredients}
+              isFetchingIngredients={isFetchingIngredients}
+              onExecute={async () => {
+                const result = await executeScaffold()
+                if (result && result.status === 'success') {
+                  setShowScaffoldPreview(false)
+                  
+                  // Use form_prefill to update the meal form
+                  const prefill = result.form_prefill || {}
+                  // Convert dish IDs to strings to match checkbox comparison
+                  const dishIds = (prefill.dish_ids || result.created?.dishes?.map(d => d.id) || [])
+                    .map(id => String(id))
+                  
+                  setMealForm(f => ({
+                    ...f,
+                    name: prefill.name || f.name,
+                    description: prefill.description || f.description,
+                    meal_type: prefill.meal_type || f.meal_type,
+                    // Merge new dish IDs with any existing selections
+                    dishes: [...new Set([...(f.dishes || []), ...dishIds])]
+                  }))
+                  
+                  // Refresh dishes list so the new dishes appear in the picker
+                  loadDishes()
+                  
+                  // Also refresh ingredients if any were created
+                  if (result.summary?.ingredients > 0) {
+                    loadIngredients()
+                  }
+                  
+                  // Show success message
+                  const newDishes = result.summary?.dishes || 0
+                  const newIngredients = result.summary?.ingredients || 0
+                  const totalDishes = dishIds.length
+                  let message = ''
+                  if (newDishes > 0 || newIngredients > 0) {
+                    const parts = []
+                    if (newDishes > 0) parts.push(`${newDishes} dish${newDishes !== 1 ? 'es' : ''}`)
+                    if (newIngredients > 0) parts.push(`${newIngredients} ingredient${newIngredients !== 1 ? 's' : ''}`)
+                    message = `Created ${parts.join(' and ')}`
+                  }
+                  if (totalDishes > newDishes) {
+                    message += message ? ` (${totalDishes} total selected)` : `${totalDishes} dish${totalDishes !== 1 ? 'es' : ''} selected`
+                  }
+                  message += '. Complete the form to create your meal!'
+                  
+                  setNotice(message)
+                  setTimeout(() => setNotice(null), 5000)
+                }
+              }}
+              onCancel={() => {
+                setShowScaffoldPreview(false)
+                clearScaffold()
+              }}
+              isExecuting={isScaffoldExecuting}
+            />
+          </div>
+        </div>
+      )}
+
       <AnalyticsDrawer
         open={analyticsDrawer.open}
         onClose={closeAnalyticsDrawer}
         metric={analyticsDrawer.metric}
         title={analyticsDrawer.title}
+      />
+
+      {/* Meal Detail Slideout */}
+      <MealDetailSlideout
+        open={mealSlideoutOpen}
+        onClose={() => { setMealSlideoutOpen(false); setSelectedMeal(null) }}
+        meal={selectedMeal}
+        dishes={dishes}
+        onSave={(updatedMeal) => {
+          // Update the meal in local state
+          setMeals(prev => prev.map(m => m.id === updatedMeal.id ? { ...m, ...updatedMeal } : m))
+          loadMeals() // Refresh from server
+        }}
+        onDelete={(mealId) => {
+          // Remove the meal from local state
+          setMeals(prev => prev.filter(m => m.id !== mealId))
+        }}
       />
     </div>
   )

@@ -136,13 +136,16 @@ class MealSerializer(serializers.ModelSerializer):
     is_compatible = serializers.SerializerMethodField()
     composed_dishes = serializers.SerializerMethodField()
     meal_dishes = serializers.SerializerMethodField()
+    dishes = serializers.SerializerMethodField()
+    created_date = serializers.DateTimeField(read_only=True)
     
     class Meta:
         model = Meal
         fields = [
             'id', 'name', 'chef', 'chef_name', 'image', 'description', 
             'price', 'average_rating', 'meal_type', 'dietary_preferences',
-            'is_chef_meal', 'chef_meal_events', 'is_compatible', 'composed_dishes', 'meal_dishes'
+            'is_chef_meal', 'chef_meal_events', 'is_compatible', 'composed_dishes', 'meal_dishes',
+            'dishes', 'created_date'
         ]
     
     def get_chef_name(self, obj):
@@ -192,6 +195,25 @@ class MealSerializer(serializers.ModelSerializer):
                     'is_chef_dish': bool(obj.chef and md.is_chef_dish),
                 }
                 for md in rows.all()
+            ]
+        except Exception:
+            return []
+    
+    def get_dishes(self, obj):
+        """Return the dish objects associated with this meal (for chef meals)."""
+        try:
+            if not obj.dishes.exists():
+                return []
+            return [
+                {
+                    'id': dish.id,
+                    'name': dish.name,
+                    'ingredients': [
+                        {'id': ing.id, 'name': ing.name}
+                        for ing in dish.ingredients.all()[:10]
+                    ] if hasattr(dish, 'ingredients') else []
+                }
+                for dish in obj.dishes.all()
             ]
         except Exception:
             return []

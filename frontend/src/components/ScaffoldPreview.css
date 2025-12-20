@@ -1,0 +1,772 @@
+/* ScaffoldPreview.css */
+/* Theme-aware scaffold preview using app design tokens */
+
+.scaffold-preview {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  max-width: 600px;
+  width: 100%;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.scaffold-preview__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.scaffold-preview__title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.scaffold-preview__close {
+  background: none;
+  border: none;
+  font-size: 1.2rem;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  transition: background 0.2s, color 0.2s;
+}
+
+.scaffold-preview__close:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.scaffold-preview__content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  background: var(--surface);
+}
+
+.scaffold-preview__empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 40px;
+}
+
+/* Scaffold Item */
+.scaffold-item {
+  margin-bottom: 8px;
+}
+
+.scaffold-item--removed {
+  opacity: 0.5;
+}
+
+.scaffold-item--exists .scaffold-item__name {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.scaffold-item__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.scaffold-item__header:hover {
+  background: var(--bg2);
+  border-color: var(--primary);
+}
+
+/* Type-specific backgrounds using primary color */
+.scaffold-item--meal > .scaffold-item__header {
+  background: linear-gradient(135deg, rgba(92, 184, 92, 0.12), rgba(92, 184, 92, 0.06));
+  border-color: rgba(92, 184, 92, 0.3);
+}
+
+.scaffold-item--dish > .scaffold-item__header {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+.scaffold-item--ingredient > .scaffold-item__header {
+  background: rgba(255, 193, 7, 0.08);
+  border-color: rgba(255, 193, 7, 0.25);
+}
+
+.scaffold-item__toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding: 4px;
+  width: 24px;
+  text-align: center;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+
+.scaffold-item__toggle:hover {
+  background: var(--surface);
+}
+
+.scaffold-item__toggle-placeholder {
+  width: 24px;
+}
+
+.scaffold-item__icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.scaffold-item__name {
+  flex: 1;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scaffold-item__name:hover {
+  text-decoration: underline;
+  color: var(--primary);
+}
+
+.scaffold-item__name-input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 2px solid var(--primary);
+  border-radius: var(--radius);
+  font-size: inherit;
+  font-weight: 500;
+  background: var(--surface);
+  color: var(--text);
+  min-width: 0;
+}
+
+.scaffold-item__name-input:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(92, 184, 92, 0.2);
+}
+
+.scaffold-item__badge {
+  font-size: 0.7rem;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+
+.scaffold-item__badge--exists {
+  background: rgba(33, 150, 243, 0.15);
+  color: #1976d2;
+}
+
+.scaffold-item__badge--removed {
+  background: rgba(244, 67, 54, 0.15);
+  color: #d32f2f;
+}
+
+.scaffold-item__actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+  flex-shrink: 0;
+}
+
+.scaffold-item__header:hover .scaffold-item__actions {
+  opacity: 1;
+}
+
+.scaffold-item__btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 6px;
+  font-size: 0.85rem;
+  border-radius: var(--radius);
+  transition: background 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scaffold-item__btn:hover {
+  background: var(--surface);
+}
+
+.scaffold-item__btn--remove:hover {
+  background: rgba(244, 67, 54, 0.12);
+}
+
+.scaffold-item__btn--restore:hover {
+  background: rgba(92, 184, 92, 0.12);
+}
+
+.scaffold-item__details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px 8px 44px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.scaffold-item__detail {
+  background: var(--surface-2);
+  padding: 3px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+.scaffold-item__detail--desc {
+  flex-basis: 100%;
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.scaffold-item__children {
+  padding-left: 16px;
+  border-left: 2px solid var(--border);
+  margin-left: 20px;
+  margin-top: 8px;
+}
+
+/* Footer */
+.scaffold-preview__footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  gap: 12px;
+}
+
+.scaffold-preview__summary {
+  font-size: 0.9rem;
+  color: var(--muted);
+  flex: 1;
+  min-width: 0;
+}
+
+.scaffold-preview__actions {
+  display: flex;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+/* Modal overlay when used as modal */
+.scaffold-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+  backdrop-filter: blur(4px);
+}
+
+/* ============================================
+   Dark Theme Overrides
+   ============================================ */
+[data-theme="dark"] .scaffold-preview {
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="dark"] .scaffold-item--meal > .scaffold-item__header {
+  background: linear-gradient(135deg, rgba(92, 184, 92, 0.18), rgba(92, 184, 92, 0.08));
+  border-color: rgba(92, 184, 92, 0.35);
+}
+
+[data-theme="dark"] .scaffold-item--dish > .scaffold-item__header {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] .scaffold-item--ingredient > .scaffold-item__header {
+  background: rgba(255, 193, 7, 0.12);
+  border-color: rgba(255, 193, 7, 0.3);
+}
+
+[data-theme="dark"] .scaffold-item__badge--exists {
+  background: rgba(33, 150, 243, 0.2);
+  color: #64b5f6;
+}
+
+[data-theme="dark"] .scaffold-item__badge--removed {
+  background: rgba(244, 67, 54, 0.2);
+  color: #ef5350;
+}
+
+[data-theme="dark"] .scaffold-item__btn--remove:hover {
+  background: rgba(244, 67, 54, 0.2);
+}
+
+[data-theme="dark"] .scaffold-item__btn--restore:hover {
+  background: rgba(92, 184, 92, 0.2);
+}
+
+[data-theme="dark"] .scaffold-modal-overlay {
+  background: rgba(0, 0, 0, 0.75);
+}
+
+/* ============================================
+   Responsive Styles
+   ============================================ */
+
+/* Tablet and below */
+@media (max-width: 768px) {
+  .scaffold-preview {
+    max-width: 100%;
+    max-height: 85vh;
+    border-radius: var(--radius);
+  }
+  
+  .scaffold-modal-overlay {
+    padding: 12px;
+  }
+  
+  .scaffold-preview__header {
+    padding: 14px 16px;
+  }
+  
+  .scaffold-preview__title {
+    font-size: 1rem;
+  }
+  
+  .scaffold-preview__content {
+    padding: 12px;
+  }
+  
+  .scaffold-item__header {
+    padding: 10px;
+    gap: 6px;
+  }
+  
+  .scaffold-item__icon {
+    font-size: 1rem;
+  }
+  
+  .scaffold-item__name {
+    font-size: 0.95rem;
+  }
+  
+  .scaffold-item__badge {
+    font-size: 0.65rem;
+    padding: 2px 6px;
+  }
+  
+  /* Show actions always on touch devices */
+  .scaffold-item__actions {
+    opacity: 1;
+  }
+  
+  .scaffold-item__details {
+    padding-left: 36px;
+    font-size: 0.8rem;
+    gap: 6px;
+  }
+  
+  .scaffold-item__children {
+    padding-left: 12px;
+    margin-left: 16px;
+  }
+  
+  .scaffold-preview__footer {
+    padding: 14px 16px;
+    flex-wrap: wrap;
+  }
+  
+  .scaffold-preview__summary {
+    font-size: 0.85rem;
+    flex-basis: 100%;
+    text-align: center;
+    margin-bottom: 10px;
+  }
+  
+  .scaffold-preview__actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+  
+  .scaffold-preview__actions .btn {
+    flex: 1;
+    justify-content: center;
+  }
+}
+
+/* Small mobile */
+@media (max-width: 480px) {
+  .scaffold-preview {
+    max-height: 90vh;
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+  
+  .scaffold-modal-overlay {
+    padding: 0;
+    align-items: flex-end;
+  }
+  
+  .scaffold-preview__header {
+    padding: 12px 14px;
+  }
+  
+  .scaffold-preview__content {
+    padding: 10px;
+  }
+  
+  .scaffold-item__header {
+    padding: 8px 10px;
+  }
+  
+  .scaffold-item__toggle {
+    width: 20px;
+    font-size: 0.7rem;
+  }
+  
+  .scaffold-item__toggle-placeholder {
+    width: 20px;
+  }
+  
+  .scaffold-item__details {
+    padding-left: 30px;
+  }
+  
+  .scaffold-item__children {
+    padding-left: 10px;
+    margin-left: 12px;
+  }
+  
+  .scaffold-preview__footer {
+    padding: 12px 14px;
+    /* Safe area for phones with home indicator */
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  
+  .scaffold-preview__actions {
+    gap: 8px;
+  }
+}
+
+/* Landscape orientation on mobile */
+@media (max-height: 500px) and (orientation: landscape) {
+  .scaffold-preview {
+    max-height: 95vh;
+  }
+  
+  .scaffold-preview__header,
+  .scaffold-preview__footer {
+    padding: 10px 16px;
+  }
+  
+  .scaffold-preview__content {
+    padding: 10px 16px;
+  }
+}
+
+/* ============================================
+   Options Bar (Ingredient Toggle)
+   ============================================ */
+.scaffold-preview__options {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  gap: 12px;
+}
+
+.scaffold-preview__toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.scaffold-preview__toggle-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.scaffold-preview__loading-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background: var(--primary);
+  border-radius: 50%;
+  margin-left: 8px;
+  animation: scaffold-pulse 1s ease-in-out infinite;
+}
+
+@keyframes scaffold-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+.scaffold-preview__expand-all {
+  background: none;
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  border-radius: var(--radius);
+  font-size: 0.8rem;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.scaffold-preview__expand-all:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+/* ============================================
+   Ingredient List
+   ============================================ */
+.ingredient-list {
+  padding: 8px 12px 8px 44px;
+}
+
+.ingredient-list--loading {
+  display: flex;
+  gap: 8px;
+}
+
+.ingredient-list__toggle {
+  background: none;
+  border: none;
+  padding: 4px 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.ingredient-list__toggle:hover {
+  color: var(--primary);
+}
+
+.ingredient-list__toggle--expanded {
+  margin-bottom: 8px;
+}
+
+.ingredient-list__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  animation: scaffold-fade-in 0.2s ease-out;
+}
+
+@keyframes scaffold-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ============================================
+   Ingredient Chip
+   ============================================ */
+.ingredient-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 4px 8px 4px 12px;
+  font-size: 0.8rem;
+  color: var(--text);
+  transition: all 0.2s;
+}
+
+.ingredient-chip:hover {
+  border-color: var(--primary);
+}
+
+.ingredient-chip--exists {
+  background: rgba(33, 150, 243, 0.1);
+  border-color: rgba(33, 150, 243, 0.3);
+  color: var(--muted);
+}
+
+.ingredient-chip--removed {
+  opacity: 0.5;
+  text-decoration: line-through;
+  background: rgba(244, 67, 54, 0.08);
+  border-color: rgba(244, 67, 54, 0.2);
+}
+
+.ingredient-chip__name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ingredient-chip__action {
+  background: none;
+  border: none;
+  padding: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+
+.ingredient-chip__action:hover {
+  background: rgba(0, 0, 0, 0.1);
+  color: var(--text);
+}
+
+.ingredient-chip--removed .ingredient-chip__action:hover {
+  background: rgba(92, 184, 92, 0.2);
+  color: var(--primary);
+}
+
+/* ============================================
+   Skeleton Loaders
+   ============================================ */
+.ingredient-skeleton {
+  height: 28px;
+  width: 80px;
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 25%,
+    var(--surface) 50%,
+    var(--surface-2) 75%
+  );
+  background-size: 200% 100%;
+  border-radius: 20px;
+  animation: skeleton-shimmer 1.5s infinite;
+}
+
+.ingredient-skeleton:nth-child(2) {
+  width: 100px;
+  animation-delay: 0.1s;
+}
+
+.ingredient-skeleton:nth-child(3) {
+  width: 70px;
+  animation-delay: 0.2s;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ============================================
+   Cuisine Hint Badge
+   ============================================ */
+.scaffold-item__detail--cuisine {
+  background: rgba(156, 39, 176, 0.1);
+  border-color: rgba(156, 39, 176, 0.25);
+  color: #9c27b0;
+  font-style: italic;
+}
+
+[data-theme="dark"] .scaffold-item__detail--cuisine {
+  background: rgba(156, 39, 176, 0.15);
+  border-color: rgba(156, 39, 176, 0.3);
+  color: #ce93d8;
+}
+
+/* ============================================
+   Dark Theme - Ingredients
+   ============================================ */
+[data-theme="dark"] .ingredient-chip {
+  background: var(--surface-2);
+}
+
+[data-theme="dark"] .ingredient-chip--exists {
+  background: rgba(33, 150, 243, 0.15);
+  border-color: rgba(33, 150, 243, 0.35);
+}
+
+[data-theme="dark"] .ingredient-chip--removed {
+  background: rgba(244, 67, 54, 0.12);
+  border-color: rgba(244, 67, 54, 0.25);
+}
+
+[data-theme="dark"] .ingredient-chip__action:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* ============================================
+   Responsive - Ingredients
+   ============================================ */
+@media (max-width: 768px) {
+  .scaffold-preview__options {
+    padding: 10px 16px;
+  }
+  
+  .scaffold-preview__toggle-label {
+    font-size: 0.85rem;
+  }
+  
+  .ingredient-list {
+    padding-left: 36px;
+  }
+  
+  .ingredient-chip {
+    font-size: 0.75rem;
+    padding: 3px 6px 3px 10px;
+  }
+  
+  .ingredient-chip__name {
+    max-width: 100px;
+  }
+}
+
+@media (max-width: 480px) {
+  .scaffold-preview__options {
+    flex-wrap: wrap;
+    padding: 10px 14px;
+  }
+  
+  .scaffold-preview__expand-all {
+    font-size: 0.75rem;
+  }
+  
+  .ingredient-list {
+    padding-left: 30px;
+  }
+  
+  .ingredient-chip__name {
+    max-width: 80px;
+  }
+}

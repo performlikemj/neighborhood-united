@@ -632,3 +632,135 @@ def sous_chef_get_suggestions(request):
             "suggestions": [],
             "priority": "low"
         }, status=500)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def sous_chef_scaffold_generate(request):
+    """
+    POST /api/chefs/me/sous-chef/scaffold/generate/
+    
+    Generate a scaffold tree for a meal with dishes and optionally ingredients.
+    The scaffold is a preview that the chef can edit before execution.
+    
+    Request Body:
+    {
+        "hint": "Sunday Soul Food Dinner",
+        "include_dishes": true,
+        "include_ingredients": false,
+        "meal_type": "Dinner"
+    }
+    
+    Response:
+    {
+        "status": "success",
+        "scaffold": {
+            "id": "uuid",
+            "type": "meal",
+            "data": { "name": "...", "description": "...", "price": 45 },
+            "children": [
+                {
+                    "id": "uuid",
+                    "type": "dish",
+                    "data": { "name": "..." },
+                    "children": [...],
+                    "status": "suggested"
+                }
+            ],
+            "status": "suggested"
+        }
+    }
+    """
+    chef, error_response = _get_chef_or_403(request)
+    if error_response:
+        return error_response
+    
+    hint = request.data.get('hint', '').strip()
+    if not hint:
+        return Response({"error": "hint is required"}, status=400)
+    
+    include_dishes = request.data.get('include_dishes', True)
+    include_ingredients = request.data.get('include_ingredients', False)
+    meal_type = request.data.get('meal_type', 'Dinner')
+    
+    try:
+        from meals.scaffold_engine import ScaffoldEngine
+        
+        engine = ScaffoldEngine(chef)
+        scaffold = engine.generate_scaffold(
+            hint=hint,
+            include_dishes=include_dishes,
+            include_ingredients=include_ingredients,
+            meal_type=meal_type
+        )
+        
+        return Response({
+            "status": "success",
+            "scaffold": scaffold.to_dict()
+        })
+        
+    except Exception as e:
+        logger.error(f"Sous Chef scaffold generation error: {e}")
+        logger.error(traceback.format_exc())
+        return Response({
+            "status": "error",
+            "message": str(e)
+        }, status=500)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def sous_chef_scaffold_execute(request):
+    """
+    POST /api/chefs/me/sous-chef/scaffold/execute/
+    
+    Execute a scaffold, creating all items in the database.
+    The scaffold should be the (possibly edited) tree from scaffold/generate/.
+    
+    Request Body:
+    {
+        "scaffold": { ... scaffold tree ... }
+    }
+    
+    Response:
+    {
+        "status": "success",
+        "created": {
+            "meal": { "id": 123, "name": "..." },
+            "dishes": [{ "id": 124, "name": "..." }],
+            "ingredients": [{ "id": 125, "name": "..." }]
+        },
+        "summary": {
+            "meal": 1,
+            "dishes": 3,
+            "ingredients": 12
+        }
+    }
+    """
+    chef, error_response = _get_chef_or_403(request)
+    if error_response:
+        return error_response
+    
+    scaffold_data = request.data.get('scaffold')
+    if not scaffold_data:
+        return Response({"error": "scaffold is required"}, status=400)
+    
+    try:
+        from meals.scaffold_engine import ScaffoldEngine, ScaffoldItem
+        
+        # Deserialize scaffold
+        scaffold = ScaffoldItem.from_dict(scaffold_data)
+        
+        # Execute
+        engine = ScaffoldEngine(chef)
+        result = engine.execute_scaffold(scaffold)
+        
+        return Response(result)
+        
+    except Exception as e:
+        logger.error(f"Sous Chef scaffold execution error: {e}")
+        logger.error(traceback.format_exc())
+        return Response({
+            "status": "error",
+            "message": str(e)
+        }, status=500)

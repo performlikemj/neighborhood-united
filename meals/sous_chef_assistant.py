@@ -73,7 +73,7 @@ from customer_dashboard.models import SousChefThread, SousChefMessage
 from chefs.models import Chef
 from custom_auth.models import CustomUser
 from crm.models import Lead
-from shared.utils import generate_family_context_for_chef
+from shared.utils import generate_family_context_for_chef, _get_language_name
 from utils.model_selection import choose_model
 from utils.groq_rate_limit import groq_call_with_retry
 
@@ -360,11 +360,21 @@ class SousChefAssistant:
       recipe scaling), ask the chef to select a family from the dropdown.
     </GeneralMode>""".format(chef_name=chef_name)
         
-        return SOUS_CHEF_PROMPT_TEMPLATE.format(
+        # Build base instructions from template
+        instructions = SOUS_CHEF_PROMPT_TEMPLATE.format(
             chef_name=chef_name,
             family_context=family_context,
             all_tools=all_tools_str
         )
+        
+        # Add language preference instruction if chef's preferred language is not English
+        chef_preferred_language = getattr(self.chef.user, 'preferred_language', 'en') or 'en'
+        if chef_preferred_language.lower() not in ('en', 'english'):
+            language_name = _get_language_name(chef_preferred_language)
+            language_instruction = f"\n<!-- LANGUAGE PREFERENCE -->\n<LanguagePreference>\n  This chef's preferred language is {language_name}. Please respond in {language_name} unless the chef specifically requests English or another language.\n</LanguagePreference>\n"
+            instructions += language_instruction
+        
+        return instructions
 
     def _get_tools(self) -> List[Dict[str, Any]]:
         """Get the tools available for sous chef operations.
@@ -376,9 +386,10 @@ class SousChefAssistant:
 
     def _build_action_block(self, tool_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Convert a tool result with render_as_action=True into an ActionBlock.
+        Convert a tool result with render_as_action=True or render_as_scaffold=True 
+        into an ActionBlock or ScaffoldBlock.
         
-        Returns None if the tool result is not an action type or is invalid.
+        Returns None if the tool result is not an action/scaffold type or is invalid.
         """
         action_type = tool_result.get("action_type")
         
@@ -403,6 +414,13 @@ class SousChefAssistant:
                     "fields": tool_result.get("fields", {})
                 },
                 "reason": tool_result.get("reason", "")
+            }
+        elif action_type == "scaffold":
+            # Scaffold block for meal creation with dishes/ingredients
+            return {
+                "type": "scaffold",
+                "scaffold": tool_result.get("scaffold"),
+                "summary": tool_result.get("summary", {})
             }
         
         return None
@@ -1077,7 +1095,8 @@ Conversation:
                         result = {"status": "error", "message": str(e)}
                     
                     # Check if this is an action-type result that should be rendered as a button
-                    if result.get("render_as_action") and result.get("status") == "success":
+                    # or a scaffold-type result that should be rendered as a scaffold preview
+                    if (result.get("render_as_action") or result.get("render_as_scaffold")) and result.get("status") == "success":
                         action_block = self._build_action_block(result)
                         if action_block:
                             pending_action_blocks.append(action_block)

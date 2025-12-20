@@ -131,6 +131,10 @@ urlpatterns = [
     # Contextual suggestions endpoint
     path('api/me/sous-chef/suggest/', sous_chef_api.sous_chef_get_suggestions, name='sous_chef_suggest'),
     
+    # Scaffold endpoints for meal creation
+    path('api/me/sous-chef/scaffold/generate/', sous_chef_api.sous_chef_scaffold_generate, name='sous_chef_scaffold_generate'),
+    path('api/me/sous-chef/scaffold/execute/', sous_chef_api.sous_chef_scaffold_execute, name='sous_chef_scaffold_execute'),
+
     # ==========================================================================
     # Collaborative Meal Plans API (Chef endpoints)
     # ==========================================================================

@@ -919,6 +919,23 @@ a.btn{ text-decoration:none }
   border-color: color-mix(in oklab, var(--primary) 20%, var(--border));
   transform: translateX(3px);
 }
+.chef-item-card-clickable{
+  cursor: pointer;
+}
+.chef-item-card-clickable:hover{
+  background: color-mix(in oklab, var(--primary) 8%, var(--surface));
+  border-color: var(--primary);
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.15);
+  transform: translateX(4px);
+}
+.chef-item-card-clickable .view-details-hint{
+  opacity: 0.6;
+  transition: opacity .18s ease;
+}
+.chef-item-card-clickable:hover .view-details-hint{
+  opacity: 1;
+  color: var(--primary);
+}
 .chef-item-info{
   flex: 1;
   min-width: 0;

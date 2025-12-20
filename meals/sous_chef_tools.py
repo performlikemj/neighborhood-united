@@ -393,6 +393,38 @@ SOUS_CHEF_TOOLS = [
             },
             "required": ["form_type", "fields", "reason"]
         }
+    },
+    {
+        "type": "function",
+        "name": "scaffold_meal",
+        "description": "Generate a complete meal structure with dishes and optionally ingredients using AI. Shows the chef a preview tree that they can edit before creating all items at once. Use when a chef wants to create a new meal and you want to help them quickly scaffold out the entire structure.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "meal_name": {
+                    "type": "string",
+                    "description": "Name or hint for the meal (e.g., 'Sunday Soul Food Dinner', 'Italian Date Night')"
+                },
+                "meal_description": {
+                    "type": ["string", "null"],
+                    "description": "Optional description for the meal"
+                },
+                "meal_type": {
+                    "type": "string",
+                    "enum": ["Breakfast", "Lunch", "Dinner"],
+                    "description": "Type of meal (default: Dinner)"
+                },
+                "include_dishes": {
+                    "type": "boolean",
+                    "description": "Whether to generate dish suggestions (default: true)"
+                },
+                "include_ingredients": {
+                    "type": "boolean",
+                    "description": "Whether to generate ingredient suggestions for each dish (default: false)"
+                }
+            },
+            "required": ["meal_name"]
+        }
     }
 ]
 
@@ -521,6 +553,7 @@ def handle_sous_chef_tool_call(
         # Navigation & UI action tools
         "navigate_to_dashboard_tab": _navigate_to_dashboard_tab,
         "prefill_form": _prefill_form,
+        "scaffold_meal": _scaffold_meal,
     }
     
     handler = tool_map.get(name)
@@ -1717,3 +1750,63 @@ def _prefill_form(
         "reason": reason,
         "render_as_action": True  # Flag for response builder to render as clickable action
     }
+
+
+def _scaffold_meal(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """
+    Generate a meal scaffold with dishes and optionally ingredients.
+    Returns the scaffold tree that the frontend will render for preview/editing.
+    """
+    from meals.scaffold_engine import ScaffoldEngine
+    
+    meal_name = args.get("meal_name", "")
+    meal_description = args.get("meal_description", "")
+    meal_type = args.get("meal_type", "Dinner")
+    include_dishes = args.get("include_dishes", True)
+    include_ingredients = args.get("include_ingredients", False)
+    
+    if not meal_name:
+        return {
+            "status": "error",
+            "message": "meal_name is required"
+        }
+    
+    try:
+        engine = ScaffoldEngine(chef)
+        scaffold = engine.generate_scaffold(
+            hint=meal_name,
+            include_dishes=include_dishes,
+            include_ingredients=include_ingredients,
+            meal_type=meal_type
+        )
+        
+        # If a description was provided, override the AI-generated one
+        if meal_description:
+            scaffold.data['description'] = meal_description
+        
+        return {
+            "status": "success",
+            "action_type": "scaffold",
+            "scaffold": scaffold.to_dict(),
+            "render_as_scaffold": True,  # Flag for frontend to render scaffold preview
+            "summary": {
+                "meal": scaffold.data.get('name'),
+                "dish_count": len([c for c in scaffold.children if c.status != 'removed']),
+                "ingredient_count": sum(
+                    len([i for i in d.children if i.status != 'removed'])
+                    for d in scaffold.children if d.status != 'removed'
+                )
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Scaffold generation failed: {e}")
+        return {
+            "status": "error",
+            "message": f"Failed to generate scaffold: {str(e)}"
+        }

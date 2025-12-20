@@ -9,9 +9,11 @@
  * - Legacy markdown text (backwards compatibility with ReactMarkdown)
  */
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import ScaffoldPreview from './ScaffoldPreview.jsx'
+import { api } from '../api.js'
 
 /**
  * Check if content looks like markdown (has markdown syntax).
@@ -271,6 +273,120 @@ function ActionBlock({ action_type, label, payload, reason, onAction }) {
 }
 
 /**
+ * Render a scaffold block (meal structure preview from AI).
+ * Shows an interactive tree that can be edited and executed.
+ */
+function ScaffoldBlock({ scaffold: initialScaffold, summary, onAction }) {
+  const [scaffold, setScaffold] = useState(initialScaffold)
+  const [isExecuting, setIsExecuting] = useState(false)
+  const [isFetchingIngredients, setIsFetchingIngredients] = useState(false)
+  const [includeIngredients, setIncludeIngredients] = useState(false)
+  const [executed, setExecuted] = useState(false)
+  const [result, setResult] = useState(null)
+  
+  // Toggle ingredients - re-fetch scaffold with ingredients included
+  const handleToggleIngredients = async (enabled) => {
+    setIncludeIngredients(enabled)
+    
+    if (enabled && scaffold) {
+      // Re-fetch with ingredients
+      setIsFetchingIngredients(true)
+      try {
+        const mealName = scaffold.data?.name || ''
+        const mealType = scaffold.data?.meal_type || 'Dinner'
+        
+        const response = await api.post('/chefs/api/me/sous-chef/scaffold/generate/', {
+          hint: mealName,
+          include_dishes: true,
+          include_ingredients: true,
+          meal_type: mealType
+        })
+        
+        if (response.data.status === 'success') {
+          setScaffold(response.data.scaffold)
+        }
+      } catch (err) {
+        console.error('[Scaffold] Ingredient fetch failed:', err)
+      } finally {
+        setIsFetchingIngredients(false)
+      }
+    } else if (!enabled && scaffold) {
+      // Remove ingredients from scaffold
+      const removeIngredients = (item) => {
+        if (item.type === 'dish') {
+          return { ...item, children: [] }
+        }
+        return {
+          ...item,
+          children: (item.children || []).map(removeIngredients)
+        }
+      }
+      setScaffold(removeIngredients(scaffold))
+    }
+  }
+  
+  const handleExecute = async () => {
+    if (!scaffold) return
+    
+    setIsExecuting(true)
+    try {
+      const response = await api.post('/chefs/api/me/sous-chef/scaffold/execute/', { scaffold })
+      
+      if (response.data.status === 'success') {
+        setExecuted(true)
+        setResult(response.data)
+        
+        // Notify parent to update UI (e.g., refresh dishes list)
+        if (onAction) {
+          onAction({ 
+            action_type: 'scaffold_executed', 
+            payload: response.data 
+          })
+        }
+      } else {
+        throw new Error(response.data.message || 'Failed to execute scaffold')
+      }
+    } catch (err) {
+      console.error('[Scaffold] Execution failed:', err)
+      alert('Failed to create items: ' + (err.message || 'Unknown error'))
+    } finally {
+      setIsExecuting(false)
+    }
+  }
+  
+  // If already executed, show success message
+  if (executed && result) {
+    const { summary: resultSummary } = result
+    return (
+      <div className="scaffold-success-block">
+        <span className="scaffold-success-icon">✅</span>
+        <span className="scaffold-success-text">
+          Created {resultSummary.dishes} dish{resultSummary.dishes !== 1 ? 'es' : ''}
+          {resultSummary.ingredients > 0 && ` with ${resultSummary.ingredients} ingredient${resultSummary.ingredients !== 1 ? 's' : ''}`}!
+        </span>
+      </div>
+    )
+  }
+  
+  if (!scaffold) return null
+  
+  return (
+    <div className="scaffold-block-container">
+      <ScaffoldPreview
+        scaffold={scaffold}
+        onUpdate={setScaffold}
+        includeIngredients={includeIngredients}
+        onToggleIngredients={handleToggleIngredients}
+        isFetchingIngredients={isFetchingIngredients}
+        onExecute={handleExecute}
+        onCancel={() => setScaffold(null)}
+        isExecuting={isExecuting}
+      />
+    </div>
+  )
+}
+
+/**
  * Main StructuredContent component.
  * 
  * @param {Object} props
@@ -351,6 +467,17 @@ export default function StructuredContent({ content, className = '', onAction })
                 label={block.label}
                 payload={block.payload}
                 reason={block.reason}
+                onAction={onAction}
+              />
+            )
+          
+          case 'scaffold':
+            // Handle scaffold blocks (meal structure from AI)
+            return (
+              <ScaffoldBlock
+                key={index}
+                scaffold={block.scaffold}
+                summary={block.summary}
                 onAction={onAction}
               />
             )
@@ -519,6 +646,42 @@ export default function StructuredContent({ content, className = '', onAction })
         
         .action-label {
           font-weight: 500;
+        }
+        
+        /* Scaffold Block Styles */
+        .scaffold-block-container {
+          margin: 0.75em 0;
+        }
+        
+        .scaffold-block-container .scaffold-preview {
+          max-width: 100%;
+          box-shadow: var(--shadow-sm);
+        }
+        
+        .scaffold-success-block {
+          display: flex;
+          align-items: center;
+          gap: 0.5em;
+          padding: 0.75em 1em;
+          background: linear-gradient(135deg, rgba(92, 184, 92, 0.12), rgba(92, 184, 92, 0.06));
+          border: 1px solid rgba(92, 184, 92, 0.35);
+          border-radius: var(--radius, 8px);
+          margin: 0.75em 0;
+        }
+        
+        .scaffold-success-icon {
+          font-size: 1.1em;
+        }
+        
+        .scaffold-success-text {
+          color: var(--primary, #5cb85c);
+          font-weight: 500;
+        }
+        
+        /* Dark theme scaffold success */
+        [data-theme="dark"] .scaffold-success-block {
+          background: linear-gradient(135deg, rgba(92, 184, 92, 0.18), rgba(92, 184, 92, 0.08));
+          border-color: rgba(92, 184, 92, 0.4);
         }
       `}</style>
     </div>

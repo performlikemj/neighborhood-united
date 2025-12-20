@@ -79,9 +79,8 @@ class ChefPhotoSerializer(serializers.ModelSerializer):
         # Safe check: ImageFieldFile.url raises if no file; rely on name to detect presence
         if not obj.image or not getattr(obj.image, 'name', None):
             return None
-        request = self.context.get('request')
-        url = obj.image.url
-        return request.build_absolute_uri(url) if request is not None else url
+        # Return relative URL for better compatibility across different hosts/proxies
+        return obj.image.url
 
 
 class UserPublicSerializer(serializers.ModelSerializer):
@@ -116,21 +115,17 @@ class ChefPublicSerializer(serializers.ModelSerializer):
         # Safe check: ImageFieldFile.url raises if no file; rely on name to detect presence
         if not obj.profile_pic or not getattr(obj.profile_pic, 'name', None):
             return None
-        request = self.context.get('request')
-        url = obj.profile_pic.url
-        return request.build_absolute_uri(url) if request is not None else url
+        # Return relative URL for better compatibility across different hosts/proxies
+        return obj.profile_pic.url
 
     def get_banner_url(self, obj):
-        request = self.context.get('request')
-        # Prefer chef's own banner
+        # Prefer chef's own banner - return relative URL for better compatibility
         if getattr(obj, 'banner_image', None) and getattr(obj.banner_image, 'name', None):
-            url = obj.banner_image.url
-            return request.build_absolute_uri(url) if request is not None else url
+            return obj.banner_image.url
         # Fallback to most recent default banner if available
         default = ChefDefaultBanner.objects.first()
         if default and getattr(default.image, 'name', None):
-            url = default.image.url
-            return request.build_absolute_uri(url) if request is not None else url
+            return default.image.url
         return None
 
     def get_photos(self, obj):
@@ -203,16 +198,13 @@ class GalleryPhotoSerializer(serializers.ModelSerializer):
     def get_image_url(self, obj):
         if not obj.image or not getattr(obj.image, 'name', None):
             return None
-        request = self.context.get('request')
-        url = obj.image.url
-        return request.build_absolute_uri(url) if request is not None else url
+        # Return relative URL for better compatibility across different hosts/proxies
+        return obj.image.url
     
     def get_thumbnail_url(self, obj):
         # Return thumbnail if available, otherwise return main image
         if obj.thumbnail and getattr(obj.thumbnail, 'name', None):
-            request = self.context.get('request')
-            url = obj.thumbnail.url
-            return request.build_absolute_uri(url) if request is not None else url
+            return obj.thumbnail.url
         # Fallback to main image
         return self.get_image_url(obj)
 
@@ -248,9 +240,8 @@ class ChefVerificationDocumentSerializer(serializers.ModelSerializer):
     def get_file_url(self, obj):
         if not obj.file or not getattr(obj.file, 'name', None):
             return None
-        request = self.context.get('request')
-        url = obj.file.url
-        return request.build_absolute_uri(url) if request is not None else url
+        # Return relative URL for better compatibility across different hosts/proxies
+        return obj.file.url
 
 
 class ChefVerificationDocumentUploadSerializer(serializers.ModelSerializer):
@@ -310,15 +301,12 @@ class MealPlanReceiptSerializer(serializers.ModelSerializer):
     def get_receipt_image_url(self, obj):
         if not obj.receipt_image or not getattr(obj.receipt_image, 'name', None):
             return None
-        request = self.context.get('request')
-        url = obj.receipt_image.url
-        return request.build_absolute_uri(url) if request is not None else url
+        # Return relative URL for better compatibility across different hosts/proxies
+        return obj.receipt_image.url
     
     def get_thumbnail_url(self, obj):
         if obj.receipt_thumbnail and getattr(obj.receipt_thumbnail, 'name', None):
-            request = self.context.get('request')
-            url = obj.receipt_thumbnail.url
-            return request.build_absolute_uri(url) if request is not None else url
+            return obj.receipt_thumbnail.url
         return self.get_receipt_image_url(obj)
     
     def get_customer_name(self, obj):
@@ -373,12 +361,9 @@ class MealPlanReceiptListSerializer(serializers.ModelSerializer):
         ]
     
     def get_thumbnail_url(self, obj):
+        # Return relative URLs for better compatibility across different hosts/proxies
         if obj.receipt_thumbnail and getattr(obj.receipt_thumbnail, 'name', None):
-            request = self.context.get('request')
-            url = obj.receipt_thumbnail.url
-            return request.build_absolute_uri(url) if request is not None else url
+            return obj.receipt_thumbnail.url
         if obj.receipt_image and getattr(obj.receipt_image, 'name', None):
-            request = self.context.get('request')
-            url = obj.receipt_image.url
-            return request.build_absolute_uri(url) if request is not None else url
+            return obj.receipt_image.url
         return None

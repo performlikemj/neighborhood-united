@@ -11996,8 +11996,10 @@ button.chat-recipient:hover {
 }
 
 .chef-avatar-emoji {
-  width: 100%;
-  height: 100%;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -12006,6 +12008,7 @@ button.chat-recipient:hover {
     color-mix(in oklab, var(--primary) 8%, var(--surface)) 100%
   );
   font-size: 1.75rem;
+  transition: border-color 0.3s ease;
 }
 
 /* ============================================

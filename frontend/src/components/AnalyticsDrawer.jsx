@@ -197,7 +197,7 @@ export default function AnalyticsDrawer({ open, onClose, metric, title }) {
     const ChartComponent = config.chartType === 'area' ? AreaChart : LineChart
 
     return (
-      <ResponsiveContainer width="100%" height={300}>
+      <ResponsiveContainer width="100%" height={250}>
         <ChartComponent data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
           <defs>
             <linearGradient id={config.gradientId} x1="0" y1="0" x2="0" y2="1">
@@ -291,33 +291,36 @@ export default function AnalyticsDrawer({ open, onClose, metric, title }) {
           </div>
         </div>
 
-        {/* Chart */}
-        <div className="analytics-drawer-chart">
-          {renderChart()}
-        </div>
+        {/* Scrollable body for chart and footer */}
+        <div className="analytics-drawer-body">
+          {/* Chart */}
+          <div className="analytics-drawer-chart">
+            {renderChart()}
+          </div>
 
-        {/* Footer with insights */}
-        <div className="analytics-drawer-footer">
-          <div className="insight-cards">
-            <div className="insight-card">
-              <div className="insight-label">Period Average</div>
-              <div className="insight-value">
-                {loading ? '—' : config.format(data.length > 0 ? total / data.length : 0)}
+          {/* Footer with insights */}
+          <div className="analytics-drawer-footer">
+            <div className="insight-cards">
+              <div className="insight-card">
+                <div className="insight-label">Period Average</div>
+                <div className="insight-value">
+                  {loading ? '—' : config.format(data.length > 0 ? total / data.length : 0)}
+                </div>
               </div>
-            </div>
-            <div className="insight-card">
-              <div className="insight-label">Peak Day</div>
-              <div className="insight-value">
-                {loading ? '—' : (
-                  data.length > 0 
-                    ? config.format(Math.max(...data.map(d => d.value)))
-                    : config.format(0)
-                )}
+              <div className="insight-card">
+                <div className="insight-label">Peak Day</div>
+                <div className="insight-value">
+                  {loading ? '—' : (
+                    data.length > 0 
+                      ? config.format(Math.max(...data.map(d => d.value)))
+                      : config.format(0)
+                  )}
+                </div>
               </div>
-            </div>
-            <div className="insight-card">
-              <div className="insight-label">Data Points</div>
-              <div className="insight-value">{loading ? '—' : data.length}</div>
+              <div className="insight-card">
+                <div className="insight-label">Data Points</div>
+                <div className="insight-value">{loading ? '—' : data.length}</div>
+              </div>
             </div>
           </div>
         </div>
@@ -325,4 +328,5 @@ export default function AnalyticsDrawer({ open, onClose, metric, title }) {
     </>
   )
 }
+
 

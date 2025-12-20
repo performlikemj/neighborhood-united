@@ -6,7 +6,13 @@
  * Press Tab to accept, Escape to dismiss, or keep typing to overwrite.
  */
 
-import React, { useState, useRef, useEffect, useCallback, forwardRef } from 'react'
+import React, { useState, useRef, useEffect, useCallback, forwardRef, useMemo } from 'react'
+
+// Detect touch device
+const isTouchDevice = () => {
+  if (typeof window === 'undefined') return false
+  return 'ontouchstart' in window || navigator.maxTouchPoints > 0
+}
 
 /**
  * GhostInput - Input with inline ghost text suggestions
@@ -81,6 +87,33 @@ const GhostInput = forwardRef(function GhostInput({
   
   const displayGhostText = getDisplayGhostText()
   const hasGhost = !!displayGhostText && isFocused
+  const isTouch = useMemo(() => isTouchDevice(), [])
+  
+  /**
+   * Handle accepting the suggestion (shared between Tab key and tap)
+   */
+  const handleAccept = useCallback((e) => {
+    if (e) {
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    if (!ghostValue) return
+    
+    setLocalValue(ghostValue)
+    
+    if (onChange) {
+      onChange(ghostValue)
+    }
+    
+    if (onAccept) {
+      onAccept(ghostValue)
+    }
+    
+    // Keep focus on the input
+    if (inputRef.current) {
+      inputRef.current.focus()
+    }
+  }, [ghostValue, onChange, onAccept])
   
   /**
    * Handle input change
@@ -100,16 +133,7 @@ const GhostInput = forwardRef(function GhostInput({
   const handleKeyDown = useCallback((e) => {
     // Tab to accept suggestion
     if (e.key === 'Tab' && hasGhost && ghostValue) {
-      e.preventDefault()
-      setLocalValue(ghostValue)
-      
-      if (onChange) {
-        onChange(ghostValue)
-      }
-      
-      if (onAccept) {
-        onAccept(ghostValue)
-      }
+      handleAccept(e)
       return
     }
     
@@ -126,7 +150,7 @@ const GhostInput = forwardRef(function GhostInput({
     if (rest.onKeyDown) {
       rest.onKeyDown(e)
     }
-  }, [hasGhost, ghostValue, onChange, onAccept, onDismiss, rest])
+  }, [hasGhost, ghostValue, handleAccept, onDismiss, rest])
   
   /**
    * Handle focus events
@@ -173,10 +197,21 @@ const GhostInput = forwardRef(function GhostInput({
         />
       </div>
       
-      {/* Hint text */}
+      {/* Hint text / Accept button */}
       {hasGhost && showHint && (
         <div className="ghost-hint">
-          <kbd>Tab</kbd> to accept
+          {isTouch ? (
+            <button 
+              type="button"
+              className="ghost-accept-btn"
+              onClick={handleAccept}
+              onTouchEnd={handleAccept}
+            >
+              Tap ↵
+            </button>
+          ) : (
+            <><kbd>Tab</kbd> to accept</>
+          )}
         </div>
       )}
       
@@ -274,6 +309,26 @@ const GhostInput = forwardRef(function GhostInput({
           padding: 0.1rem 0.35rem;
           font-size: 0.65rem;
           font-family: inherit;
+        }
+        
+        /* Mobile accept button - compact pill style */
+        .ghost-accept-btn {
+          background: var(--surface-2, #f0f0f0);
+          border: 1px solid var(--border, #ddd);
+          border-radius: 12px;
+          padding: 2px 10px;
+          font-size: 0.7rem;
+          color: var(--muted, #888);
+          cursor: pointer;
+          touch-action: manipulation;
+          transition: background 0.15s, border-color 0.15s, color 0.15s;
+          -webkit-tap-highlight-color: transparent;
+        }
+        
+        .ghost-accept-btn:active {
+          background: var(--primary, #5cb85c);
+          border-color: var(--primary, #5cb85c);
+          color: white;
         }
         
         /* Animation for ghost appearance */

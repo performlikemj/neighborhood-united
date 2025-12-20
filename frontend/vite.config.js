@@ -9,6 +9,8 @@ export default defineConfig({
     // Align with user's running port (e.g., 5174) to keep origin consistent
     port: 5174,
     host: true,
+    // Dev server only: allow access via mj.local on your LAN
+    allowedHosts: ['mj.local'],
     proxy: {
       // Dev-time proxy to avoid CORS. Frontend can call relative paths like /auth/... /meals/... etc.
       '/auth': {
@@ -40,6 +42,11 @@ export default defineConfig({
         changeOrigin: true
       },
       '/messaging': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true
+      },
+      // Media files (uploaded images, etc.)
+      '/media': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true
       },

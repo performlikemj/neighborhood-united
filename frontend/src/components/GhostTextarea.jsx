@@ -6,7 +6,13 @@
  * Press Tab to accept, Escape to dismiss, or keep typing to overwrite.
  */
 
-import React, { useState, useRef, useEffect, useCallback, forwardRef } from 'react'
+import React, { useState, useRef, useEffect, useCallback, forwardRef, useMemo } from 'react'
+
+// Detect touch device
+const isTouchDevice = () => {
+  if (typeof window === 'undefined') return false
+  return 'ontouchstart' in window || navigator.maxTouchPoints > 0
+}
 
 /**
  * GhostTextarea - Textarea with inline ghost text suggestions
@@ -115,6 +121,36 @@ const GhostTextarea = forwardRef(function GhostTextarea({
   
   const displayGhostText = getDisplayGhostText()
   const hasGhost = !!displayGhostText && isFocused
+  const isTouch = useMemo(() => isTouchDevice(), [])
+  
+  /**
+   * Handle accepting the suggestion (shared between Tab key and tap)
+   */
+  const handleAccept = useCallback((e) => {
+    if (e) {
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    if (!ghostValue) return
+    
+    setLocalValue(ghostValue)
+    
+    if (onChange) {
+      onChange(ghostValue)
+    }
+    
+    if (onAccept) {
+      onAccept(ghostValue)
+    }
+    
+    // Keep focus on the textarea and move cursor to end
+    if (textareaRef.current) {
+      textareaRef.current.focus()
+      setTimeout(() => {
+        textareaRef.current.selectionStart = textareaRef.current.selectionEnd = ghostValue.length
+      }, 0)
+    }
+  }, [ghostValue, onChange, onAccept])
   
   /**
    * Handle textarea change
@@ -139,21 +175,7 @@ const GhostTextarea = forwardRef(function GhostTextarea({
                     textarea.selectionEnd === localValue.length
       
       if (atEnd) {
-        e.preventDefault()
-        setLocalValue(ghostValue)
-        
-        if (onChange) {
-          onChange(ghostValue)
-        }
-        
-        if (onAccept) {
-          onAccept(ghostValue)
-        }
-        
-        // Move cursor to end
-        setTimeout(() => {
-          textarea.selectionStart = textarea.selectionEnd = ghostValue.length
-        }, 0)
+        handleAccept(e)
         return
       }
     }
@@ -171,7 +193,7 @@ const GhostTextarea = forwardRef(function GhostTextarea({
     if (rest.onKeyDown) {
       rest.onKeyDown(e)
     }
-  }, [hasGhost, ghostValue, localValue, onChange, onAccept, onDismiss, rest])
+  }, [hasGhost, ghostValue, localValue, handleAccept, onDismiss, rest])
   
   /**
    * Handle focus events
@@ -218,10 +240,21 @@ const GhostTextarea = forwardRef(function GhostTextarea({
         />
       </div>
       
-      {/* Hint text */}
+      {/* Hint text / Accept button */}
       {hasGhost && showHint && (
         <div className="ghost-hint">
-          <kbd>Tab</kbd> to accept
+          {isTouch ? (
+            <button 
+              type="button"
+              className="ghost-accept-btn"
+              onClick={handleAccept}
+              onTouchEnd={handleAccept}
+            >
+              Tap ↵
+            </button>
+          ) : (
+            <><kbd>Tab</kbd> to accept</>
+          )}
         </div>
       )}
       
@@ -321,6 +354,26 @@ const GhostTextarea = forwardRef(function GhostTextarea({
           padding: 0.1rem 0.35rem;
           font-size: 0.65rem;
           font-family: inherit;
+        }
+        
+        /* Mobile accept button - compact pill style */
+        .ghost-accept-btn {
+          background: var(--surface-2, #f0f0f0);
+          border: 1px solid var(--border, #ddd);
+          border-radius: 12px;
+          padding: 2px 10px;
+          font-size: 0.7rem;
+          color: var(--muted, #888);
+          cursor: pointer;
+          touch-action: manipulation;
+          transition: background 0.15s, border-color 0.15s, color 0.15s;
+          -webkit-tap-highlight-color: transparent;
+        }
+        
+        .ghost-accept-btn:active {
+          background: var(--primary, #5cb85c);
+          border-color: var(--primary, #5cb85c);
+          color: white;
         }
         
         /* Animation for ghost appearance */

@@ -22,6 +22,7 @@
   width: 480px;
   max-width: 100vw;
   height: 100vh;
+  height: 100dvh; /* Accounts for mobile browser chrome */
   background: var(--surface, #fff);
   box-shadow: -4px 0 24px rgba(0, 0, 0, 0.15);
   transform: translateX(100%);
@@ -107,6 +108,16 @@
   flex-shrink: 0;
 }
 
+/* Scrollable body wrapper for chart and footer */
+.analytics-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+}
+
 .range-selector {
   display: flex;
   gap: 0.5rem;
@@ -138,10 +149,9 @@
 
 /* Chart Container */
 .analytics-drawer-chart {
-  flex: 1;
+  flex: 0 0 auto;
   padding: 1.5rem;
-  overflow: hidden;
-  min-height: 320px;
+  min-height: 280px;
 }
 
 .chart-loading,
@@ -151,14 +161,14 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 300px;
+  height: 250px;
   gap: 1rem;
   color: var(--text-muted, #6b7280);
 }
 
 .chart-skeleton {
   width: 100%;
-  height: 300px;
+  height: 250px;
   background: linear-gradient(90deg, var(--surface-2, #f3f4f6) 25%, var(--surface-3, #e5e7eb) 50%, var(--surface-2, #f3f4f6) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
@@ -251,6 +261,7 @@
 
   .analytics-drawer-chart {
     padding: 1rem;
+    min-height: 220px;
   }
 
   .analytics-drawer-footer {
@@ -277,6 +288,53 @@
   .range-btn {
     padding: 0.4rem 0.75rem;
     font-size: 0.8rem;
+  }
+}
+
+/* Very small screens - stack insight cards */
+@media (max-width: 360px) {
+  .insight-cards {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+  
+  .insight-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    text-align: left;
+  }
+  
+  .insight-label {
+    margin-bottom: 0;
+  }
+}
+
+/* Small height screens (landscape mobile) */
+@media (max-height: 600px) {
+  .analytics-drawer-chart {
+    min-height: 180px;
+  }
+  
+  .analytics-drawer-header {
+    padding: 0.75rem 1rem;
+  }
+  
+  .drawer-title {
+    font-size: 1.1rem;
+  }
+  
+  .total-value {
+    font-size: 1.5rem;
+  }
+  
+  .analytics-drawer-controls {
+    padding: 0.5rem 1rem;
+  }
+  
+  .range-btn {
+    padding: 0.35rem 0.6rem;
+    font-size: 0.75rem;
   }
 }
 
@@ -412,6 +470,8 @@ body.dark .analytics-drawer,
 [data-theme="dark"] .analytics-drawer {
   background: var(--surface, #1a1a2e);
   box-shadow: -4px 0 32px rgba(0, 0, 0, 0.5);
+  height: 100vh;
+  height: 100dvh;
 }
 
 html.dark .analytics-drawer-header,
@@ -514,4 +574,5 @@ body.dark .chart-empty,
 [data-theme="dark"] .chart-empty {
   color: var(--text-muted, #9ca3af);
 }
+
 

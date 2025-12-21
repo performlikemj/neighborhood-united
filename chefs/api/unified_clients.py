@@ -203,9 +203,54 @@ def unified_client_list(request):
         allergy_filter = request.query_params.get('allergy')
         ordering = request.query_params.get('ordering', '-connected_since')
         
+        # =================================================================
+        # STEP 1: Calculate TOTAL summary stats (before any source filter)
+        # This ensures stats always show total counts regardless of filter
+        # =================================================================
+        total_platform_count = 0
+        total_contact_count = 0
+        total_dietary_breakdown = {}
+        total_allergy_breakdown = {}
+        
+        # Count all platform clients
+        all_connections = ChefCustomerConnection.objects.filter(
+            chef=chef,
+            status='accepted'
+        ).select_related('customer')
+        
+        for conn in all_connections:
+            customer = conn.customer
+            if not customer:
+                continue
+            total_platform_count += 1
+            # Aggregate dietary/allergy for summary
+            for pref in customer.dietary_preferences.values_list('name', flat=True):
+                total_dietary_breakdown[pref] = total_dietary_breakdown.get(pref, 0) + 1
+            for allergy in (customer.allergies or []):
+                if allergy and allergy != 'None':
+                    total_allergy_breakdown[allergy] = total_allergy_breakdown.get(allergy, 0) + 1
+        
+        # Count all manual contacts
+        all_leads = Lead.objects.filter(
+            owner=chef.user,
+            is_deleted=False,
+            status='won'
+        )
+        
+        for lead in all_leads:
+            total_contact_count += 1
+            for pref in (lead.dietary_preferences or []):
+                total_dietary_breakdown[pref] = total_dietary_breakdown.get(pref, 0) + 1
+            for allergy in (lead.allergies or []):
+                if allergy and allergy != 'None':
+                    total_allergy_breakdown[allergy] = total_allergy_breakdown.get(allergy, 0) + 1
+        
+        # =================================================================
+        # STEP 2: Build filtered results list (applies source filter)
+        # =================================================================
         unified_clients = []
         
-        # Get platform clients
+        # Get platform clients (if not filtered to contacts only)
         if not source_filter or source_filter == 'platform':
             connections = ChefCustomerConnection.objects.filter(
                 chef=chef,
@@ -246,7 +291,7 @@ def unified_client_list(request):
                 
                 unified_clients.append(client_data)
         
-        # Get manual contacts
+        # Get manual contacts (if not filtered to platform only)
         if not source_filter or source_filter == 'contact':
             leads = Lead.objects.filter(
                 owner=chef.user,
@@ -283,19 +328,6 @@ def unified_client_list(request):
                 
                 unified_clients.append(client_data)
         
-        # Calculate summary stats
-        platform_count = sum(1 for c in unified_clients if c['source_type'] == 'platform')
-        contact_count = sum(1 for c in unified_clients if c['source_type'] == 'contact')
-        
-        dietary_breakdown = {}
-        allergy_breakdown = {}
-        for client in unified_clients:
-            for pref in client['dietary_preferences']:
-                dietary_breakdown[pref] = dietary_breakdown.get(pref, 0) + 1
-            for allergy in client['allergies']:
-                if allergy and allergy != 'None':
-                    allergy_breakdown[allergy] = allergy_breakdown.get(allergy, 0) + 1
-        
         # Sort results
         reverse = ordering.startswith('-')
         sort_key = ordering.lstrip('-')
@@ -320,11 +352,12 @@ def unified_client_list(request):
         if page is not None:
             response_data = paginator.get_paginated_response(page).data
             response_data['summary'] = {
-                'total': len(unified_clients),
-                'platform': platform_count,
-                'contacts': contact_count,
-                'dietary_breakdown': dict(sorted(dietary_breakdown.items(), key=lambda x: -x[1])[:10]),
-                'allergy_breakdown': dict(sorted(allergy_breakdown.items(), key=lambda x: -x[1])[:10]),
+                # Use TOTAL counts (not filtered) so stats remain constant
+                'total': total_platform_count + total_contact_count,
+                'platform': total_platform_count,
+                'contacts': total_contact_count,
+                'dietary_breakdown': dict(sorted(total_dietary_breakdown.items(), key=lambda x: -x[1])[:10]),
+                'allergy_breakdown': dict(sorted(total_allergy_breakdown.items(), key=lambda x: -x[1])[:10]),
             }
             return Response(response_data)
         
@@ -333,11 +366,12 @@ def unified_client_list(request):
             'next': None,
             'previous': None,
             'summary': {
-                'total': len(unified_clients),
-                'platform': platform_count,
-                'contacts': contact_count,
-                'dietary_breakdown': dietary_breakdown,
-                'allergy_breakdown': allergy_breakdown,
+                # Use TOTAL counts (not filtered) so stats remain constant
+                'total': total_platform_count + total_contact_count,
+                'platform': total_platform_count,
+                'contacts': total_contact_count,
+                'dietary_breakdown': total_dietary_breakdown,
+                'allergy_breakdown': total_allergy_breakdown,
             },
             'results': unified_clients
         })

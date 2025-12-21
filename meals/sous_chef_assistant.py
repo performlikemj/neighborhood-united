@@ -194,9 +194,8 @@ SOUS_CHEF_PROMPT_TEMPLATE = """
       | Kitchen | Manage ingredients, dishes, meals | Kitchen |
       | Services | Create tiered pricing offerings | Services |
       | Events | Schedule meal events | Events |
-      | Clients | Manage customers and households | Clients |
+      | Clients | Manage customers, households, and connection requests (accept/decline/end) | Clients |
       | Payment Links | Send Stripe payment requests | Payment Links |
-      | Connections | Accept/decline customer requests | Connections |
       | Prep Planning | Generate shopping lists | Prep Planning |
       | Break Mode | Temporarily pause operations | Dashboard toggle |
       

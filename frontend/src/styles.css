@@ -951,6 +951,136 @@ a.btn{ text-decoration:none }
   color: var(--muted);
 }
 
+/* Chef Orders */
+.chef-orders-header{
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.chef-orders-count{
+  font-weight: 600;
+  color: var(--muted);
+}
+.chef-orders-toolbar{
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem;
+  margin-top: 1rem;
+  align-items: flex-end;
+}
+.chef-orders-toolbar .filter-group{
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+  min-width: 180px;
+  flex: 1 1 180px;
+}
+.chef-orders-toolbar .filter-actions{
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+.chef-orders-list{
+  display: flex;
+  flex-direction: column;
+  gap: .75rem;
+  margin-top: .25rem;
+}
+.chef-order-card{
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: .75rem;
+  background: var(--surface-2);
+}
+.chef-order-header{
+  display: flex;
+  justify-content: space-between;
+  gap: .5rem;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.chef-order-customer{
+  font-weight: 700;
+}
+.chef-order-contact{
+  font-size: .85rem;
+}
+.chef-order-badges{
+  display: flex;
+  gap: .35rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.chef-order-title{
+  font-size: .95rem;
+  margin-top: .35rem;
+}
+.chef-order-schedule{
+  font-size: .9rem;
+  margin-top: .25rem;
+}
+.chef-order-meta{
+  display: flex;
+  gap: .4rem;
+  flex-wrap: wrap;
+  margin-top: .5rem;
+  font-size: .85rem;
+}
+.chef-order-notes{
+  margin-top: .5rem;
+  font-size: .85rem;
+}
+.chef-orders-empty{
+  display: flex;
+  flex-direction: column;
+  gap: .4rem;
+  align-items: flex-start;
+}
+.chef-orders-pagination{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  margin-top: 1rem;
+  padding-top: .75rem;
+  border-top: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+}
+.chef-orders-pagination-controls{
+  display: flex;
+  gap: .5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.chef-orders-pagination-size{
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+  min-width: 140px;
+}
+@media (max-width: 720px){
+  .chef-orders-toolbar .filter-actions{
+    width: 100%;
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+  .chef-orders-pagination{
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .chef-orders-pagination-controls{
+    width: 100%;
+    justify-content: space-between;
+  }
+  .chef-orders-pagination-size{
+    width: 100%;
+  }
+}
+
 /* Empty State */
 .chef-empty-state{
   text-align: center;

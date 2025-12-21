@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { api } from '../api'
 import {
   createLead, updateLead, deleteLead,
   addHouseholdMember, updateHouseholdMember, deleteHouseholdMember,
   DIETARY_OPTIONS, ALLERGY_OPTIONS
 } from '../api/chefCrmClient.js'
+import { useConnections } from '../hooks/useConnections.js'
 import MealPlanSlideout from './MealPlanSlideout.jsx'
 
 const API_BASE = '/chefs/api/me'
@@ -62,6 +63,25 @@ export default function ChefAllClients() {
   const [mealPlanOpen, setMealPlanOpen] = useState(false)
   
   const isDesktop = useMediaQuery('(min-width: 900px)')
+  
+  // Connection management for platform clients
+  const {
+    connections,
+    respondToConnection,
+    respondStatus,
+    respondError
+  } = useConnections('chef')
+  const [connectionActionId, setConnectionActionId] = useState(null)
+  const connectionMutating = respondStatus === 'pending'
+  
+  // Get connection for a platform client by customer_id
+  const getConnectionForCustomer = useCallback((customerId) => {
+    if (!customerId || !connections?.length) return null
+    return connections.find(c => 
+      String(c.customerId) === String(customerId) || 
+      String(c.customer_id) === String(customerId)
+    )
+  }, [connections])
   
   // Filters
   const [sourceFilter, setSourceFilter] = useState('')
@@ -230,7 +250,7 @@ export default function ChefAllClients() {
 
   const handleDelete = async (client) => {
     if (client.source_type !== 'contact') {
-      alert('Platform connections can only be ended from the Connections tab.')
+      alert('Platform connections can be ended using the "End Connection" button in the client detail panel.')
       return
     }
     if (!confirm(`Remove ${client.name} and their household?`)) return
@@ -240,6 +260,31 @@ export default function ChefAllClients() {
       if (selected?.id === client.id) setSelected(null)
     } catch (err) {
       console.error('Failed to delete client:', err)
+    }
+  }
+
+  // Handle connection actions (accept/decline/end) for platform clients
+  const handleConnectionAction = async (connectionId, action) => {
+    if (!connectionId || !action) return
+    setConnectionActionId(connectionId)
+    try {
+      await respondToConnection({ connectionId, action })
+      await loadClients() // Refresh the client list
+      const message = action === 'accept'
+        ? 'Connection accepted!'
+        : action === 'decline'
+          ? 'Invitation declined.'
+          : 'Connection ended.'
+      try {
+        window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: message, tone: 'success' } }))
+      } catch {}
+    } catch (error) {
+      const msg = error?.response?.data?.detail || 'Unable to update this connection. Please try again.'
+      try {
+        window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: msg, tone: 'error' } }))
+      } catch {}
+    } finally {
+      setConnectionActionId(null)
     }
   }
 
@@ -323,7 +368,7 @@ export default function ChefAllClients() {
     badgeManual: { background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)', color: 'white' },
     householdBadge: { background: 'var(--surface-2)', padding: '.2rem .5rem', borderRadius: '6px', fontSize: '.75rem', fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: '.25rem' },
     detailPanel: { background: 'var(--surface)', borderRadius: '16px', border: '1px solid var(--border)', overflow: 'hidden' },
-    detailContent: { padding: '1.25rem', maxHeight: '60vh', overflowY: 'auto' },
+    detailContent: { padding: '1.5rem', minHeight: isDesktop ? '65vh' : '70vh' },
     detailEmpty: { textAlign: 'center', padding: '3rem 1.5rem', color: 'var(--muted)' },
     detailEmptyIcon: { fontSize: '3.5rem', marginBottom: '1rem', opacity: 0.5 },
     sectionTitle: { margin: '0 0 .75rem 0', fontSize: '.8rem', fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.05em' },
@@ -364,33 +409,107 @@ export default function ChefAllClients() {
     </div>
   )
 
-  const ClientCard = ({ client, isSelected, onClick }) => (
-    <div onClick={onClick} style={{ ...styles.clientCard, ...(isSelected ? styles.clientCardSelected : {}) }}>
-      <div style={styles.clientName}>
-        {client.name}
-        <Badge type={client.source_type} />
-        {client.household_size > 1 && (
-          <span style={styles.householdBadge}>
-            👥 {client.household_size}
-            {client.household_size > (client.household_members?.length || 0) + 1 && (
-              <span title="Household profiles incomplete" style={{ color: '#f59e0b', marginLeft: '2px' }}>⚠</span>
-            )}
-          </span>
-        )}
-      </div>
-      {client.email && <div style={{ color: 'var(--muted)', fontSize: '.85rem', marginTop: '.35rem' }}>{client.email}</div>}
-      {(client.dietary_preferences?.length > 0 || client.allergies?.filter(a => a && a !== 'None').length > 0) && (
-        <div style={{ marginTop: '.6rem', display: 'flex', flexWrap: 'wrap', gap: '.25rem' }}>
-          {client.dietary_preferences?.slice(0, 2).map(p => (
-            <span key={p} style={{ padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.7rem', background: 'rgba(16, 185, 129, 0.1)', color: '#059669' }}>{p}</span>
-          ))}
-          {client.allergies?.filter(a => a && a !== 'None').slice(0, 1).map(a => (
-            <span key={a} style={{ padding: '.15rem .5rem', borderRadius: '4px', fontSize: '.7rem', background: 'rgba(220, 38, 38, 0.1)', color: '#dc2626' }}>⚠ {a}</span>
-          ))}
+  const ClientCard = ({ client, isSelected, onClick }) => {
+    // Get connection status for platform clients
+    const clientConnection = client.source_type === 'platform' 
+      ? getConnectionForCustomer(client.customer_id) 
+      : null
+    const isPending = clientConnection?.isPending
+    const allergies = client.allergies?.filter(a => a && a !== 'None') || []
+    const hasAllergies = allergies.length > 0
+    
+    return (
+      <div onClick={onClick} style={{ 
+        ...styles.clientCard, 
+        ...(isSelected ? styles.clientCardSelected : {}),
+        ...(isPending ? { borderColor: 'rgba(245, 158, 11, 0.5)', background: 'rgba(245, 158, 11, 0.03)' } : {})
+      }}>
+        {/* Top row: Name + badges */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap', marginBottom: '.35rem' }}>
+          <span style={{ fontWeight: 600, fontSize: '1rem', color: 'var(--text)' }}>{client.name}</span>
+          <Badge type={client.source_type} />
+          {isPending && (
+            <span style={{ 
+              padding: '.15rem .5rem', 
+              borderRadius: '4px', 
+              fontSize: '.65rem', 
+              fontWeight: 600,
+              background: 'rgba(245, 158, 11, 0.15)', 
+              color: '#b45309',
+              textTransform: 'uppercase',
+              letterSpacing: '.03em'
+            }}>
+              ⏳ Pending
+            </span>
+          )}
         </div>
-      )}
-    </div>
-  )
+        
+        {/* Email */}
+        {client.email && (
+          <div style={{ color: 'var(--muted)', fontSize: '.8rem', marginBottom: '.5rem', display: 'flex', alignItems: 'center', gap: '.35rem' }}>
+            <span style={{ opacity: 0.5, fontSize: '.7rem' }}>📧</span> {client.email}
+          </div>
+        )}
+        
+        {/* Quick info row: household + dietary icons */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '.75rem', flexWrap: 'wrap' }}>
+          {/* Household indicator */}
+          {client.household_size > 1 && (
+            <span style={{ 
+              display: 'inline-flex', 
+              alignItems: 'center', 
+              gap: '.25rem',
+              fontSize: '.75rem',
+              color: 'var(--muted)',
+              padding: '.2rem .5rem',
+              background: 'var(--surface-2)',
+              borderRadius: '4px'
+            }}>
+              👥 {client.household_size}
+              {client.household_size > (client.household_members?.length || 0) + 1 && (
+                <span title="Household profiles incomplete" style={{ color: '#f59e0b' }}>⚠</span>
+              )}
+            </span>
+          )}
+          
+          {/* Dietary preferences - compact icons */}
+          {client.dietary_preferences?.length > 0 && (
+            <span style={{ 
+              display: 'inline-flex', 
+              alignItems: 'center', 
+              gap: '.25rem',
+              fontSize: '.75rem',
+              color: '#059669',
+              padding: '.2rem .5rem',
+              background: 'rgba(16, 185, 129, 0.08)',
+              borderRadius: '4px'
+            }}>
+              🥗 {client.dietary_preferences.slice(0, 2).join(', ')}
+              {client.dietary_preferences.length > 2 && ` +${client.dietary_preferences.length - 2}`}
+            </span>
+          )}
+          
+          {/* Allergies - prominent warning */}
+          {hasAllergies && (
+            <span style={{ 
+              display: 'inline-flex', 
+              alignItems: 'center', 
+              gap: '.25rem',
+              fontSize: '.75rem',
+              color: '#dc2626',
+              fontWeight: 600,
+              padding: '.2rem .5rem',
+              background: 'rgba(220, 38, 38, 0.1)',
+              borderRadius: '4px'
+            }}>
+              ⚠️ {allergies.slice(0, 2).join(', ')}
+              {allergies.length > 2 && ` +${allergies.length - 2}`}
+            </span>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   // Member Form Component
   const MemberForm = ({ isEditing, onSubmit, onCancel }) => (
@@ -442,6 +561,17 @@ export default function ChefAllClients() {
     )
 
     const canEdit = client.source_type === 'contact'
+    
+    // For platform clients, get connection details
+    const connection = client.source_type === 'platform' 
+      ? getConnectionForCustomer(client.customer_id) 
+      : null
+    const isPlatformPending = connection?.isPending
+    const isPlatformAccepted = connection?.isAccepted
+    const canAcceptConnection = connection?.canAccept
+    const canDeclineConnection = connection?.canDecline
+    const canEndConnection = connection?.canEnd
+    const isThisConnectionBusy = connectionMutating && String(connectionActionId) === String(connection?.id)
 
     // Edit Mode View
     if (editMode && canEdit) {
@@ -506,6 +636,92 @@ export default function ChefAllClients() {
             </div>
           )}
         </div>
+
+        {/* Connection Status & Actions for Platform Clients */}
+        {client.source_type === 'platform' && connection && (
+          <div style={{ 
+            marginBottom: '1.25rem', 
+            padding: '1rem', 
+            background: isPlatformPending ? 'rgba(245, 158, 11, 0.1)' : 'rgba(16, 185, 129, 0.08)', 
+            borderRadius: '12px',
+            border: `1px solid ${isPlatformPending ? 'rgba(245, 158, 11, 0.3)' : 'rgba(16, 185, 129, 0.2)'}`
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '.75rem' }}>
+              <div>
+                <div style={{ fontSize: '.8rem', color: 'var(--muted)', marginBottom: '.25rem', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '.03em' }}>
+                  Connection Status
+                </div>
+                <div style={{ 
+                  display: 'inline-flex', 
+                  alignItems: 'center', 
+                  gap: '.4rem',
+                  padding: '.3rem .75rem',
+                  borderRadius: '6px',
+                  fontSize: '.85rem',
+                  fontWeight: 600,
+                  background: isPlatformPending ? 'rgba(245, 158, 11, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                  color: isPlatformPending ? '#b45309' : '#059669'
+                }}>
+                  <span style={{ fontSize: '.6rem' }}>{isPlatformPending ? '⏳' : '✓'}</span>
+                  {isPlatformPending ? 'Pending Request' : 'Connected'}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '.5rem', flexWrap: 'wrap' }}>
+                {canAcceptConnection && (
+                  <button
+                    onClick={() => handleConnectionAction(connection.id, 'accept')}
+                    disabled={isThisConnectionBusy}
+                    style={{
+                      ...styles.primaryBtn,
+                      padding: '.5rem 1rem',
+                      fontSize: '.85rem',
+                      opacity: isThisConnectionBusy ? 0.6 : 1
+                    }}
+                  >
+                    {isThisConnectionBusy ? 'Updating...' : '✓ Accept'}
+                  </button>
+                )}
+                {canDeclineConnection && (
+                  <button
+                    onClick={() => handleConnectionAction(connection.id, 'decline')}
+                    disabled={isThisConnectionBusy}
+                    style={{
+                      ...styles.secondaryBtn,
+                      padding: '.5rem 1rem',
+                      fontSize: '.85rem',
+                      opacity: isThisConnectionBusy ? 0.6 : 1
+                    }}
+                  >
+                    Decline
+                  </button>
+                )}
+                {canEndConnection && (
+                  <button
+                    onClick={() => {
+                      if (confirm(`End connection with ${client.name}? They will no longer have access to your personalized offerings.`)) {
+                        handleConnectionAction(connection.id, 'end')
+                      }
+                    }}
+                    disabled={isThisConnectionBusy}
+                    style={{
+                      ...styles.dangerBtn,
+                      padding: '.5rem 1rem',
+                      fontSize: '.85rem',
+                      opacity: isThisConnectionBusy ? 0.6 : 1
+                    }}
+                  >
+                    {isThisConnectionBusy ? 'Ending...' : 'End Connection'}
+                  </button>
+                )}
+              </div>
+            </div>
+            {respondError && connectionActionId === connection.id && (
+              <div style={{ marginTop: '.75rem', padding: '.5rem', background: 'rgba(220, 38, 38, 0.1)', borderRadius: '6px', fontSize: '.85rem', color: '#dc2626' }}>
+                {respondError?.response?.data?.detail || respondError?.message || 'Failed to update connection'}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Contact Info */}
         {(client.email || client.phone) && (

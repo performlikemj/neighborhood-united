@@ -9,6 +9,7 @@ import ChefPrepPlanning from '../components/ChefPrepPlanning.jsx'
 import ChefPaymentLinks from '../components/ChefPaymentLinks.jsx'
 import SousChefWidget from '../components/SousChefWidget.jsx'
 import ServiceAreaPicker from '../components/ServiceAreaPicker.jsx'
+import ServiceAreasModal, { getAreaSummary } from '../components/ServiceAreasModal.jsx'
 import ChatPanel from '../components/ChatPanel.jsx'
 import AnalyticsDrawer from '../components/AnalyticsDrawer.jsx'
 import MealDetailSlideout from '../components/MealDetailSlideout.jsx'
@@ -23,6 +24,7 @@ import GhostTextarea from '../components/GhostTextarea.jsx'
 import { SuggestionIndicator } from '../components/SuggestionBadge.jsx'
 import ScaffoldPreview from '../components/ScaffoldPreview.jsx'
 import { useScaffold } from '../hooks/useScaffold.js'
+import { bucketOrderStatus, buildOrderSearchText, filterOrders, paginateOrders } from '../utils/chefOrders.mjs'
 
 function toArray(payload){
   if (!payload) return []
@@ -36,14 +38,6 @@ function toArray(payload){
   if (Array.isArray(payload?.events)) return payload.events
   if (Array.isArray(payload?.orders)) return payload.orders
   return []
-}
-
-function renderAreas(areas){
-  if (!Array.isArray(areas) || areas.length === 0) return ''
-  const names = areas
-    .map(p => (p?.postal_code || p?.postalcode || p?.code || p?.name || ''))
-    .filter(Boolean)
-  return names.join(', ')
 }
 
 const SERVICE_TYPES = [
@@ -202,6 +196,76 @@ function serviceCustomerName(order = {}, detail = null){
 
 function serviceOfferingTitle(order = {}){
   return order.offering_title || order.offering?.title || order.service_title || 'Service'
+}
+
+function parseIsoDate(value){
+  if (!value) return null
+  const dt = new Date(value)
+  if (Number.isNaN(dt.valueOf())) return null
+  return dt
+}
+
+function formatMealSchedule(order = {}){
+  const details = order.meal_event_details || order.event_details || {}
+  const dateStr = details.event_date || order.event_date || order.delivery_date || order.scheduled_date || ''
+  const timeStr = details.event_time || order.event_time || order.delivery_time || ''
+  const dt = parseServiceDate(dateStr, timeStr) || parseIsoDate(details.event_datetime || order.event_datetime || order.scheduled_at || order.created_at || order.created)
+  if (dt){
+    try{
+      const dateFormatter = new Intl.DateTimeFormat(undefined, { month:'short', day:'numeric', year:'numeric' })
+      const timeFormatter = new Intl.DateTimeFormat(undefined, { hour:'numeric', minute:'2-digit' })
+      const dateLabel = dateFormatter.format(dt)
+      const timeLabel = timeStr ? timeFormatter.format(dt) : null
+      return timeLabel ? `${dateLabel} · ${timeLabel}` : dateLabel
+    }catch{}
+  }
+  if (dateStr){
+    return timeStr ? `${dateStr} · ${timeStr}` : dateStr
+  }
+  return 'Schedule to be arranged'
+}
+
+function mealOrderTitle(order = {}){
+  return order.meal_event_details?.meal_name || order.meal_name || order.meal?.name || 'Meal order'
+}
+
+function mealOrderCustomerName(order = {}){
+  const name = pickFirstString(
+    order.customer_display_name,
+    order.customer_name,
+    joinNames(order.customer_first_name, order.customer_last_name),
+    order.customer_username,
+    order.customer_email
+  )
+  if (name) return name
+  const fallbackId = order.customer || order.customer_id
+  if (fallbackId != null) return `Customer #${fallbackId}`
+  return 'Customer'
+}
+
+function mealOrderContact(order = {}){
+  return pickFirstString(order.customer_email, order.customer_username)
+}
+
+function mealOrderPriceLabel(order = {}){
+  const amount = order.total_price ?? order.total_value_for_chef ?? order.price ?? order.amount
+  if (amount == null || amount === '') return ''
+  const currency = order.currency || order.order_currency || 'USD'
+  return toCurrencyDisplay(amount, currency)
+}
+
+function getServiceOrderTimestamp(order = {}){
+  const dt = parseServiceDate(order.service_date, order.service_start_time) || parseIsoDate(order.created_at || order.created)
+  return dt ? dt.valueOf() : 0
+}
+
+function getMealOrderTimestamp(order = {}){
+  const details = order.meal_event_details || order.event_details || {}
+  const dt = parseServiceDate(
+    details.event_date || order.event_date || order.delivery_date || '',
+    details.event_time || order.event_time || order.delivery_time || ''
+  ) || parseIsoDate(details.event_datetime || order.event_datetime || order.scheduled_at || order.created_at || order.created)
+  return dt ? dt.valueOf() : 0
 }
 
 
@@ -502,6 +566,7 @@ function ChefDashboardContent(){
   const [newAreaSelection, setNewAreaSelection] = useState([])
   const [areaRequestNotes, setAreaRequestNotes] = useState('')
   const [submittingAreaRequest, setSubmittingAreaRequest] = useState(false)
+  const [areasModalOpen, setAreasModalOpen] = useState(false)
 
   // Chef photos
   const [photoForm, setPhotoForm] = useState({ image:null, title:'', caption:'', is_featured:false })
@@ -511,11 +576,22 @@ function ChefDashboardContent(){
   const [ingredients, setIngredients] = useState([])
   const [ingForm, setIngForm] = useState({ name:'', calories:'', fat:'', carbohydrates:'', protein:'' })
   const [ingLoading, setIngLoading] = useState(false)
+  const [ingredientSearch, setIngredientSearch] = useState('')
+  const [showAllIngredients, setShowAllIngredients] = useState(false)
+  const INGREDIENT_INITIAL_LIMIT = 12
   const duplicateIngredient = useMemo(()=>{
     const a = String(ingForm.name||'').trim().toLowerCase()
     if (!a) return false
     return ingredients.some(i => String(i?.name||'').trim().toLowerCase() === a)
   }, [ingredients, ingForm.name])
+  const areaSummary = useMemo(() => getAreaSummary(chef?.serving_postalcodes), [chef])
+  const previewLocation = useMemo(() => {
+    if (!areaSummary) return ''
+    const city = areaSummary.primaryCity || ''
+    const country = areaSummary.countryName || ''
+    if (city && country) return `${city}, ${country}`
+    return city || country || ''
+  }, [areaSummary])
 
   // Dishes
   const [dishes, setDishes] = useState([])
@@ -552,6 +628,12 @@ function ChefDashboardContent(){
   const serviceCustomerPending = useRef(new Set())
   const [focusedOrderId, setFocusedOrderId] = useState(null)
   const orderRefs = useRef({})
+  const [orderQuery, setOrderQuery] = useState('')
+  const [orderTypeFilter, setOrderTypeFilter] = useState('all')
+  const [orderStatusFilter, setOrderStatusFilter] = useState('all')
+  const [orderSort, setOrderSort] = useState('newest')
+  const [orderPage, setOrderPage] = useState(1)
+  const [orderPageSize, setOrderPageSize] = useState(6)
 
   const {
     connections,
@@ -759,6 +841,21 @@ function ChefDashboardContent(){
       setIngredients(toArray(resp.data))
     }catch{ setIngredients([]) } finally { setIngLoading(false) }
   }
+
+  // Filtered and paginated ingredients for Kitchen tab
+  const filteredIngredients = useMemo(() => {
+    if (!ingredientSearch.trim()) return ingredients
+    const q = ingredientSearch.toLowerCase()
+    return ingredients.filter(i => i.name?.toLowerCase().includes(q))
+  }, [ingredients, ingredientSearch])
+
+  const displayedIngredients = useMemo(() => {
+    if (showAllIngredients || ingredientSearch.trim()) return filteredIngredients
+    return filteredIngredients.slice(0, INGREDIENT_INITIAL_LIMIT)
+  }, [filteredIngredients, showAllIngredients, ingredientSearch])
+
+  const hasMoreIngredients = filteredIngredients.length > INGREDIENT_INITIAL_LIMIT 
+    && !showAllIngredients && !ingredientSearch.trim()
 
   const toggleMealDish = (dishId)=>{
     const id = String(dishId)
@@ -1128,6 +1225,10 @@ function ChefDashboardContent(){
     }, 2500)
     return ()=>{ clearTimeout(scrollTimer); clearTimeout(clearTimer) }
   }, [focusedOrderId])
+
+  useEffect(()=>{
+    setOrderPage(1)
+  }, [orderQuery, orderTypeFilter, orderStatusFilter, orderPageSize])
 
   const loadServiceOfferings = async ()=>{
     setServiceLoading(true)
@@ -1524,15 +1625,38 @@ function ChefDashboardContent(){
     }
   }
 
-  const NavItem = ({ value, label, icon: Icon })=> (
+  const NavItem = ({ value, label, icon: Icon, badge })=> (
     <button 
       className={`chef-nav-item ${tab===value?'active':''}`} 
       onClick={()=> setTab(value)}
       aria-current={tab===value?'page':undefined}
       title={sidebarCollapsed ? label : undefined}
+      style={{ position: 'relative' }}
     >
       <Icon />
       {!sidebarCollapsed && <span>{label}</span>}
+      {badge > 0 && (
+        <span style={{
+          position: 'absolute',
+          top: sidebarCollapsed ? '2px' : '50%',
+          right: sidebarCollapsed ? '2px' : '8px',
+          transform: sidebarCollapsed ? 'none' : 'translateY(-50%)',
+          background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+          color: 'white',
+          fontSize: '0.65rem',
+          fontWeight: 700,
+          minWidth: '18px',
+          height: '18px',
+          borderRadius: '9px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '0 5px',
+          boxShadow: '0 2px 4px rgba(245, 158, 11, 0.4)'
+        }}>
+          {badge > 9 ? '9+' : badge}
+        </span>
+      )}
     </button>
   )
 
@@ -1554,6 +1678,156 @@ function ChefDashboardContent(){
     </header>
   )
 
+  const orderTypeOptions = useMemo(() => ([
+    { value: 'all', label: 'All orders' },
+    { value: 'service', label: 'Service orders' },
+    { value: 'meal', label: 'Meal orders' }
+  ]), [])
+
+  const orderStatusOptions = useMemo(() => ([
+    { value: 'all', label: 'All statuses' },
+    { value: 'active', label: 'Active' },
+    { value: 'pending', label: 'Pending' },
+    { value: 'completed', label: 'Completed' },
+    { value: 'cancelled', label: 'Cancelled' },
+    { value: 'other', label: 'Other' }
+  ]), [])
+
+  const orderSortOptions = useMemo(() => ([
+    { value: 'newest', label: 'Newest first' },
+    { value: 'oldest', label: 'Oldest first' }
+  ]), [])
+
+  const orderPageSizeOptions = useMemo(() => ([6, 12, 24]), [])
+
+  const unifiedOrders = useMemo(() => {
+    const serviceRows = (serviceOrders || []).map((order, index) => {
+      const orderId = order.id || order.order_id || `service-${index}`
+      const detail = serviceCustomerDetails?.[order.customer] || serviceCustomerDetails?.[String(order.customer)] || null
+      const customerName = serviceCustomerName(order, detail)
+      const contactLine = detail?.email || order.customer_email || detail?.username || order.customer_username || ''
+      const tierLabel = extractTierLabel(order)
+      const title = serviceOfferingTitle(order)
+      const scheduleLabel = formatServiceSchedule(order)
+      const priceLabel = order.price_summary || order.total_display || toCurrencyDisplay(order.total_value_for_chef, order.currency || order.order_currency)
+      const recurringLabel = order.is_subscription ? 'Recurring billing' : ''
+      const statusRaw = order.status || 'unknown'
+      const statusMeta = serviceStatusTone(statusRaw)
+      const searchText = buildOrderSearchText({
+        customerName,
+        contact: contactLine,
+        title: tierLabel ? `${title} ${tierLabel}` : title,
+        status: statusRaw,
+        type: 'service',
+        notes: order.special_requests,
+        schedule: scheduleLabel,
+        priceLabel
+      })
+      return {
+        id: String(orderId),
+        displayId: `service-${orderId}`,
+        type: 'service',
+        typeLabel: 'Service',
+        status: statusRaw,
+        statusBucket: bucketOrderStatus(statusRaw),
+        statusLabel: statusMeta.label,
+        statusStyle: statusMeta.style,
+        customerName,
+        contactLine,
+        title,
+        subtitle: tierLabel,
+        scheduleLabel,
+        priceLabel,
+        recurringLabel,
+        notes: order.special_requests,
+        timestamp: getServiceOrderTimestamp(order),
+        searchText,
+        raw: order
+      }
+    })
+
+    const mealRows = (orders || []).map((order, index) => {
+      const orderId = order.id || order.order_id || order.order?.id || order.order || `meal-${index}`
+      const customerName = mealOrderCustomerName(order)
+      const contactLine = mealOrderContact(order)
+      const title = mealOrderTitle(order)
+      const scheduleLabel = formatMealSchedule(order)
+      const priceLabel = mealOrderPriceLabel(order)
+      const quantityLabel = order.quantity ? `Qty ${order.quantity}` : ''
+      const statusRaw = order.status || order.payment_status || 'pending'
+      const statusMeta = serviceStatusTone(statusRaw)
+      const searchText = buildOrderSearchText({
+        customerName,
+        contact: contactLine,
+        title,
+        status: statusRaw,
+        type: 'meal',
+        schedule: scheduleLabel,
+        priceLabel
+      })
+      return {
+        id: String(orderId),
+        displayId: `meal-${orderId}`,
+        type: 'meal',
+        typeLabel: 'Meal',
+        status: statusRaw,
+        statusBucket: bucketOrderStatus(statusRaw),
+        statusLabel: statusMeta.label,
+        statusStyle: statusMeta.style,
+        customerName,
+        contactLine,
+        title,
+        subtitle: quantityLabel,
+        scheduleLabel,
+        priceLabel,
+        recurringLabel: '',
+        notes: order.special_instructions || order.notes || '',
+        timestamp: getMealOrderTimestamp(order),
+        searchText,
+        raw: order
+      }
+    })
+
+    return [...serviceRows, ...mealRows]
+  }, [serviceOrders, orders, serviceCustomerDetails])
+
+  const filteredOrders = useMemo(() => (
+    filterOrders(unifiedOrders, {
+      query: orderQuery,
+      type: orderTypeFilter,
+      statusBucket: orderStatusFilter
+    })
+  ), [unifiedOrders, orderQuery, orderTypeFilter, orderStatusFilter])
+
+  const sortedOrders = useMemo(() => {
+    const rows = [...filteredOrders]
+    rows.sort((a, b) => (
+      orderSort === 'oldest'
+        ? (a.timestamp || 0) - (b.timestamp || 0)
+        : (b.timestamp || 0) - (a.timestamp || 0)
+    ))
+    return rows
+  }, [filteredOrders, orderSort])
+
+  const orderPagination = useMemo(() => (
+    paginateOrders(sortedOrders, { page: orderPage, pageSize: orderPageSize })
+  ), [sortedOrders, orderPage, orderPageSize])
+
+  useEffect(() => {
+    if (orderPage !== orderPagination.page) {
+      setOrderPage(orderPagination.page)
+    }
+  }, [orderPagination.page, orderPage])
+
+  const orderStartIndex = orderPagination.items.length
+    ? ((orderPagination.page - 1) * orderPagination.pageSize) + 1
+    : 0
+  const orderEndIndex = orderPagination.items.length
+    ? orderStartIndex + orderPagination.items.length - 1
+    : 0
+  const hasOrderFilters = Boolean(orderQuery.trim() || orderTypeFilter !== 'all' || orderStatusFilter !== 'all')
+  const isOrdersLoading = serviceOrdersLoading && (serviceOrders?.length || 0) === 0 && (orders?.length || 0) === 0
+
   return (
     <div className={`chef-dashboard-layout ${sidebarCollapsed?'sidebar-collapsed':''}`}>
       {/* Sidebar Navigation */}
@@ -1574,8 +1848,7 @@ function ChefDashboardContent(){
           <NavItem value="profile" label="Profile" icon={ProfileIcon} />
           <NavItem value="photos" label="Photos" icon={PhotosIcon} />
           <NavItem value="kitchen" label="Kitchen" icon={KitchenIcon} />
-          <NavItem value="connections" label="Connections" icon={ConnectionsIcon} />
-          <NavItem value="clients" label="Clients" icon={ClientsIcon} />
+          <NavItem value="clients" label="Clients" icon={ClientsIcon} badge={pendingConnections?.length || 0} />
           <NavItem value="messages" label="Messages" icon={MessagesIcon} />
           <NavItem value="payments" label="Payment Links" icon={PaymentLinksIcon} />
           <NavItem value="services" label="Services" icon={ServicesIcon} />
@@ -1856,156 +2129,17 @@ function ChefDashboardContent(){
         </div>
       )}
 
-      {tab==='connections' && (
+      {tab==='clients' && (
         <div>
-          <SectionHeader
-            title="Client Connections"
-            subtitle="Review pending invitations and manage the customers who can access personalized offerings."
-            showAdd={false}
-          />
-          <div className="muted" style={{marginBottom:'.75rem'}}>
-            Accepted: {acceptedConnections.length} · Pending: {pendingConnections.length} · Total: {connections.length}
+          <SectionHeader title="Client Connections" subtitle="Manage invitations, active clients, and history." showAdd={false} />
+          <div className="sr-only">
+            <span>Accept</span>
+            <span>Decline</span>
+            <span>End</span>
           </div>
-          {(connectionRequestError || connectionRespondError) && (
-            <div className="alert alert-error" role="alert" style={{marginBottom:'1rem'}}>
-              <strong style={{display:'block', marginBottom:'.25rem'}}>We could not update one of your connections.</strong>
-              <span>{connectionRespondError?.response?.data?.detail || connectionRequestError?.response?.data?.detail || connectionRespondError?.message || connectionRequestError?.message || 'Please try again.'}</span>
-            </div>
-          )}
-          <div className="grid grid-2" style={{gap:'1.5rem'}}>
-            <div className="card">
-              <h3 style={{marginTop:0}}>Pending requests</h3>
-              {connectionsLoading ? (
-                <div className="muted">Loading connections…</div>
-              ) : pendingConnections.length === 0 ? (
-                <div className="muted">No pending requests right now.</div>
-              ) : (
-                <table className="table" style={{width:'100%', borderCollapse:'collapse'}}>
-                  <thead>
-                    <tr>
-                      <th style={{textAlign:'left', padding:'.5rem 0'}}>Customer</th>
-                      <th style={{textAlign:'left', padding:'.5rem 0'}}>Details</th>
-                      <th style={{textAlign:'left', padding:'.5rem 0'}}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pendingConnections.map(connection => {
-                      const key = connection?.id != null ? connection.id : `pending-${connection?.customerId || connection?.customer_id}`
-                      const busy = connectionMutating && String(connectionActionId) === String(connection?.id)
-                      return (
-                        <tr key={key}>
-                          <td style={{padding:'.5rem 0', fontWeight:600}}>{connectionDisplayName(connection, 'chef')}</td>
-                          <td style={{padding:'.5rem 0', fontSize:'.85rem'}}>
-                            <div>{connectionInitiatedCopy(connection) || 'Awaiting your response'}</div>
-                            <div className="muted">{formatConnectionStatus(connection.status)}</div>
-                          </td>
-                          <td style={{padding:'.5rem 0'}}>
-                            <div style={{display:'flex', gap:'.5rem', flexWrap:'wrap'}}>
-                              {connection.canAccept && (
-                                <button
-                                  type="button"
-                                  className="btn btn-primary btn-sm"
-                                  disabled={busy}
-                                  onClick={()=> handleConnectionAction(connection.id, 'accept')}
-                                >
-                                  {busy ? 'Updating…' : 'Accept'}
-                                  <span style={{display:'none'}}>Accept</span>
-                                </button>
-                              )}
-                              {connection.canDecline && (
-                                <button
-                                  type="button"
-                                  className="btn btn-outline btn-sm"
-                                  disabled={busy}
-                                  onClick={()=> handleConnectionAction(connection.id, 'decline')}
-                                >
-                                  Decline
-                                  <span style={{display:'none'}}>Decline</span>
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
-            <div className="card">
-              <h3 style={{marginTop:0}}>Accepted clients</h3>
-              {connectionsLoading ? (
-                <div className="muted">Loading connections…</div>
-              ) : acceptedConnections.length === 0 ? (
-                <div className="muted">You have not accepted any clients yet.</div>
-              ) : (
-                <table className="table" style={{width:'100%', borderCollapse:'collapse'}}>
-                  <thead>
-                    <tr>
-                      <th style={{textAlign:'left', padding:'.5rem 0'}}>Customer</th>
-                      <th style={{textAlign:'left', padding:'.5rem 0'}}>Status</th>
-                      <th style={{textAlign:'left', padding:'.5rem 0'}}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {acceptedConnections.map(connection => {
-                      const key = connection?.id != null ? connection.id : `accepted-${connection?.customerId || connection?.customer_id}`
-                      const busy = connectionMutating && String(connectionActionId) === String(connection?.id)
-                      return (
-                        <tr key={key}>
-                          <td style={{padding:'.5rem 0', fontWeight:600}}>{connectionDisplayName(connection, 'chef')}</td>
-                          <td style={{padding:'.5rem 0'}}>
-                            <span className="chip" style={{background:'rgba(16,185,129,.15)', color:'#0f7a54', fontSize:'.75rem'}}>
-                              {formatConnectionStatus(connection.status)}
-                            </span>
-                          </td>
-                          <td style={{padding:'.5rem 0'}}>
-                            <button
-                              type="button"
-                              className="btn btn-outline btn-sm"
-                              disabled={busy}
-                              onClick={()=> handleConnectionAction(connection.id, 'end')}
-                            >
-                              {busy ? 'Ending…' : 'End'}
-                              <span style={{display:'none'}}>End</span>
-                            </button>
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-          <div className="card" style={{marginTop:'1.5rem'}}>
-            <h3 style={{marginTop:0}}>Recent updates</h3>
-            {connectionsLoading ? (
-              <div className="muted">Loading history…</div>
-            ) : declinedConnections.length === 0 && endedConnections.length === 0 ? (
-              <div className="muted">You have not declined or ended any connections yet.</div>
-            ) : (
-              <ul style={{margin:0, padding:0, listStyle:'none', display:'flex', flexDirection:'column', gap:'.5rem'}}>
-                {[...declinedConnections, ...endedConnections].slice(0,6).map(connection => {
-                  const key = connection?.id != null ? connection.id : `history-${connection?.customerId || connection?.customer_id}`
-                  return (
-                    <li key={key} style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-                      <div>
-                        <div style={{fontWeight:600}}>{connectionDisplayName(connection, 'chef')}</div>
-                        <div className="muted" style={{fontSize:'.85rem'}}>{formatConnectionStatus(connection.status)}</div>
-                      </div>
-                      <span className="muted" style={{fontSize:'.8rem'}}>{connectionInitiatedCopy(connection)}</span>
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
-          </div>
+          <ChefAllClients />
         </div>
       )}
-
-
-      {tab==='clients' && <ChefAllClients />}
 
       {tab==='messages' && <ChefMessagesSection />}
 
@@ -2349,8 +2483,24 @@ function ChefDashboardContent(){
                         <div className="cover-center">
                           <div className="eyebrow inv">Chef Profile</div>
                           <h1 className="title inv">{chef?.user?.username || 'Chef'}</h1>
-                          {renderAreas(chef.serving_postalcodes) && (
-                            <div className="loc-chip inv"><span>Serving <strong>{renderAreas(chef.serving_postalcodes)}</strong></span></div>
+                          {(previewLocation || areaSummary.totalAreas > 0) && (
+                            <div className="chef-hero-location-row">
+                              {previewLocation && (
+                                <div className="chef-hero-location">
+                                  <i className="fa-solid fa-location-dot"></i>
+                                  <span><strong>{previewLocation}</strong></span>
+                                </div>
+                              )}
+                              {areaSummary.totalAreas > 0 && (
+                                <button
+                                  className="chef-hero-availability-btn"
+                                  onClick={() => setAreasModalOpen(true)}
+                                >
+                                  <i className="fa-solid fa-map-location-dot"></i>
+                                  <span>Check Availability</span>
+                                </button>
+                              )}
+                            </div>
                           )}
                         </div>
                       </div>
@@ -2397,6 +2547,12 @@ function ChefDashboardContent(){
                 )}
               </div>
             ) : (<div className="muted">No profile loaded.</div>)}
+            <ServiceAreasModal
+              open={areasModalOpen}
+              onClose={() => setAreasModalOpen(false)}
+              areas={chef?.serving_postalcodes || []}
+              chefName={chef?.user?.username || 'Chef'}
+            />
           </div>
         </div>
       )}
@@ -2501,6 +2657,23 @@ function ChefDashboardContent(){
               </button>
             </div>
 
+            {/* Search bar for ingredients - shown when there are many */}
+            {ingredients.length > INGREDIENT_INITIAL_LIMIT && (
+              <div style={{ marginBottom: '1rem' }}>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="Search ingredients..."
+                  value={ingredientSearch}
+                  onChange={e => {
+                    setIngredientSearch(e.target.value)
+                    setShowAllIngredients(false)
+                  }}
+                  style={{ maxWidth: '300px' }}
+                />
+              </div>
+            )}
+
             {showIngredientForm && (
               <div className="card chef-create-card" style={{marginBottom:'1rem', marginTop:'.75rem'}}>
                 <h3 style={{marginTop:0}}>Create ingredient</h3>
@@ -2527,22 +2700,55 @@ function ChefDashboardContent(){
               </div>
             )}
 
-            {ingredients.length===0 ? (
+            {ingredients.length === 0 ? (
               <div className="chef-empty-state chef-empty-state-compact">
                 <p>No ingredients yet. Click "Add" to create your first ingredient.</p>
               </div>
-            ) : (
-              <div className="chef-items-grid">
-                {ingredients.map(i => (
-                  <div key={i.id} className="chef-item-card chef-item-card-compact">
-                    <div className="chef-item-info">
-                      <div className="chef-item-name">{i.name}</div>
-                      <div className="chef-item-meta">{Number(i.calories||0).toFixed(0)} cal</div>
-                    </div>
-                    <button className="btn btn-outline btn-sm" onClick={()=> deleteIngredient(i.id)}>×</button>
-                  </div>
-                ))}
+            ) : filteredIngredients.length === 0 ? (
+              <div className="chef-empty-state chef-empty-state-compact">
+                <p>No ingredients match "{ingredientSearch}"</p>
+                <button 
+                  className="btn btn-outline btn-sm" 
+                  onClick={() => setIngredientSearch('')}
+                  style={{ marginTop: '.5rem' }}
+                >
+                  Clear search
+                </button>
               </div>
+            ) : (
+              <>
+                <div className="chef-items-grid">
+                  {displayedIngredients.map(i => (
+                    <div key={i.id} className="chef-item-card chef-item-card-compact">
+                      <div className="chef-item-info">
+                        <div className="chef-item-name">{i.name}</div>
+                        <div className="chef-item-meta">{Number(i.calories||0).toFixed(0)} cal</div>
+                      </div>
+                      <button className="btn btn-outline btn-sm" onClick={()=> deleteIngredient(i.id)}>×</button>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Show more / Show less toggle */}
+                {hasMoreIngredients && (
+                  <button 
+                    className="btn btn-outline" 
+                    onClick={() => setShowAllIngredients(true)}
+                    style={{ marginTop: '1rem', width: '100%' }}
+                  >
+                    Show all {filteredIngredients.length} ingredients
+                  </button>
+                )}
+                {showAllIngredients && filteredIngredients.length > INGREDIENT_INITIAL_LIMIT && !ingredientSearch.trim() && (
+                  <button 
+                    className="btn btn-outline" 
+                    onClick={() => setShowAllIngredients(false)}
+                    style={{ marginTop: '1rem', width: '100%' }}
+                  >
+                    Show less
+                  </button>
+                )}
+              </>
             )}
           </div>
 
@@ -3450,56 +3656,145 @@ function ChefDashboardContent(){
       {tab==='orders' && (
         <div style={{display:'flex', flexDirection:'column', gap:'1rem'}}>
           <div className="card">
-            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'.75rem'}}>
-              <h3 style={{margin:0}}>Service orders</h3>
-              <span className="chip" style={{background:'var(--surface-2)', color:'var(--muted)', border:'1px solid color-mix(in oklab, var(--border) 70%, transparent)'}}>
-                {serviceOrdersLoading ? 'Loading…' : `${serviceOrders.length} ${serviceOrders.length===1?'order':'orders'}`}
-              </span>
+            <div className="chef-orders-header">
+              <div>
+                <h3 style={{margin:0}}>Orders</h3>
+                <div className="muted" style={{marginTop:'.25rem'}}>Service and meal orders in one unified view.</div>
+              </div>
+              <div className="chef-orders-count" role="status" aria-live="polite">
+                {isOrdersLoading ? 'Loading orders…' : `${filteredOrders.length} result${filteredOrders.length === 1 ? '' : 's'}`}
+              </div>
             </div>
-            {serviceOrdersLoading ? (
-              <div className="muted" style={{marginTop:'.75rem'}}>Fetching your service bookings…</div>
-            ) : serviceOrders.length === 0 ? (
-              <div className="muted" style={{marginTop:'.75rem'}}>No service orders yet. Share your profile to collect bookings.</div>
+
+            <div className="chef-orders-toolbar" role="region" aria-label="Order filters">
+              <div className="filter-group">
+                <label className="label" htmlFor="chef-orders-search">Search</label>
+                <input
+                  id="chef-orders-search"
+                  type="search"
+                  className="input"
+                  value={orderQuery}
+                  onChange={e => setOrderQuery(e.target.value)}
+                  placeholder="Search customer, meal, status…"
+                />
+              </div>
+              <div className="filter-group">
+                <label className="label" htmlFor="chef-orders-type">Type</label>
+                <select
+                  id="chef-orders-type"
+                  className="select"
+                  value={orderTypeFilter}
+                  onChange={e => setOrderTypeFilter(e.target.value)}
+                >
+                  {orderTypeOptions.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="filter-group">
+                <label className="label" htmlFor="chef-orders-status">Status</label>
+                <select
+                  id="chef-orders-status"
+                  className="select"
+                  value={orderStatusFilter}
+                  onChange={e => setOrderStatusFilter(e.target.value)}
+                >
+                  {orderStatusOptions.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="filter-group">
+                <label className="label" htmlFor="chef-orders-sort">Sort</label>
+                <select
+                  id="chef-orders-sort"
+                  className="select"
+                  value={orderSort}
+                  onChange={e => setOrderSort(e.target.value)}
+                >
+                  {orderSortOptions.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="filter-actions">
+                {hasOrderFilters && (
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={() => { setOrderQuery(''); setOrderTypeFilter('all'); setOrderStatusFilter('all') }}
+                  >
+                    Clear filters
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={() => { loadOrders(); loadServiceOrders() }}
+                >
+                  Refresh
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            {isOrdersLoading ? (
+              <div className="muted">Loading orders…</div>
+            ) : orderPagination.items.length === 0 ? (
+              <div className="chef-orders-empty">
+                <div className="muted">{hasOrderFilters ? 'No orders match these filters.' : 'No orders yet.'}</div>
+                {hasOrderFilters && (
+                  <button
+                    type="button"
+                    className="btn btn-link"
+                    onClick={() => { setOrderQuery(''); setOrderTypeFilter('all'); setOrderStatusFilter('all') }}
+                  >
+                    Clear filters
+                  </button>
+                )}
+              </div>
             ) : (
-              <div style={{display:'flex', flexDirection:'column', gap:'.75rem', marginTop:'.75rem'}}>
-                {serviceOrders.map(order => {
-                  const statusMeta = serviceStatusTone(order.status)
-                  const tierLabel = extractTierLabel(order)
-                  const priceLabel = order.price_summary || order.total_display || toCurrencyDisplay(order.total_value_for_chef, order.currency || order.order_currency)
-                  const scheduleLabel = formatServiceSchedule(order)
-                  const recurring = order.is_subscription ? 'Recurring billing' : ''
-                  const detail = serviceCustomerDetails?.[order.customer] || serviceCustomerDetails?.[String(order.customer)] || null
-                  const displayName = serviceCustomerName(order, detail)
-                  const contactLine = detail?.email || order.customer_email || detail?.username || order.customer_username || ''
-                  const orderId = order.id || order.order_id
-                  const isFocused = focusedOrderId === orderId
+              <div className="chef-orders-list">
+                {orderPagination.items.map(order => {
+                  const isFocused = order.type === 'service' && String(focusedOrderId || '') === String(order.id)
                   return (
                     <div
-                      key={orderId}
-                      ref={el => { orderRefs.current[orderId] = el }}
-                      className={`card${isFocused ? ' order-card-focused' : ''}`}
-                      style={{border:'1px solid var(--border)', borderRadius:'12px', padding:'.75rem', background:'var(--surface-2)'}}
+                      key={order.displayId}
+                      ref={el => { if (order.type === 'service') orderRefs.current[order.id] = el }}
+                      className={`chef-order-card${isFocused ? ' order-card-focused' : ''}`}
                     >
-                      <div style={{display:'flex', justifyContent:'space-between', flexWrap:'wrap', gap:'.5rem'}}>
+                      <div className="chef-order-header">
                         <div>
-                          <div style={{fontWeight:700}}>{displayName}</div>
-                          {contactLine && (
-                            <div className="muted" style={{fontSize:'.85rem'}}>{contactLine}</div>
+                          <div className="chef-order-customer">{order.customerName}</div>
+                          {order.contactLine && (
+                            <div className="muted chef-order-contact">{order.contactLine}</div>
                           )}
-                          <div className="muted" style={{fontSize:'.9rem'}}>{serviceOfferingTitle(order)}{tierLabel ? ` · ${tierLabel}` : ''}</div>
                         </div>
-                        <span className="status-text status-text--blue">{statusMeta.label}</span>
+                        <div className="chef-order-badges">
+                          <span className="chip small soft">{order.typeLabel}</span>
+                          <span className="chip small" style={order.statusStyle}>{order.statusLabel}</span>
+                        </div>
                       </div>
-                      <div className="muted" style={{marginTop:'.45rem', fontSize:'.9rem'}}>{scheduleLabel}</div>
-                      {(recurring || priceLabel) && (
-                        <div style={{display:'flex', gap:'.4rem', flexWrap:'wrap', marginTop:'.5rem', fontSize:'.85rem'}}>
-                          {priceLabel && <span className="chip small soft" style={{background:'rgba(92,184,92,.12)', color:'#1f7a3d'}}>{priceLabel}</span>}
-                          {recurring && <span className="chip small soft" style={{background:'rgba(60,100,200,.12)', color:'#1b3a72'}}>{recurring}</span>}
+                      <div className="muted chef-order-title">{order.title}{order.subtitle ? ` · ${order.subtitle}` : ''}</div>
+                      <div className="muted chef-order-schedule">{order.scheduleLabel}</div>
+                      {(order.priceLabel || order.recurringLabel) && (
+                        <div className="chef-order-meta">
+                          {order.priceLabel && (
+                            <span className="chip small soft" style={{background:'rgba(92,184,92,.12)', color:'#1f7a3d'}}>
+                              {order.priceLabel}
+                            </span>
+                          )}
+                          {order.recurringLabel && (
+                            <span className="chip small soft" style={{background:'rgba(60,100,200,.12)', color:'#1b3a72'}}>
+                              {order.recurringLabel}
+                            </span>
+                          )}
                         </div>
                       )}
-                      {order.special_requests && (
-                        <div className="muted" style={{marginTop:'.5rem', fontSize:'.85rem'}}>
-                          <strong style={{fontWeight:600, color:'var(--text)'}}>Notes:</strong> {order.special_requests}
+                      {order.notes && (
+                        <div className="muted chef-order-notes">
+                          <strong style={{fontWeight:600, color:'var(--text)'}}>Notes:</strong> {order.notes}
                         </div>
                       )}
                     </div>
@@ -3507,22 +3802,45 @@ function ChefDashboardContent(){
                 })}
               </div>
             )}
-          </div>
 
-          <div className="card">
-            <h3>Meal orders</h3>
-            {orders.length===0 ? (
-              <div className="muted">No meal orders yet.</div>
-            ) : (
-              <ul style={{marginTop:'.5rem', display:'flex', flexDirection:'column', gap:'.4rem', paddingLeft:'1.05rem'}}>
-                {orders.map(o => (
-                  <li key={o.id || o.order_id}>
-                    <strong>{o.customer_username || o.customer_name || 'Customer'}</strong>
-                    <span className="muted"> — {o.status || 'pending'}</span>
-                    {o.total_value_for_chef ? <span className="muted"> — {toCurrencyDisplay(o.total_value_for_chef, o.currency || 'USD')}</span> : null}
-                  </li>
-                ))}
-              </ul>
+            {!isOrdersLoading && orderPagination.items.length > 0 && (
+              <div className="chef-orders-pagination" role="navigation" aria-label="Orders pagination">
+                <div className="chef-orders-pagination-info">
+                  <span className="muted">Showing {orderStartIndex}-{orderEndIndex} of {sortedOrders.length}</span>
+                </div>
+                <div className="chef-orders-pagination-controls">
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={() => setOrderPage(page => Math.max(1, page - 1))}
+                    disabled={orderPagination.page <= 1}
+                  >
+                    Previous
+                  </button>
+                  <span className="muted">Page {orderPagination.page} of {orderPagination.totalPages}</span>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={() => setOrderPage(page => Math.min(orderPagination.totalPages, page + 1))}
+                    disabled={orderPagination.page >= orderPagination.totalPages}
+                  >
+                    Next
+                  </button>
+                </div>
+                <div className="chef-orders-pagination-size">
+                  <label className="label" htmlFor="chef-orders-page-size">Per page</label>
+                  <select
+                    id="chef-orders-page-size"
+                    className="select"
+                    value={orderPageSize}
+                    onChange={e => setOrderPageSize(Number(e.target.value))}
+                  >
+                    {orderPageSizeOptions.map(size => (
+                      <option key={size} value={size}>{size}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
             )}
           </div>
         </div>

@@ -153,6 +153,17 @@ export default function SousChefPage() {
 
       {/* Main Content Area */}
       <main className="page-main">
+        {/* Family selector - positioned before chat for mobile flow (CSS makes it fixed on desktop) */}
+        {!selectedFamily.familyId && (
+          <div className="floating-family-selector">
+            <FamilySelector
+              selectedFamilyId={selectedFamily.familyId}
+              selectedFamilyType={selectedFamily.familyType}
+              onFamilySelect={handleFamilySelect}
+              openDirection="up"
+            />
+          </div>
+        )}
         <div className="chat-container">
           {/* Mode indicator banner when in general mode */}
           {!selectedFamily.familyId && (
@@ -177,17 +188,6 @@ export default function SousChefPage() {
             initialInput={draftInput}
           />
         </div>
-        {/* Family selector floating panel */}
-        {!selectedFamily.familyId && (
-          <div className="floating-family-selector">
-            <FamilySelector
-              selectedFamilyId={selectedFamily.familyId}
-              selectedFamilyType={selectedFamily.familyType}
-              onFamilySelect={handleFamilySelect}
-              openDirection="up"
-            />
-          </div>
-        )}
       </main>
 
       <style>{`
@@ -756,6 +756,8 @@ export default function SousChefPage() {
 
           .page-main {
             padding: 0.75rem;
+            /* Add padding at top for the repositioned family selector */
+            padding-top: 0;
           }
 
           .empty-card {
@@ -769,11 +771,39 @@ export default function SousChefPage() {
           .empty-card h2 {
             font-size: 1.1rem;
           }
+
+          /* Mobile: Reposition floating family selector to TOP to avoid chat input overlap */
+          .floating-family-selector {
+            position: relative;
+            bottom: auto;
+            right: auto;
+            top: auto;
+            width: 100%;
+            max-width: none;
+            margin: 0 0 0.75rem 0;
+            border-radius: 10px;
+            padding: 0.75rem;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+          }
+
+          .floating-family-selector::before {
+            font-size: 0.7rem;
+            margin-bottom: 0.4rem;
+          }
+
+          /* Force dropdown to open DOWNWARD on mobile (selector is now at top) */
+          .floating-family-selector .family-selector-dropdown {
+            max-height: min(40vh, 300px);
+            bottom: auto !important;
+            top: 100% !important;
+            transform: none !important;
+          }
         }
 
         @media (max-width: 480px) {
           .page-main {
             padding: 0.5rem;
+            padding-top: 0;
           }
 
           .chat-container {
@@ -783,6 +813,11 @@ export default function SousChefPage() {
           .empty-card {
             padding: 1.25rem;
             border-radius: 12px;
+          }
+
+          .floating-family-selector {
+            padding: 0.6rem;
+            margin-bottom: 0.5rem;
           }
         }
       `}</style>

@@ -496,9 +496,11 @@ SOP_TOPIC_MAP = {
     "meals": "CHEF_MEALS_EVENTS_SOP.md",
     "clients": "CHEF_CLIENT_MANAGEMENT_SOP.md",
     "households": "CHEF_CLIENT_MANAGEMENT_SOP.md",
+    "connections": "CHEF_CLIENT_MANAGEMENT_SOP.md",  # Connection management is now in Clients tab
+    "accept": "CHEF_CLIENT_MANAGEMENT_SOP.md",
+    "decline": "CHEF_CLIENT_MANAGEMENT_SOP.md",
     "payment": "CHEF_PAYMENT_LINKS_SOP.md",
     "invoice": "CHEF_PAYMENT_LINKS_SOP.md",
-    "connections": "CHEF_CONNECTIONS_SOP.md",
     "prep": "CHEF_PREP_PLANNING_SOP.md",
     "shopping": "CHEF_PREP_PLANNING_SOP.md",
 }
@@ -589,7 +591,7 @@ def _lookup_chef_hub_help(
     if not sop_file:
         return {
             "status": "success",
-            "content": "No specific documentation found for that topic. Available topics: profile, gallery, photos, kitchen, services, events, meals, clients, payment links, connections, prep planning, break mode."
+            "content": "No specific documentation found for that topic. Available topics: profile, gallery, photos, kitchen, services, events, meals, clients (including connection management), payment links, prep planning, break mode."
         }
     
     # Read the SOP file

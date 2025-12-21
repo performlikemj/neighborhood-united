@@ -1,6 +1,13 @@
 # Chef Connections Management - Standard Operating Procedure
 
-## Overview
+> ⚠️ **DEPRECATED**: The separate Connections tab has been merged into the **Clients** tab. 
+> Please see [CHEF_CLIENT_MANAGEMENT_SOP.md](CHEF_CLIENT_MANAGEMENT_SOP.md) for current documentation.
+> 
+> Connection management (accept/decline/end) is now available directly in the client detail panel within the Clients tab.
+
+---
+
+## Overview (Legacy Reference)
 
 The **Connections** feature in Chef Hub manages the relationship lifecycle between chefs and customers on the Hood United platform. It handles connection requests, approvals, and ongoing relationship management.
 

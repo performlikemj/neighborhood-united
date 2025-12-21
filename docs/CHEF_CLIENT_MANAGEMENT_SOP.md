@@ -2,7 +2,9 @@
 
 ## Overview
 
-The **Client Management** feature in Chef Hub provides a unified view of all your clients—both platform-connected customers and manually-added contacts. It allows chefs to track household information, dietary preferences, allergies, and create personalized meal plans for each client.
+The **Client Management** feature in Chef Hub provides a unified view of all your clients—both platform-connected customers and manually-added contacts. It allows chefs to track household information, dietary preferences, allergies, manage connection requests, and create personalized meal plans for each client.
+
+> **Note**: Connection management (accepting/declining customer requests) is now integrated directly into the Clients tab. There is no longer a separate Connections tab.
 
 ---
 
@@ -12,11 +14,12 @@ The **Client Management** feature in Chef Hub provides a unified view of all you
 2. [Key Features](#key-features)
 3. [How It Works](#how-it-works)
 4. [Step-by-Step Guide](#step-by-step-guide)
-5. [Understanding the Interface](#understanding-the-interface)
-6. [Managing Meal Plans](#managing-meal-plans)
-7. [Best Practices](#best-practices)
-8. [Troubleshooting](#troubleshooting)
-9. [Technical Details](#technical-details)
+5. [Managing Connection Requests](#managing-connection-requests)
+6. [Understanding the Interface](#understanding-the-interface)
+7. [Managing Meal Plans](#managing-meal-plans)
+8. [Best Practices](#best-practices)
+9. [Troubleshooting](#troubleshooting)
+10. [Technical Details](#technical-details)
 
 ---
 
@@ -228,6 +231,64 @@ Use the dropdown to sort by:
 1. Select a client
 2. Click **"✨ Manage Plans"** button in their profile
 3. The Meal Plan Slideout opens (see Meal Planning SOP for details)
+
+---
+
+## Managing Connection Requests
+
+Connection management is integrated directly into the Clients tab. Platform clients show their connection status and you can take action right from the client detail panel.
+
+### Connection Lifecycle
+
+```
+Customer Request → Pending → Accepted (or Declined)
+                              ↓
+                        Active Client → End Connection (optional)
+```
+
+### Viewing Pending Requests
+
+1. Go to the **Clients** tab
+2. Look for the **orange badge** in the sidebar showing pending count
+3. Client cards with pending status show an **⏳ Pending** badge
+4. Click on a pending client to view their details
+
+### Accepting a Connection
+
+1. Select the client with a pending request
+2. In the **Connection Status** section (shown in detail panel):
+   - Click **"✓ Accept"** to approve the connection
+3. The client becomes an active platform client
+4. They gain access to your services
+
+### Declining a Connection
+
+1. Select the client with a pending request
+2. In the Connection Status section:
+   - Click **"Decline"** to reject the request
+3. The customer is notified
+4. They cannot immediately re-request
+
+### Ending a Connection
+
+1. Select an active platform client
+2. In the Connection Status section:
+   - Click **"End Connection"**
+3. Confirm the action
+4. **What happens:**
+   - Customer loses access to book services
+   - Existing orders are not affected
+   - You can no longer create meal plans for them
+   - History is preserved
+   - Either party can reconnect later
+
+### Connection Status Indicators
+
+| Status | Indicator | Location |
+|--------|-----------|----------|
+| **Pending** | ⏳ Pending badge (orange) | Client card + detail panel |
+| **Connected** | ✓ Connected badge (green) | Detail panel |
+| **Badge Count** | Orange number badge | Sidebar "Clients" nav item |
 
 ---
 

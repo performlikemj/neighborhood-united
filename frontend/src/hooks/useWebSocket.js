@@ -1,5 +1,26 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 
+function decodeJwtPayload(token) {
+  try {
+    const payload = token.split('.')[1]
+    if (!payload) return null
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = normalized.padEnd(normalized.length + (4 - (normalized.length % 4 || 4)), '=')
+    const json = atob(padded)
+    return JSON.parse(json)
+  } catch {
+    return null
+  }
+}
+
+function isJwtExpired(token, nowSec = Math.floor(Date.now() / 1000)) {
+  if (!token) return false
+  const payload = decodeJwtPayload(token)
+  const exp = payload?.exp
+  if (typeof exp !== 'number') return false
+  return exp <= nowSec
+}
+
 /**
  * WebSocket hook for real-time chat connections.
  * 
@@ -44,7 +65,7 @@ export default function useWebSocket(conversationId, options = {}) {
     
     // Get JWT token for authentication
     const token = localStorage.getItem('accessToken')
-    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : ''
+    const tokenParam = token && !isJwtExpired(token) ? `?token=${encodeURIComponent(token)}` : ''
     
     if (apiBase) {
       // Convert http(s):// to ws(s)://
@@ -224,4 +245,3 @@ export default function useWebSocket(conversationId, options = {}) {
     sendRead,
   }
 }
-

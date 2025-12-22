@@ -119,10 +119,11 @@ urlpatterns = [
     # Chef meals endpoints
     path('api/chef/meals/<int:meal_id>/update/', chef_meals_views.api_update_chef_meal, name='api_update_chef_meal'),
     
-    # New API endpoints for chef meal events
+    # New API endpoints for chef meal events (meal shares)
     path('api/chef-meal-events/', chef_meals_views.api_chef_meal_events, name='api_chef_meal_events'),
     path('api/chef-meal-events/<int:event_id>/update/', chef_meals_views.api_update_chef_meal_event, name='api_update_chef_meal_event'),
     path('api/chef-meal-events/<int:event_id>/cancel/', chef_meals_views.api_cancel_chef_meal_event, name='api_cancel_chef_meal_event'),
+    path('api/chef-meal-events/<int:event_id>/duplicate/', chef_meals_views.api_duplicate_meal_share, name='api_duplicate_meal_share'),
     
     # Add this to your urlpatterns list
     # TODO: Update frontend to use this since Streamlit isn't stateful

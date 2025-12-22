@@ -375,6 +375,7 @@ class ChefMealReviewInline(admin.TabularInline):
     can_delete = False
 
 class ChefMealEventAdmin(admin.ModelAdmin):
+    """Admin for Meal Shares (ChefMealEvent model)."""
     list_display = ('meal', 'chef', 'event_date', 'event_time', 'status', 'current_price', 'base_price', 'orders_count', 'max_orders')
     list_filter = ('status', 'event_date', 'chef')
     search_fields = ('meal__name', 'chef__user__username', 'description')
@@ -382,13 +383,17 @@ class ChefMealEventAdmin(admin.ModelAdmin):
     inlines = [ChefMealOrderInline]
     date_hierarchy = 'event_date'
     
+    class Meta:
+        verbose_name = 'Meal Share'
+        verbose_name_plural = 'Meal Shares'
+    
     def get_form(self, request, obj=None, **kwargs):
         form = super().get_form(request, obj, **kwargs)
         
-        # Add a warning message if this event has orders
+        # Add a warning message if this meal share has orders
         if obj and obj.orders_count > 0:
             help_text = (
-                "⚠️ <strong>WARNING:</strong> This event has existing orders! "
+                "⚠️ <strong>WARNING:</strong> This meal share has existing orders! "
                 "Changing prices could affect customer charges. "
                 "Price increases are blocked through the API but can be changed here. "
                 "Make sure you understand the implications before saving."
@@ -417,10 +422,15 @@ class ChefMealEventAdmin(admin.ModelAdmin):
     )
 
 class ChefMealOrderAdmin(admin.ModelAdmin):
+    """Admin for orders placed against Meal Shares."""
     list_display = ('id', 'customer', 'meal_event', 'quantity', 'price_paid', 'status', 'created_at')
     list_filter = ('status', 'created_at', 'meal_event__chef')
     search_fields = ('customer__username', 'meal_event__meal__name', 'meal_event__chef__user__username')
     readonly_fields = ('created_at', 'updated_at', 'stripe_payment_intent_id', 'stripe_refund_id')
+    
+    class Meta:
+        verbose_name = 'Meal Share Order'
+        verbose_name_plural = 'Meal Share Orders'
     
     fieldsets = (
         (None, {

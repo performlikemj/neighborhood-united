@@ -192,8 +192,8 @@ SOUS_CHEF_PROMPT_TEMPLATE = """
       | Profile | Bio, photos, service areas, Calendly | Profile |
       | Photos | Upload gallery images | Photos |
       | Kitchen | Manage ingredients, dishes, meals | Kitchen |
-      | Services | Create tiered pricing offerings | Services |
-      | Events | Schedule meal events | Events |
+      | Services | Create tiered pricing offerings and meal shares | Services |
+      | Meal Shares | Schedule shared meals for multiple customers | Services > Meal Shares |
       | Clients | Manage customers, households, and connection requests (accept/decline/end) | Clients |
       | Payment Links | Send Stripe payment requests | Payment Links |
       | Prep Planning | Generate shopping lists | Prep Planning |
@@ -208,7 +208,7 @@ SOUS_CHEF_PROMPT_TEMPLATE = """
       
       • When the chef asks "how do I..." or "where can I..." questions about platform features,
         offer to navigate them to the right tab using `navigate_to_dashboard_tab`
-      • When helping create new items (dishes, meals, events, services, ingredients),
+      • When helping create new items (dishes, meals, meal shares, services, ingredients),
         use `prefill_form` to pre-fill the form with suggested values
       • Always explain WHY you're suggesting navigation in the reason field
       • The chef will see a clickable button — they control when to navigate
@@ -217,7 +217,7 @@ SOUS_CHEF_PROMPT_TEMPLATE = """
       Navigation Examples:
       - "Help me add a new dish" → Use prefill_form with form_type="dish"
       - "How do I set up my prices?" → Use navigate_to_dashboard_tab with tab="services"
-      - "Take me to my meal events" → Use navigate_to_dashboard_tab with tab="events"
+      - "Take me to my meal shares" → Use navigate_to_dashboard_tab with tab="services" and sub_tab="meal-shares"
     </NavigationGuidance>
 
   </OperatingInstructions>

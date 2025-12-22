@@ -13,6 +13,9 @@ import ServiceAreasModal, { getAreaSummary } from '../components/ServiceAreasMod
 import ChatPanel from '../components/ChatPanel.jsx'
 import AnalyticsDrawer from '../components/AnalyticsDrawer.jsx'
 import MealDetailSlideout from '../components/MealDetailSlideout.jsx'
+import OnboardingChecklist from '../components/OnboardingChecklist.jsx'
+import NavSection from '../components/NavSection.jsx'
+import TodayDashboard from '../components/TodayDashboard.jsx'
 import { SousChefNotificationProvider } from '../contexts/SousChefNotificationContext.jsx'
 import { useMessaging } from '../context/MessagingContext.jsx'
 
@@ -25,6 +28,7 @@ import { SuggestionIndicator } from '../components/SuggestionBadge.jsx'
 import ScaffoldPreview from '../components/ScaffoldPreview.jsx'
 import { useScaffold } from '../hooks/useScaffold.js'
 import { bucketOrderStatus, buildOrderSearchText, filterOrders, paginateOrders } from '../utils/chefOrders.mjs'
+import { resolveSousChefNavigation, resolveSousChefPrefillTarget } from '../utils/sousChefNavigation.mjs'
 
 function toArray(payload){
   if (!payload) return []
@@ -398,7 +402,7 @@ const KitchenIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="n
 const ClientsIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
 const ServicesIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
 const ConnectionsIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="5" cy="6" r="3"/><circle cx="19" cy="6" r="3"/><circle cx="12" cy="18" r="3"/><path d="M5 9v3a4 4 0 0 0 4 4h2"/><path d="M19 9v3a4 4 0 0 1-4 4h-2"/></svg>
-const EventsIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+const MealSharesIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
 const OrdersIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
 const MealsIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>
 const PrepPlanIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="m9 14 2 2 4-4"/></svg>
@@ -525,9 +529,17 @@ function ChefMessagesSection() {
 
 function ChefDashboardContent(){
   const location = useLocation()
-  const [tab, setTab] = useState(() => location.state?.tab || 'dashboard')
+  const [tab, setTab] = useState(() => location.state?.tab || 'today')
   const [notice, setNotice] = useState(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  
+  // Sub-tab state for merged tabs
+  const [profileSubTab, setProfileSubTab] = useState('info') // 'info' | 'photos'
+  const [menuSubTab, setMenuSubTab] = useState('ingredients') // 'ingredients' | 'dishes' | 'meals'
+  const [servicesSubTab, setServicesSubTab] = useState('services') // 'services' | 'meal-shares'
+  
+  // Messaging for unread badge
+  const { totalUnread } = useMessaging()
   
   // Analytics drawer state
   const [analyticsDrawer, setAnalyticsDrawer] = useState({ open: false, metric: null, title: '' })
@@ -834,6 +846,21 @@ function ChefDashboardContent(){
       .filter(Boolean)
   }, [acceptedConnections])
 
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // Onboarding Checklist Completion State
+  // ═══════════════════════════════════════════════════════════════════════════════
+  const onboardingCompletionState = useMemo(() => ({
+    profile: Boolean(chef?.bio && chef?.profile_pic_url),
+    kitchen: meals.length > 0,
+    services: serviceOfferings.length > 0,
+    photos: (chef?.photos?.length || 0) >= 3,
+    payouts: payouts.is_active
+  }), [chef, meals, serviceOfferings, payouts.is_active])
+
+  const isOnboardingComplete = useMemo(() => {
+    return Object.values(onboardingCompletionState).every(Boolean)
+  }, [onboardingCompletionState])
+
   const loadIngredients = async ()=>{
     setIngLoading(true)
     try{
@@ -941,22 +968,25 @@ function ChefDashboardContent(){
   // Handle Sous Chef action blocks (navigation and form prefill)
   const handleSousChefAction = useCallback((action) => {
     if (action.action_type === 'navigate') {
-      // Navigate to the specified tab
-      setTab(action.payload.tab)
-      setNotice(`Navigated to ${action.payload.tab.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase())}`)
+      // Navigate to the specified tab (including sub-tabs)
+      const target = resolveSousChefNavigation(action.payload || {})
+      if (target.tab) setTab(target.tab)
+      if (target.menuSubTab) setMenuSubTab(target.menuSubTab)
+      if (target.servicesSubTab) setServicesSubTab(target.servicesSubTab)
+      if (target.profileSubTab) setProfileSubTab(target.profileSubTab)
+      const noticeLabel = target.label || action?.payload?.tab
+      if (noticeLabel) {
+        setNotice(`Navigated to ${noticeLabel}`)
+      }
       setTimeout(() => setNotice(null), 3000)
     } 
     else if (action.action_type === 'prefill') {
-      // Navigate to the appropriate tab first
-      const tabMap = {
-        ingredient: 'kitchen',
-        dish: 'kitchen', 
-        meal: 'meals',
-        event: 'events',
-        service: 'services'
-      }
-      const targetTab = action.payload.target_tab || tabMap[action.payload.form_type] || 'dashboard'
-      setTab(targetTab)
+      // Navigate to the appropriate tab first (including sub-tabs)
+      const target = resolveSousChefPrefillTarget(action.payload || {})
+      if (target.tab) setTab(target.tab)
+      if (target.menuSubTab) setMenuSubTab(target.menuSubTab)
+      if (target.servicesSubTab) setServicesSubTab(target.servicesSubTab)
+      if (target.profileSubTab) setProfileSubTab(target.profileSubTab)
       
       // Store prefill data to be consumed by the effect below
       setPendingPrefill(action.payload)
@@ -1108,7 +1138,7 @@ function ChefDashboardContent(){
   const toggleBreak = async (nextState)=>{
     if (breakBusy) return
     // Confirm enabling
-    if (nextState && !window.confirm('This will cancel upcoming events and refund paid orders. Continue?')){
+    if (nextState && !window.confirm('This will cancel upcoming meal shares and refund paid orders. Continue?')){
       return
     }
     setBreakBusy(true)
@@ -1122,10 +1152,10 @@ function ChefDashboardContent(){
         const refunded = Number(data?.refunds_processed||0)
         const failed = Number(data?.refunds_failed||0)
         const hasErrors = Array.isArray(data?.errors) && data.errors.length>0
-        const summary = `You're now on break. Cancelled ${cancelled} events; refunds processed ${refunded}.`
+        const summary = `You're now on break. Cancelled ${cancelled} meal shares; refunds processed ${refunded}.`
         try{ window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text: summary, tone: failed>0||hasErrors?'error':'success' } })) }catch{}
       } else {
-        try{ window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text: `Break disabled. You can create new events now.`, tone:'success' } })) }catch{}
+        try{ window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text: `Break disabled. You can create new meal shares now.`, tone:'success' } })) }catch{}
       }
       // Refresh profile in background
       loadChefProfile()
@@ -1443,16 +1473,47 @@ function ChefDashboardContent(){
         special_instructions: eventForm.special_instructions
       }
       const resp = await api.post('/meals/api/chef-meal-events/', payload)
-      try{ window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: (resp?.data?.message || 'Event created successfully'), tone:'success' } })) }catch{}
+      try{ window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: (resp?.data?.message || 'Meal share created successfully'), tone:'success' } })) }catch{}
       setEventForm({ meal:null, event_date:'', event_time:'18:00', order_cutoff_date:'', order_cutoff_time:'12:00', base_price:'', min_price:'', max_orders:10, min_orders:1, description:'', special_instructions:'' })
       loadEvents()
     }catch(e){
       console.error('createEvent failed', e)
       try{
         const { buildErrorMessage } = await import('../api')
-        const msg = buildErrorMessage(e?.response?.data, 'Failed to create event', e?.response?.status)
+        const msg = buildErrorMessage(e?.response?.data, 'Failed to create meal share', e?.response?.status)
         window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text: msg, tone:'error' } }))
       }catch{}
+    }
+  }
+
+  const duplicateMealShare = async (eventToDuplicate) => {
+    if (!eventToDuplicate?.id) return
+    try {
+      // Pre-fill the form with values from the meal share to duplicate
+      const tomorrow = new Date()
+      tomorrow.setDate(tomorrow.getDate() + 1)
+      const tomorrowISO = tomorrow.toISOString().split('T')[0]
+      
+      setEventForm({
+        meal: eventToDuplicate.meal?.id || eventToDuplicate.meal_id || null,
+        event_date: tomorrowISO,
+        event_time: eventToDuplicate.event_time || '18:00',
+        order_cutoff_date: tomorrowISO,
+        order_cutoff_time: '12:00',
+        base_price: eventToDuplicate.base_price || '',
+        min_price: eventToDuplicate.min_price || '',
+        max_orders: eventToDuplicate.max_orders || 10,
+        min_orders: eventToDuplicate.min_orders || 1,
+        description: eventToDuplicate.description || '',
+        special_instructions: eventToDuplicate.special_instructions || ''
+      })
+      
+      // Switch to meal shares sub-tab and scroll to form
+      setServicesSubTab('meal-shares')
+      try{ window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: 'Form pre-filled. Adjust date/time and submit.', tone:'info' } })) }catch{}
+    } catch(e) {
+      console.error('duplicateMealShare failed', e)
+      try{ window.dispatchEvent(new CustomEvent('global-toast', { detail:{ text: 'Failed to duplicate meal share', tone:'error' } })) }catch{}
     }
   }
 
@@ -1843,18 +1904,28 @@ function ChefDashboardContent(){
           </button>
         </div>
         <nav className="chef-nav" role="navigation" aria-label="Chef dashboard sections">
-          <NavItem value="dashboard" label="Dashboard" icon={DashboardIcon} />
-          <NavItem value="prep" label="Prep Planning" icon={PrepPlanIcon} />
-          <NavItem value="profile" label="Profile" icon={ProfileIcon} />
-          <NavItem value="photos" label="Photos" icon={PhotosIcon} />
-          <NavItem value="kitchen" label="Kitchen" icon={KitchenIcon} />
-          <NavItem value="clients" label="Clients" icon={ClientsIcon} badge={pendingConnections?.length || 0} />
-          <NavItem value="messages" label="Messages" icon={MessagesIcon} />
-          <NavItem value="payments" label="Payment Links" icon={PaymentLinksIcon} />
-          <NavItem value="services" label="Services" icon={ServicesIcon} />
-          <NavItem value="events" label="Events" icon={EventsIcon} />
-          <NavItem value="orders" label="Orders" icon={OrdersIcon} />
-          <NavItem value="meals" label="Meals" icon={MealsIcon} />
+          {/* Primary Actions - Always visible */}
+          <div className="nav-primary-items">
+            <NavItem value="today" label="Today" icon={DashboardIcon} />
+            <NavItem value="profile" label="My Profile" icon={ProfileIcon} />
+          </div>
+
+          {/* Your Menu - Menu Builder, Services, Payment Links */}
+          <NavSection id="menu" title="Your Menu" sidebarCollapsed={sidebarCollapsed}>
+            <NavItem value="menu" label="Menu Builder" icon={KitchenIcon} />
+            <NavItem value="services" label="Services" icon={ServicesIcon} />
+            <NavItem value="payments" label="Payment Links" icon={PaymentLinksIcon} />
+          </NavSection>
+
+          {/* Operations - Orders, Clients, Prep, Messages (show for active chefs) */}
+          {isOnboardingComplete && (
+            <NavSection id="operations" title="Operations" sidebarCollapsed={sidebarCollapsed}>
+              <NavItem value="orders" label="Orders" icon={OrdersIcon} />
+              <NavItem value="clients" label="Clients" icon={ClientsIcon} badge={pendingConnections?.length || 0} />
+              <NavItem value="prep" label="Prep Planning" icon={PrepPlanIcon} />
+              <NavItem value="messages" label="Messages" icon={MessagesIcon} badge={totalUnread || 0} />
+            </NavSection>
+          )}
         </nav>
       </aside>
 
@@ -1863,84 +1934,135 @@ function ChefDashboardContent(){
         {notice && <div className="card" style={{borderColor:'#f0d000', marginBottom:'1rem'}}>{notice}</div>}
 
       {/* Content Sections */}
+      {/* Today - Smart Dashboard */}
+      {tab==='today' && (
+        <div>
+          {/* Onboarding Checklist - Show prominently when incomplete */}
+          {!payouts.loading && profileInit && !isOnboardingComplete && (
+            <OnboardingChecklist
+              completionState={onboardingCompletionState}
+              onNavigate={(targetTab) => setTab(targetTab)}
+              onStartStripeOnboarding={startOrContinueOnboarding}
+            />
+          )}
+          
+          <TodayDashboard
+            orders={orders}
+            serviceOrders={serviceOrders}
+            events={events}
+            pendingConnections={pendingConnections}
+            unreadMessageCount={totalUnread || 0}
+            onNavigate={(targetTab) => setTab(targetTab)}
+            onViewOrder={(order) => {
+              setFocusedOrderId(order.id)
+              setTab('orders')
+            }}
+            isOnboardingComplete={isOnboardingComplete}
+            onboardingCompletionState={onboardingCompletionState}
+          />
+        </div>
+      )}
+
+      {/* Legacy Dashboard redirect - now redirects to Today */}
       {tab==='dashboard' && (
+        <div style={{textAlign:'center', padding:'2rem'}}>
+          <p className="muted">The Dashboard has been redesigned as "Today".</p>
+          <button className="btn btn-primary" onClick={() => setTab('today')}>
+            Go to Today
+          </button>
+        </div>
+      )}
+
+      {/* Full Dashboard with metrics (accessible via direct state) */}
+      {tab==='metrics' && (
         <div>
           <header style={{marginBottom:'1.5rem'}}>
-            <h1 style={{margin:'0 0 .25rem 0'}}>Dashboard</h1>
+            <h1 style={{margin:'0 0 .25rem 0'}}>Metrics</h1>
             <p className="muted">Your business overview and key metrics</p>
           </header>
 
-          {/* Stripe Payouts Status */}
-          {payouts.loading ? (
-            <div className="card" style={{marginBottom:'1.5rem', background:'var(--surface-2)'}}>
-              <div style={{display:'flex', alignItems:'center', gap:'.75rem'}}>
-                <div style={{width:40, height:40, borderRadius:8, background:'var(--surface)', display:'flex', alignItems:'center', justifyContent:'center'}}>
-                  <i className="fa-brands fa-stripe" style={{fontSize:20, opacity:.5}}></i>
-                </div>
-                <div style={{flex:1}}>
-                  <div style={{fontWeight:600, marginBottom:'.15rem'}}>Payouts</div>
-                  <div className="muted" style={{fontSize:'.9rem'}}>Checking Stripe status…</div>
-                </div>
-                <button className="btn btn-outline btn-sm" disabled={onboardingBusy} onClick={loadStripeStatus}>
-                  <i className="fa-solid fa-rotate-right" style={{fontSize:14}}></i>
-                </button>
-              </div>
-            </div>
-          ) : payouts.is_active ? (
-            <div className="card" style={{marginBottom:'1.5rem', background:'linear-gradient(135deg, rgba(52,211,153,.1), rgba(16,185,129,.05))', borderColor:'rgba(16,185,129,.3)'}}>
-              <div style={{display:'flex', alignItems:'center', gap:'.75rem'}}>
-                <div style={{width:40, height:40, borderRadius:8, background:'rgba(16,185,129,.15)', display:'flex', alignItems:'center', justifyContent:'center'}}>
-                  <i className="fa-solid fa-circle-check" style={{fontSize:20, color:'var(--success)'}}></i>
-                </div>
-                <div style={{flex:1}}>
-                  <div style={{fontWeight:600, marginBottom:'.15rem', display:'flex', alignItems:'center', gap:'.5rem'}}>
-                    Stripe Payouts Active
-                    <i className="fa-brands fa-stripe" style={{fontSize:18, opacity:.6}}></i>
+          {/* Onboarding Checklist - Show prominently when incomplete */}
+          {!payouts.loading && profileInit && (
+            <OnboardingChecklist
+              completionState={onboardingCompletionState}
+              onNavigate={(targetTab) => setTab(targetTab)}
+              onStartStripeOnboarding={startOrContinueOnboarding}
+            />
+          )}
+
+          {/* Stripe Payouts Status - Only show standalone card when onboarding checklist is complete */}
+          {isOnboardingComplete && (
+            payouts.loading ? (
+              <div className="card" style={{marginBottom:'1.5rem', background:'var(--surface-2)'}}>
+                <div style={{display:'flex', alignItems:'center', gap:'.75rem'}}>
+                  <div style={{width:40, height:40, borderRadius:8, background:'var(--surface)', display:'flex', alignItems:'center', justifyContent:'center'}}>
+                    <i className="fa-brands fa-stripe" style={{fontSize:20, opacity:.5}}></i>
                   </div>
-                  <div className="muted" style={{fontSize:'.9rem'}}>You're ready to receive payments</div>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:600, marginBottom:'.15rem'}}>Payouts</div>
+                    <div className="muted" style={{fontSize:'.9rem'}}>Checking Stripe status…</div>
+                  </div>
+                  <button className="btn btn-outline btn-sm" disabled={onboardingBusy} onClick={loadStripeStatus}>
+                    <i className="fa-solid fa-rotate-right" style={{fontSize:14}}></i>
+                  </button>
                 </div>
-                <button className="btn btn-outline btn-sm" disabled={onboardingBusy} onClick={loadStripeStatus} title="Refresh status">
-                  <i className="fa-solid fa-rotate-right" style={{fontSize:14}}></i>
-                </button>
               </div>
-            </div>
-          ) : (
-            <div className="card" style={{marginBottom:'1.5rem', borderColor:'#f0a000', background:'rgba(240,160,0,.08)'}}>
-              <div style={{display:'flex', alignItems:'flex-start', gap:'.75rem'}}>
-                <div style={{width:40, height:40, borderRadius:8, background:'rgba(240,160,0,.15)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0}}>
-                  <i className="fa-solid fa-triangle-exclamation" style={{fontSize:20, color:'#f0a000'}}></i>
-                </div>
-                <div style={{flex:1}}>
-                  <div style={{fontWeight:600, marginBottom:'.25rem'}}>Payouts Setup Required</div>
-                  <div className="muted" style={{fontSize:'.9rem', marginBottom:'.5rem'}}>Complete Stripe onboarding to receive payments and unlock all features.</div>
-                  {payouts?.disabled_reason && (
-                    <div className="muted" style={{fontSize:'.85rem', marginBottom:'.5rem'}}>
-                      <strong>Reason:</strong> {payouts.disabled_reason}
+            ) : payouts.is_active ? (
+              <div className="card" style={{marginBottom:'1.5rem', background:'linear-gradient(135deg, rgba(52,211,153,.1), rgba(16,185,129,.05))', borderColor:'rgba(16,185,129,.3)'}}>
+                <div style={{display:'flex', alignItems:'center', gap:'.75rem'}}>
+                  <div style={{width:40, height:40, borderRadius:8, background:'rgba(16,185,129,.15)', display:'flex', alignItems:'center', justifyContent:'center'}}>
+                    <i className="fa-solid fa-circle-check" style={{fontSize:20, color:'var(--success)'}}></i>
+                  </div>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:600, marginBottom:'.15rem', display:'flex', alignItems:'center', gap:'.5rem'}}>
+                      Stripe Payouts Active
+                      <i className="fa-brands fa-stripe" style={{fontSize:18, opacity:.6}}></i>
                     </div>
-                  )}
-                  <div style={{display:'flex', flexWrap:'wrap', gap:'.5rem', marginTop:'.75rem'}}>
-                    <button className="btn btn-primary btn-sm" disabled={onboardingBusy} onClick={startOrContinueOnboarding}>
-                      <i className="fa-brands fa-stripe" style={{fontSize:14, marginRight:'.35rem'}}></i>
-                      {onboardingBusy?'Opening…':(payouts.has_account?'Continue Setup':'Set Up Payouts')}
-                    </button>
-                    <button className="btn btn-outline btn-sm" disabled={onboardingBusy} onClick={regenerateOnboarding}>
-                      <i className="fa-solid fa-link" style={{fontSize:12, marginRight:'.35rem'}}></i>
-                      New Link
-                    </button>
-                    <button className="btn btn-outline btn-sm" disabled={onboardingBusy} onClick={loadStripeStatus}>
-                      <i className="fa-solid fa-rotate-right" style={{fontSize:12, marginRight:'.35rem'}}></i>
-                      Refresh
-                    </button>
-                    {payouts.disabled_reason && (
-                      <button className="btn btn-outline btn-sm" disabled={onboardingBusy} onClick={fixRestrictedAccount}>
-                        <i className="fa-solid fa-wrench" style={{fontSize:12, marginRight:'.35rem'}}></i>
-                        Fix Account
-                      </button>
+                    <div className="muted" style={{fontSize:'.9rem'}}>You're ready to receive payments</div>
+                  </div>
+                  <button className="btn btn-outline btn-sm" disabled={onboardingBusy} onClick={loadStripeStatus} title="Refresh status">
+                    <i className="fa-solid fa-rotate-right" style={{fontSize:14}}></i>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="card" style={{marginBottom:'1.5rem', borderColor:'#f0a000', background:'rgba(240,160,0,.08)'}}>
+                <div style={{display:'flex', alignItems:'flex-start', gap:'.75rem'}}>
+                  <div style={{width:40, height:40, borderRadius:8, background:'rgba(240,160,0,.15)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0}}>
+                    <i className="fa-solid fa-triangle-exclamation" style={{fontSize:20, color:'#f0a000'}}></i>
+                  </div>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:600, marginBottom:'.25rem'}}>Payouts Setup Required</div>
+                    <div className="muted" style={{fontSize:'.9rem', marginBottom:'.5rem'}}>Complete Stripe onboarding to receive payments and unlock all features.</div>
+                    {payouts?.disabled_reason && (
+                      <div className="muted" style={{fontSize:'.85rem', marginBottom:'.5rem'}}>
+                        <strong>Reason:</strong> {payouts.disabled_reason}
+                      </div>
                     )}
+                    <div style={{display:'flex', flexWrap:'wrap', gap:'.5rem', marginTop:'.75rem'}}>
+                      <button className="btn btn-primary btn-sm" disabled={onboardingBusy} onClick={startOrContinueOnboarding}>
+                        <i className="fa-brands fa-stripe" style={{fontSize:14, marginRight:'.35rem'}}></i>
+                        {onboardingBusy?'Opening…':(payouts.has_account?'Continue Setup':'Set Up Payouts')}
+                      </button>
+                      <button className="btn btn-outline btn-sm" disabled={onboardingBusy} onClick={regenerateOnboarding}>
+                        <i className="fa-solid fa-link" style={{fontSize:12, marginRight:'.35rem'}}></i>
+                        New Link
+                      </button>
+                      <button className="btn btn-outline btn-sm" disabled={onboardingBusy} onClick={loadStripeStatus}>
+                        <i className="fa-solid fa-rotate-right" style={{fontSize:12, marginRight:'.35rem'}}></i>
+                        Refresh
+                      </button>
+                      {payouts.disabled_reason && (
+                        <button className="btn btn-outline btn-sm" disabled={onboardingBusy} onClick={fixRestrictedAccount}>
+                          <i className="fa-solid fa-wrench" style={{fontSize:12, marginRight:'.35rem'}}></i>
+                          Fix Account
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            )
           )}
 
           {/* Key Metrics Cards */}
@@ -2003,10 +2125,10 @@ function ChefDashboardContent(){
           {/* Quick Actions & Upcoming */}
           <div className="grid grid-2" style={{marginTop:'1.5rem'}}>
             <div className="card">
-              <h3 style={{marginTop:0}}>Upcoming Events</h3>
+              <h3 style={{marginTop:0}}>Upcoming Meal Shares</h3>
               <div style={{maxHeight: 300, overflowY:'auto'}}>
                 {upcomingEvents.length===0 ? (
-                  <div className="muted">No upcoming events.</div>
+                  <div className="muted">No upcoming meal shares.</div>
                 ) : (
                   <div style={{display:'flex', flexDirection:'column', gap:'.5rem'}}>
                     {upcomingEvents.slice(0,5).map(e => (
@@ -2148,7 +2270,29 @@ function ChefDashboardContent(){
       {tab==='prep' && <ChefPrepPlanning />}
 
       {tab==='profile' && (
-        <div className="grid grid-2">
+        <div>
+          {/* My Profile - Sub-tab Navigation */}
+          <header style={{marginBottom:'1rem'}}>
+            <h1 style={{margin:'0 0 .5rem 0'}}>My Profile</h1>
+            <div className="sub-tab-nav">
+              <button 
+                className={`sub-tab ${profileSubTab === 'info' ? 'active' : ''}`}
+                onClick={() => setProfileSubTab('info')}
+              >
+                Profile Info
+              </button>
+              <button 
+                className={`sub-tab ${profileSubTab === 'photos' ? 'active' : ''}`}
+                onClick={() => setProfileSubTab('photos')}
+              >
+                Photos {chef?.photos?.length > 0 && <span className="sub-tab-badge">{chef.photos.length}</span>}
+              </button>
+            </div>
+          </header>
+
+          {/* Profile Info Sub-tab */}
+          {profileSubTab === 'info' && (
+          <div className="grid grid-2">
           <div className="card">
             <h3>Chef profile</h3>
             {!profileInit && <div className="muted" style={{marginBottom:'.35rem'}}>Loading…</div>}
@@ -2555,18 +2699,33 @@ function ChefDashboardContent(){
             />
           </div>
         </div>
-      )}
+          )}
 
-      {tab==='photos' && (
+          {/* Photos Sub-tab */}
+          {profileSubTab === 'photos' && (
         <div className="grid grid-2">
-          <div className="card">
+          <div className="card" data-testid="photo-upload-card">
             <h3>Upload photo</h3>
             <div className="label">Image</div>
             <FileSelect label="Choose file" accept="image/jpeg,image/png,image/webp" onChange={(f)=> setPhotoForm(p=>({ ...p, image: f }))} />
             <div className="label">Title</div>
-            <input className="input" value={photoForm.title} onChange={e=> setPhotoForm(f=>({ ...f, title:e.target.value }))} />
+            <input
+              className="input"
+              data-testid="photo-title"
+              name="photo-title"
+              aria-label="Photo title"
+              value={photoForm.title}
+              onChange={e=> setPhotoForm(f=>({ ...f, title:e.target.value }))}
+            />
             <div className="label">Caption</div>
-            <input className="input" value={photoForm.caption} onChange={e=> setPhotoForm(f=>({ ...f, caption:e.target.value }))} />
+            <input
+              className="input"
+              data-testid="photo-caption"
+              name="photo-caption"
+              aria-label="Photo caption"
+              value={photoForm.caption}
+              onChange={e=> setPhotoForm(f=>({ ...f, caption:e.target.value }))}
+            />
             <div style={{marginTop:'.35rem'}}>
               <label style={{display:'inline-flex', alignItems:'center', gap:'.35rem'}}>
                 <input type="checkbox" checked={photoForm.is_featured} onChange={e=> setPhotoForm(f=>({ ...f, is_featured:e.target.checked }))} />
@@ -2627,18 +2786,51 @@ function ChefDashboardContent(){
             )}
           </div>
         </div>
+          )}
+        </div>
+      )}
+
+      {/* Legacy photos tab - redirect to profile/photos */}
+      {tab==='photos' && (
+        <div style={{textAlign:'center', padding:'2rem'}}>
+          <p className="muted">Photos have moved to the Profile tab.</p>
+          <button className="btn btn-primary" onClick={() => { setTab('profile'); setProfileSubTab('photos'); }}>
+            Go to Profile → Photos
+          </button>
+        </div>
       )}
 
 
-      {tab==='kitchen' && (
+      {/* Menu Builder - merged Kitchen + Meals */}
+      {tab==='menu' && (
         <div>
-          <SectionHeader 
-            title="Kitchen" 
-            subtitle="Manage your ingredients, dishes, and meals"
-            showAdd={false}
-          />
+          {/* Menu Builder - Sub-tab Navigation */}
+          <header style={{marginBottom:'1rem'}}>
+            <h1 style={{margin:'0 0 .5rem 0'}}>Menu Builder</h1>
+            <div className="sub-tab-nav">
+              <button 
+                className={`sub-tab ${menuSubTab === 'ingredients' ? 'active' : ''}`}
+                onClick={() => setMenuSubTab('ingredients')}
+              >
+                Ingredients {ingredients.length > 0 && <span className="sub-tab-badge">{ingredients.length}</span>}
+              </button>
+              <button 
+                className={`sub-tab ${menuSubTab === 'dishes' ? 'active' : ''}`}
+                onClick={() => setMenuSubTab('dishes')}
+              >
+                Dishes {dishes.length > 0 && <span className="sub-tab-badge">{dishes.length}</span>}
+              </button>
+              <button 
+                className={`sub-tab ${menuSubTab === 'meals' ? 'active' : ''}`}
+                onClick={() => setMenuSubTab('meals')}
+              >
+                Meals {meals.length > 0 && <span className="sub-tab-badge">{meals.length}</span>}
+              </button>
+            </div>
+          </header>
 
-          {/* Ingredients Section */}
+          {/* Ingredients Sub-tab */}
+          {menuSubTab === 'ingredients' && (
           <div className="chef-kitchen-section">
             <div className="chef-kitchen-section-header">
               <div>
@@ -2751,8 +2943,10 @@ function ChefDashboardContent(){
               </>
             )}
           </div>
+          )}
 
-          {/* Dishes Section */}
+          {/* Dishes Sub-tab */}
+          {menuSubTab === 'dishes' && (
           <div className="chef-kitchen-section">
             <div className="chef-kitchen-section-header">
               <div>
@@ -2824,8 +3018,10 @@ function ChefDashboardContent(){
               </div>
             )}
           </div>
+          )}
 
-          {/* Meals Section */}
+          {/* Meals Sub-tab */}
+          {menuSubTab === 'meals' && (
           <div className="chef-kitchen-section">
             <div className="chef-kitchen-section-header">
               <div>
@@ -2950,6 +3146,17 @@ function ChefDashboardContent(){
               </div>
             )}
           </div>
+          )}
+        </div>
+      )}
+
+      {/* Legacy kitchen tab - redirect to menu */}
+      {tab==='kitchen' && (
+        <div style={{textAlign:'center', padding:'2rem'}}>
+          <p className="muted">Kitchen has been renamed to Menu Builder.</p>
+          <button className="btn btn-primary" onClick={() => setTab('menu')}>
+            Go to Menu Builder
+          </button>
         </div>
       )}
 
@@ -3223,6 +3430,28 @@ function ChefDashboardContent(){
       )}
 
       {tab==='services' && (
+        <div>
+          {/* Services - Sub-tab Navigation */}
+          <header style={{marginBottom:'1rem'}}>
+            <h1 style={{margin:'0 0 .5rem 0'}}>Services</h1>
+            <div className="sub-tab-nav">
+              <button 
+                className={`sub-tab ${servicesSubTab === 'services' ? 'active' : ''}`}
+                onClick={() => setServicesSubTab('services')}
+              >
+                Offerings {serviceOfferings.length > 0 && <span className="sub-tab-badge">{serviceOfferings.length}</span>}
+              </button>
+              <button 
+                className={`sub-tab ${servicesSubTab === 'meal-shares' ? 'active' : ''}`}
+                onClick={() => setServicesSubTab('meal-shares')}
+              >
+                Meal Shares {events.length > 0 && <span className="sub-tab-badge">{events.length}</span>}
+              </button>
+            </div>
+          </header>
+
+          {/* Service Offerings Sub-tab */}
+          {servicesSubTab === 'services' && (
         <div className="grid grid-2">
           <div className="card">
             <h3 style={{marginTop:0}}>{serviceForm.id ? 'Edit service offering' : 'Create service offering'}</h3>
@@ -3543,12 +3772,13 @@ function ChefDashboardContent(){
             </div>
           </div>
         </div>
-      )}
+          )}
 
-      {tab==='events' && (
+          {/* Meal Shares Sub-tab */}
+          {servicesSubTab === 'meal-shares' && (
         <div className="grid grid-2">
           <div className="card">
-            <h3>Create event</h3>
+            <h3>Create Meal Share</h3>
             <form onSubmit={createEvent}>
               <div className="label">Meal</div>
               <select className="select" value={eventForm.meal||''} onChange={e=> setEventForm(f=>({ ...f, meal: e.target.value }))}>
@@ -3601,23 +3831,31 @@ function ChefDashboardContent(){
               </div>
               <div className="label">Special instructions (optional)</div>
               <textarea className="textarea" value={eventForm.special_instructions} onChange={e=> setEventForm(f=>({ ...f, special_instructions:e.target.value }))} />
-              {!payouts.is_active && <div className="muted" style={{marginTop:'.35rem'}}>Complete payouts setup to create events.</div>}
-              <div style={{marginTop:'.6rem'}}><button className="btn btn-primary" disabled={!payouts.is_active}>Create Event</button></div>
+              {!payouts.is_active && <div className="muted" style={{marginTop:'.35rem'}}>Complete payouts setup to create meal shares.</div>}
+              <div style={{marginTop:'.6rem'}}><button className="btn btn-primary" disabled={!payouts.is_active}>Create Meal Share</button></div>
             </form>
           </div>
           <div className="card">
-            <h3>Your events</h3>
+            <h3>Your Meal Shares</h3>
             {upcomingEvents.length===0 && pastEvents.length===0 ? (
-              <div className="muted">No events yet.</div>
+              <div className="muted">No meal shares yet.</div>
             ) : (
               <>
                 <div>
                   <div className="label" style={{marginTop:0}}>Upcoming</div>
                   {upcomingEvents.length===0 ? <div className="muted">None</div> : (
-                    <ul>
+                    <ul style={{listStyle:'none', padding:0, margin:0}}>
                       {upcomingEvents.map(e => (
-                        <li key={e.id} style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                        <li key={e.id} style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'.35rem 0', borderBottom:'1px solid var(--border)'}}>
                           <span><strong>{e.meal?.name || e.meal_name || 'Meal'}</strong> — {e.event_date} {e.event_time} ({e.orders_count || 0}/{e.max_orders || 0})</span>
+                          <button 
+                            className="btn btn-outline btn-xs" 
+                            type="button" 
+                            onClick={() => duplicateMealShare(e)}
+                            title="Duplicate this meal share"
+                          >
+                            Duplicate
+                          </button>
                         </li>
                       ))}
                     </ul>
@@ -3632,10 +3870,18 @@ function ChefDashboardContent(){
                     {showPastEvents && (
                       <>
                         <div style={{maxHeight: 320, overflowY:'auto', marginTop:'.35rem'}}>
-                          <ul>
+                          <ul style={{listStyle:'none', padding:0, margin:0}}>
                             {pastEvents.map(e => (
-                              <li key={e.id} style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+                              <li key={e.id} style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'.35rem 0', borderBottom:'1px solid var(--border)'}}>
                                 <span><span className="muted">{e.event_date} {e.event_time}</span> — <strong>{e.meal?.name || e.meal_name || 'Meal'}</strong></span>
+                                <button 
+                                  className="btn btn-outline btn-xs" 
+                                  type="button" 
+                                  onClick={() => duplicateMealShare(e)}
+                                  title="Duplicate this meal share"
+                                >
+                                  Duplicate
+                                </button>
                               </li>
                             ))}
                           </ul>
@@ -3650,6 +3896,18 @@ function ChefDashboardContent(){
               </>
             )}
           </div>
+        </div>
+          )}
+        </div>
+      )}
+
+      {/* Legacy events tab - redirect to services/meal-shares */}
+      {tab==='events' && (
+        <div style={{textAlign:'center', padding:'2rem'}}>
+          <p className="muted">Meal Shares have moved to the Services tab.</p>
+          <button className="btn btn-primary" onClick={() => { setTab('services'); setServicesSubTab('meal-shares'); }}>
+            Go to Services → Meal Shares
+          </button>
         </div>
       )}
 

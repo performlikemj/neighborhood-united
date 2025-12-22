@@ -18,7 +18,7 @@ This document serves as the master index for all Chef Hub Standard Operating Pro
 | 💳 [Payment Links](./CHEF_PAYMENT_LINKS_SOP.md) | Creating and sending payment requests | `CHEF_PAYMENT_LINKS_SOP.md` |
 | 🔗 [Connections](./CHEF_CONNECTIONS_SOP.md) | Managing customer connections | `CHEF_CONNECTIONS_SOP.md` |
 | 💼 [Services & Pricing](./CHEF_SERVICES_PRICING_SOP.md) | Service offerings and pricing tiers | `CHEF_SERVICES_PRICING_SOP.md` |
-| 🍽️ [Meals & Events](./CHEF_MEALS_EVENTS_SOP.md) | Creating meals and scheduling events | `CHEF_MEALS_EVENTS_SOP.md` |
+| 🍽️ [Meal Shares](./CHEF_MEAL_SHARES_SOP.md) | Creating meals and scheduling meal shares | `CHEF_MEAL_SHARES_SOP.md` |
 | 👤 [Profile & Gallery](./CHEF_PROFILE_GALLERY_SOP.md) | Managing profile and photos | `CHEF_PROFILE_GALLERY_SOP.md` |
 | 🍳 [Kitchen](./CHEF_KITCHEN_SOP.md) | Ingredients and dishes management | `CHEF_KITCHEN_SOP.md` |
 | 📋 [Prep Planning](./CHEF_PREP_PLANNING_SOP.md) | Shopping lists and prep optimization | `CHEF_PREP_PLANNING_SOP.md` |
@@ -49,7 +49,7 @@ The Chef Hub sidebar contains the following sections:
 │  👥 Clients         - Client management  │
 │  💳 Payment Links   - Payment requests   │
 │  💼 Services        - Service offerings  │
-│  📅 Events          - Meal events        │
+│  📅 Meal Shares     - Shared meals       │
 │  📦 Orders          - Order management   │
 │  🍽️ Meals           - Meal creation      │
 └─────────────────────────────────────────┘
@@ -127,19 +127,19 @@ The main dashboard shows:
 
 ---
 
-### 🍽️ Meals & Events
-**Purpose**: Create meals and schedule cooking events
+### 🍽️ Meal Shares
+**Purpose**: Create meals and schedule shared meal offerings for multiple customers
 
 **Key Features**:
 - Meal creation with dishes
-- Event scheduling
+- Meal share scheduling
 - Capacity management
 - Dynamic pricing
 - Order tracking
 
-**When to Use**: Creating menus, scheduling events, managing orders
+**When to Use**: Creating menus, scheduling meal shares, managing orders
 
-[📖 Full SOP →](./CHEF_MEALS_EVENTS_SOP.md)
+[📖 Full SOP →](./CHEF_MEAL_SHARES_SOP.md)
 
 ---
 
@@ -204,7 +204,7 @@ For new chefs, follow this recommended setup order:
 
 ### Phase 3: Business Setup
 7. ✅ Define **Service Offerings** with pricing tiers
-8. ✅ Create first **Event** for a meal
+8. ✅ Create first **Meal Share** for a meal
 
 ### Phase 4: Client Operations
 9. ✅ Accept **Connections** from customers
@@ -244,7 +244,8 @@ Understanding how features connect:
        │  └─────────┘     └────┬────┘   │
        │                       │        │
        │                 ┌─────▼─────┐  │
-       │                 │  EVENTS   │  │
+       │                 │ MEAL      │  │
+       │                 │ SHARES    │  │
        │                 └─────┬─────┘  │
        │                       │        │
        │           ┌───────────▼───────┐│
@@ -256,9 +257,9 @@ Understanding how features connect:
 **Key Dependencies**:
 - Dishes require Ingredients
 - Meals require Dishes
-- Events require Meals
+- Meal Shares require Meals
 - Payment Links require Clients (and Stripe)
-- Prep Planning aggregates from Meals/Events/Plans
+- Prep Planning aggregates from Meals/Meal Shares/Plans
 
 ---
 
@@ -274,8 +275,8 @@ All SOP features integrate with the **Sous Chef** AI assistant. You can ask:
 - "Generate a prep plan for next week"
 - "What's on my shopping list?"
 
-**Meals & Events**
-- "What events do I have scheduled?"
+**Meal Shares**
+- "What meal shares do I have scheduled?"
 - "Create a meal with salmon"
 
 **General**

@@ -3,11 +3,11 @@ import { api } from '../api'
 import { useCart } from '../context/CartContext'
 
 /**
- * ChefMenuModal - Browse chef's menu (dishes, events, services)
+ * ChefMenuModal - Browse chef's menu (dishes, meal shares, services)
  * 
  * Slide-out modal showing the chef's full catalog with tabs for:
  * - Dishes (chef's signature dishes)
- * - Meal Events (upcoming bookable events)
+ * - Meal Shares (upcoming bookable group meals)
  * - Services (service offerings with pricing tiers)
  */
 export default function ChefMenuModal({ isOpen, onClose, chefId, chefUsername }) {
@@ -107,7 +107,7 @@ export default function ChefMenuModal({ isOpen, onClose, chefId, chefUsername })
 
   const tabs = [
     { id: 'dishes', label: 'Dishes', count: catalog.dishes?.length || 0 },
-    { id: 'events', label: 'Meal Events', count: catalog.meal_events?.length || 0 },
+    { id: 'meal-shares', label: 'Meal Shares', count: catalog.meal_events?.length || 0 },
     { id: 'services', label: 'Services', count: catalog.services?.length || 0 },
   ]
 
@@ -196,13 +196,13 @@ export default function ChefMenuModal({ isOpen, onClose, chefId, chefUsername })
                 </div>
               )}
 
-              {/* Meal Events Tab */}
-              {activeTab === 'events' && (
+              {/* Meal Shares Tab */}
+              {activeTab === 'meal-shares' && (
                 <div className="menu-section">
                   {catalog.meal_events.length === 0 ? (
                     <div className="menu-empty">
                       <i className="fa-solid fa-calendar"></i>
-                      <p>No upcoming meal events.</p>
+                      <p>No upcoming meal shares.</p>
                     </div>
                   ) : (
                     <div className="menu-list">

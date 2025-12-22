@@ -279,7 +279,7 @@ export default function SousChefChat({
     { label: '📚 Platform help', prompt: 'How do I use Chef Hub?' },
     { label: '💳 Payment links', prompt: 'How do I send a payment link to a client?' },
     { label: '🍳 Kitchen setup', prompt: 'How do I set up my kitchen with ingredients and dishes?' },
-    { label: '📅 Scheduling', prompt: 'How do I manage events and meal schedules?' }
+    { label: '📅 Meal Shares', prompt: 'How do I create meal shares for multiple customers?' }
   ] : [
     { label: '🍽️ Menu suggestions', prompt: 'What should I make for this family this week?' },
     { label: '⚠️ Check allergies', prompt: 'What are the critical allergies I need to watch out for?' },

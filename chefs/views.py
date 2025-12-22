@@ -454,7 +454,7 @@ def me_chef_profile(request):
     # Ignore any stray user_id in query/body
     if 'user_id' in request.query_params or 'user_id' in request.data:
         pass
-    serializer = ChefPublicSerializer(chef, context={'request': request})
+    serializer = ChefPublicSerializer(chef, context={'request': request, 'include_all_photos': True})
     return Response(serializer.data)
 
 
@@ -507,6 +507,8 @@ def me_upload_photo(request):
 
     photo = form.save(commit=False)
     photo.chef = chef
+    if 'is_public' not in request.data:
+        photo.is_public = True
     if photo.is_featured:
         ChefPhoto.objects.filter(chef=chef, is_featured=True).update(is_featured=False)
     photo.save()

@@ -87,3 +87,12 @@ DATABASE_*.md
 LONG_RUNNING_TASKS_*.md
 PYDANTIC_*.md   
 GROQ_*.md
+AGENTS.md
+CONTINUITY.md
+
+# Playwright/E2E artifacts
+/frontend/.playwright-browsers/
+/frontend/tests/e2e_screenshots/
+/frontend/tests/chef_dashboard_e2e_report.md
+/frontend/tests/E2E_REMEDIATION_REPORT.md
+/frontend/tests/assets/

@@ -129,11 +129,19 @@ class ChefPublicSerializer(serializers.ModelSerializer):
         return None
 
     def get_photos(self, obj):
-        """Return only public photos, prioritizing featured items."""
+        """Return public photos; include full gallery when explicitly requested."""
         public_photos = getattr(obj, 'public_photos', None)
         if public_photos is None:
             public_photos = obj.photos.filter(is_public=True)
-        serializer = ChefPhotoSerializer(public_photos[:6], many=True, context=self.context)
+        include_all = bool(self.context.get('include_all_photos'))
+        if hasattr(public_photos, 'order_by'):
+            public_photos = public_photos.order_by('-created_at')
+        else:
+            public_photos = list(public_photos)
+        if include_all:
+            serializer = ChefPhotoSerializer(public_photos, many=True, context=self.context)
+        else:
+            serializer = ChefPhotoSerializer(public_photos[:6], many=True, context=self.context)
         return serializer.data
 
     

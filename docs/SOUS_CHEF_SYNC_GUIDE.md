@@ -66,8 +66,8 @@ When making Chef Dashboard changes, check these items:
   | Profile | Bio, photos, service areas, Calendly | Profile |
   | Photos | Upload gallery images | Photos |
   | Kitchen | Manage ingredients, dishes, meals | Kitchen |
-  | Services | Create tiered pricing offerings | Services |
-  | Events | Schedule meal events | Events |
+  | Services | Create tiered pricing offerings and meal shares | Services |
+  | Meal Shares | Schedule shared meals for multiple customers | Services > Meal Shares |
   | Clients | Manage customers, households, and connection requests | Clients |
   | Payment Links | Send Stripe payment requests | Payment Links |
   | Prep Planning | Generate shopping lists | Prep Planning |
@@ -112,7 +112,7 @@ SOP_TOPIC_MAP = {
 
 Also update the fallback message (around line 590):
 ```python
-"Available topics: profile, gallery, photos, kitchen, services, events, meals, clients..."
+"Available topics: profile, gallery, photos, kitchen, services, meal shares, meals, clients..."
 ```
 
 ---
@@ -127,7 +127,7 @@ Also update the fallback message (around line 590):
 | `CHEF_PROFILE_GALLERY_SOP.md` | Profile, gallery, photos, break mode, Stripe |
 | `CHEF_KITCHEN_SOP.md` | Kitchen, ingredients, dishes |
 | `CHEF_SERVICES_PRICING_SOP.md` | Services, pricing tiers |
-| `CHEF_MEALS_EVENTS_SOP.md` | Meals, events |
+| `CHEF_MEAL_SHARES_SOP.md` | Meals, meal shares |
 | `CHEF_CLIENT_MANAGEMENT_SOP.md` | Clients, households, connections |
 | `CHEF_PAYMENT_LINKS_SOP.md` | Payment links, invoicing |
 | `CHEF_PREP_PLANNING_SOP.md` | Prep planning, shopping lists |
@@ -151,7 +151,7 @@ const quickActions = isGeneralMode ? [
   { label: '📚 Platform help', prompt: 'How do I use Chef Hub?' },
   { label: '💳 Payment links', prompt: 'How do I send a payment link to a client?' },
   { label: '🍳 Kitchen setup', prompt: 'How do I set up my kitchen with ingredients and dishes?' },
-  { label: '📅 Scheduling', prompt: 'How do I manage events and meal schedules?' }
+  { label: '📅 Meal Shares', prompt: 'How do I create meal shares for multiple customers?' }
 ] : [
   // Family-specific prompts...
 ]

@@ -260,7 +260,7 @@ SOUS_CHEF_TOOLS = [
     {
         "type": "function",
         "name": "generate_prep_plan",
-        "description": "Generate a new prep plan for an upcoming date range. This will analyze your upcoming meal events and service orders, then create an optimized shopping list with timing suggestions based on ingredient shelf life.",
+        "description": "Generate a new prep plan for an upcoming date range. This will analyze your upcoming meal shares and service orders, then create an optimized shopping list with timing suggestions based on ingredient shelf life.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -319,7 +319,7 @@ SOUS_CHEF_TOOLS = [
     {
         "type": "function",
         "name": "get_upcoming_commitments",
-        "description": "Get all your upcoming meal events and service orders for the next few days. Useful for understanding what you need to prepare for.",
+        "description": "Get all your upcoming meal shares and service orders for the next few days. Useful for understanding what you need to prepare for.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -335,7 +335,7 @@ SOUS_CHEF_TOOLS = [
     {
         "type": "function",
         "name": "lookup_chef_hub_help",
-        "description": "Look up detailed documentation about a Chef Hub feature. Use when a chef asks 'how do I...' questions about platform features like profile, services, payment links, events, etc.",
+        "description": "Look up detailed documentation about a Chef Hub feature. Use when a chef asks 'how do I...' questions about platform features like profile, services, payment links, meal shares, etc.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -359,8 +359,8 @@ SOUS_CHEF_TOOLS = [
             "properties": {
                 "tab": {
                     "type": "string",
-                    "enum": ["dashboard", "prep", "profile", "photos", "kitchen", "connections", "clients", "messages", "payments", "services", "events", "orders", "meals"],
-                    "description": "The dashboard tab to navigate to"
+                    "enum": ["dashboard", "prep", "profile", "photos", "kitchen", "connections", "clients", "messages", "payments", "services", "meal-shares", "orders", "meals"],
+                    "description": "The dashboard tab to navigate to. Note: 'meal-shares' is a sub-tab under 'services'."
                 },
                 "reason": {
                     "type": "string",
@@ -373,18 +373,18 @@ SOUS_CHEF_TOOLS = [
     {
         "type": "function",
         "name": "prefill_form",
-        "description": "Pre-fill a form with suggested values and navigate to it. Use when helping the chef create something new like a dish, meal, or event. The chef will see a button to create the item with pre-filled data.",
+        "description": "Pre-fill a form with suggested values and navigate to it. Use when helping the chef create something new like a dish, meal, or meal share. The chef will see a button to create the item with pre-filled data.",
         "parameters": {
             "type": "object",
             "properties": {
                 "form_type": {
                     "type": "string",
-                    "enum": ["ingredient", "dish", "meal", "event", "service"],
+                    "enum": ["ingredient", "dish", "meal", "meal-share", "service"],
                     "description": "Which form to prefill"
                 },
                 "fields": {
                     "type": "object",
-                    "description": "Key-value pairs of field names and suggested values. For ingredient: name, calories, fat, carbohydrates, protein. For dish: name, featured. For meal: name, description, meal_type, price. For event: event_date, event_time, base_price, max_orders. For service: title, description, service_type."
+                    "description": "Key-value pairs of field names and suggested values. For ingredient: name, calories, fat, carbohydrates, protein. For dish: name, featured. For meal: name, description, meal_type, price. For meal-share: event_date, event_time, base_price, max_orders. For service: title, description, service_type."
                 },
                 "reason": {
                     "type": "string",
@@ -492,8 +492,11 @@ SOP_TOPIC_MAP = {
     "services": "CHEF_SERVICES_PRICING_SOP.md",
     "pricing": "CHEF_SERVICES_PRICING_SOP.md",
     "tiers": "CHEF_SERVICES_PRICING_SOP.md",
-    "events": "CHEF_MEALS_EVENTS_SOP.md",
-    "meals": "CHEF_MEALS_EVENTS_SOP.md",
+    "meal-shares": "CHEF_MEAL_SHARES_SOP.md",
+    "meal shares": "CHEF_MEAL_SHARES_SOP.md",
+    "shared meals": "CHEF_MEAL_SHARES_SOP.md",
+    "events": "CHEF_MEAL_SHARES_SOP.md",  # Legacy alias - "Events" renamed to "Meal Shares"
+    "meals": "CHEF_MEAL_SHARES_SOP.md",
     "clients": "CHEF_CLIENT_MANAGEMENT_SOP.md",
     "households": "CHEF_CLIENT_MANAGEMENT_SOP.md",
     "connections": "CHEF_CLIENT_MANAGEMENT_SOP.md",  # Connection management is now in Clients tab
@@ -591,7 +594,7 @@ def _lookup_chef_hub_help(
     if not sop_file:
         return {
             "status": "success",
-            "content": "No specific documentation found for that topic. Available topics: profile, gallery, photos, kitchen, services, events, meals, clients (including connection management), payment links, prep planning, break mode."
+            "content": "No specific documentation found for that topic. Available topics: profile, gallery, photos, kitchen, services, meal shares, meals, clients (including connection management), payment links, prep planning, break mode."
         }
     
     # Read the SOP file
@@ -1574,7 +1577,7 @@ def _get_upcoming_commitments_tool(
     customer: Optional[CustomUser],
     lead: Optional[Lead]
 ) -> Dict[str, Any]:
-    """Get upcoming meal commitments including client meal plans, events, and services."""
+    """Get upcoming meal commitments including client meal plans, meal shares, and services."""
     from datetime import date, timedelta
     from chefs.resource_planning.services import get_upcoming_commitments
     
@@ -1593,7 +1596,7 @@ def _get_upcoming_commitments_tool(
         
         type_labels = {
             'client_meal_plan': 'Client Meal Plan',
-            'meal_event': 'Meal Event',
+            'meal_event': 'Meal Share',  # "Events" renamed to "Meal Shares"
             'service_order': 'Service'
         }
         
@@ -1621,7 +1624,7 @@ def _get_upcoming_commitments_tool(
     if type_counts['client_meal_plan'] > 0:
         summary_parts.append(f"{type_counts['client_meal_plan']} client meal plan meals")
     if type_counts['meal_event'] > 0:
-        summary_parts.append(f"{type_counts['meal_event']} meal events")
+        summary_parts.append(f"{type_counts['meal_event']} meal shares")
     if type_counts['service_order'] > 0:
         summary_parts.append(f"{type_counts['service_order']} service appointments")
     
@@ -1637,7 +1640,7 @@ def _get_upcoming_commitments_tool(
         "total_servings": total_servings,
         "breakdown": {
             "client_meal_plans": type_counts['client_meal_plan'],
-            "meal_events": type_counts['meal_event'],
+            "meal_shares": type_counts['meal_event'],
             "service_orders": type_counts['service_order']
         },
         "commitments_by_date": by_date,
@@ -1661,7 +1664,7 @@ TAB_LABELS = {
     "messages": "Messages",
     "payments": "Payment Links",
     "services": "Services",
-    "events": "Events",
+    "meal-shares": "Meal Shares",
     "orders": "Orders",
     "meals": "Meals",
 }
@@ -1671,7 +1674,7 @@ FORM_TAB_MAP = {
     "ingredient": "kitchen",
     "dish": "kitchen",
     "meal": "meals",
-    "event": "events",
+    "meal-share": "services",
     "service": "services",
 }
 
@@ -1737,7 +1740,7 @@ def _prefill_form(
         "ingredient": "Ingredient",
         "dish": "Dish",
         "meal": "Meal",
-        "event": "Event",
+        "meal-share": "Meal Share",
         "service": "Service",
     }
     label = f"Create {form_labels.get(form_type, form_type.title())}"

@@ -1,8 +1,10 @@
-# Chef Meals & Events - Standard Operating Procedure
+# Chef Meals & Meal Shares - Standard Operating Procedure
 
 ## Overview
 
-The **Meals & Events** features in Chef Hub enable chefs to create meal offerings and schedule public cooking events. Meals serve as the building blocks for events, meal plans, and menu offerings.
+The **Meals & Meal Shares** features in Chef Hub enable chefs to create meal offerings and schedule group cooking opportunities. Meals serve as the building blocks for meal shares, meal plans, and menu offerings.
+
+A **Meal Share** allows a chef to cook one meal for multiple customers, making it efficient for the chef and cost-effective for customers through dynamic group pricing.
 
 ---
 
@@ -11,12 +13,13 @@ The **Meals & Events** features in Chef Hub enable chefs to create meal offering
 1. [Vision & Purpose](#vision--purpose)
 2. [Key Concepts](#key-concepts)
 3. [Creating Meals](#creating-meals)
-4. [Managing Events](#managing-events)
-5. [Order Management](#order-management)
-6. [Dynamic Pricing](#dynamic-pricing)
-7. [Best Practices](#best-practices)
-8. [Troubleshooting](#troubleshooting)
-9. [Technical Details](#technical-details)
+4. [Managing Meal Shares](#managing-meal-shares)
+5. [Duplicating Meal Shares](#duplicating-meal-shares)
+6. [Order Management](#order-management)
+7. [Dynamic Pricing](#dynamic-pricing)
+8. [Best Practices](#best-practices)
+9. [Troubleshooting](#troubleshooting)
+10. [Technical Details](#technical-details)
 
 ---
 
@@ -25,16 +28,16 @@ The **Meals & Events** features in Chef Hub enable chefs to create meal offering
 ### The Problem
 Running a personal chef business involves:
 - Creating consistent meal offerings
-- Managing public cooking events
+- Serving multiple customers efficiently
 - Handling orders and capacity
 - Coordinating timing and logistics
 
 ### The Solution
-Meals & Events provides comprehensive tools:
+Meals & Meal Shares provides comprehensive tools:
 - **Meals** - Create reusable meal offerings with dishes
-- **Events** - Schedule public events with capacity limits
+- **Meal Shares** - Schedule batch cooking for multiple customers
 - **Orders** - Track and manage customer orders
-- **Pricing** - Dynamic pricing based on demand
+- **Pricing** - Dynamic pricing that rewards group ordering
 
 ---
 
@@ -55,17 +58,17 @@ A **Dish** is a single prepared item:
 - Can be marked as "Featured"
 - Reusable across multiple meals
 
-### Event
-A **Meal Event** is a scheduled cooking opportunity:
+### Meal Share
+A **Meal Share** is a scheduled group cooking opportunity:
 - Based on a specific meal
-- Has date, time, and location
+- Has date, time, and order cutoff
 - Limited capacity (max orders)
-- Order cutoff time
-- Dynamic pricing options
+- Dynamic pricing based on number of orders
+- Multiple customers share the same meal offering
 
 ### Order
-A **Meal Order** is when a customer books:
-- Links to specific event
+A **Meal Share Order** is when a customer books:
+- Links to specific meal share
 - Tracks quantity and payment
 - Status workflow
 
@@ -73,10 +76,11 @@ A **Meal Order** is when a customer books:
 
 ## Creating Meals
 
-### Step 1: Access Meals Tab
+### Step 1: Access Menu Builder
 1. Log in to Chef Hub
-2. Click **"Meals"** in the left sidebar
-3. You'll see your meals list
+2. Click **"Menu Builder"** in the left sidebar
+3. Navigate to the **"Meals"** sub-tab
+4. You'll see your meals list
 
 ### Step 2: Create a New Meal
 
@@ -124,41 +128,26 @@ Your meal card shows:
 - Dietary tags
 - Edit/Delete options
 
-### Step 4: Edit a Meal
-
-1. Find the meal in your list
-2. Click **"Edit"** button
-3. Update any fields
-4. Click **"Save"**
-
-### Step 5: Delete a Meal
-
-1. Find the meal in your list
-2. Click **"Delete"** button
-3. Confirm deletion
-
-> **Note**: Meals linked to active events cannot be deleted.
-
 ---
 
-## Managing Events
+## Managing Meal Shares
 
-### Step 1: Access Events Tab
+### Step 1: Access Meal Shares Tab
 1. Log in to Chef Hub
-2. Click **"Events"** in the left sidebar
-3. You'll see upcoming and past events
+2. Click **"Services"** in the left sidebar
+3. Select the **"Meal Shares"** sub-tab
+4. You'll see upcoming and past meal shares
 
-### Step 2: Create a New Event
+### Step 2: Create a New Meal Share
 
-1. Click **"+ Create Event"** button
-2. Fill in the event details:
+1. Fill in the meal share form:
 
    **Select Meal** (required)
    - Choose from your meals dropdown
    - This determines what you're cooking
 
    **Event Date** (required)
-   - When the event takes place
+   - When you'll prepare and serve the meal
    - Must be in the future
 
    **Event Time**
@@ -178,7 +167,7 @@ Your meal card shows:
    - Example: 35.00
 
    **Min Price** (optional)
-   - Lowest price (for dynamic pricing)
+   - Lowest price when fully subscribed
    - Leave empty if no dynamic pricing
 
    **Max Orders**
@@ -186,50 +175,69 @@ Your meal card shows:
    - Example: 10
 
    **Min Orders**
-   - Minimum to proceed
+   - Minimum orders needed to proceed
    - Example: 3
 
    **Description** (optional)
-   - Event-specific details
-   - Location, special notes
+   - Meal share-specific details
+   - Pickup location, special notes
 
    **Special Instructions** (optional)
    - Internal prep notes
 
-3. Click **"Create Event"**
+2. Click **"Create Meal Share"**
 
-### Step 3: View Event Details
+### Step 3: View Meal Share Details
 
-Event cards show:
+Meal share entries show:
 - Meal name
 - Date and time
-- Order cutoff
-- Current orders vs. capacity
-- Pricing
+- Current orders vs. capacity (e.g., "3/10")
 - Status
 
-### Step 4: Manage Upcoming Events
+### Step 4: Manage Upcoming Meal Shares
 
 **View Orders**
-- Click the event to expand
+- Click the meal share to expand
 - See list of orders
 - Customer names and quantities
 
-**Edit Event**
-- Click "Edit" to modify details
-- Only possible before cutoff
-
-**Cancel Event**
+**Cancel Meal Share**
 - Click "Cancel"
 - All orders are refunded
 - Customers are notified
 
-### Step 5: View Past Events
+### Step 5: View Past Meal Shares
 
-Toggle **"Show Past Events"** to see:
-- Completed events
+Click **"Show past"** to see:
+- Completed meal shares
 - Order history
 - Revenue generated
+
+---
+
+## Duplicating Meal Shares
+
+The **Duplicate** feature helps you quickly create recurring meal shares without re-entering all details.
+
+### How to Duplicate
+
+1. Find the meal share you want to duplicate (upcoming or past)
+2. Click the **"Duplicate"** button next to it
+3. The create form will be pre-filled with:
+   - Same meal
+   - Same pricing (base price, min price)
+   - Same capacity settings
+   - Same description and instructions
+   - **New date** (defaults to tomorrow)
+4. Adjust the date and time as needed
+5. Click **"Create Meal Share"**
+
+### Best Uses for Duplicate
+
+- **Weekly recurring meals**: Duplicate last week's meal share for the same day next week
+- **Popular meals**: Quickly recreate meals that sold well
+- **Seasonal offerings**: Bring back successful meal shares from previous seasons
 
 ---
 
@@ -245,14 +253,14 @@ PLACED → CONFIRMED → COMPLETED
 
 ### Viewing Orders
 1. Click **"Orders"** in the sidebar
-2. See all meal orders
+2. See all meal share orders
 3. Filter by status or date
 
 ### Order Information
 
 Each order shows:
 - Customer name
-- Event/Meal name
+- Meal share/Meal name
 - Quantity
 - Total amount
 - Status
@@ -290,47 +298,41 @@ Each order shows:
 
 ### How It Works
 
-Dynamic pricing adjusts the price based on:
-- Time until order cutoff
-- Current order volume
-- Supply and demand
+Dynamic pricing rewards group ordering - as more customers order the same meal share, the price decreases for everyone. This benefits:
+- **Chefs**: Higher volume, efficient batch cooking
+- **Customers**: Lower prices for popular meals
 
 ### Configuration
 
-Set in event creation:
+Set in meal share creation:
 - **Base Price**: Starting/maximum price
-- **Min Price**: Lowest allowable price
+- **Min Price**: Lowest price (floor)
 
 ### Price Calculation
 
 ```
-If orders < min_orders:
-  - Price discounted toward min_price
-  - Encourages early orders
-  
-If orders > threshold:
-  - Price increases toward base_price
-  - Premium for high-demand events
+For each order after the first:
+  - Price drops by 5% of (base_price - min_price)
+  - Price never goes below min_price
+  - All existing orders get the new lower price
 ```
 
 ### Example Scenario
 
 ```
-Event: Sunday Brunch
+Meal Share: Sunday Lasagna Night
 Base Price: $45
-Min Price: $35
+Min Price: $30
 Max Orders: 12
-Min Orders: 4
 
-Current Status:
-- 2 orders placed
-- 5 days until cutoff
-
-Dynamic Price: $37.50 (discounted to attract orders)
-
-After 8 orders:
-- Price: $42.00 (near capacity premium)
+Order 1: Customer pays $45
+Order 2: Price drops to $44.25 (both customers)
+Order 3: Price drops to $43.50 (all three)
+...
+Order 10+: Price reaches $30 minimum (everyone pays $30)
 ```
+
+**Win-Win**: Early customers are incentivized to share the meal share with friends - when prices drop, everyone benefits!
 
 ---
 
@@ -362,7 +364,7 @@ Always tag applicable:
 - Gluten-free
 - Allergens
 
-### Event Management
+### Meal Share Management
 
 **1. Realistic Capacity**
 - Consider your kitchen capacity
@@ -380,11 +382,16 @@ Set minimums that:
 - Justify the effort
 - Are achievable
 
-**4. Regular Events**
-Build customer habits:
+**4. Build Regular Schedule**
+Create customer habits:
 - Weekly "Sunday Brunch"
 - Monthly "Date Night Dinner"
 - Seasonal specials
+
+**5. Use Duplicate Feature**
+- Don't recreate from scratch
+- Duplicate past successes
+- Build consistent offerings
 
 ### Order Management
 
@@ -406,40 +413,40 @@ Build customer habits:
 
 ## Troubleshooting
 
-### Can't create a meal
+### Can't create a meal share
 
 **Causes**:
+- Payouts not set up
+- No meals available
 - Missing required fields
-- No dishes available
-- Kitchen setup incomplete
 
 **Solutions**:
-1. Fill all required fields
-2. Create dishes first in Kitchen tab
-3. Complete chef profile
+1. Complete Stripe Connect setup
+2. Create meals first in Menu Builder
+3. Fill all required fields
 
-### Event not appearing to customers
+### Meal share not appearing to customers
 
 **Causes**:
-- Event date in past
+- Date in past
 - Order cutoff passed
 - Maximum orders reached
 
 **Solutions**:
-1. Check event date is future
+1. Check date is in future
 2. Verify cutoff hasn't passed
 3. Increase max orders if needed
 
 ### Customer can't order
 
 **Causes**:
-- Not connected to you
-- Event full
+- Not in service area
+- Meal share full
 - Past cutoff time
 
 **Solutions**:
-1. Have them request connection
-2. Create another event
+1. Check your service areas
+2. Create another meal share
 3. Extend cutoff if possible
 
 ### Orders not showing
@@ -454,18 +461,6 @@ Build customer habits:
 2. Refresh the page
 3. Check Stripe for payment status
 
-### Event pricing not updating
-
-**Causes**:
-- Dynamic pricing not enabled
-- Min price not set
-- Calculation timing
-
-**Solutions**:
-1. Set both base and min price
-2. Wait for recalculation
-3. Refresh the page
-
 ---
 
 ## Technical Details
@@ -479,34 +474,35 @@ Meal:
     description             # Full description
     meal_type               # breakfast/lunch/dinner/snack
     price                   # Base price
-    start_date              # Availability date
     dietary_preferences     # JSON array of tags
     dishes                  # M2M to Dish
     created_at              # Creation timestamp
 
-ChefMealEvent:
+ChefMealEvent (Meal Share):
     chef                    # FK to Chef
     meal                    # FK to Meal
-    event_date              # Event date
-    event_time              # Event time
+    event_date              # Meal share date
+    event_time              # Service time
     order_cutoff_time       # Cutoff datetime
     base_price              # Starting price
     min_price               # Floor price (dynamic)
+    current_price           # Current price (auto-updated)
     max_orders              # Capacity
     min_orders              # Minimum to proceed
-    description             # Event details
+    orders_count            # Current order count
+    description             # Meal share details
     special_instructions    # Prep notes
-    status                  # active/cancelled/completed
+    status                  # scheduled/open/completed/cancelled
     created_at              # Creation timestamp
 
 ChefMealOrder:
-    event                   # FK to ChefMealEvent
+    meal_event              # FK to ChefMealEvent
     customer                # FK to Customer
     quantity                # Number ordered
     unit_price              # Price at order time
-    total_amount            # Total charged
+    price_paid              # Total charged
     status                  # placed/confirmed/completed/cancelled
-    stripe_payment_id       # Payment reference
+    stripe_payment_intent_id # Payment reference
     created_at              # Order timestamp
 ```
 
@@ -518,35 +514,14 @@ ChefMealOrder:
 | `/meals/api/chef/meals/` | POST | Create meal |
 | `/meals/api/chef/meals/<id>/` | PATCH | Update meal |
 | `/meals/api/chef/meals/<id>/` | DELETE | Delete meal |
-| `/meals/api/chef-meal-events/` | GET | List events |
-| `/meals/api/chef-meal-events/` | POST | Create event |
-| `/meals/api/chef-meal-events/<id>/` | PATCH | Update event |
-| `/meals/api/chef-meal-events/<id>/` | DELETE | Delete event |
+| `/meals/api/chef-meal-events/` | GET | List meal shares |
+| `/meals/api/chef-meal-events/` | POST | Create meal share |
+| `/meals/api/chef-meal-events/<id>/update/` | PATCH | Update meal share |
+| `/meals/api/chef-meal-events/<id>/cancel/` | POST | Cancel meal share |
+| `/meals/api/chef-meal-events/<id>/duplicate/` | POST | Duplicate meal share |
 | `/meals/api/chef-meal-orders/` | GET | List orders |
 | `/meals/api/chef-meal-orders/<id>/confirm/` | POST | Confirm order |
-| `/meals/api/chef-meal-orders/<id>/complete/` | POST | Complete order |
 | `/meals/api/chef-meal-orders/<id>/cancel/` | POST | Cancel order |
-
-### Meal Types
-
-```javascript
-MEAL_TYPES = [
-  { value: 'Breakfast', label: 'Breakfast' },
-  { value: 'Lunch', label: 'Lunch' },
-  { value: 'Dinner', label: 'Dinner' },
-  { value: 'Snack', label: 'Snack' }
-]
-```
-
-### Dietary Options
-
-```javascript
-DIETARY_OPTIONS = [
-  'Vegetarian', 'Vegan', 'Pescatarian', 'Keto', 'Paleo',
-  'Halal', 'Kosher', 'Gluten-Free', 'Low Sodium',
-  'Mediterranean', 'Whole30', 'FODMAP'
-]
-```
 
 ---
 
@@ -555,7 +530,8 @@ DIETARY_OPTIONS = [
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | Dec 2025 | Initial release with events and dynamic pricing |
-| 1.1 | Dec 2025 | Updated with accurate UI walkthrough and screenshot placeholders |
+| 1.1 | Dec 2025 | Updated with accurate UI walkthrough |
+| 2.0 | Dec 2025 | Renamed "Events" to "Meal Shares"; added Duplicate feature |
 
 ---
 

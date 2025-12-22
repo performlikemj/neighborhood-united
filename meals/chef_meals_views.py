@@ -1574,6 +1574,123 @@ def api_cancel_chef_meal_event(request, event_id):
             status_code=500
         )
 
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_duplicate_meal_share(request, event_id):
+    """
+    Duplicate an existing meal share (ChefMealEvent) with new date/time.
+    
+    This allows chefs to quickly recreate a previous meal share without re-entering
+    all the details. The duplicated meal share will have:
+    - Same meal, pricing, capacity settings
+    - Reset orders_count to 0
+    - Status set to 'scheduled'
+    - current_price set to base_price
+    - New date/time (provided in request body or defaults that chef must change)
+    
+    Request body (all optional - will copy from original if not provided):
+    - event_date: New date for the meal share (YYYY-MM-DD)
+    - event_time: New time for the meal share (HH:MM)
+    - order_cutoff_date: New cutoff date
+    - order_cutoff_time: New cutoff time
+    - base_price: Override base price
+    - min_price: Override min price
+    - max_orders: Override max orders
+    - min_orders: Override min orders
+    - description: Override description
+    - special_instructions: Override special instructions
+    """
+    try:
+        chef = request.user.chef
+    except Chef.DoesNotExist:
+        logger.error(f"User {request.user.username} is not a chef")
+        return standardize_response(
+            status="error",
+            message="User is not a chef.",
+            status_code=403
+        )
+    
+    try:
+        original = get_object_or_404(ChefMealEvent, id=event_id)
+        
+        # Verify ownership
+        if original.chef.id != chef.id:
+            logger.error(f"Permission denied: Event chef ID {original.chef.id} does not match requesting chef ID {chef.id}")
+            return standardize_response(
+                status="error",
+                message="You don't have permission to duplicate this meal share.",
+                status_code=403
+            )
+        
+        # Get data from request or use original values
+        data = request.data
+        
+        # Parse new date/time or use placeholder values that signal "needs to be updated"
+        event_date = data.get('event_date')
+        event_time = data.get('event_time', original.event_time.strftime('%H:%M') if original.event_time else '18:00')
+        order_cutoff_date = data.get('order_cutoff_date')
+        order_cutoff_time = data.get('order_cutoff_time', '12:00')
+        
+        # If no new date provided, use tomorrow as default
+        if not event_date:
+            tomorrow = timezone.now().date() + timedelta(days=1)
+            event_date = tomorrow.strftime('%Y-%m-%d')
+        
+        if not order_cutoff_date:
+            order_cutoff_date = event_date
+        
+        # Build cutoff datetime
+        try:
+            cutoff_datetime = datetime.strptime(f"{order_cutoff_date} {order_cutoff_time}", "%Y-%m-%d %H:%M")
+            cutoff_datetime = timezone.make_aware(cutoff_datetime) if timezone.is_naive(cutoff_datetime) else cutoff_datetime
+        except ValueError:
+            cutoff_datetime = timezone.now() + timedelta(hours=24)
+        
+        # Create the new meal share
+        new_event = ChefMealEvent.objects.create(
+            chef=chef,
+            meal=original.meal,
+            event_date=event_date,
+            event_time=event_time,
+            order_cutoff_time=cutoff_datetime,
+            max_orders=int(data.get('max_orders', original.max_orders)),
+            min_orders=int(data.get('min_orders', original.min_orders)),
+            base_price=Decimal(str(data.get('base_price', original.base_price))),
+            current_price=Decimal(str(data.get('base_price', original.base_price))),  # Reset to base
+            min_price=Decimal(str(data.get('min_price', original.min_price))),
+            orders_count=0,
+            status=STATUS_SCHEDULED,
+            description=data.get('description', original.description or ''),
+            special_instructions=data.get('special_instructions', original.special_instructions or '')
+        )
+        
+        logger.info(f"Duplicated meal share {event_id} to new meal share {new_event.id}")
+        
+        serializer = ChefMealEventSerializer(new_event)
+        return standardize_response(
+            status="success",
+            message="Meal share duplicated successfully",
+            data=serializer.data,
+            status_code=201
+        )
+        
+    except ChefMealEvent.DoesNotExist:
+        logger.error(f"Meal share with ID {event_id} not found")
+        return standardize_response(
+            status="error",
+            message="Meal share not found.",
+            status_code=404
+        )
+    except Exception as e:
+        logger.error(f"Error duplicating meal share: {str(e)}", exc_info=True)
+        return standardize_response(
+            status="error",
+            message=f"Error duplicating meal share: {str(e)}",
+            status_code=500
+        )
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def api_get_meals(request):

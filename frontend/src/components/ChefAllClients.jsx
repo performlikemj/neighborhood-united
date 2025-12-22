@@ -67,6 +67,7 @@ export default function ChefAllClients() {
   // Connection management for platform clients
   const {
     connections,
+    pendingConnections,
     respondToConnection,
     respondStatus,
     respondError
@@ -908,10 +909,191 @@ export default function ChefAllClients() {
         </div>
       )}
 
+      {/* Pending Connection Requests */}
+      {pendingConnections?.length > 0 && !showAddForm && (
+        <div style={{
+          background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.08) 0%, rgba(251, 191, 36, 0.05) 100%)',
+          borderRadius: '16px',
+          padding: '1.25rem',
+          marginBottom: '1.5rem',
+          border: '1px solid rgba(245, 158, 11, 0.25)',
+          boxShadow: '0 4px 12px rgba(245, 158, 11, 0.08)'
+        }}>
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '.5rem', 
+            marginBottom: '1rem',
+            paddingBottom: '.75rem',
+            borderBottom: '1px solid rgba(245, 158, 11, 0.15)'
+          }}>
+            <span style={{ 
+              fontSize: '1.25rem',
+              background: 'rgba(245, 158, 11, 0.15)',
+              padding: '.4rem',
+              borderRadius: '8px',
+              lineHeight: 1
+            }}>🔔</span>
+            <div>
+              <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 600, color: 'var(--text)' }}>
+                Pending Connection Requests
+              </h3>
+              <p style={{ margin: '.2rem 0 0 0', fontSize: '.85rem', color: 'var(--muted)' }}>
+                {pendingConnections.length} {pendingConnections.length === 1 ? 'person wants' : 'people want'} to connect with you
+              </p>
+            </div>
+          </div>
+          
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '.75rem' }}>
+            {pendingConnections.map(connection => {
+              // Try multiple fields to find the customer name
+              // API returns flat fields: customer_first_name, customer_last_name, customer_username, customer_email
+              const customerName = 
+                // Flat fields from API (preferred)
+                (connection.customer_first_name && connection.customer_last_name 
+                    ? `${connection.customer_first_name} ${connection.customer_last_name}`.trim()
+                    : connection.customer_first_name)
+                || connection.customer_username
+                // Nested fields (fallback)
+                || connection.customer?.name 
+                || connection.customer?.full_name
+                || (connection.customer?.first_name && connection.customer?.last_name 
+                    ? `${connection.customer.first_name} ${connection.customer.last_name}`.trim()
+                    : connection.customer?.first_name)
+                || connection.customer?.username
+                || connection.customerName
+                || null // No email fallback - let the email field below handle identification
+              const customerEmail = connection.customer_email || connection.customer?.email || ''
+              const requestDate = connection.created_at || connection.requested_at
+              const isThisBusy = connectionMutating && String(connectionActionId) === String(connection.id)
+              
+              return (
+                <div 
+                  key={connection.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: '1rem',
+                    padding: '1rem',
+                    background: 'var(--surface)',
+                    borderRadius: '12px',
+                    border: '1px solid var(--border)'
+                  }}
+                >
+                  <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+                    {customerName ? (
+                      <>
+                        <div style={{ 
+                          fontWeight: 600, 
+                          fontSize: '1rem', 
+                          color: 'var(--text)',
+                          marginBottom: '.25rem'
+                        }}>
+                          {customerName}
+                        </div>
+                        {customerEmail && (
+                          <div style={{ 
+                            fontSize: '.85rem', 
+                            color: 'var(--muted)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '.35rem'
+                          }}>
+                            <span style={{ opacity: 0.6, fontSize: '.75rem' }}>📧</span>
+                            {customerEmail}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      // No name available - use email as primary identifier
+                      <div style={{ 
+                        fontWeight: 600, 
+                        fontSize: '1rem', 
+                        color: 'var(--text)',
+                        marginBottom: '.25rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '.35rem'
+                      }}>
+                        <span style={{ opacity: 0.6, fontSize: '.85rem' }}>📧</span>
+                        {customerEmail || 'New connection request'}
+                      </div>
+                    )}
+                    {requestDate && (
+                      <div style={{ 
+                        fontSize: '.8rem', 
+                        color: 'var(--muted)',
+                        marginTop: '.35rem',
+                        opacity: 0.8
+                      }}>
+                        Requested {new Date(requestDate).toLocaleDateString(undefined, { 
+                          month: 'short', 
+                          day: 'numeric',
+                          year: requestDate.slice(0,4) !== new Date().getFullYear().toString() ? 'numeric' : undefined
+                        })}
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div style={{ display: 'flex', gap: '.5rem', flexShrink: 0 }}>
+                    {connection.canAccept && (
+                      <button
+                        onClick={() => handleConnectionAction(connection.id, 'accept')}
+                        disabled={isThisBusy}
+                        style={{
+                          background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                          color: 'white',
+                          border: 'none',
+                          padding: '.6rem 1.25rem',
+                          borderRadius: '10px',
+                          fontWeight: 600,
+                          fontSize: '.9rem',
+                          cursor: isThisBusy ? 'wait' : 'pointer',
+                          opacity: isThisBusy ? 0.6 : 1,
+                          boxShadow: '0 2px 8px rgba(16, 185, 129, 0.25)',
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        {isThisBusy ? 'Accepting...' : '✓ Accept'}
+                      </button>
+                    )}
+                    {connection.canDecline && (
+                      <button
+                        onClick={() => handleConnectionAction(connection.id, 'decline')}
+                        disabled={isThisBusy}
+                        style={{
+                          background: 'var(--surface-2)',
+                          color: 'var(--text)',
+                          border: '1.5px solid var(--border)',
+                          padding: '.6rem 1rem',
+                          borderRadius: '10px',
+                          fontWeight: 500,
+                          fontSize: '.9rem',
+                          cursor: isThisBusy ? 'wait' : 'pointer',
+                          opacity: isThisBusy ? 0.6 : 1,
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        Decline
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Stats Cards */}
       {summary && !showAddForm && (
         <div style={styles.statsGrid}>
           <div style={{ ...styles.statCard, borderColor: sourceFilter === '' ? 'var(--accent)' : 'transparent', background: sourceFilter === '' ? 'rgba(16, 185, 129, 0.05)' : 'var(--surface-1)' }} onClick={() => setSourceFilter('')}><div style={styles.statNumber}>{summary.total}</div><div style={styles.statLabel}>All Clients</div></div>
+          {pendingConnections?.length > 0 && (
+            <div style={{ ...styles.statCard, borderColor: '#f59e0b', background: 'rgba(245, 158, 11, 0.08)' }}><div style={{ ...styles.statNumber, color: '#f59e0b' }}>{pendingConnections.length}</div><div style={styles.statLabel}>⏳ Pending</div></div>
+          )}
           <div style={{ ...styles.statCard, borderColor: sourceFilter === 'platform' ? '#10b981' : 'transparent', background: sourceFilter === 'platform' ? 'rgba(16, 185, 129, 0.05)' : 'var(--surface-1)' }} onClick={() => setSourceFilter(sourceFilter === 'platform' ? '' : 'platform')}><div style={{ ...styles.statNumber, color: '#10b981' }}>{summary.platform}</div><div style={styles.statLabel}>🟢 Platform</div></div>
           <div style={{ ...styles.statCard, borderColor: sourceFilter === 'contact' ? '#6366f1' : 'transparent', background: sourceFilter === 'contact' ? 'rgba(99, 102, 241, 0.05)' : 'var(--surface-1)' }} onClick={() => setSourceFilter(sourceFilter === 'contact' ? '' : 'contact')}><div style={{ ...styles.statNumber, color: '#6366f1' }}>{summary.contacts}</div><div style={styles.statLabel}>📋 Manual</div></div>
         </div>

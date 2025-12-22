@@ -911,15 +911,18 @@ class SystemUpdate(models.Model):
 
 class ChefMealEvent(models.Model):
     """
-    Represents a specific meal offering by a chef that customers can order.
+    Represents a Meal Share - a scheduled meal offering that multiple customers can order.
     
     This model allows chefs to schedule when they'll prepare a particular meal
-    and make it available to customers. For example, a chef might offer their
+    and make it available to multiple customers. For example, a chef might offer their
     signature lasagna on Friday evening from 6-8pm with orders needed by Thursday.
     
     The dynamic pricing encourages group orders - as more customers order the same meal,
     the price decreases for everyone, benefiting both the chef (more orders) and
     customers (lower prices).
+    
+    Note: The model is named ChefMealEvent for historical reasons, but the user-facing
+    terminology is "Meal Share" to better convey the shared, group ordering concept.
     """
     STATUS_CHOICES = [
         (STATUS_SCHEDULED, 'Scheduled'),
@@ -932,12 +935,12 @@ class ChefMealEvent(models.Model):
     
     chef = models.ForeignKey(Chef, on_delete=models.CASCADE, related_name='meal_events')
     meal = models.ForeignKey(Meal, on_delete=models.CASCADE, related_name='events')
-    event_date = models.DateField(help_text="The date when the chef will prepare and serve this meal")
+    event_date = models.DateField(help_text="The date when the chef will prepare and serve this meal share")
     event_time = models.TimeField(help_text="The time when the meal will be available for pickup/delivery")
-    order_cutoff_time = models.DateTimeField(help_text="Deadline for placing orders (e.g., 24 hours before event)")
+    order_cutoff_time = models.DateTimeField(help_text="Deadline for placing orders for this meal share")
     
-    max_orders = models.PositiveIntegerField(help_text="Maximum number of orders the chef can fulfill")
-    min_orders = models.PositiveIntegerField(default=1, help_text="Minimum number of orders needed to proceed")
+    max_orders = models.PositiveIntegerField(help_text="Maximum number of orders the chef can fulfill for this meal share")
+    min_orders = models.PositiveIntegerField(default=1, help_text="Minimum number of orders needed for the meal share to proceed")
     
     base_price = models.DecimalField(max_digits=6, decimal_places=2, 
                                    help_text="Starting price per order")
@@ -1147,7 +1150,7 @@ class ChefMealEvent(models.Model):
 
 class ChefMealOrder(models.Model):
     """
-    Represents a customer's order for a specific ChefMealEvent.
+    Represents a customer's order for a specific Meal Share (ChefMealEvent).
     Linked to the main Order model for unified order history.
     """
     STATUS_CHOICES = [

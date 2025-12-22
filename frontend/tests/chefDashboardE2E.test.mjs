@@ -21,6 +21,15 @@ const credentials = {
   customer: { username: 'kiho', password: 'Beihoo1228@!' }
 }
 
+const shouldRunE2E = (() => {
+  const runFlag = String(process.env.RUN_E2E || '').toLowerCase()
+  if (['1', 'true', 'yes'].includes(runFlag)) return true
+  if (process.env.CI) return false
+  return true
+})()
+
+const e2eTest = shouldRunE2E ? test : test.skip
+
 const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
 const dataSeeds = {
   experience: `E2E experience update ${timestamp}`,
@@ -212,7 +221,7 @@ function buildReport() {
   return lines.join('\n')
 }
 
-test('Chef dashboard user journey (ferris + kiho)', { timeout: 20 * 60 * 1000 }, async () => {
+e2eTest('Chef dashboard user journey (ferris + kiho)', { timeout: 20 * 60 * 1000 }, async () => {
   const { chromium } = await import('playwright')
   await ensureFrontendUp()
   await ensureBackendUp()

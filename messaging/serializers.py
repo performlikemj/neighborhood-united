@@ -3,6 +3,7 @@ Serializers for messaging API.
 """
 from rest_framework import serializers
 from .models import Conversation, Message
+from .utils import normalize_message_content
 
 
 class MessageSerializer(serializers.ModelSerializer):
@@ -23,6 +24,11 @@ class MessageSerializer(serializers.ModelSerializer):
         if user.first_name and user.last_name:
             return f"{user.first_name} {user.last_name}"
         return user.username
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['content'] = normalize_message_content(data.get('content', ''))
+        return data
 
 
 class ConversationSerializer(serializers.ModelSerializer):
@@ -77,6 +83,11 @@ class ConversationSerializer(serializers.ModelSerializer):
         # User is chef
         return obj.chef_unread_count
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['last_message_preview'] = normalize_message_content(data.get('last_message_preview', ''))
+        return data
+
 
 class ConversationDetailSerializer(ConversationSerializer):
     """Serializer for conversation detail view with messages."""
@@ -91,7 +102,6 @@ class ConversationDetailSerializer(ConversationSerializer):
         # Reverse to show oldest first
         messages = list(reversed(messages))
         return MessageSerializer(messages, many=True).data
-
 
 
 

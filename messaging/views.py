@@ -13,6 +13,7 @@ from rest_framework.response import Response
 from chefs.models import Chef
 from chef_services.models import ChefCustomerConnection
 from .models import Conversation, Message
+from .utils import normalize_message_content
 from .serializers import (
     ConversationSerializer, 
     ConversationDetailSerializer, 
@@ -122,7 +123,7 @@ def send_message(request, conversation_id):
             status=status.HTTP_403_FORBIDDEN
         )
     
-    content = request.data.get('content', '').strip()
+    content = normalize_message_content(request.data.get('content', ''))
     if not content:
         return Response(
             {'error': 'Message content is required'},
@@ -333,5 +334,4 @@ def websocket_health_check(request):
         results["error_type"] = type(e).__name__
     
     return Response(results)
-
 

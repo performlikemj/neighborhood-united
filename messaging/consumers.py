@@ -7,6 +7,8 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.utils import timezone
 
+from .utils import normalize_message_content
+
 logger = logging.getLogger(__name__)
 
 
@@ -86,7 +88,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             msg_type = data.get('type', 'message')
             
             if msg_type == 'message':
-                content = data.get('content', '').strip()
+                content = normalize_message_content(data.get('content', ''))
                 if content:
                     message = await self.save_message(content)
                     
@@ -189,7 +191,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     def save_message(self, content):
         """Save a new message to the database."""
         from .models import Conversation, Message
-        
+        content = normalize_message_content(content)
         conversation = Conversation.objects.get(id=self.conversation_id)
         
         message = Message.objects.create(
@@ -246,5 +248,4 @@ class ChatConsumer(AsyncWebsocketConsumer):
             conversation.mark_read(self.user_type)
         except Conversation.DoesNotExist:
             pass
-
 

@@ -6,6 +6,8 @@ from django.db import models
 from django.contrib.postgres.fields import ArrayField
 from django.utils import timezone
 
+# settings is required for AUTH_USER_MODEL references on foreign keys
+
 
 # Reuse the same choices from CustomUser for consistency
 DIETARY_CHOICES = [

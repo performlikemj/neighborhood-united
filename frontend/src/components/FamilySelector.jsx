@@ -134,19 +134,18 @@ export default function FamilySelector({
     return fullName || family.username || family.email || 'Family'
   }
 
-  const formatDietarySummary = (family) => {
-    const items = []
-    if (family.dietaryPreferences?.length) {
-      items.push(...family.dietaryPreferences.slice(0, 2))
+  // Get initials for avatar display (matches formatFamilyName fallback order)
+  const getInitials = (family) => {
+    const first = family.firstName?.[0] || ''
+    const last = family.lastName?.[0] || ''
+    if (first || last) {
+      return (first + last).toUpperCase()
     }
-    if (family.allergies?.length) {
-      items.push(`⚠️ ${family.allergies.length} allergies`)
+    // Fall back to username, then email (same order as formatFamilyName)
+    if (family.username) {
+      return family.username[0].toUpperCase()
     }
-    return items.length ? items.join(' • ') : 'No restrictions'
-  }
-
-  const getTypeIcon = (type) => {
-    return type === 'customer' ? '👤' : '📋'
+    return family.email?.[0]?.toUpperCase() || '?'
   }
 
   const getTypeBadge = (family) => {
@@ -196,7 +195,7 @@ export default function FamilySelector({
         {selectedFamily ? (
           <div className="selected-family">
             <div className="family-avatar" data-type={selectedFamily.type}>
-              {getTypeIcon(selectedFamily.type)}
+              {getInitials(selectedFamily)}
             </div>
             <div className="family-info">
               <div className="family-name">
@@ -204,10 +203,6 @@ export default function FamilySelector({
                 <span className={`type-badge ${getTypeBadge(selectedFamily).className}`}>
                   {getTypeBadge(selectedFamily).label}
                 </span>
-              </div>
-              <div className="family-meta muted">
-                {selectedFamily.householdSize} members
-                {selectedFamily.totalOrders > 0 && ` • ${selectedFamily.totalOrders} orders`}
               </div>
             </div>
           </div>
@@ -249,8 +244,7 @@ export default function FamilySelector({
                         isSelected={selectedFamilyId === family.id && selectedFamilyType === 'lead'}
                         onSelect={handleSelect}
                         formatFamilyName={formatFamilyName}
-                        formatDietarySummary={formatDietarySummary}
-                        getTypeIcon={getTypeIcon}
+                        getInitials={getInitials}
                         getTypeBadge={getTypeBadge}
                       />
                     ))}
@@ -268,8 +262,7 @@ export default function FamilySelector({
                         isSelected={selectedFamilyId === family.id && selectedFamilyType === 'customer'}
                         onSelect={handleSelect}
                         formatFamilyName={formatFamilyName}
-                        formatDietarySummary={formatDietarySummary}
-                        getTypeIcon={getTypeIcon}
+                        getInitials={getInitials}
                         getTypeBadge={getTypeBadge}
                       />
                     ))}
@@ -292,21 +285,21 @@ export default function FamilySelector({
           align-items: center;
           justify-content: space-between;
           padding: 0.75rem 1rem;
-          background: var(--bg-card, #fff);
-          color: var(--text, #333);
-          border: 1px solid var(--border-color, #ddd);
+          background: var(--surface);
+          color: var(--text);
+          border: 1px solid var(--border);
           border-radius: 8px;
           cursor: pointer;
           transition: border-color 0.2s, box-shadow 0.2s;
         }
-        
+
         .family-selector-trigger:hover {
-          border-color: var(--accent-color, #3b82f6);
+          border-color: var(--primary);
         }
-        
+
         .family-selector-trigger.open {
-          border-color: var(--accent-color, #3b82f6);
-          box-shadow: 0 0 0 3px var(--accent-color-alpha, rgba(59, 130, 246, 0.1));
+          border-color: var(--primary);
+          box-shadow: 0 0 0 3px var(--primary-bg);
         }
         
         .selected-family {
@@ -319,21 +312,23 @@ export default function FamilySelector({
           width: 40px;
           height: 40px;
           border-radius: 50%;
-          background: var(--accent-gradient, linear-gradient(135deg, #3b82f6, #8b5cf6));
+          background: var(--primary);
           color: white;
           display: flex;
           align-items: center;
           justify-content: center;
           font-weight: 600;
-          font-size: 1.25rem;
+          font-size: 0.9rem;
+          text-transform: uppercase;
+          flex-shrink: 0;
         }
-        
+
         .family-avatar[data-type="lead"] {
-          background: linear-gradient(135deg, #8b5cf6, #a855f7);
+          background: var(--manual-color);
         }
-        
+
         .family-avatar[data-type="customer"] {
-          background: linear-gradient(135deg, #10b981, #059669);
+          background: var(--platform-color);
         }
         
         .family-info {
@@ -358,43 +353,39 @@ export default function FamilySelector({
         }
         
         .type-badge.badge-platform {
-          background: rgba(16, 185, 129, 0.15);
-          color: #059669;
+          background: var(--platform-bg);
+          color: var(--platform-color);
         }
-        
+
         .type-badge.badge-manual {
-          background: rgba(139, 92, 246, 0.15);
-          color: #7c3aed;
+          background: var(--manual-bg);
+          color: var(--manual-color);
         }
-        
-        .family-meta {
-          font-size: 0.8rem;
-        }
-        
+
         .placeholder {
           display: flex;
           align-items: center;
           gap: 0.5rem;
-          color: var(--text-muted, #888);
+          color: var(--muted);
         }
-        
+
         .placeholder .icon {
           font-size: 1.25rem;
         }
-        
+
         .chevron {
           font-size: 0.75rem;
-          color: var(--text-muted, #888);
+          color: var(--muted);
         }
         
         .family-selector-dropdown {
           position: absolute;
           left: 0;
           right: 0;
-          background: var(--bg-card, #fff);
-          border: 1px solid var(--border-color, #ddd);
+          background: var(--surface);
+          border: 1px solid var(--border);
           border-radius: 8px;
-          box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+          box-shadow: var(--shadow-lg);
           z-index: 100;
           max-height: min(60vh, 520px);
           display: flex;
@@ -422,32 +413,32 @@ export default function FamilySelector({
         
         .family-selector-dropdown.open-up .search-wrapper {
           border-bottom: none;
-          border-top: 1px solid var(--border-color, #ddd);
+          border-top: 1px solid var(--border);
         }
         
         .search-wrapper {
           padding: 0.75rem;
-          border-bottom: 1px solid var(--border-color, #ddd);
+          border-bottom: 1px solid var(--border);
           position: sticky;
           top: 0;
-          background: var(--bg-card, #fff);
+          background: var(--surface);
           z-index: 2;
         }
 
         .search-input {
           width: 100%;
           padding: 0.5rem 0.75rem;
-          border: 1px solid var(--border-color, #ddd);
+          border: 1px solid var(--border);
           border-radius: 6px;
           font-size: 0.9rem;
-          background: var(--surface, #fff);
-          color: var(--text, #333);
+          background: var(--surface-2);
+          color: var(--text);
         }
 
         .search-input:focus {
           outline: none;
-          border-color: var(--accent-color, #3b82f6);
-          box-shadow: 0 0 0 3px var(--accent-color-alpha, rgba(59, 130, 246, 0.14));
+          border-color: var(--primary);
+          box-shadow: 0 0 0 3px var(--primary-bg);
         }
         
         .family-list {
@@ -460,9 +451,9 @@ export default function FamilySelector({
           font-size: 0.75rem;
           font-weight: 600;
           text-transform: uppercase;
-          color: var(--text-muted, #888);
-          background: var(--bg-page, #f9fafb);
-          border-bottom: 1px solid var(--border-color, #eee);
+          color: var(--muted);
+          background: var(--surface-2);
+          border-bottom: 1px solid var(--border);
           position: sticky;
           top: 0;
         }
@@ -474,16 +465,16 @@ export default function FamilySelector({
           padding: 0.75rem 1rem;
           cursor: pointer;
           transition: background 0.15s, border-color 0.15s;
-          border-bottom: 1px solid var(--border-color, #ddd);
+          border-bottom: 1px solid var(--border);
         }
 
         .family-option:hover {
-          background: color-mix(in oklab, var(--bg-card, #fff) 70%, var(--accent-color, #3b82f6) 10%);
+          background: var(--surface-2);
         }
 
         .family-option.selected {
-          background: var(--accent-color-alpha, rgba(59, 130, 246, 0.1));
-          border-color: var(--accent-color, #3b82f6);
+          background: var(--primary-bg);
+          border-color: var(--primary);
         }
         
         .family-details {
@@ -491,44 +482,42 @@ export default function FamilySelector({
           min-width: 0;
         }
         
-        .family-dietary {
+        .family-email {
           font-size: 0.8rem;
           margin-top: 0.125rem;
-        }
-        
-        .family-stats {
-          font-size: 0.75rem;
-          margin-top: 0.125rem;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
         
         .no-results {
           padding: 2rem 1rem;
           text-align: center;
-          color: var(--text-muted, #888);
+          color: var(--muted);
         }
-        
+
         .family-selector-loading,
         .family-selector-error,
         .family-selector-empty {
           padding: 1rem;
           text-align: center;
-          color: var(--text-muted, #888);
-          background: var(--bg-card, #fff);
-          border: 1px solid var(--border-color, #ddd);
+          color: var(--muted);
+          background: var(--surface);
+          border: 1px solid var(--border);
           border-radius: 8px;
         }
-        
+
         .family-selector-error {
-          color: var(--error-color, #ef4444);
-          border-color: var(--error-color, #ef4444);
+          color: var(--danger);
+          border-color: var(--danger);
         }
-        
+
         .spinner-sm {
           display: inline-block;
           width: 14px;
           height: 14px;
-          border: 2px solid var(--border-color, #ddd);
-          border-top-color: var(--accent-color, #3b82f6);
+          border: 2px solid var(--border);
+          border-top-color: var(--primary);
           border-radius: 50%;
           animation: spin 0.8s linear infinite;
           margin-right: 0.5rem;
@@ -545,24 +534,23 @@ export default function FamilySelector({
 /**
  * Individual family option in the dropdown.
  */
-function FamilyOption({ 
-  family, 
-  isSelected, 
-  onSelect, 
-  formatFamilyName, 
-  formatDietarySummary,
-  getTypeIcon,
-  getTypeBadge 
+function FamilyOption({
+  family,
+  isSelected,
+  onSelect,
+  formatFamilyName,
+  getInitials,
+  getTypeBadge
 }) {
   const badge = getTypeBadge(family)
-  
+
   return (
     <div
       className={`family-option ${isSelected ? 'selected' : ''}`}
       onClick={() => onSelect(family)}
     >
       <div className="family-avatar" data-type={family.type}>
-        {getTypeIcon(family.type)}
+        {getInitials(family)}
       </div>
       <div className="family-details">
         <div className="family-name">
@@ -571,14 +559,11 @@ function FamilyOption({
             {badge.label}
           </span>
         </div>
-        <div className="family-dietary muted">
-          {formatDietarySummary(family)}
-        </div>
-        <div className="family-stats muted">
-          {family.householdSize} members
-          {family.totalOrders > 0 && ` • ${family.totalOrders} orders`}
-          {family.email && ` • ${family.email}`}
-        </div>
+        {family.email && (
+          <div className="family-email muted">
+            {family.email}
+          </div>
+        )}
       </div>
     </div>
   )

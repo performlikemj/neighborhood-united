@@ -1,9 +1,8 @@
 /**
  * SousChefChat Component
- * 
- * AI chat interface for chefs to interact with the Sous Chef assistant
- * about a specific family. Includes streaming responses, tool call
- * visualization, and family context panel.
+ *
+ * Modern AI chat interface for chefs to interact with the Sous Chef assistant.
+ * Features redesigned message bubbles, quick action pills, and improved input.
  */
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
@@ -15,19 +14,6 @@ import {
   newSousChefConversation,
   getFamilyContext
 } from '../api/sousChefClient'
-
-// Tool name display mapping
-const TOOL_NAME_MAP = {
-  get_family_dietary_summary: 'Checking dietary requirements',
-  check_recipe_compliance: 'Checking recipe safety',
-  suggest_family_menu: 'Generating menu suggestions',
-  scale_recipe_for_household: 'Scaling recipe',
-  get_family_order_history: 'Looking up order history',
-  add_family_note: 'Adding note to CRM',
-  get_upcoming_family_orders: 'Checking upcoming orders',
-  estimate_prep_time: 'Estimating prep time',
-  get_household_members: 'Getting household details'
-}
 
 export default function SousChefChat({
   familyId,
@@ -43,50 +29,41 @@ export default function SousChefChat({
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState(initialInput || '')
   const [isStreaming, setIsStreaming] = useState(false)
-  const [activeTools, setActiveTools] = useState([])
   const [error, setError] = useState(null)
   const [familyContext, setFamilyContext] = useState(null)
   const [showContext, setShowContext] = useState(true)
   const [historyLoading, setHistoryLoading] = useState(true)
   const [pendingPrompt, setPendingPrompt] = useState(null)
-  
+
   // Use provided emoji or fallback to random for inclusive representation
   const chefEmoji = useMemo(() => chefEmojiProp || getRandomChefEmoji(), [chefEmojiProp])
-  
+
   const endRef = useRef(null)
-  const abortRef = useRef(null)
   const inputRef = useRef(null)
   const isInitialLoadRef = useRef(true)
 
   // Track the initial context prePrompt to detect new contexts
   const initialPrePromptRef = useRef(null)
-  
+
   // Handle initial context from notifications
-  // Store the context but don't clear it until it's actually used
   useEffect(() => {
     const prePrompt = initialContext?.prePrompt
     if (prePrompt && prePrompt !== initialPrePromptRef.current) {
-      console.log('[SousChefChat] Received NEW context with prePrompt:', prePrompt.substring(0, 50) + '...')
       initialPrePromptRef.current = prePrompt
       setPendingPrompt(prePrompt)
-      // DON'T call onContextHandled yet - wait until we actually use the prompt
     }
   }, [initialContext?.prePrompt])
 
   // Auto-fill pending prompt when a family is selected and history is loaded
   useEffect(() => {
     if (pendingPrompt && familyId && !historyLoading && !isStreaming) {
-      console.log('[SousChefChat] Applying pending prompt for family:', familyId)
-      // Small delay to ensure UI is ready
       const timer = setTimeout(() => {
         setInput(pendingPrompt)
         setPendingPrompt(null)
-        initialPrePromptRef.current = null // Reset so we can receive new contexts
-        // NOW we can mark context as handled
+        initialPrePromptRef.current = null
         if (onContextHandled) {
           onContextHandled()
         }
-        // Focus the input so user can see and optionally edit before sending
         if (inputRef.current) {
           inputRef.current.focus()
         }
@@ -101,24 +78,22 @@ export default function SousChefChat({
   // Load history and context when family changes (or general mode)
   useEffect(() => {
     let mounted = true
-    
+
     async function loadData() {
-      isInitialLoadRef.current = true  // Reset for new family/mode
+      isInitialLoadRef.current = true
       setHistoryLoading(true)
       setMessages([])
       setFamilyContext(null)
       setError(null)
-      
+
       try {
-        // Load history and context in parallel
-        // For general mode, pass null values - API client handles this
         const [historyData, contextData] = await Promise.all([
           getSousChefHistory(familyId || null, familyType || null).catch(() => null),
           getFamilyContext(familyId || null, familyType || null).catch(() => null)
         ])
-        
+
         if (!mounted) return
-        
+
         if (historyData?.messages) {
           const formattedMessages = historyData.messages.map((msg, idx) => ({
             id: `hist-${idx}`,
@@ -128,7 +103,7 @@ export default function SousChefChat({
           }))
           setMessages(formattedMessages)
         }
-        
+
         if (contextData) {
           setFamilyContext(contextData)
         }
@@ -142,7 +117,7 @@ export default function SousChefChat({
         }
       }
     }
-    
+
     loadData()
     return () => { mounted = false }
   }, [familyId, familyType])
@@ -150,18 +125,15 @@ export default function SousChefChat({
   // Auto-scroll - use instant on initial load, smooth for new messages
   useEffect(() => {
     if (isInitialLoadRef.current) {
-      // Use instant scroll for initial load to avoid "spazzing" effect
       endRef.current?.scrollIntoView({ behavior: 'instant', block: 'end' })
-      // Mark initial load as complete after a short delay
       const timer = setTimeout(() => {
         isInitialLoadRef.current = false
       }, 500)
       return () => clearTimeout(timer)
     } else {
-      // Use smooth scroll for new messages
       endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
     }
-  }, [messages, activeTools])
+  }, [messages])
 
   // Focus input when not streaming
   useEffect(() => {
@@ -171,18 +143,9 @@ export default function SousChefChat({
   }, [isStreaming, familyId])
 
   const handleNewChat = async () => {
-    // Works in both family mode and general mode
-    
-    // Abort any in-progress stream
-    if (abortRef.current) {
-      abortRef.current.abort()
-      abortRef.current = null
-    }
-    
     try {
       await newSousChefConversation(familyId, familyType)
       setMessages([])
-      setActiveTools([])
       setError(null)
     } catch (err) {
       setError(err.message || 'Failed to start new conversation')
@@ -191,12 +154,11 @@ export default function SousChefChat({
 
   const handleSend = useCallback(async () => {
     const text = input.trim()
-    // Allow sending in both family mode and general mode
     if (!text || isStreaming) return
-    
+
     setError(null)
     setInput('')
-    
+
     // Add user message
     const userMsgId = `user-${Date.now()}`
     setMessages(prev => [...prev, {
@@ -205,8 +167,8 @@ export default function SousChefChat({
       content: text,
       finalized: true
     }])
-    
-    // Add thinking indicator (placeholder assistant message)
+
+    // Add thinking indicator
     const assistantId = `assistant-${Date.now()}`
     setMessages(prev => [...prev, {
       id: assistantId,
@@ -215,33 +177,28 @@ export default function SousChefChat({
       finalized: false,
       isThinking: true
     }])
-    
+
     setIsStreaming(true)
-    setActiveTools([])
-    
+
     try {
-      // Use structured output endpoint (non-streaming)
-      // Pass null for family params in general mode
       const result = await sendStructuredMessage({
         familyId: familyId || null,
         familyType: familyType || null,
         message: text
       })
-      
+
       if (result.status === 'success' && result.content) {
-        // Convert structured content to JSON string for storage/display
         const contentJson = JSON.stringify(result.content)
-        setMessages(prev => prev.map(m => 
-          m.id === assistantId 
+        setMessages(prev => prev.map(m =>
+          m.id === assistantId
             ? { ...m, content: contentJson, finalized: true, isThinking: false }
             : m
         ))
       } else {
-        // Handle error response
         const errorMsg = result.message || 'Something went wrong'
         setError(errorMsg)
-        setMessages(prev => prev.map(m => 
-          m.id === assistantId 
+        setMessages(prev => prev.map(m =>
+          m.id === assistantId
             ? { ...m, content: JSON.stringify({ blocks: [{ type: 'text', content: errorMsg }] }), finalized: true, isThinking: false }
             : m
         ))
@@ -249,8 +206,8 @@ export default function SousChefChat({
     } catch (err) {
       const errorMsg = err.message || 'An error occurred'
       setError(errorMsg)
-      setMessages(prev => prev.map(m => 
-        m.id === assistantId 
+      setMessages(prev => prev.map(m =>
+        m.id === assistantId
           ? { ...m, content: JSON.stringify({ blocks: [{ type: 'text', content: 'Sorry, something went wrong. Please try again.' }] }), finalized: true, isThinking: false }
           : m
       ))
@@ -266,83 +223,83 @@ export default function SousChefChat({
     }
   }
 
-  const handleStop = () => {
-    if (abortRef.current) {
-      abortRef.current.abort()
-      abortRef.current = null
-      setIsStreaming(false)
-    }
-  }
-
   // Quick action buttons - different for general mode vs family mode
   const quickActions = isGeneralMode ? [
-    { label: '📚 Platform help', prompt: 'How do I use Chef Hub?' },
-    { label: '💳 Payment links', prompt: 'How do I send a payment link to a client?' },
-    { label: '🍳 Kitchen setup', prompt: 'How do I set up my kitchen with ingredients and dishes?' },
-    { label: '📅 Meal Shares', prompt: 'How do I create meal shares for multiple customers?' }
+    { icon: '📚', label: 'Platform help', prompt: 'How do I use Chef Hub?' },
+    { icon: '💳', label: 'Payment links', prompt: 'How do I send a payment link to a client?' },
+    { icon: '🍳', label: 'Kitchen setup', prompt: 'How do I set up my kitchen with ingredients and dishes?' },
+    { icon: '📅', label: 'Meal Shares', prompt: 'How do I create meal shares for multiple customers?' }
   ] : [
-    { label: '🍽️ Menu suggestions', prompt: 'What should I make for this family this week?' },
-    { label: '⚠️ Check allergies', prompt: 'What are the critical allergies I need to watch out for?' },
-    { label: '📊 Order history', prompt: "Show me what I've made for them before." },
-    { label: '👨‍👩‍👧 Family details', prompt: 'Tell me about each household member and their dietary needs.' }
+    { icon: '🍽️', label: 'Menu ideas', prompt: 'What should I make for this family this week?' },
+    { icon: '⚠️', label: 'Allergies', prompt: 'What are the critical allergies I need to watch out for?' },
+    { icon: '📊', label: 'Orders', prompt: "Show me what I've made for them before." },
+    { icon: '👥', label: 'Family', prompt: 'Tell me about each household member and their dietary needs.' }
   ]
 
   const handleQuickAction = (prompt) => {
     if (isStreaming) return
     setInput(prompt)
-    // Auto-send after a brief delay for UX
     setTimeout(() => {
-      const sendBtn = document.querySelector('.sous-chef-send-btn')
-      if (sendBtn) sendBtn.click()
+      handleSend()
     }, 100)
   }
 
   return (
-    <div className="sous-chef-chat">
+    <div className="sc-chat">
       {/* Family Context Panel - only show in family mode */}
       {familyContext && !isGeneralMode && (
-        <div className={`context-panel ${showContext ? 'expanded' : 'collapsed'}`}>
-          <div className="context-header" onClick={() => setShowContext(!showContext)}>
-            <span className="context-title">
-              <span className="icon">👨‍👩‍👧‍👦</span>
+        <div className={`sc-context ${showContext ? 'sc-context--expanded' : ''}`}>
+          <button className="sc-context-toggle" onClick={() => setShowContext(!showContext)}>
+            <span className="sc-context-title">
+              <span className="sc-context-icon">👨‍👩‍👧‍👦</span>
               {familyContext.family_name}
             </span>
-            <span className="toggle">{showContext ? '▼' : '▶'}</span>
-          </div>
-          
+            <svg
+              className={`sc-context-chevron ${showContext ? 'sc-context-chevron--open' : ''}`}
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </button>
+
           {showContext && (
-            <div className="context-body">
-              <div className="context-row">
-                <span className="label">Household:</span>
-                <span className="value">{familyContext.household_size} members</span>
+            <div className="sc-context-body">
+              <div className="sc-context-row">
+                <span className="sc-context-label">Household:</span>
+                <span className="sc-context-value">{familyContext.household_size} members</span>
               </div>
-              
+
               {familyContext.dietary_restrictions?.length > 0 && (
-                <div className="context-row">
-                  <span className="label">Dietary:</span>
-                  <span className="value tags">
+                <div className="sc-context-row">
+                  <span className="sc-context-label">Dietary:</span>
+                  <span className="sc-context-tags">
                     {familyContext.dietary_restrictions.map((d, i) => (
-                      <span key={i} className="tag diet">{d}</span>
+                      <span key={i} className="sc-tag sc-tag--diet">{d}</span>
                     ))}
                   </span>
                 </div>
               )}
-              
+
               {familyContext.allergies?.length > 0 && (
-                <div className="context-row">
-                  <span className="label">Allergies:</span>
-                  <span className="value tags">
+                <div className="sc-context-row">
+                  <span className="sc-context-label">Allergies:</span>
+                  <span className="sc-context-tags">
                     {familyContext.allergies.map((a, i) => (
-                      <span key={i} className="tag allergy">⚠️ {a}</span>
+                      <span key={i} className="sc-tag sc-tag--allergy">⚠️ {a}</span>
                     ))}
                   </span>
                 </div>
               )}
-              
+
               {familyContext.stats?.total_orders > 0 && (
-                <div className="context-row">
-                  <span className="label">History:</span>
-                  <span className="value">
+                <div className="sc-context-row">
+                  <span className="sc-context-label">History:</span>
+                  <span className="sc-context-value">
                     {familyContext.stats.total_orders} orders • ${familyContext.stats.total_spent?.toFixed(2)}
                   </span>
                 </div>
@@ -353,51 +310,53 @@ export default function SousChefChat({
       )}
 
       {/* Chat Header */}
-      <div className="chat-header">
-        <div className="header-left">
-          <span className="chef-icon">{chefEmoji}</span>
+      <div className="sc-chat-header">
+        <div className="sc-chat-header-left">
+          <span className="sc-chat-avatar">{chefEmoji}</span>
           <div>
-            <h3>Sous Chef</h3>
-            <span className="subtitle muted">
-              {isGeneralMode 
-                ? 'General Assistant — ask me anything about Chef Hub'
-                : `Helping you serve ${familyName || 'this family'}`
+            <h3 className="sc-chat-title">Sous Chef</h3>
+            <span className="sc-chat-subtitle">
+              {isGeneralMode
+                ? 'General Assistant'
+                : `Helping with ${familyName || 'this family'}`
               }
             </span>
           </div>
         </div>
-        <button className="btn btn-outline btn-sm" onClick={handleNewChat} disabled={isStreaming}>
+        <button className="sc-btn sc-btn--outline sc-btn--sm" onClick={handleNewChat} disabled={isStreaming}>
           New Chat
         </button>
       </div>
 
       {/* Messages */}
-      <div className="messages-container">
+      <div className="sc-messages">
         {historyLoading ? (
-          <div className="loading-state">
-            <span className="spinner" /> Loading conversation...
+          <div className="sc-loading">
+            <span className="sc-spinner" /> Loading...
           </div>
         ) : messages.length === 0 ? (
-          <div className="welcome-state">
-            <div className="welcome-content">
-              <span className="welcome-icon">{isGeneralMode ? '💡' : '🍳'}</span>
+          <div className="sc-welcome">
+            <div className="sc-welcome-content">
+              <span className="sc-welcome-icon">{isGeneralMode ? '💡' : '🍳'}</span>
               <h3>How can I help you today?</h3>
               <p>
-                {isGeneralMode 
+                {isGeneralMode
                   ? "I can help with platform questions, SOPs, prep planning, and more. Select a client for personalized meal planning."
                   : "I have full context about this family's dietary needs, allergies, and your history with them."
                 }
               </p>
-              
-              <div className="quick-actions">
+
+              {/* Quick Action Pills */}
+              <div className="sc-quick-actions">
                 {quickActions.map((action, idx) => (
                   <button
                     key={idx}
-                    className="quick-action-btn"
+                    className="sc-quick-action"
                     onClick={() => handleQuickAction(action.prompt)}
                     disabled={isStreaming}
                   >
-                    {action.label}
+                    <span className="sc-quick-action-icon">{action.icon}</span>
+                    <span className="sc-quick-action-label">{action.label}</span>
                   </button>
                 ))}
               </div>
@@ -415,327 +374,391 @@ export default function SousChefChat({
                 isThinking={msg.isThinking}
               />
             ))}
-            
-            {/* Tool calls indicator */}
-            {isStreaming && activeTools.length > 0 && (
-              <div className="tools-row">
-                {activeTools.map(tool => (
-                  <span key={tool.id} className={`tool-chip ${tool.status}`}>
-                    <span className="dot" />
-                    {tool.name}
-                  </span>
-                ))}
-              </div>
-            )}
-            
           </>
         )}
-        
+
         {error && (
-          <div className="error-message">
+          <div className="sc-error">
             {error}
           </div>
         )}
-        
+
         <div ref={endRef} />
       </div>
 
       {/* Input Area */}
-      <div className="composer">
-        <textarea
-          ref={(el) => {
-            inputRef.current = el
-            if (externalInputRef) externalInputRef.current = el
-          }}
-          className="composer-input"
-          rows={1}
-          placeholder={`Ask about ${familyName || 'this family'}...`}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          disabled={isStreaming || historyLoading}
-        />
-        <div className="composer-actions">
-          {isStreaming ? (
-            <button className="btn btn-outline" onClick={handleStop}>
-              Stop
-            </button>
-          ) : (
-            <button 
-              className="btn btn-primary sous-chef-send-btn" 
-              onClick={handleSend}
-              disabled={!input.trim() || historyLoading}
-            >
-              Send
-            </button>
-          )}
+      <div className="sc-composer">
+        <div className="sc-composer-input-wrap">
+          <textarea
+            ref={(el) => {
+              inputRef.current = el
+              if (externalInputRef) externalInputRef.current = el
+            }}
+            className="sc-composer-input"
+            rows={1}
+            placeholder={isGeneralMode ? 'Ask Sous Chef anything...' : `Ask about ${familyName || 'this family'}...`}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={isStreaming || historyLoading}
+          />
+          <button
+            className={`sc-send-btn ${input.trim() ? 'sc-send-btn--visible' : ''}`}
+            onClick={handleSend}
+            disabled={!input.trim() || isStreaming || historyLoading}
+            aria-label="Send message"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="22" y1="2" x2="11" y2="13"/>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
+          </button>
         </div>
       </div>
 
       <style>{`
-        .sous-chef-chat {
+        /* ============================================
+           SOUS CHEF CHAT - MODERN UI
+           ============================================ */
+
+        .sc-chat {
           display: flex;
           flex-direction: column;
           height: 100%;
-          background: var(--surface-2, #f9fafb);
+          background: var(--sc-surface-2, var(--surface-2, #f9fafb));
           border-radius: 12px;
           overflow: hidden;
           color: var(--text);
         }
-        
-        .sous-chef-chat.empty-state {
-          align-items: center;
-          justify-content: center;
+
+        /* ─────────────────────────────────────────────
+           CONTEXT PANEL (Collapsible)
+           ───────────────────────────────────────────── */
+        .sc-context {
+          background: var(--sc-surface, var(--surface, #fff));
+          border-bottom: 1px solid var(--sc-border, var(--border, #e5e7eb));
         }
-        
-        .empty-content {
-          text-align: center;
-          padding: 3rem;
-          color: var(--muted);
-        }
-        
-        .empty-icon {
-          font-size: 4rem;
-          display: block;
-          margin-bottom: 1rem;
-        }
-        
-        .empty-content h3 {
-          margin: 0 0 0.5rem 0;
-          color: var(--text);
-        }
-        
-        /* Context Panel */
-        .context-panel {
-          background: var(--surface);
-          border-bottom: 1px solid var(--border);
-          color: var(--text);
-        }
-        
-        .context-header {
+
+        .sc-context-toggle {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          padding: 0.75rem 1rem;
+          width: 100%;
+          padding: 10px 14px;
+          background: none;
+          border: none;
           cursor: pointer;
-          user-select: none;
+          text-align: left;
+          color: var(--text);
         }
-        
-        .context-header:hover {
-          background: var(--surface-2);
+
+        .sc-context-toggle:hover {
+          background: var(--sc-surface-2, var(--surface-2, #f9fafb));
         }
-        
-        .context-title {
+
+        .sc-context-title {
           display: flex;
           align-items: center;
-          gap: 0.5rem;
+          gap: 8px;
+          font-weight: 600;
+          font-size: 0.9rem;
+        }
+
+        .sc-context-icon {
+          font-size: 1.1rem;
+        }
+
+        .sc-context-chevron {
+          color: var(--muted);
+          transition: transform 0.2s ease;
+        }
+
+        .sc-context-chevron--open {
+          transform: rotate(180deg);
+        }
+
+        .sc-context-body {
+          padding: 0 14px 12px 14px;
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+
+        .sc-context-row {
+          display: flex;
+          gap: 8px;
+          font-size: 0.8rem;
+          align-items: flex-start;
+        }
+
+        .sc-context-label {
+          color: var(--muted);
+          min-width: 65px;
+          flex-shrink: 0;
+        }
+
+        .sc-context-value {
+          color: var(--text);
+        }
+
+        .sc-context-tags {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px;
+        }
+
+        .sc-tag {
+          padding: 2px 8px;
+          border-radius: 12px;
+          font-size: 0.7rem;
+          font-weight: 500;
+        }
+
+        .sc-tag--diet {
+          background: var(--success-bg);
+          color: var(--success);
+        }
+
+        .sc-tag--allergy {
+          background: var(--danger-bg);
+          color: var(--danger);
+        }
+
+        /* ─────────────────────────────────────────────
+           CHAT HEADER
+           ───────────────────────────────────────────── */
+        .sc-chat-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 14px 16px;
+          background: var(--sc-surface, var(--surface, #fff));
+          border-bottom: 1px solid var(--sc-border, var(--border, #e5e7eb));
+        }
+
+        .sc-chat-header-left {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .sc-chat-avatar {
+          font-size: 1.75rem;
+        }
+
+        .sc-chat-title {
+          margin: 0;
+          font-size: 1rem;
           font-weight: 600;
           color: var(--text);
         }
-        
-        .context-title .icon {
-          font-size: 1.25rem;
-        }
-        
-        .toggle {
-          color: var(--muted);
+
+        .sc-chat-subtitle {
           font-size: 0.75rem;
-        }
-        
-        .context-body {
-          padding: 0 1rem 1rem 1rem;
-          display: flex;
-          flex-direction: column;
-          gap: 0.5rem;
-        }
-        
-        .context-row {
-          display: flex;
-          gap: 0.5rem;
-          font-size: 0.875rem;
-          color: var(--text);
-        }
-        
-        .context-row .label {
           color: var(--muted);
-          min-width: 70px;
         }
-        
-        .context-row .value.tags {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 0.25rem;
-        }
-        
-        .tag {
-          padding: 0.125rem 0.5rem;
-          border-radius: 12px;
-          font-size: 0.75rem;
-        }
-        
-        .tag.diet {
-          background: rgba(16, 185, 129, 0.15);
-          color: #10b981;
-        }
-        
-        .tag.allergy {
-          background: rgba(220, 38, 38, 0.15);
-          color: #ef4444;
-        }
-        
-        /* Chat Header */
-        .chat-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 1rem;
-          background: var(--surface);
-          border-bottom: 1px solid var(--border);
-        }
-        
-        .header-left {
-          display: flex;
-          align-items: center;
-          gap: 0.75rem;
-        }
-        
-        .chef-icon {
-          font-size: 2rem;
-        }
-        
-        .chat-header h3 {
-          margin: 0;
-          font-size: 1.125rem;
-          color: var(--text);
-        }
-        
-        .subtitle {
+
+        .sc-btn {
+          padding: 6px 12px;
+          border-radius: 6px;
           font-size: 0.8rem;
-          color: var(--muted);
-        }
-        
-        /* Messages */
-        .messages-container {
-          flex: 1;
-          overflow-y: auto;
-          padding: 1rem;
-          display: flex;
-          flex-direction: column;
-          gap: 1rem;
-        }
-        
-        .loading-state,
-        .welcome-state {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          flex: 1;
-          color: var(--muted);
-        }
-        
-        .welcome-content {
-          text-align: center;
-          max-width: 400px;
-        }
-        
-        .welcome-icon {
-          font-size: 3rem;
-          display: block;
-          margin-bottom: 1rem;
-        }
-        
-        .welcome-content h3 {
-          margin: 0 0 0.5rem 0;
-          color: var(--text);
-        }
-        
-        .welcome-content p {
-          color: var(--muted);
-        }
-        
-        .quick-actions {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 0.5rem;
-          justify-content: center;
-          margin-top: 1.5rem;
-        }
-        
-        .quick-action-btn {
-          padding: 0.5rem 1rem;
-          background: var(--surface);
-          border: 1px solid var(--border);
-          border-radius: 20px;
+          font-weight: 500;
           cursor: pointer;
-          font-size: 0.875rem;
-          transition: all 0.2s;
+          transition: all 0.15s ease;
+          border: none;
+        }
+
+        .sc-btn--outline {
+          background: transparent;
+          border: 1px solid var(--sc-border, var(--border, #e5e7eb));
           color: var(--text);
         }
-        
-        .quick-action-btn:hover:not(:disabled) {
-          background: var(--primary);
-          color: white;
-          border-color: var(--primary);
+
+        .sc-btn--outline:hover:not(:disabled) {
+          border-color: var(--sc-primary, var(--primary, #5cb85c));
+          color: var(--sc-primary, var(--primary, #5cb85c));
         }
-        
-        .quick-action-btn:disabled {
+
+        .sc-btn--sm {
+          padding: 5px 10px;
+          font-size: 0.75rem;
+        }
+
+        .sc-btn:disabled {
           opacity: 0.5;
           cursor: not-allowed;
         }
-        
-        /* Message Bubbles */
-        .msg-row {
+
+        /* ─────────────────────────────────────────────
+           MESSAGES AREA
+           ───────────────────────────────────────────── */
+        .sc-messages {
+          flex: 1;
+          overflow-y: auto;
+          padding: 16px;
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+
+        .sc-loading {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex: 1;
+          color: var(--muted);
+          gap: 8px;
+        }
+
+        .sc-spinner {
+          display: inline-block;
+          width: 16px;
+          height: 16px;
+          border: 2px solid var(--sc-border, var(--border, #e5e7eb));
+          border-top-color: var(--sc-primary, var(--primary, #5cb85c));
+          border-radius: 50%;
+          animation: sc-spin 0.8s linear infinite;
+        }
+
+        @keyframes sc-spin {
+          to { transform: rotate(360deg); }
+        }
+
+        /* ─────────────────────────────────────────────
+           WELCOME STATE
+           ───────────────────────────────────────────── */
+        .sc-welcome {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex: 1;
+        }
+
+        .sc-welcome-content {
+          text-align: center;
+          max-width: 320px;
+          padding: 20px;
+        }
+
+        .sc-welcome-icon {
+          font-size: 2.5rem;
+          display: block;
+          margin-bottom: 12px;
+        }
+
+        .sc-welcome-content h3 {
+          margin: 0 0 8px 0;
+          font-size: 1.1rem;
+          font-weight: 600;
+          color: var(--text);
+        }
+
+        .sc-welcome-content p {
+          margin: 0;
+          font-size: 0.85rem;
+          color: var(--muted);
+          line-height: 1.5;
+        }
+
+        /* ─────────────────────────────────────────────
+           QUICK ACTION PILLS (Horizontal Scrollable)
+           ───────────────────────────────────────────── */
+        .sc-quick-actions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          justify-content: center;
+          margin-top: 16px;
+        }
+
+        .sc-quick-action {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          padding: 8px 14px;
+          background: var(--sc-surface, var(--surface, #fff));
+          border: 1px solid var(--sc-border, var(--border, #e5e7eb));
+          border-radius: 20px;
+          cursor: pointer;
+          font-size: 0.8rem;
+          transition: all 0.15s ease;
+          color: var(--text);
+        }
+
+        .sc-quick-action:hover:not(:disabled) {
+          border-color: var(--sc-primary, var(--primary, #5cb85c));
+          background: rgba(92, 184, 92, 0.08);
+        }
+
+        .sc-quick-action:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+
+        .sc-quick-action-icon {
+          font-size: 1rem;
+        }
+
+        .sc-quick-action-label {
+          font-weight: 500;
+        }
+
+        /* ─────────────────────────────────────────────
+           MESSAGE BUBBLES (Modern Design)
+           ───────────────────────────────────────────── */
+        .sc-msg {
           display: flex;
         }
-        
-        .msg-row.chef {
+
+        .sc-msg--user {
           justify-content: flex-end;
         }
-        
-        .msg-row.assistant {
+
+        .sc-msg--assistant {
           justify-content: flex-start;
         }
-        
-        .bubble {
+
+        .sc-bubble {
           max-width: 80%;
-          padding: 0.75rem 1rem;
-          border-radius: 12px;
+          padding: 12px 16px;
+          border-radius: 16px;
           word-wrap: break-word;
+          line-height: 1.5;
         }
-        
-        .bubble.chef {
-          background: var(--primary);
+
+        .sc-bubble--user {
+          background: var(--sc-primary, var(--primary, #5cb85c));
           color: white;
           border-bottom-right-radius: 4px;
         }
-        
-        .bubble.assistant {
-          background: var(--surface);
-          border: 1px solid var(--border);
+
+        .sc-bubble--assistant {
+          background: var(--sc-surface, var(--surface, #fff));
+          border: 1px solid var(--sc-border, var(--border, #e5e7eb));
           border-bottom-left-radius: 4px;
           color: var(--text);
         }
-        
-        /* Thinking indicator - animated dots */
-        .thinking-indicator {
+
+        /* Thinking Indicator (Three Dots) */
+        .sc-thinking {
           display: flex;
           gap: 4px;
           padding: 4px 0;
         }
-        
-        .thinking-dot {
+
+        .sc-thinking-dot {
           width: 8px;
           height: 8px;
-          background: var(--primary);
+          background: var(--sc-primary, var(--primary, #5cb85c));
           border-radius: 50%;
-          animation: thinking-bounce 1.4s infinite ease-in-out both;
+          animation: sc-thinking-bounce 1.4s infinite ease-in-out both;
         }
-        
-        .thinking-dot:nth-child(1) { animation-delay: -0.32s; }
-        .thinking-dot:nth-child(2) { animation-delay: -0.16s; }
-        .thinking-dot:nth-child(3) { animation-delay: 0s; }
-        
-        @keyframes thinking-bounce {
+
+        .sc-thinking-dot:nth-child(1) { animation-delay: -0.32s; }
+        .sc-thinking-dot:nth-child(2) { animation-delay: -0.16s; }
+        .sc-thinking-dot:nth-child(3) { animation-delay: 0s; }
+
+        @keyframes sc-thinking-bounce {
           0%, 80%, 100% {
             transform: scale(0.6);
             opacity: 0.5;
@@ -745,437 +768,214 @@ export default function SousChefChat({
             opacity: 1;
           }
         }
-        
-        /* ═══════════════════════════════════════════════════════════════════ */
-        /* STRUCTURED CONTENT STYLING                                          */
-        /* ═══════════════════════════════════════════════════════════════════ */
-        
-        .bubble.assistant .markdown-content {
+
+        /* Error Message */
+        .sc-error {
+          padding: 10px 14px;
+          background: var(--danger-bg);
+          color: var(--danger);
+          border-radius: 8px;
+          font-size: 0.85rem;
+        }
+
+        /* ─────────────────────────────────────────────
+           COMPOSER (Input Area)
+           ───────────────────────────────────────────── */
+        .sc-composer {
+          padding: 12px 16px;
+          background: var(--sc-surface, var(--surface, #fff));
+          border-top: 1px solid var(--sc-border, var(--border, #e5e7eb));
+        }
+
+        .sc-composer-input-wrap {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          background: var(--sc-surface-2, var(--surface-2, #f9fafb));
+          border: 1px solid var(--sc-border, var(--border, #e5e7eb));
+          border-radius: 24px;
+          padding: 4px 4px 4px 16px;
+          transition: border-color 0.15s, box-shadow 0.15s;
+        }
+
+        .sc-composer-input-wrap:focus-within {
+          border-color: var(--sc-primary, var(--primary, #5cb85c));
+          box-shadow: 0 0 0 3px rgba(92, 184, 92, 0.12);
+        }
+
+        .sc-composer-input {
+          flex: 1;
+          border: none;
+          background: transparent;
+          padding: 10px 0;
+          font-family: inherit;
+          font-size: 0.9rem;
+          resize: none;
+          outline: none;
+          color: var(--text);
+          min-height: 24px;
+          max-height: 120px;
+        }
+
+        .sc-composer-input::placeholder {
+          color: var(--muted);
+        }
+
+        .sc-composer-input:disabled {
+          opacity: 0.6;
+        }
+
+        .sc-send-btn {
+          width: 36px;
+          height: 36px;
+          border-radius: 50%;
+          border: none;
+          background: var(--sc-primary, var(--primary, #5cb85c));
+          color: white;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          opacity: 0;
+          transform: scale(0.8);
+          transition: all 0.15s ease;
+          flex-shrink: 0;
+        }
+
+        .sc-send-btn--visible {
+          opacity: 1;
+          transform: scale(1);
+        }
+
+        .sc-send-btn:hover:not(:disabled) {
+          background: var(--sc-primary-hover, var(--primary-700, #4a9d4a));
+        }
+
+        .sc-send-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+
+        /* ─────────────────────────────────────────────
+           MARKDOWN CONTENT STYLING
+           ───────────────────────────────────────────── */
+        .sc-bubble--assistant .markdown-content {
           line-height: 1.6;
           color: var(--text);
           font-size: 0.9rem;
           word-break: break-word;
         }
-        
-        /* ─────────────────────────────────────────────────────────────────── */
-        /* Paragraphs                                                          */
-        /* ─────────────────────────────────────────────────────────────────── */
-        .bubble.assistant .markdown-content p {
+
+        .sc-bubble--assistant .markdown-content p {
           color: var(--text);
           margin: 0.75em 0;
         }
-        
-        .bubble.assistant .markdown-content p:first-child {
+
+        .sc-bubble--assistant .markdown-content p:first-child {
           margin-top: 0;
         }
-        
-        .bubble.assistant .markdown-content p:last-child {
+
+        .sc-bubble--assistant .markdown-content p:last-child {
           margin-bottom: 0;
         }
-        
-        /* ─────────────────────────────────────────────────────────────────── */
-        /* Headings                                                            */
-        /* ─────────────────────────────────────────────────────────────────── */
-        .bubble.assistant .markdown-content h1,
-        .bubble.assistant .markdown-content h2,
-        .bubble.assistant .markdown-content h3,
-        .bubble.assistant .markdown-content h4,
-        .bubble.assistant .markdown-content h5,
-        .bubble.assistant .markdown-content h6 {
+
+        .sc-bubble--assistant .markdown-content h1,
+        .sc-bubble--assistant .markdown-content h2,
+        .sc-bubble--assistant .markdown-content h3,
+        .sc-bubble--assistant .markdown-content h4 {
           color: var(--text);
           font-weight: 600;
           line-height: 1.3;
-          margin-top: 1.25em;
+          margin-top: 1em;
           margin-bottom: 0.5em;
         }
-        
-        .bubble.assistant .markdown-content h1 {
-          font-size: 1.3em;
-          border-bottom: 1px solid var(--border);
-          padding-bottom: 0.3em;
-        }
-        
-        .bubble.assistant .markdown-content h2 {
-          font-size: 1.15em;
-          border-bottom: 1px solid var(--border);
-          padding-bottom: 0.25em;
-        }
-        
-        .bubble.assistant .markdown-content h3 {
-          font-size: 1.05em;
-        }
-        
-        .bubble.assistant .markdown-content h4,
-        .bubble.assistant .markdown-content h5,
-        .bubble.assistant .markdown-content h6 {
-          font-size: 1em;
-        }
-        
-        .bubble.assistant .markdown-content h1:first-child,
-        .bubble.assistant .markdown-content h2:first-child,
-        .bubble.assistant .markdown-content h3:first-child,
-        .bubble.assistant .markdown-content h4:first-child {
+
+        .sc-bubble--assistant .markdown-content h1:first-child,
+        .sc-bubble--assistant .markdown-content h2:first-child,
+        .sc-bubble--assistant .markdown-content h3:first-child {
           margin-top: 0;
         }
-        
-        /* ─────────────────────────────────────────────────────────────────── */
-        /* Lists                                                               */
-        /* ─────────────────────────────────────────────────────────────────── */
-        .bubble.assistant .markdown-content ul,
-        .bubble.assistant .markdown-content ol {
+
+        .sc-bubble--assistant .markdown-content ul,
+        .sc-bubble--assistant .markdown-content ol {
           margin: 0.75em 0;
           padding-left: 1.5em;
           color: var(--text);
         }
-        
-        .bubble.assistant .markdown-content li {
+
+        .sc-bubble--assistant .markdown-content li {
           color: var(--text);
           margin: 0.35em 0;
-          line-height: 1.5;
         }
-        
-        .bubble.assistant .markdown-content li > p {
-          margin: 0.25em 0;
-        }
-        
-        /* Nested lists */
-        .bubble.assistant .markdown-content ul ul,
-        .bubble.assistant .markdown-content ul ol,
-        .bubble.assistant .markdown-content ol ul,
-        .bubble.assistant .markdown-content ol ol {
-          margin: 0.25em 0;
-        }
-        
-        /* Unordered list markers */
-        .bubble.assistant .markdown-content ul {
-          list-style-type: disc;
-        }
-        
-        .bubble.assistant .markdown-content ul ul {
-          list-style-type: circle;
-        }
-        
-        .bubble.assistant .markdown-content ul ul ul {
-          list-style-type: square;
-        }
-        
-        /* Ordered list markers */
-        .bubble.assistant .markdown-content ol {
-          list-style-type: decimal;
-        }
-        
-        /* ─────────────────────────────────────────────────────────────────── */
-        /* Inline text styles                                                  */
-        /* ─────────────────────────────────────────────────────────────────── */
-        .bubble.assistant .markdown-content strong {
+
+        .sc-bubble--assistant .markdown-content strong {
           color: var(--text);
           font-weight: 700;
         }
-        
-        .bubble.assistant .markdown-content em {
-          color: var(--text);
-          font-style: italic;
-        }
-        
-        .bubble.assistant .markdown-content a {
-          color: var(--link, var(--primary));
-          text-decoration: underline;
-        }
-        
-        .bubble.assistant .markdown-content a:hover {
-          opacity: 0.8;
-        }
-        
-        /* ─────────────────────────────────────────────────────────────────── */
-        /* Inline code                                                         */
-        /* ─────────────────────────────────────────────────────────────────── */
-        .bubble.assistant .markdown-content code {
-          background: var(--surface-2);
-          border: 1px solid var(--border);
+
+        .sc-bubble--assistant .markdown-content code {
+          background: var(--sc-surface-2, var(--surface-2, #f3f4f6));
+          border: 1px solid var(--sc-border, var(--border, #e5e7eb));
           padding: 0.15em 0.4em;
           border-radius: 4px;
           font-size: 0.85em;
-          font-family: 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace;
+          font-family: 'SF Mono', Consolas, monospace;
           color: var(--text);
-          white-space: nowrap;
         }
-        
-        /* ─────────────────────────────────────────────────────────────────── */
-        /* Code blocks (pre > code)                                            */
-        /* ─────────────────────────────────────────────────────────────────── */
-        .bubble.assistant .markdown-content pre {
-          background: var(--surface-2);
-          border: 1px solid var(--border);
-          border-radius: 6px;
-          padding: 0.75em 1em;
+
+        .sc-bubble--assistant .markdown-content pre {
+          background: var(--sc-surface-2, var(--surface-2, #f3f4f6));
+          border: 1px solid var(--sc-border, var(--border, #e5e7eb));
+          border-radius: 8px;
+          padding: 12px;
           margin: 0.75em 0;
           overflow-x: auto;
-          -webkit-overflow-scrolling: touch;
         }
-        
-        .bubble.assistant .markdown-content pre code {
+
+        .sc-bubble--assistant .markdown-content pre code {
           background: transparent;
           border: none;
           padding: 0;
           font-size: 0.85em;
-          white-space: pre;
-          word-break: normal;
-          overflow-wrap: normal;
         }
-        
-        /* ─────────────────────────────────────────────────────────────────── */
-        /* Blockquotes                                                         */
-        /* ─────────────────────────────────────────────────────────────────── */
-        .bubble.assistant .markdown-content blockquote {
+
+        .sc-bubble--assistant .markdown-content blockquote {
           margin: 0.75em 0;
           padding: 0.5em 0 0.5em 1em;
-          border-left: 4px solid var(--primary);
-          background: rgba(92, 184, 92, 0.08);
+          border-left: 3px solid var(--sc-primary, var(--primary, #5cb85c));
+          background: rgba(92, 184, 92, 0.06);
           border-radius: 0 6px 6px 0;
           color: var(--muted);
-          font-style: italic;
         }
-        
-        .bubble.assistant .markdown-content blockquote p {
-          margin: 0.25em 0;
-          color: inherit;
-        }
-        
-        .bubble.assistant .markdown-content blockquote p:first-child {
-          margin-top: 0;
-        }
-        
-        .bubble.assistant .markdown-content blockquote p:last-child {
-          margin-bottom: 0;
-        }
-        
-        /* ─────────────────────────────────────────────────────────────────── */
-        /* Tables                                                              */
-        /* ─────────────────────────────────────────────────────────────────── */
-        .bubble.assistant .markdown-content table {
+
+        .sc-bubble--assistant .markdown-content table {
           border-collapse: collapse;
           margin: 0.75em 0;
           font-size: 0.85em;
           width: 100%;
-          display: block;
-          overflow-x: auto;
-          -webkit-overflow-scrolling: touch;
         }
-        
-        .bubble.assistant .markdown-content thead {
-          background: var(--surface-2);
-        }
-        
-        .bubble.assistant .markdown-content th {
-          background: var(--surface-2);
-          border: 1px solid var(--border);
-          padding: 0.5em 0.75em;
+
+        .sc-bubble--assistant .markdown-content th {
+          background: var(--sc-surface-2, var(--surface-2, #f3f4f6));
+          border: 1px solid var(--sc-border, var(--border, #e5e7eb));
+          padding: 8px 12px;
           color: var(--text);
           font-weight: 600;
           text-align: left;
-          white-space: nowrap;
         }
-        
-        .bubble.assistant .markdown-content td {
-          border: 1px solid var(--border);
-          padding: 0.5em 0.75em;
+
+        .sc-bubble--assistant .markdown-content td {
+          border: 1px solid var(--sc-border, var(--border, #e5e7eb));
+          padding: 8px 12px;
           color: var(--text);
-          vertical-align: top;
         }
-        
-        /* Alternating row colors */
-        .bubble.assistant .markdown-content tbody tr:nth-child(even) {
-          background: rgba(128, 128, 128, 0.05);
-        }
-        
-        .bubble.assistant .markdown-content tbody tr:hover {
-          background: rgba(92, 184, 92, 0.08);
-        }
-        
-        /* ─────────────────────────────────────────────────────────────────── */
-        /* Horizontal rules                                                    */
-        /* ─────────────────────────────────────────────────────────────────── */
-        .bubble.assistant .markdown-content hr {
-          border: none;
-          border-top: 1px solid var(--border);
-          margin: 1.25em 0;
-        }
-        
-        /* ─────────────────────────────────────────────────────────────────── */
-        /* Images                                                              */
-        /* ─────────────────────────────────────────────────────────────────── */
-        .bubble.assistant .markdown-content img {
-          max-width: 100%;
-          height: auto;
-          border-radius: 6px;
-          margin: 0.5em 0;
-        }
-        
-        /* ─────────────────────────────────────────────────────────────────── */
-        /* Task lists (GFM)                                                    */
-        /* ─────────────────────────────────────────────────────────────────── */
-        .bubble.assistant .markdown-content input[type="checkbox"] {
-          margin-right: 0.5em;
-          vertical-align: middle;
-        }
-        
-        /* ─────────────────────────────────────────────────────────────────── */
-        /* Definition lists (if supported)                                     */
-        /* ─────────────────────────────────────────────────────────────────── */
-        .bubble.assistant .markdown-content dl {
-          margin: 0.75em 0;
-        }
-        
-        .bubble.assistant .markdown-content dt {
-          font-weight: 600;
-          color: var(--text);
-          margin-top: 0.5em;
-        }
-        
-        .bubble.assistant .markdown-content dd {
-          margin-left: 1.5em;
-          color: var(--muted);
-        }
-        
-        /* ─────────────────────────────────────────────────────────────────── */
-        /* Spacing between block elements                                      */
-        /* ─────────────────────────────────────────────────────────────────── */
-        .bubble.assistant .markdown-content > *:first-child {
+
+        .sc-bubble--assistant .markdown-content > *:first-child {
           margin-top: 0 !important;
         }
-        
-        .bubble.assistant .markdown-content > *:last-child {
+
+        .sc-bubble--assistant .markdown-content > *:last-child {
           margin-bottom: 0 !important;
-        }
-        
-        /* Tools Row */
-        .tools-row {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 0.5rem;
-          padding: 0.5rem 0;
-        }
-        
-        .tool-chip {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.375rem;
-          padding: 0.25rem 0.75rem;
-          background: var(--surface);
-          border: 1px solid var(--border);
-          border-radius: 16px;
-          font-size: 0.8rem;
-          color: var(--text);
-        }
-        
-        .tool-chip .dot {
-          width: 6px;
-          height: 6px;
-          border-radius: 50%;
-          background: var(--primary);
-        }
-        
-        .tool-chip.running .dot {
-          animation: pulse 1s infinite;
-        }
-        
-        .tool-chip.done .dot {
-          background: #10b981;
-        }
-        
-        @keyframes pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.3; }
-        }
-        
-        /* Typing Indicator */
-        .typing-indicator {
-          display: flex;
-          gap: 4px;
-          padding: 0.75rem 1rem;
-          background: var(--surface);
-          border-radius: 12px;
-          width: fit-content;
-        }
-        
-        .typing-indicator .dot {
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-          background: var(--muted);
-          animation: bounce 1.4s infinite;
-        }
-        
-        .typing-indicator .dot:nth-child(2) {
-          animation-delay: 0.2s;
-        }
-        
-        .typing-indicator .dot:nth-child(3) {
-          animation-delay: 0.4s;
-        }
-        
-        @keyframes bounce {
-          0%, 60%, 100% { transform: translateY(0); }
-          30% { transform: translateY(-4px); }
-        }
-        
-        /* Error */
-        .error-message {
-          padding: 0.75rem 1rem;
-          background: rgba(220, 38, 38, 0.15);
-          color: #ef4444;
-          border-radius: 8px;
-          font-size: 0.875rem;
-        }
-        
-        /* Composer */
-        .composer {
-          display: flex;
-          gap: 0.75rem;
-          padding: 1rem;
-          background: var(--surface);
-          border-top: 1px solid var(--border);
-        }
-        
-        .composer-input {
-          flex: 1;
-          padding: 0.75rem 1rem;
-          border: 1px solid var(--border);
-          border-radius: 8px;
-          resize: none;
-          font-family: inherit;
-          font-size: 0.9rem;
-          background: var(--surface, #fff);
-          color: var(--text);
-        }
-        
-        .composer-input::placeholder {
-          color: var(--muted);
-        }
-        
-        .composer-input:focus {
-          outline: none;
-          border-color: var(--primary);
-        }
-        
-        .composer-input:disabled {
-          background: var(--surface-2);
-          color: var(--muted);
-        }
-        
-        .spinner {
-          display: inline-block;
-          width: 18px;
-          height: 18px;
-          border: 2px solid var(--border);
-          border-top-color: var(--primary);
-          border-radius: 50%;
-          animation: spin 0.8s linear infinite;
-          margin-right: 0.5rem;
-        }
-        
-        @keyframes spin {
-          to { transform: rotate(360deg); }
         }
       `}</style>
     </div>
@@ -1184,21 +984,20 @@ export default function SousChefChat({
 
 /**
  * Message bubble component with structured content rendering.
- * Uses StructuredContent for assistant messages to render JSON blocks.
  */
 function MessageBubble({ role, content, finalized, isThinking, onAction }) {
-  const isChef = role === 'chef'
-  
+  const isUser = role === 'chef'
+
   return (
-    <div className={`msg-row ${isChef ? 'chef' : 'assistant'}`}>
-      <div className={`bubble ${isChef ? 'chef' : 'assistant'} ${!finalized ? 'streaming' : ''}`}>
-        {isChef ? (
+    <div className={`sc-msg ${isUser ? 'sc-msg--user' : 'sc-msg--assistant'}`}>
+      <div className={`sc-bubble ${isUser ? 'sc-bubble--user' : 'sc-bubble--assistant'} ${!finalized ? 'streaming' : ''}`}>
+        {isUser ? (
           <div>{content}</div>
         ) : isThinking ? (
-          <div className="thinking-indicator">
-            <span className="thinking-dot"></span>
-            <span className="thinking-dot"></span>
-            <span className="thinking-dot"></span>
+          <div className="sc-thinking">
+            <span className="sc-thinking-dot"></span>
+            <span className="sc-thinking-dot"></span>
+            <span className="sc-thinking-dot"></span>
           </div>
         ) : (
           <StructuredContent content={content} onAction={onAction} />

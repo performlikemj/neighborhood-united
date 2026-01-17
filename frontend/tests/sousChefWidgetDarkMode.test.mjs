@@ -16,28 +16,28 @@ function getBlock(source, pattern) {
   return match ? match[0] : ''
 }
 
-test('SousChef panel seeds themed card variables for dark mode', () => {
+test('SousChef panel uses themed surface for dark mode', () => {
   const src = load(widgetPath)
-  const block = getBlock(src, /\.sous-chef-panel\s*\{[^}]+\}/)
-  assert.ok(block, 'Expected .sous-chef-panel styles.')
-  assert.match(block, /--bg-card:\s*var\(--surface/, 'Panel should expose --bg-card tied to themed surface.')
-  assert.match(block, /--border-color:\s*var\(--border/, 'Panel should expose --border-color from theme tokens.')
+  const block = getBlock(src, /\.sc-panel\s*\{[^}]+\}/)
+  assert.ok(block, 'Expected .sc-panel styles.')
+  assert.match(block, /background:\s*var\(--sc-surface,\s*var\(--surface/, 'Panel should use themed surface with fallback.')
+  assert.match(block, /border:\s*1px solid var\(--sc-border,\s*var\(--border/, 'Panel should use themed border.')
 })
 
 test('Family selector trigger and dropdown use themed surfaces', () => {
   const src = load(selectorPath)
   const trigger = getBlock(src, /\.family-selector-trigger\s*\{[^}]+\}/)
   assert.ok(trigger, 'Expected trigger styles.')
-  assert.match(trigger, /background:\s*var\(--bg-card/, 'Trigger background should use themed card surface.')
+  assert.match(trigger, /background:\s*var\(--surface/, 'Trigger background should use themed surface.')
 
   const dropdown = getBlock(src, /\.family-selector-dropdown\s*\{[^}]+\}/)
   assert.ok(dropdown, 'Expected dropdown styles.')
-  assert.match(dropdown, /background:\s*var\(--bg-card/, 'Dropdown background should use themed card surface.')
+  assert.match(dropdown, /background:\s*var\(--surface/, 'Dropdown background should use themed surface.')
 })
 
-test('SousChef composer input uses themed surface background', () => {
+test('SousChef composer input wrapper uses themed surface background', () => {
   const src = load(chatPath)
-  const block = getBlock(src, /\.composer-input\s*\{[^}]+\}/)
-  assert.ok(block, 'Expected composer input styles.')
-  assert.match(block, /background:\s*var\(--surface/, 'Composer input should sit on themed surface for dark mode readability.')
+  const block = getBlock(src, /\.sc-composer-input-wrap\s*\{[^}]+\}/)
+  assert.ok(block, 'Expected .sc-composer-input-wrap styles.')
+  assert.match(block, /background:\s*var\(--sc-surface-2,\s*var\(--surface-2/, 'Composer input wrapper should use themed surface for dark mode readability.')
 })

@@ -63,6 +63,14 @@ export default function MealPlanSlideout({
     notes: ''
   })
 
+  // Edit dates state (for draft plans)
+  const [showEditDates, setShowEditDates] = useState(false)
+  const [editDatesForm, setEditDatesForm] = useState({ start_date: '', end_date: '' })
+  const [editDatesError, setEditDatesError] = useState(null)
+
+  // Week navigation state (lifted from MealPlanWeekView for generation context)
+  const [currentWeekIndex, setCurrentWeekIndex] = useState(0)
+
   // Watch for active jobs completing (in case they started before modal opened)
   useEffect(() => {
     if (notifications?.activeJobs && selectedPlan) {
@@ -151,14 +159,17 @@ export default function MealPlanSlideout({
   
   const handleGenerateMeals = async (mode = 'full_week') => {
     if (!selectedPlan) return
-    
+
     setGenerating(true)
     setError(null)
     setGenerationStatus('Starting AI generation...')
-    
+
     try {
-      // Start the async generation job
-      const startData = await startMealGeneration(selectedPlan.id, { mode })
+      // Start the async generation job with current week context
+      const startData = await startMealGeneration(selectedPlan.id, {
+        mode,
+        week_offset: currentWeekIndex
+      })
       
       if (!startData?.job_id) {
         throw new Error('Failed to start generation job')
@@ -210,18 +221,22 @@ export default function MealPlanSlideout({
 
   const handleAcceptSuggestion = async (suggestion) => {
     if (!selectedPlan || !planDetail) return
-    
+
     try {
-      // Find or create the day
-      const dayName = suggestion.day
-      const dates = getDatesInRange(planDetail.start_date, planDetail.end_date)
-      const targetDate = dates.find(d => new Date(d).toLocaleDateString('en-US', { weekday: 'long' }) === dayName)
-      
+      // Use actual date if available (new format), fallback to day name matching (legacy)
+      let targetDate = suggestion.date
       if (!targetDate) {
-        setError(`Could not find ${dayName} in plan date range`)
+        // Fallback: find first matching day name in plan range
+        const dayName = suggestion.day
+        const dates = getDatesInRange(planDetail.start_date, planDetail.end_date)
+        targetDate = dates.find(d => new Date(d).toLocaleDateString('en-US', { weekday: 'long' }) === dayName)
+      }
+
+      if (!targetDate) {
+        setError(`Could not find ${suggestion.day} in plan date range`)
         return
       }
-      
+
       // Check if day exists
       let day = planDetail.days?.find(d => d.date === targetDate)
       
@@ -306,6 +321,59 @@ export default function MealPlanSlideout({
     }
   }
 
+  // Open edit dates form with current values
+  const handleOpenEditDates = () => {
+    if (planDetail) {
+      setEditDatesForm({
+        start_date: planDetail.start_date,
+        end_date: planDetail.end_date
+      })
+      setEditDatesError(null)
+      setShowEditDates(true)
+    }
+  }
+
+  // Save date changes
+  const handleSaveDates = async (e) => {
+    e.preventDefault()
+    if (!selectedPlan) return
+
+    setLoading(true)
+    setEditDatesError(null)
+    try {
+      await updatePlan(selectedPlan.id, {
+        start_date: editDatesForm.start_date,
+        end_date: editDatesForm.end_date
+      })
+      await loadPlanDetail(selectedPlan.id)
+      await loadPlans()
+      setShowEditDates(false)
+      if (onPlanUpdate) onPlanUpdate()
+    } catch (err) {
+      setEditDatesError(err.response?.data?.error || err.message || 'Failed to update dates')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Helper to format date range: "Jan 15 - 21, 2025" or "Jan 30 - Feb 5, 2025"
+  const formatDateRange = (startDate, endDate) => {
+    if (!startDate || !endDate) return ''
+    const start = new Date(startDate)
+    const end = new Date(endDate)
+    const startMonth = start.toLocaleDateString('en-US', { month: 'short' })
+    const endMonth = end.toLocaleDateString('en-US', { month: 'short' })
+    const startDay = start.getDate()
+    const endDay = end.getDate()
+    const year = end.getFullYear()
+
+    if (startMonth === endMonth) {
+      return `${startMonth} ${startDay} - ${endDay}, ${year}`
+    } else {
+      return `${startMonth} ${startDay} - ${endMonth} ${endDay}, ${year}`
+    }
+  }
+
   if (!isOpen) return null
 
   const isDraft = selectedPlan?.status === 'draft'
@@ -326,6 +394,23 @@ export default function MealPlanSlideout({
             <div className="mps-header-text">
               <h2>Meal Plans</h2>
               <span className="mps-client-name">{client?.name}</span>
+              {selectedPlan && planDetail && (
+                <div className="mps-date-range-row">
+                  <span className="mps-date-range">
+                    {formatDateRange(planDetail.start_date, planDetail.end_date)}
+                  </span>
+                  {isDraft && (
+                    <button
+                      className="mps-btn-icon"
+                      onClick={handleOpenEditDates}
+                      title="Edit dates"
+                      aria-label="Edit dates"
+                    >
+                      ✏️
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
           <div className="mps-header-actions">
@@ -366,6 +451,55 @@ export default function MealPlanSlideout({
             + New Plan
           </button>
         </div>
+
+        {/* Edit Dates Form (Draft Plans Only) */}
+        {showEditDates && (
+          <div className="mps-edit-dates-form">
+            <form onSubmit={handleSaveDates}>
+              <div className="mps-edit-dates-header">
+                <h3>Edit Plan Dates</h3>
+                <span className="mps-edit-dates-warning">
+                  Changing dates may affect meals outside the new range
+                </span>
+              </div>
+              <div className="mps-form-row mps-form-row-2col">
+                <div>
+                  <label>Start Date</label>
+                  <input
+                    type="date"
+                    required
+                    value={editDatesForm.start_date}
+                    onChange={e => setEditDatesForm(f => ({ ...f, start_date: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label>End Date</label>
+                  <input
+                    type="date"
+                    required
+                    value={editDatesForm.end_date}
+                    onChange={e => setEditDatesForm(f => ({ ...f, end_date: e.target.value }))}
+                  />
+                </div>
+              </div>
+              {editDatesError && (
+                <div className="mps-edit-dates-error">{editDatesError}</div>
+              )}
+              <div className="mps-form-actions">
+                <button
+                  type="button"
+                  className="mps-btn mps-btn-outline"
+                  onClick={() => setShowEditDates(false)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="mps-btn mps-btn-primary" disabled={loading}>
+                  {loading ? 'Saving...' : 'Save Dates'}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
 
         {/* New Plan Form */}
         {showNewPlanForm && (
@@ -479,10 +613,12 @@ export default function MealPlanSlideout({
                 </div>
               )}
               
-              <MealPlanWeekView 
+              <MealPlanWeekView
                 planDetail={planDetail}
                 onSlotClick={isDraft ? handleSlotClick : null}
                 readOnly={!isDraft}
+                currentWeekIndex={currentWeekIndex}
+                onWeekChange={setCurrentWeekIndex}
               />
             </>
           ) : (
@@ -505,7 +641,9 @@ export default function MealPlanSlideout({
                   {suggestions.map((s, idx) => (
                     <div key={idx} className="mps-suggestion-card">
                       <div className="mps-suggestion-header">
-                        <span className="mps-suggestion-slot">{s.day} • {s.meal_type}</span>
+                        <span className="mps-suggestion-slot">
+                          {s.date ? `${new Date(s.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} (${s.day})` : s.day} • {s.meal_type}
+                        </span>
                         <div className="mps-suggestion-actions">
                           <button 
                             className="mps-btn mps-btn-sm mps-btn-primary"
@@ -647,6 +785,63 @@ export default function MealPlanSlideout({
           color: var(--muted, #666);
         }
 
+        /* Date Range Row */
+        .mps-date-range-row {
+          display: flex;
+          align-items: center;
+          gap: 0.35rem;
+          margin-top: 0.15rem;
+        }
+
+        .mps-date-range {
+          font-size: 0.8rem;
+          color: var(--muted, #666);
+        }
+
+        .mps-btn-icon {
+          background: none;
+          border: none;
+          padding: 0.15rem 0.25rem;
+          cursor: pointer;
+          font-size: 0.8rem;
+          opacity: 0.6;
+          transition: opacity 0.15s;
+        }
+
+        .mps-btn-icon:hover {
+          opacity: 1;
+        }
+
+        /* Edit Dates Form */
+        .mps-edit-dates-form {
+          padding: 1rem;
+          background: var(--surface-2, #f9fafb);
+          border-bottom: 1px solid var(--border, #e5e7eb);
+        }
+
+        .mps-edit-dates-header {
+          margin-bottom: 0.75rem;
+        }
+
+        .mps-edit-dates-header h3 {
+          margin: 0 0 0.25rem 0;
+          font-size: 1rem;
+        }
+
+        .mps-edit-dates-warning {
+          font-size: 0.8rem;
+          color: var(--warning, #f0ad4e);
+        }
+
+        .mps-edit-dates-error {
+          padding: 0.5rem 0.75rem;
+          background: var(--danger-bg, #fef2f2);
+          color: var(--danger, #dc2626);
+          font-size: 0.85rem;
+          border-radius: 6px;
+          margin-top: 0.5rem;
+        }
+
         /* Plan Selector */
         .mps-plan-selector {
           display: flex;
@@ -772,8 +967,8 @@ export default function MealPlanSlideout({
           align-items: center;
           justify-content: space-between;
           padding: 0.75rem 1rem;
-          background: #fee2e2;
-          color: #dc2626;
+          background: var(--danger-bg);
+          color: var(--danger);
           font-size: 0.9rem;
         }
 

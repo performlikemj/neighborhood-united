@@ -13,29 +13,39 @@ const MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack']
 const MEAL_TYPE_LABELS = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner', snack: 'Snack' }
 const MEAL_ICONS = { breakfast: '🌅', lunch: '☀️', dinner: '🌙', snack: '🍎' }
 
-export default function MealPlanWeekView({ 
-  planDetail, 
-  onSlotClick, 
-  readOnly = false 
+export default function MealPlanWeekView({
+  planDetail,
+  onSlotClick,
+  readOnly = false,
+  currentWeekIndex: controlledWeekIndex,
+  onWeekChange
 }) {
   const [expandedDay, setExpandedDay] = useState(null)
+  // Support both controlled (via props) and uncontrolled (internal) week state
+  const [internalWeekIndex, setInternalWeekIndex] = useState(0)
+  const currentWeekIndex = controlledWeekIndex ?? internalWeekIndex
+  const setCurrentWeekIndex = onWeekChange ?? setInternalWeekIndex
 
   // Build days with their items
   const daysData = useMemo(() => {
     if (!planDetail) return []
-    
+
     const { start_date, end_date, days = [] } = planDetail
     const result = []
-    
+
     const start = new Date(start_date)
     const end = new Date(end_date)
-    
+
+    // Today's date at midnight for comparison
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+
     // Build a map of existing days by date
     const daysMap = {}
     for (const day of days) {
       daysMap[day.date] = day
     }
-    
+
     // Iterate through date range
     const current = new Date(start)
     while (current <= end) {
@@ -44,40 +54,87 @@ export default function MealPlanWeekView({
       const dayShort = current.toLocaleDateString('en-US', { weekday: 'short' })
       const dayNum = current.getDate()
       const month = current.toLocaleDateString('en-US', { month: 'short' })
-      
+
+      // Today/past comparison
+      const currentMidnight = new Date(current)
+      currentMidnight.setHours(0, 0, 0, 0)
+      const isToday = currentMidnight.getTime() === today.getTime()
+      const isPast = currentMidnight < today
+
       const existingDay = daysMap[dateStr]
       const items = existingDay?.items || []
-      
+
       // Map items by meal type
       const itemsByType = {}
       for (const item of items) {
         itemsByType[item.meal_type] = item
       }
-      
+
       result.push({
         date: dateStr,
         dayName,
         dayShort,
         dayNum,
         month,
+        isToday,
+        isPast,
         isSkipped: existingDay?.is_skipped || false,
         skipReason: existingDay?.skip_reason || '',
         items: itemsByType,
         dayId: existingDay?.id
       })
-      
+
       current.setDate(current.getDate() + 1)
     }
-    
+
     return result
   }, [planDetail])
 
+  // Split days into weeks (7 days each)
+  const weeks = useMemo(() => {
+    const result = []
+    for (let i = 0; i < daysData.length; i += 7) {
+      result.push(daysData.slice(i, i + 7))
+    }
+    return result
+  }, [daysData])
+
+  // Current week's days
+  const currentWeekDays = weeks[currentWeekIndex] || []
+  const totalWeeks = weeks.length
+  const hasMultipleWeeks = totalWeeks > 1
+
+  // Find which week contains today and auto-navigate there on load
+  React.useEffect(() => {
+    if (weeks.length > 0) {
+      const todayWeekIndex = weeks.findIndex(week => week.some(day => day.isToday))
+      if (todayWeekIndex >= 0) {
+        setCurrentWeekIndex(todayWeekIndex)
+      }
+    }
+  }, [weeks.length])
+
   // Auto-expand first day on mobile
   React.useEffect(() => {
-    if (daysData.length > 0 && expandedDay === null) {
-      setExpandedDay(daysData[0].date)
+    if (currentWeekDays.length > 0 && expandedDay === null) {
+      setExpandedDay(currentWeekDays[0].date)
     }
-  }, [daysData])
+  }, [currentWeekDays])
+
+  // Week navigation
+  const goToPrevWeek = () => setCurrentWeekIndex(i => Math.max(0, i - 1))
+  const goToNextWeek = () => setCurrentWeekIndex(i => Math.min(totalWeeks - 1, i + 1))
+
+  // Format week range for display
+  const weekRangeLabel = useMemo(() => {
+    if (currentWeekDays.length === 0) return ''
+    const first = currentWeekDays[0]
+    const last = currentWeekDays[currentWeekDays.length - 1]
+    if (first.month === last.month) {
+      return `${first.month} ${first.dayNum} - ${last.dayNum}`
+    }
+    return `${first.month} ${first.dayNum} - ${last.month} ${last.dayNum}`
+  }, [currentWeekDays])
 
   const handleSlotClick = (date, mealType, item) => {
     if (readOnly || !onSlotClick) return
@@ -88,21 +145,57 @@ export default function MealPlanWeekView({
     return <div className="mpw-empty">No plan data</div>
   }
 
+  // Number of days in current week for dynamic grid
+  const numDays = currentWeekDays.length
+
   return (
     <div className="mpw-container">
+      {/* Week Navigation */}
+      {hasMultipleWeeks && (
+        <div className="mpw-week-nav">
+          <button
+            className="mpw-week-nav-btn"
+            onClick={goToPrevWeek}
+            disabled={currentWeekIndex === 0}
+            aria-label="Previous week"
+          >
+            ← Prev
+          </button>
+          <div className="mpw-week-nav-info">
+            <span className="mpw-week-label">{weekRangeLabel}</span>
+            <span className="mpw-week-indicator">
+              Week {currentWeekIndex + 1} of {totalWeeks}
+              {currentWeekDays.length < 7 && ` (${currentWeekDays.length} days)`}
+            </span>
+          </div>
+          <button
+            className="mpw-week-nav-btn"
+            onClick={goToNextWeek}
+            disabled={currentWeekIndex === totalWeeks - 1}
+            aria-label="Next week"
+          >
+            Next →
+          </button>
+        </div>
+      )}
+
       {/* Desktop Grid View */}
-      <div className="mpw-grid-desktop">
+      <div className="mpw-grid-desktop" style={{ '--num-days': numDays }}>
         {/* Header Row */}
         <div className="mpw-grid-header">
           <div className="mpw-grid-corner"></div>
-          {daysData.map(day => (
-            <div key={day.date} className={`mpw-grid-day-header ${day.isSkipped ? 'skipped' : ''}`}>
+          {currentWeekDays.map(day => (
+            <div
+              key={day.date}
+              className={`mpw-grid-day-header ${day.isSkipped ? 'skipped' : ''} ${day.isToday ? 'is-today' : ''} ${day.isPast ? 'is-past' : ''}`}
+            >
               <span className="mpw-day-short">{day.dayShort}</span>
               <span className="mpw-day-num">{day.dayNum}</span>
+              <span className="mpw-day-month">{day.month}</span>
             </div>
           ))}
         </div>
-        
+
         {/* Meal Type Rows */}
         {MEAL_TYPES.map(mealType => (
           <div key={mealType} className="mpw-grid-row">
@@ -110,12 +203,12 @@ export default function MealPlanWeekView({
               <span className="mpw-type-icon">{MEAL_ICONS[mealType]}</span>
               <span className="mpw-type-name">{MEAL_TYPE_LABELS[mealType]}</span>
             </div>
-            {daysData.map(day => {
+            {currentWeekDays.map(day => {
               const item = day.items[mealType]
               return (
-                <div 
+                <div
                   key={`${day.date}-${mealType}`}
-                  className={`mpw-grid-cell ${item ? 'has-meal' : 'empty'} ${day.isSkipped ? 'skipped' : ''} ${readOnly ? 'readonly' : ''}`}
+                  className={`mpw-grid-cell ${item ? 'has-meal' : 'empty'} ${day.isSkipped ? 'skipped' : ''} ${readOnly ? 'readonly' : ''} ${day.isToday ? 'is-today' : ''} ${day.isPast ? 'is-past' : ''}`}
                   onClick={() => !day.isSkipped && handleSlotClick(day.date, mealType, item)}
                 >
                   {day.isSkipped ? (
@@ -139,9 +232,12 @@ export default function MealPlanWeekView({
 
       {/* Mobile Accordion View */}
       <div className="mpw-accordion-mobile">
-        {daysData.map(day => (
-          <div key={day.date} className={`mpw-accordion-day ${day.isSkipped ? 'skipped' : ''}`}>
-            <button 
+        {currentWeekDays.map(day => (
+          <div
+            key={day.date}
+            className={`mpw-accordion-day ${day.isSkipped ? 'skipped' : ''} ${day.isToday ? 'is-today' : ''} ${day.isPast ? 'is-past' : ''}`}
+          >
+            <button
               className={`mpw-accordion-header ${expandedDay === day.date ? 'expanded' : ''}`}
               onClick={() => setExpandedDay(expandedDay === day.date ? null : day.date)}
             >
@@ -219,6 +315,59 @@ export default function MealPlanWeekView({
         }
 
         /* ========================================
+           Week Navigation
+           ======================================== */
+        .mpw-week-nav {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 0.75rem 0;
+          margin-bottom: 0.75rem;
+          border-bottom: 1px solid var(--border, #e5e7eb);
+        }
+
+        .mpw-week-nav-btn {
+          padding: 0.5rem 1rem;
+          background: var(--surface-2, #f3f4f6);
+          border: 1px solid var(--border, #e5e7eb);
+          border-radius: 8px;
+          font-size: 0.85rem;
+          font-weight: 500;
+          cursor: pointer;
+          color: var(--text, #333);
+          transition: all 0.15s;
+        }
+
+        .mpw-week-nav-btn:hover:not(:disabled) {
+          background: var(--surface, #fff);
+          border-color: var(--primary, #5cb85c);
+          color: var(--primary, #5cb85c);
+        }
+
+        .mpw-week-nav-btn:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+
+        .mpw-week-nav-info {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 0.15rem;
+        }
+
+        .mpw-week-label {
+          font-size: 1rem;
+          font-weight: 600;
+          color: var(--text, #333);
+        }
+
+        .mpw-week-indicator {
+          font-size: 0.75rem;
+          color: var(--muted, #666);
+        }
+
+        /* ========================================
            Desktop Grid View
            ======================================== */
         .mpw-grid-desktop {
@@ -240,7 +389,7 @@ export default function MealPlanWeekView({
 
         .mpw-grid-header {
           display: grid;
-          grid-template-columns: 80px repeat(7, 1fr);
+          grid-template-columns: 90px repeat(var(--num-days, 7), 1fr);
           background: var(--surface-2, #f9fafb);
           border-bottom: 1px solid var(--border, #e5e7eb);
         }
@@ -254,9 +403,10 @@ export default function MealPlanWeekView({
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          padding: 0.5rem;
+          padding: 0.75rem 0.5rem;
           text-align: center;
           border-left: 1px solid var(--border, #e5e7eb);
+          min-width: 0;
         }
 
         .mpw-grid-day-header.skipped {
@@ -276,9 +426,32 @@ export default function MealPlanWeekView({
           color: var(--text, #333);
         }
 
+        .mpw-day-month {
+          font-size: 0.65rem;
+          color: var(--muted, #999);
+          text-transform: uppercase;
+          letter-spacing: 0.03em;
+        }
+
+        /* Today highlight - desktop header */
+        .mpw-grid-day-header.is-today {
+          background: rgba(92, 184, 92, 0.08);
+          border-bottom: 2px solid var(--primary, #5cb85c);
+        }
+
+        .mpw-grid-day-header.is-today .mpw-day-num {
+          color: var(--primary, #5cb85c);
+          font-weight: 800;
+        }
+
+        /* Past days dimmed - desktop header */
+        .mpw-grid-day-header.is-past:not(.is-today) {
+          opacity: 0.65;
+        }
+
         .mpw-grid-row {
           display: grid;
-          grid-template-columns: 80px repeat(7, 1fr);
+          grid-template-columns: 90px repeat(var(--num-days, 7), 1fr);
           border-bottom: 1px solid var(--border, #e5e7eb);
         }
 
@@ -308,8 +481,8 @@ export default function MealPlanWeekView({
         }
 
         .mpw-grid-cell {
-          min-height: 70px;
-          padding: 0.35rem;
+          min-height: 80px;
+          padding: 0.5rem;
           border-left: 1px solid var(--border, #e5e7eb);
           display: flex;
           align-items: center;
@@ -337,6 +510,16 @@ export default function MealPlanWeekView({
           cursor: default;
         }
 
+        /* Today highlight - grid cells */
+        .mpw-grid-cell.is-today {
+          background: rgba(92, 184, 92, 0.04);
+        }
+
+        /* Past days dimmed - grid cells */
+        .mpw-grid-cell.is-past:not(.has-meal) {
+          opacity: 0.7;
+        }
+
         .mpw-skipped-label {
           font-size: 0.7rem;
           color: var(--muted, #999);
@@ -344,11 +527,16 @@ export default function MealPlanWeekView({
 
         .mpw-meal-card {
           width: 100%;
-          padding: 0.35rem 0.5rem;
+          padding: 0.5rem 0.5rem;
           background: var(--primary, #5cb85c);
           color: white;
           border-radius: 6px;
           text-align: center;
+          min-height: 44px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
         }
 
         .mpw-meal-card.composed {
@@ -357,12 +545,14 @@ export default function MealPlanWeekView({
         }
 
         .mpw-meal-name {
-          font-size: 0.75rem;
+          font-size: 0.8rem;
           font-weight: 500;
+          line-height: 1.2;
           display: -webkit-box;
           -webkit-line-clamp: 2;
           -webkit-box-orient: vertical;
           overflow: hidden;
+          word-break: break-word;
         }
 
         .mpw-dish-count {
@@ -404,6 +594,20 @@ export default function MealPlanWeekView({
 
         .mpw-accordion-day.skipped {
           opacity: 0.6;
+        }
+
+        /* Today highlight - mobile accordion */
+        .mpw-accordion-day.is-today {
+          border-left: 3px solid var(--primary, #5cb85c);
+        }
+
+        .mpw-accordion-day.is-today .mpw-accordion-day-name {
+          color: var(--primary, #5cb85c);
+        }
+
+        /* Past days dimmed - mobile accordion */
+        .mpw-accordion-day.is-past:not(.is-today) {
+          opacity: 0.7;
         }
 
         .mpw-accordion-header {
@@ -547,6 +751,20 @@ export default function MealPlanWeekView({
           font-size: 0.85rem;
           color: var(--muted, #999);
           font-style: italic;
+        }
+
+        /* Dark mode adjustments */
+        [data-theme="dark"] .mpw-grid-day-header.is-today {
+          background: rgba(92, 184, 92, 0.12);
+        }
+
+        [data-theme="dark"] .mpw-grid-cell.is-today {
+          background: rgba(92, 184, 92, 0.06);
+        }
+
+        [data-theme="dark"] .mpw-grid-day-header.is-past:not(.is-today),
+        [data-theme="dark"] .mpw-accordion-day.is-past:not(.is-today) {
+          opacity: 0.55;
         }
       `}</style>
     </div>

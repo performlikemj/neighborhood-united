@@ -1989,7 +1989,11 @@ class MealPlanGenerationJob(models.Model):
     target_day = models.CharField(max_length=20, blank=True)
     target_meal_type = models.CharField(max_length=20, blank=True)
     custom_prompt = models.TextField(blank=True)
-    
+    week_offset = models.PositiveIntegerField(
+        default=0,
+        help_text="0-indexed week number to generate for (0 = first week, 1 = second, etc.)"
+    )
+
     status = models.CharField(
         max_length=20,
         choices=STATUS_CHOICES,

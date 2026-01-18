@@ -1,4 +1,3 @@
-from celery import shared_task
 from django.utils import timezone
 from django.conf import settings
 from django.db.models import Q
@@ -11,7 +10,6 @@ from meals.email_service import send_system_update_email
 logger = logging.getLogger(__name__)
 
 
-@shared_task
 def send_chef_waitlist_notifications(chef_id: int, activation_epoch: int) -> None:
     """Notify subscribers that a chef is active again.
 
@@ -51,9 +49,9 @@ def send_chef_waitlist_notifications(chef_id: int, activation_epoch: int) -> Non
     if not user_ids:
         return
 
-    # Queue a single assistant-driven email job for all targets
+    # Send assistant-driven email to all targets
     try:
-        send_system_update_email.delay(
+        send_system_update_email(
             subject,
             message,
             user_ids=user_ids,
@@ -61,7 +59,7 @@ def send_chef_waitlist_notifications(chef_id: int, activation_epoch: int) -> Non
             template_context={'chef_username': chef_username, 'chef_profile_url': chef_profile_url},
         )
     except Exception:
-        # If queueing fails, do not update subscriptions, so a later retry can notify
+        # If sending fails, do not update subscriptions, so a later retry can notify
         return
 
     # Mark as notified for this epoch (after scheduling)
@@ -79,7 +77,6 @@ def send_chef_waitlist_notifications(chef_id: int, activation_epoch: int) -> Non
     return
 
 
-@shared_task
 def notify_waitlist_subscribers_for_chef(chef_id: int) -> None:
     """Simplified: notify all active subscribers that a chef now has open orderable events.
 
@@ -110,7 +107,7 @@ def notify_waitlist_subscribers_for_chef(chef_id: int) -> None:
     message = f"Chef {chef_username} just opened orders. View their profile: {chef_profile_url}"
 
     try:
-        send_system_update_email.delay(
+        send_system_update_email(
             subject,
             message,
             user_ids=user_ids,
@@ -118,7 +115,7 @@ def notify_waitlist_subscribers_for_chef(chef_id: int) -> None:
             template_context={'chef_username': chef_username, 'chef_profile_url': chef_profile_url},
         )
     except Exception:
-        # If queueing fails, do not change subscriptions; a later retry may succeed
+        # If sending fails, do not change subscriptions; a later retry may succeed
         return
 
     now = timezone.now()
@@ -132,7 +129,6 @@ def notify_waitlist_subscribers_for_chef(chef_id: int) -> None:
     return
 
 
-@shared_task
 def notify_area_waitlist_users(postal_code: str, country: str, chef_username: str) -> None:
     """Notify users on the area waitlist that a chef is now available in their area.
     
@@ -169,7 +165,7 @@ def notify_area_waitlist_users(postal_code: str, country: str, chef_username: st
     )
     
     try:
-        send_system_update_email.delay(
+        send_system_update_email(
             subject,
             message,
             user_ids=user_ids,
@@ -182,7 +178,7 @@ def notify_area_waitlist_users(postal_code: str, country: str, chef_username: st
             },
         )
     except Exception:
-        # If queueing fails, don't update waitlist - allow retry
+        # If sending fails, don't update waitlist - allow retry
         return
     
     now = timezone.now()
@@ -213,8 +209,7 @@ def _get_groq_client():
     return None
 
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=30)
-def generate_meal_plan_suggestions_async(self, job_id: int) -> None:
+def generate_meal_plan_suggestions_async(job_id: int) -> None:
     """Generate AI meal suggestions asynchronously using Groq.
     
     This task runs in the background so chefs don't have to wait.
@@ -289,34 +284,59 @@ def generate_meal_plan_suggestions_async(self, job_id: int) -> None:
         # Determine which slots need meals
         slots_to_fill = []
         meal_types = ['breakfast', 'lunch', 'dinner']
-        
-        # Build existing items map
+
+        # Build existing items map keyed by date string for precise matching
         existing_items = {}
         for day in plan.days.all():
-            day_name = day.date.strftime('%A')
+            date_str = day.date.isoformat()
             for item in day.items.all():
-                key = f"{day_name}_{item.meal_type}"
+                key = f"{date_str}_{item.meal_type}"
                 existing_items[key] = item
-        
+
         # Calculate date range
         num_days = (plan.end_date - plan.start_date).days + 1
-        
+
+        # Use week_offset to determine which 7-day chunk to generate for
+        week_offset = getattr(job, 'week_offset', 0) or 0
+        start_offset = week_offset * 7
+        end_offset = min(start_offset + 7, num_days)
+
         if job.mode == 'single_slot':
-            slots_to_fill.append({'day': job.target_day, 'meal_type': job.target_meal_type})
+            # For single slot, find the date from day name in the current week context
+            target_day_name = job.target_day
+            for i in range(start_offset, end_offset):
+                current_date = plan.start_date + timedelta(days=i)
+                if current_date.strftime('%A') == target_day_name:
+                    slots_to_fill.append({
+                        'date': current_date.isoformat(),
+                        'day': target_day_name,
+                        'meal_type': job.target_meal_type
+                    })
+                    break
         elif job.mode == 'fill_empty':
-            for i in range(min(num_days, 7)):
+            for i in range(start_offset, end_offset):
                 current_date = plan.start_date + timedelta(days=i)
+                date_str = current_date.isoformat()
                 day_name = current_date.strftime('%A')
                 for mt in meal_types:
-                    key = f"{day_name}_{mt}"
+                    key = f"{date_str}_{mt}"
                     if key not in existing_items:
-                        slots_to_fill.append({'day': day_name, 'meal_type': mt})
+                        slots_to_fill.append({
+                            'date': date_str,
+                            'day': day_name,
+                            'meal_type': mt
+                        })
         else:  # full_week
-            for i in range(min(num_days, 7)):
+            for i in range(start_offset, end_offset):
                 current_date = plan.start_date + timedelta(days=i)
+                date_str = current_date.isoformat()
                 day_name = current_date.strftime('%A')
                 for mt in meal_types:
-                    slots_to_fill.append({'day': day_name, 'meal_type': mt})
+                    slots_to_fill.append({
+                        'date': date_str,
+                        'day': day_name,
+                        'meal_type': mt
+                    })
         
         if not slots_to_fill:
             print(f"[CELERY TASK] No slots to fill, marking complete")
@@ -336,11 +356,19 @@ def generate_meal_plan_suggestions_async(self, job_id: int) -> None:
         print(f"[CELERY TASK] Groq client created successfully")
         
         groq_model = getattr(settings, 'GROQ_MODEL', 'llama-3.1-70b-versatile')
-        
-        slots_text = '\n'.join([f"- {s['day']} {s['meal_type']}" for s in slots_to_fill])
+
+        # Include dates in the slots text for context
+        slots_text = '\n'.join([f"- {s['date']} ({s['day']}) {s['meal_type']}" for s in slots_to_fill])
+
+        # Build a lookup map for matching AI response back to our slots
+        slot_lookup = {}
+        for s in slots_to_fill:
+            # Key by day_name + meal_type for matching AI response
+            key = f"{s['day'].lower()}_{s['meal_type'].lower()}"
+            slot_lookup[key] = s['date']
 
         system_prompt = f"""You are a professional chef assistant helping create personalized meal plans.
-        
+
 Family dietary context:
 {dietary_text}
 
@@ -359,6 +387,7 @@ Respond with a JSON object containing a "suggestions" array."""
 {slots_text}
 
 For each slot, provide:
+- date: the date in YYYY-MM-DD format (copy from the slot)
 - day: the day name
 - meal_type: must be lowercase - one of: breakfast, lunch, dinner, snack
 - name: a clear, appetizing meal name
@@ -391,14 +420,24 @@ Respond ONLY with a valid JSON object containing a "suggestions" array."""
         else:
             # Try common keys the AI might use
             suggestions = (
-                result_data.get('suggestions') or 
-                result_data.get('meals') or 
+                result_data.get('suggestions') or
+                result_data.get('meals') or
                 result_data.get('meal_suggestions') or
                 result_data.get('menu') or
                 []
             )
         print(f"[CELERY TASK] Result keys: {list(result_data.keys()) if isinstance(result_data, dict) else 'array'}")
-        
+
+        # Post-process: ensure each suggestion has a date
+        # If AI didn't include it, look it up from our slot_lookup map
+        for suggestion in suggestions:
+            if not suggestion.get('date'):
+                day_name = suggestion.get('day', '')
+                meal_type = suggestion.get('meal_type', '')
+                lookup_key = f"{day_name.lower()}_{meal_type.lower()}"
+                if lookup_key in slot_lookup:
+                    suggestion['date'] = slot_lookup[lookup_key]
+
         print(f"[CELERY TASK] Parsed {len(suggestions)} suggestions, marking complete")
         job.mark_completed(suggestions)
         print(f"[CELERY TASK] Job {job_id} marked complete")

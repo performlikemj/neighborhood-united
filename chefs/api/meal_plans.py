@@ -226,38 +226,89 @@ def plan_detail(request, plan_id):
         return Response(_serialize_plan_for_chef(plan, include_days=True))
     
     elif request.method == 'PUT':
+        from datetime import datetime
+
         title = request.data.get('title', plan.title)
         notes = request.data.get('notes', plan.notes)
-        
-        # Only allow date changes on drafts
-        if plan.status == ChefMealPlan.STATUS_DRAFT:
-            start_date = request.data.get('start_date')
-            end_date = request.data.get('end_date')
-            
-            if start_date:
-                from datetime import datetime
-                try:
-                    plan.start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
-                except ValueError:
+        start_date_str = request.data.get('start_date')
+        end_date_str = request.data.get('end_date')
+
+        # Check if date changes are being requested
+        date_change_requested = start_date_str or end_date_str
+
+        # Return explicit error for non-draft plans trying to change dates
+        if date_change_requested and plan.status != ChefMealPlan.STATUS_DRAFT:
+            return Response(
+                {'error': 'Dates can only be changed for draft plans.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Parse and validate dates if provided
+        new_start_date = plan.start_date
+        new_end_date = plan.end_date
+
+        if start_date_str:
+            try:
+                new_start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+            except ValueError:
+                return Response(
+                    {'error': 'Invalid start_date format. Use YYYY-MM-DD.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        if end_date_str:
+            try:
+                new_end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+            except ValueError:
+                return Response(
+                    {'error': 'Invalid end_date format. Use YYYY-MM-DD.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        # Validate date range
+        if new_start_date > new_end_date:
+            return Response(
+                {'error': 'Start date must be before or equal to end date.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # If dates are changing on a draft plan, perform additional checks
+        if date_change_requested and plan.status == ChefMealPlan.STATUS_DRAFT:
+            # Check for orphaned meals (days with items outside new date range)
+            orphaned_days = ChefMealPlanDay.objects.filter(plan=plan).exclude(
+                date__gte=new_start_date,
+                date__lte=new_end_date
+            )
+            orphaned_count = orphaned_days.count()
+
+            if orphaned_count > 0:
+                return Response(
+                    {'error': f'Cannot change dates: {orphaned_count} meal day(s) would be outside the new range. Delete or reschedule them first.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Check unique constraint (same chef, customer, start_date)
+            if start_date_str:
+                duplicate_plan = ChefMealPlan.objects.filter(
+                    chef=chef,
+                    customer=plan.customer,
+                    start_date=new_start_date
+                ).exclude(id=plan.id).exists()
+
+                if duplicate_plan:
                     return Response(
-                        {'error': 'Invalid start_date format.'},
+                        {'error': 'A plan for this client already starts on this date.'},
                         status=status.HTTP_400_BAD_REQUEST
                     )
-            
-            if end_date:
-                from datetime import datetime
-                try:
-                    plan.end_date = datetime.strptime(end_date, '%Y-%m-%d').date()
-                except ValueError:
-                    return Response(
-                        {'error': 'Invalid end_date format.'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-        
+
+            # Apply date changes
+            plan.start_date = new_start_date
+            plan.end_date = new_end_date
+
         plan.title = title
         plan.notes = notes
         plan.save()
-        
+
         return Response(_serialize_plan_for_chef(plan, include_days=True))
     
     elif request.method == 'DELETE':
@@ -673,8 +724,17 @@ def generate_meals_for_plan(request, plan_id):
     target_day = request.data.get('day', '')
     target_meal_type = request.data.get('meal_type', '')
     custom_prompt = request.data.get('prompt', '')
-    
-    logger.debug(f"Request params: mode={mode}, day={target_day}, meal_type={target_meal_type}")
+    week_offset = request.data.get('week_offset', 0)
+
+    # Validate week_offset is a non-negative integer
+    try:
+        week_offset = int(week_offset)
+        if week_offset < 0:
+            week_offset = 0
+    except (TypeError, ValueError):
+        week_offset = 0
+
+    logger.debug(f"Request params: mode={mode}, day={target_day}, meal_type={target_meal_type}, week_offset={week_offset}")
     
     if mode == 'single_slot':
         if not target_day or not target_meal_type:
@@ -706,15 +766,16 @@ def generate_meals_for_plan(request, plan_id):
         mode=mode,
         target_day=target_day,
         target_meal_type=target_meal_type,
-        custom_prompt=custom_prompt
+        custom_prompt=custom_prompt,
+        week_offset=week_offset
     )
     logger.debug(f"Job created: {job.id}")
     
     # Queue the async task
-    logger.debug(f"Queuing task for job {job.id}...")
+    logger.debug(f"Running task for job {job.id}...")
     try:
-        task_result = generate_meal_plan_suggestions_async.delay(job.id)
-        logger.debug(f"Task queued successfully: task_id={task_result.id}")
+        generate_meal_plan_suggestions_async(job.id)
+        logger.debug(f"Task completed for job {job.id}")
     except Exception as e:
         logger.error(f"Failed to queue task for job {job.id}: {e}")
         job.mark_failed(f"Failed to queue task: {e}")

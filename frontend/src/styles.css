@@ -38,6 +38,46 @@
   --shadow-md: 0 8px 24px rgba(16, 24, 16, 0.12);
 
   --gradient-brand: linear-gradient(90deg, #5cb85c 0%, #4AA74A 50%, #3E8F3E 100%);
+
+  /* Status colors - Light mode */
+  --success:#168516;
+  --success-bg:rgba(22, 133, 22, 0.12);
+  --warning:#b45309;
+  --warning-bg:rgba(245, 158, 11, 0.12);
+  --danger:#dc2626;
+  --danger-bg:rgba(220, 38, 38, 0.12);
+  --info:#1d4ed8;
+  --info-bg:rgba(59, 130, 246, 0.12);
+  --pending:#7c3aed;
+  --pending-bg:rgba(124, 58, 237, 0.12);
+  --neutral:#4b5563;
+  --neutral-bg:rgba(75, 85, 99, 0.1);
+
+  /* Semantic status colors */
+  --status-paid:#168516;
+  --status-paid-bg:rgba(22, 133, 22, 0.12);
+  --status-pending:#b45309;
+  --status-pending-bg:rgba(245, 158, 11, 0.12);
+  --status-cancelled:#dc2626;
+  --status-cancelled-bg:rgba(220, 38, 38, 0.12);
+  --status-active:#1d4ed8;
+  --status-active-bg:rgba(59, 130, 246, 0.12);
+
+  /* Platform/source colors */
+  --platform-color:#059669;
+  --platform-bg:rgba(5, 150, 105, 0.12);
+  --manual-color:#6366f1;
+  --manual-bg:rgba(99, 102, 241, 0.12);
+
+  /* Sous Chef design tokens */
+  --sc-surface: var(--surface);
+  --sc-surface-2: var(--surface-2);
+  --sc-bg: var(--surface-2);
+  --sc-border: var(--border);
+  --sc-primary: var(--primary);
+  --sc-primary-hover: var(--primary-700);
+  --sc-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  --sc-shadow-hover: 0 6px 16px rgba(0, 0, 0, 0.15);
 }
 
 /* Dark theme overrides */
@@ -56,6 +96,46 @@
   --shadow-xs: 0 1px 2px rgba(0,0,0,0.5);
   --shadow-sm: 0 2px 8px rgba(0,0,0,0.55);
   --shadow-md: 0 8px 24px rgba(0,0,0,0.6);
+
+  /* Status colors - Dark mode (brighter for contrast) */
+  --success:#4ade80;
+  --success-bg:rgba(74, 222, 128, 0.15);
+  --warning:#fbbf24;
+  --warning-bg:rgba(251, 191, 36, 0.15);
+  --danger:#f87171;
+  --danger-bg:rgba(248, 113, 113, 0.15);
+  --info:#60a5fa;
+  --info-bg:rgba(96, 165, 250, 0.15);
+  --pending:#a78bfa;
+  --pending-bg:rgba(167, 139, 250, 0.15);
+  --neutral:#9ca3af;
+  --neutral-bg:rgba(156, 163, 175, 0.12);
+
+  /* Semantic status colors - Dark mode */
+  --status-paid:#4ade80;
+  --status-paid-bg:rgba(74, 222, 128, 0.15);
+  --status-pending:#fbbf24;
+  --status-pending-bg:rgba(251, 191, 36, 0.15);
+  --status-cancelled:#f87171;
+  --status-cancelled-bg:rgba(248, 113, 113, 0.15);
+  --status-active:#60a5fa;
+  --status-active-bg:rgba(96, 165, 250, 0.15);
+
+  /* Platform/source colors - Dark mode */
+  --platform-color:#34d399;
+  --platform-bg:rgba(52, 211, 153, 0.18);
+  --manual-color:#a78bfa;
+  --manual-bg:rgba(167, 139, 250, 0.18);
+
+  /* Sous Chef design tokens - Dark mode */
+  --sc-surface: var(--surface);
+  --sc-surface-2: var(--surface-2);
+  --sc-bg: var(--surface-2);
+  --sc-border: var(--border);
+  --sc-primary: var(--primary);
+  --sc-primary-hover: var(--primary-600);
+  --sc-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --sc-shadow-hover: 0 6px 16px rgba(0, 0, 0, 0.4);
 }
 
 /* FamilySelector dark mode fixes */
@@ -11538,6 +11618,12 @@ button.chat-recipient:hover {
   background: color-mix(in oklab, var(--primary) 6%, transparent);
 }
 
+.audience-btn:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(92, 184, 92, 0.25);
+}
+
 /* Hero Main Content */
 .home-hero-main {
   display: flex;
@@ -11794,6 +11880,28 @@ button.chat-recipient:hover {
   padding: 2rem;
 }
 
+.home-chefs-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 3rem 2rem;
+  text-align: center;
+  color: var(--muted);
+  grid-column: 1 / -1;
+}
+
+.home-chefs-error i {
+  font-size: 2.5rem;
+  color: var(--warning);
+  opacity: 0.6;
+}
+
+.home-chefs-error p {
+  margin: 0;
+}
+
 /* Chef Card */
 .home-chef-card {
   display: flex;
@@ -11812,6 +11920,13 @@ button.chat-recipient:hover {
   border-color: var(--primary);
   box-shadow: var(--shadow-md);
   transform: translateY(-2px);
+}
+
+.home-chef-card:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-color: var(--primary);
+  box-shadow: var(--shadow-md);
 }
 
 .home-chef-avatar {
@@ -11913,9 +12028,17 @@ button.chat-recipient:hover {
   transform: translateY(-4px);
 }
 
+.home-service-card:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-color: var(--primary);
+  box-shadow: var(--shadow-lg);
+}
+
 .home-service-image {
   height: 180px;
   overflow: hidden;
+  position: relative;
 }
 
 .home-service-image img {
@@ -11927,6 +12050,41 @@ button.chat-recipient:hover {
 
 .home-service-card:hover .home-service-image img {
   transform: scale(1.08);
+}
+
+/* Service card overlay */
+.home-service-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0.3));
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 1.25rem;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.home-service-card:hover .home-service-overlay {
+  opacity: 1;
+}
+
+.home-service-cta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: white;
+  font-weight: 600;
+  font-size: 0.95rem;
+  padding: 0.5rem 1rem;
+  background: var(--primary);
+  border-radius: 999px;
+  transform: translateY(10px);
+  transition: transform 0.3s ease;
+}
+
+.home-service-card:hover .home-service-cta {
+  transform: translateY(0);
 }
 
 .home-service-content {
@@ -12081,12 +12239,12 @@ button.chat-recipient:hover {
 
 /* Final CTA */
 .home-final-cta {
-  background: linear-gradient(135deg, 
-    color-mix(in oklab, var(--primary) 12%, var(--surface)) 0%, 
+  background: linear-gradient(135deg,
+    color-mix(in oklab, var(--primary) 12%, var(--surface)) 0%,
     color-mix(in oklab, var(--primary) 6%, var(--surface)) 100%
   );
   border-radius: var(--radius-xl);
-  margin: 2rem;
+  margin: 2rem auto;
   padding: 4rem 2rem;
 }
 
@@ -12187,7 +12345,7 @@ button.chat-recipient:hover {
   }
 
   .home-final-cta {
-    margin: 1rem;
+    margin: 1rem auto;
     padding: 2.5rem 1.5rem;
   }
 }
@@ -12251,6 +12409,53 @@ button.chat-recipient:hover {
 
 .home-hero-content {
   animation: heroContentIn 0.5s ease-out;
+}
+
+/* Touch device alternatives for home page */
+@media (hover: none) {
+  /* Chef cards - subtle permanent elevation instead of hover transform */
+  .home-chef-card {
+    box-shadow: var(--shadow-sm);
+  }
+
+  .home-chef-card:hover {
+    transform: none;
+  }
+
+  /* Service cards - subtle permanent shadow, show overlay persistently */
+  .home-service-card {
+    box-shadow: var(--shadow-sm);
+  }
+
+  .home-service-card:hover {
+    transform: none;
+  }
+
+  .home-service-overlay {
+    opacity: 1;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.5), transparent 60%);
+  }
+
+  .home-service-cta {
+    transform: translateY(0);
+  }
+
+  /* Disable image zoom on touch (can cause layout issues) */
+  .home-service-card:hover .home-service-image img,
+  .home-hero-image img:hover {
+    transform: none;
+  }
+}
+
+/* Ensure hover effects only on hover-capable devices */
+@media (hover: hover) {
+  .home-chef-card:hover {
+    transform: translateY(-2px);
+  }
+
+  .home-service-card:hover {
+    transform: translateY(-4px);
+  }
 }
 
 /* Smooth scroll behavior for anchor links */

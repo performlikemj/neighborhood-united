@@ -1,8 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext.jsx'
 import { api } from '../api'
 import { getSeededChefEmoji } from '../utils/emojis.js'
+import { HOME_IMAGES } from '../config/homeImages.js'
+import { HOME_CONFIG } from '../config/homeConstants.js'
+import { trackEvent, EVENTS } from '../utils/analytics.js'
 
 // Animated counter hook for trust metrics
 function useAnimatedCounter(targetValue, duration = 2000) {
@@ -36,8 +39,8 @@ function useAnimatedCounter(targetValue, duration = 2000) {
   return { count, ref }
 }
 
-// Featured chef card component
-function ChefCard({ chef }) {
+// Featured chef card component - memoized to prevent unnecessary re-renders
+const ChefCard = React.memo(function ChefCard({ chef }) {
   const username = chef?.user?.username || 'Chef'
   const profilePic = chef?.profile_pic_url
   const bio = chef?.bio || ''
@@ -47,11 +50,19 @@ function ChefCard({ chef }) {
   // Use chef's chosen emoji, or fall back to a seeded random for consistency
   const chefEmoji = chef?.sous_chef_emoji || getSeededChefEmoji(chef?.id || username)
 
+  const handleClick = () => {
+    trackEvent(EVENTS.HOME_CHEF_CARD_CLICKED, { chefId: chef?.id, username })
+  }
+
   return (
-    <Link to={`/c/${encodeURIComponent(username)}`} className="home-chef-card">
+    <Link
+      to={`/c/${encodeURIComponent(username)}`}
+      className="home-chef-card"
+      onClick={handleClick}
+    >
       <div className="home-chef-avatar">
         {profilePic ? (
-          <img src={profilePic} alt={username} />
+          <img src={profilePic} alt={username} loading="lazy" />
         ) : (
           <div className="home-chef-avatar-emoji">
             <span role="img" aria-label="chef">{chefEmoji}</span>
@@ -66,7 +77,12 @@ function ChefCard({ chef }) {
             {[location, country].filter(Boolean).join(', ')}
           </p>
         )}
-        {bio && <p className="home-chef-bio">{bio.slice(0, 80)}{bio.length > 80 ? '...' : ''}</p>}
+        {bio && (
+          <p className="home-chef-bio">
+            {bio.slice(0, HOME_CONFIG.BIO_MAX_LENGTH)}
+            {bio.length > HOME_CONFIG.BIO_MAX_LENGTH ? '...' : ''}
+          </p>
+        )}
       </div>
       {photoCount > 0 && (
         <div className="home-chef-photos">
@@ -75,7 +91,7 @@ function ChefCard({ chef }) {
       )}
     </Link>
   )
-}
+})
 
 export default function Home() {
   const { user } = useAuth()
@@ -94,24 +110,27 @@ export default function Home() {
   // Platform stats from real data
   const [platformStats, setPlatformStats] = useState({ chefCount: 0, cityCount: 0 })
 
+  // Error state for failed chef fetch
+  const [chefsError, setChefsError] = useState(null)
+
   // Animated counters for trust metrics - using real data
-  const chefsCounter = useAnimatedCounter(platformStats.chefCount, 2000)
-  const citiesCounter = useAnimatedCounter(platformStats.cityCount, 1800)
+  const chefsCounter = useAnimatedCounter(platformStats.chefCount, HOME_CONFIG.CHEF_COUNTER_DURATION)
+  const citiesCounter = useAnimatedCounter(platformStats.cityCount, HOME_CONFIG.CITY_COUNTER_DURATION)
 
   // Fetch featured chefs and derive real stats
-  useEffect(() => {
-    let mounted = true
-    api.get('/chefs/api/public/', { params: { page_size: 100 }, skipUserId: true })
+  const fetchChefs = useCallback(() => {
+    setChefsError(null)
+    setLoadingChefs(true)
+    api.get('/chefs/api/public/', { params: { page_size: HOME_CONFIG.CHEF_PAGE_SIZE }, skipUserId: true })
       .then(res => {
-        if (!mounted) return
         const list = Array.isArray(res.data) ? res.data : (res.data?.results || [])
-        
-        // Set featured chefs (first 8)
-        setFeaturedChefs(list.slice(0, 8))
-        
+
+        // Set featured chefs (limited by config)
+        setFeaturedChefs(list.slice(0, HOME_CONFIG.FEATURED_CHEFS_LIMIT))
+
         // Calculate real stats from chef data
         const chefCount = res.data?.count || list.length
-        
+
         // Count unique cities from chef serving areas
         const cities = new Set()
         list.forEach(chef => {
@@ -124,27 +143,33 @@ export default function Home() {
           const chefCity = chef?.city || chef?.location_city || ''
           if (chefCity.trim()) cities.add(chefCity.toLowerCase())
         })
-        
+
         setPlatformStats({
           chefCount: chefCount,
           cityCount: Math.max(cities.size, 1) // At least 1 if we have chefs
         })
       })
-      .catch(() => {})
-      .finally(() => { if (mounted) setLoadingChefs(false) })
-    return () => { mounted = false }
+      .catch(() => {
+        setChefsError('Unable to load chefs. Please try again.')
+      })
+      .finally(() => setLoadingChefs(false))
   }, [])
 
-  const handleLocationSearch = (e) => {
+  useEffect(() => {
+    fetchChefs()
+  }, [fetchChefs])
+
+  const handleLocationSearch = useCallback((e) => {
     e.preventDefault()
+    trackEvent(EVENTS.HOME_SEARCH_SUBMITTED, { query: locationQuery.trim() })
     if (locationQuery.trim()) {
       navigate(`/chefs?q=${encodeURIComponent(locationQuery.trim())}`)
     } else {
       navigate('/chefs')
     }
-  }
+  }, [locationQuery, navigate])
 
-  const handleChefApplication = async () => {
+  const handleChefApplication = useCallback(async () => {
     setSubmitting(true)
     setApplyMsg(null)
     try {
@@ -155,21 +180,78 @@ export default function Home() {
       if (user?.address?.city) fd.append('city', user.address.city)
       if (user?.address?.country) fd.append('country', user.address.country)
       if (chefForm.profile_pic) fd.append('profile_pic', chefForm.profile_pic)
-      
-      const resp = await api.post('/chefs/api/submit-chef-request/', fd, { 
-        headers: { 'Content-Type': 'multipart/form-data' } 
+
+      const resp = await api.post('/chefs/api/submit-chef-request/', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' }
       })
-      if (resp.status === 200 || resp.status === 201) {
+      const success = resp.status === 200 || resp.status === 201
+      trackEvent(EVENTS.HOME_CHEF_APPLICATION_SUBMITTED, { success })
+      if (success) {
         setApplyMsg('Application submitted! We\'ll notify you when approved.')
       } else {
         setApplyMsg('Submission failed. Please try again later.')
       }
     } catch (e) {
+      trackEvent(EVENTS.HOME_CHEF_APPLICATION_SUBMITTED, { success: false })
       setApplyMsg(e?.response?.data?.error || 'Submission failed. Please try again.')
     } finally {
       setSubmitting(false)
     }
-  }
+  }, [chefForm, user?.address?.city, user?.address?.country])
+
+  // Handler for opening chef application modal
+  const handleOpenApplyModal = useCallback(() => {
+    trackEvent(EVENTS.HOME_CHEF_APPLICATION_STARTED)
+    setApplyOpen(true)
+  }, [])
+
+  // SEO: Inject structured data for search engines
+  useEffect(() => {
+    const structuredData = {
+      '@context': 'https://schema.org',
+      '@type': 'WebSite',
+      'name': 'sautai',
+      'url': 'https://sautai.com',
+      'description': 'Connect with talented local chefs for meal prep, private dinners, cooking classes, and more.',
+      'potentialAction': {
+        '@type': 'SearchAction',
+        'target': 'https://sautai.com/chefs?q={search_term_string}',
+        'query-input': 'required name=search_term_string'
+      }
+    }
+
+    const organizationData = {
+      '@context': 'https://schema.org',
+      '@type': 'Organization',
+      'name': 'sautai',
+      'url': 'https://sautai.com',
+      'logo': 'https://sautai.com/sautai_logo_new.png',
+      'description': 'AI-powered platform connecting food lovers with local personal chefs'
+    }
+
+    // Create script elements
+    const websiteScript = document.createElement('script')
+    websiteScript.type = 'application/ld+json'
+    websiteScript.id = 'home-structured-data-website'
+    websiteScript.textContent = JSON.stringify(structuredData)
+
+    const orgScript = document.createElement('script')
+    orgScript.type = 'application/ld+json'
+    orgScript.id = 'home-structured-data-org'
+    orgScript.textContent = JSON.stringify(organizationData)
+
+    // Remove existing if present (for hot reload)
+    document.getElementById('home-structured-data-website')?.remove()
+    document.getElementById('home-structured-data-org')?.remove()
+
+    document.head.appendChild(websiteScript)
+    document.head.appendChild(orgScript)
+
+    return () => {
+      document.getElementById('home-structured-data-website')?.remove()
+      document.getElementById('home-structured-data-org')?.remove()
+    }
+  }, [])
 
   return (
     <div className="page-home-v2">
@@ -181,15 +263,21 @@ export default function Home() {
         <div className="home-hero-content">
           {/* Audience Toggle */}
           <div className="home-audience-toggle">
-            <button 
+            <button
               className={`audience-btn ${activeAudience === 'customer' ? 'active' : ''}`}
-              onClick={() => setActiveAudience('customer')}
+              onClick={() => {
+                setActiveAudience('customer')
+                trackEvent(EVENTS.HOME_AUDIENCE_TOGGLED, { audience: 'customer' })
+              }}
             >
               I'm looking for a chef
             </button>
-            <button 
+            <button
               className={`audience-btn ${activeAudience === 'chef' ? 'active' : ''}`}
-              onClick={() => setActiveAudience('chef')}
+              onClick={() => {
+                setActiveAudience('chef')
+                trackEvent(EVENTS.HOME_AUDIENCE_TOGGLED, { audience: 'chef' })
+              }}
             >
               I'm a chef
             </button>
@@ -261,7 +349,7 @@ export default function Home() {
                   </Link>
                 )}
                 {user && !user?.is_chef && (
-                  <button className="btn btn-primary btn-lg" onClick={() => setApplyOpen(true)}>
+                  <button className="btn btn-primary btn-lg" onClick={handleOpenApplyModal}>
                     Apply to Become a Chef
                   </button>
                 )}
@@ -287,12 +375,10 @@ export default function Home() {
 
         {/* Hero Image */}
         <div className="home-hero-image">
-          <img 
-            src={activeAudience === 'customer' 
-              ? 'https://images.unsplash.com/photo-1556910103-1c02745aae4d?w=800&q=80' 
-              : 'https://images.unsplash.com/photo-1577219491135-ce391730fb2c?w=800&q=80'
-            } 
+          <img
+            src={activeAudience === 'customer' ? HOME_IMAGES.hero.customer : HOME_IMAGES.hero.chef}
             alt={activeAudience === 'customer' ? 'Delicious home-cooked meal' : 'Professional chef at work'}
+            loading="lazy"
           />
         </div>
       </section>
@@ -319,9 +405,16 @@ export default function Home() {
             <div className="home-trust-divider"></div>
             <div className="home-trust-item">
               <span className="home-trust-number">
-                <i className="fa-solid fa-globe" style={{ fontSize: '1.5rem' }}></i>
+                <i className="fa-solid fa-shield-check" style={{ fontSize: '1.5rem', color: 'var(--success)' }}></i>
               </span>
-              <span className="home-trust-label">Worldwide</span>
+              <span className="home-trust-label">Verified Chefs</span>
+            </div>
+            <div className="home-trust-divider"></div>
+            <div className="home-trust-item">
+              <span className="home-trust-number">
+                <i className="fa-brands fa-stripe" style={{ fontSize: '1.5rem', color: '#635bff' }}></i>
+              </span>
+              <span className="home-trust-label">Secure Payments</span>
             </div>
           </div>
         </section>
@@ -340,15 +433,23 @@ export default function Home() {
 
         <div className="home-chefs-grid">
           {loadingChefs ? (
-            <div className="home-chefs-loading">
+            <div className="home-chefs-loading" role="status" aria-live="polite">
               <div className="spinner"></div>
+            </div>
+          ) : chefsError ? (
+            <div className="home-chefs-error" role="status">
+              <i className="fa-solid fa-triangle-exclamation"></i>
+              <p>{chefsError}</p>
+              <button className="btn btn-outline" onClick={fetchChefs}>
+                Try Again
+              </button>
             </div>
           ) : featuredChefs.length > 0 ? (
             featuredChefs.map(chef => (
               <ChefCard key={chef.id} chef={chef} />
             ))
           ) : (
-            <p className="home-chefs-empty">Chefs are joining every day. Check back soon!</p>
+            <p className="home-chefs-empty" role="status">Chefs are joining every day. Check back soon!</p>
           )}
         </div>
 
@@ -372,9 +473,19 @@ export default function Home() {
         </div>
 
         <div className="home-services-grid">
-          <Link to="/chefs?service=meal-prep" className="home-service-card">
+          <Link
+            to="/chefs?service=meal-prep"
+            className="home-service-card"
+            onClick={() => trackEvent(EVENTS.HOME_SERVICE_CARD_CLICKED, { service: 'meal-prep' })}
+          >
             <div className="home-service-image">
-              <img src="https://images.unsplash.com/photo-1498837167922-ddd27525d352?w=400&q=80" alt="Meal Prep" />
+              <img src={HOME_IMAGES.services.mealPrep} alt="Meal Prep" loading="lazy" />
+              <div className="home-service-overlay">
+                <span className="home-service-cta">
+                  <i className="fa-solid fa-arrow-right"></i>
+                  Find Chefs
+                </span>
+              </div>
             </div>
             <div className="home-service-content">
               <h3>Weekly Meal Prep</h3>
@@ -382,9 +493,19 @@ export default function Home() {
             </div>
           </Link>
 
-          <Link to="/chefs?service=private-dining" className="home-service-card">
+          <Link
+            to="/chefs?service=private-dining"
+            className="home-service-card"
+            onClick={() => trackEvent(EVENTS.HOME_SERVICE_CARD_CLICKED, { service: 'private-dining' })}
+          >
             <div className="home-service-image">
-              <img src="https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=400&q=80" alt="Private Dining" />
+              <img src={HOME_IMAGES.services.privateDining} alt="Private Dining" loading="lazy" />
+              <div className="home-service-overlay">
+                <span className="home-service-cta">
+                  <i className="fa-solid fa-arrow-right"></i>
+                  Find Chefs
+                </span>
+              </div>
             </div>
             <div className="home-service-content">
               <h3>Private Dinners</h3>
@@ -392,9 +513,19 @@ export default function Home() {
             </div>
           </Link>
 
-          <Link to="/chefs?service=cooking-class" className="home-service-card">
+          <Link
+            to="/chefs?service=cooking-class"
+            className="home-service-card"
+            onClick={() => trackEvent(EVENTS.HOME_SERVICE_CARD_CLICKED, { service: 'cooking-class' })}
+          >
             <div className="home-service-image">
-              <img src="https://images.unsplash.com/photo-1507048331197-7d4ac70811cf?w=400&q=80" alt="Cooking Class" />
+              <img src={HOME_IMAGES.services.cookingClass} alt="Cooking Class" loading="lazy" />
+              <div className="home-service-overlay">
+                <span className="home-service-cta">
+                  <i className="fa-solid fa-arrow-right"></i>
+                  Find Chefs
+                </span>
+              </div>
             </div>
             <div className="home-service-content">
               <h3>Cooking Classes</h3>
@@ -402,9 +533,19 @@ export default function Home() {
             </div>
           </Link>
 
-          <Link to="/chefs?service=events" className="home-service-card">
+          <Link
+            to="/chefs?service=events"
+            className="home-service-card"
+            onClick={() => trackEvent(EVENTS.HOME_SERVICE_CARD_CLICKED, { service: 'events' })}
+          >
             <div className="home-service-image">
-              <img src="https://images.unsplash.com/photo-1555244162-803834f70033?w=400&q=80" alt="Events" />
+              <img src={HOME_IMAGES.services.events} alt="Events" loading="lazy" />
+              <div className="home-service-overlay">
+                <span className="home-service-cta">
+                  <i className="fa-solid fa-arrow-right"></i>
+                  Find Chefs
+                </span>
+              </div>
             </div>
             <div className="home-service-content">
               <h3>Events & Catering</h3>
@@ -530,7 +671,7 @@ export default function Home() {
               </Link>
             )}
             {user && !user?.is_chef && (
-              <button className="btn btn-outline btn-lg" onClick={() => setApplyOpen(true)}>
+              <button className="btn btn-outline btn-lg" onClick={handleOpenApplyModal}>
                 <i className="fa-solid fa-hat-chef"></i>
                 Become a Chef
               </button>

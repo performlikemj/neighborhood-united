@@ -104,13 +104,39 @@ export default function MealPlanWeekView({
   const totalWeeks = weeks.length
   const hasMultipleWeeks = totalWeeks > 1
 
-  // Find which week contains today and auto-navigate there on load
+  // Track which week contains today for "Today" button functionality
+  const todayWeekIndex = useMemo(() => {
+    return weeks.findIndex(week => week.some(day => day.isToday))
+  }, [weeks])
+
+  const currentWeekContainsToday = todayWeekIndex >= 0
+  const isViewingCurrentWeek = currentWeekIndex === todayWeekIndex
+
+  // Smart week navigation: auto-navigate to most relevant week on load
   React.useEffect(() => {
     if (weeks.length > 0) {
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+
+      // Priority 1: Week containing today
       const todayWeekIndex = weeks.findIndex(week => week.some(day => day.isToday))
       if (todayWeekIndex >= 0) {
         setCurrentWeekIndex(todayWeekIndex)
+        return
       }
+
+      // Priority 2: First upcoming week (for future plans)
+      const upcomingWeekIndex = weeks.findIndex(week => {
+        const weekStart = new Date(week[0].date + 'T00:00:00')
+        return weekStart > today
+      })
+      if (upcomingWeekIndex >= 0) {
+        setCurrentWeekIndex(upcomingWeekIndex)
+        return
+      }
+
+      // Priority 3: Last week (for past plans - most recent content)
+      setCurrentWeekIndex(weeks.length - 1)
     }
   }, [weeks.length])
 
@@ -124,6 +150,11 @@ export default function MealPlanWeekView({
   // Week navigation
   const goToPrevWeek = () => setCurrentWeekIndex(i => Math.max(0, i - 1))
   const goToNextWeek = () => setCurrentWeekIndex(i => Math.min(totalWeeks - 1, i + 1))
+  const goToToday = () => {
+    if (todayWeekIndex >= 0) {
+      setCurrentWeekIndex(todayWeekIndex)
+    }
+  }
 
   // Format week range for display
   const weekRangeLabel = useMemo(() => {
@@ -136,9 +167,58 @@ export default function MealPlanWeekView({
     return `${first.month} ${first.dayNum} - ${last.month} ${last.dayNum}`
   }, [currentWeekDays])
 
-  const handleSlotClick = (date, mealType, item) => {
+  // Relative week label (This Week, Next Week, etc.)
+  const relativeWeekLabel = useMemo(() => {
+    if (currentWeekDays.length === 0) return null
+
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+
+    // Get start of this calendar week (Monday)
+    const thisWeekStart = new Date(today)
+    const dayOfWeek = thisWeekStart.getDay()
+    const diff = (dayOfWeek === 0 ? -6 : 1) - dayOfWeek
+    thisWeekStart.setDate(thisWeekStart.getDate() + diff)
+    thisWeekStart.setHours(0, 0, 0, 0)
+
+    const viewedWeekStart = new Date(currentWeekDays[0].date + 'T00:00:00')
+    const diffDays = Math.round((viewedWeekStart - thisWeekStart) / (1000 * 60 * 60 * 24))
+
+    if (diffDays >= 0 && diffDays < 7) return 'This Week'
+    if (diffDays >= 7 && diffDays < 14) return 'Next Week'
+    if (diffDays >= -7 && diffDays < 0) return 'Last Week'
+    if (diffDays > 0) {
+      const weeksAhead = Math.floor(diffDays / 7)
+      return `${weeksAhead} Week${weeksAhead > 1 ? 's' : ''} Ahead`
+    }
+    const weeksAgo = Math.abs(Math.ceil(diffDays / 7))
+    return `${weeksAgo} Week${weeksAgo > 1 ? 's' : ''} Ago`
+  }, [currentWeekDays])
+
+  // Plan timing indicator for plans that don't contain today
+  const planRelativeToToday = useMemo(() => {
+    if (daysData.length === 0) return null
+
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+
+    const planStart = new Date(daysData[0].date + 'T00:00:00')
+    const planEnd = new Date(daysData[daysData.length - 1].date + 'T00:00:00')
+
+    if (today < planStart) {
+      const daysUntil = Math.ceil((planStart - today) / (1000 * 60 * 60 * 24))
+      return { type: 'future', days: daysUntil, text: `Starts in ${daysUntil} day${daysUntil > 1 ? 's' : ''}` }
+    }
+    if (today > planEnd) {
+      const daysAgo = Math.ceil((today - planEnd) / (1000 * 60 * 60 * 24))
+      return { type: 'past', days: daysAgo, text: `Ended ${daysAgo} day${daysAgo > 1 ? 's' : ''} ago` }
+    }
+    return { type: 'current', days: 0, text: 'Active now' }
+  }, [daysData])
+
+  const handleSlotClick = (date, mealType, item, dayId) => {
     if (readOnly || !onSlotClick) return
-    onSlotClick(date, mealType, item)
+    onSlotClick(date, mealType, item, dayId)
   }
 
   if (!planDetail) {
@@ -150,9 +230,18 @@ export default function MealPlanWeekView({
 
   return (
     <div className="mpw-container">
+      {/* Plan timing indicator for plans not containing today */}
+      {!currentWeekContainsToday && planRelativeToToday && (
+        <div className={`mpw-plan-timing mpw-plan-timing-${planRelativeToToday.type}`}>
+          {planRelativeToToday.type === 'future' && '📅 '}
+          {planRelativeToToday.type === 'past' && '📆 '}
+          {planRelativeToToday.text}
+        </div>
+      )}
+
       {/* Week Navigation */}
       {hasMultipleWeeks && (
-        <div className="mpw-week-nav">
+        <div className={`mpw-week-nav ${!isViewingCurrentWeek && currentWeekContainsToday ? 'away-from-today' : ''}`}>
           <button
             className="mpw-week-nav-btn"
             onClick={goToPrevWeek}
@@ -162,6 +251,9 @@ export default function MealPlanWeekView({
             ← Prev
           </button>
           <div className="mpw-week-nav-info">
+            {relativeWeekLabel && (
+              <span className="mpw-relative-label">{relativeWeekLabel}</span>
+            )}
             <span className="mpw-week-label">{weekRangeLabel}</span>
             <span className="mpw-week-indicator">
               Week {currentWeekIndex + 1} of {totalWeeks}
@@ -176,6 +268,22 @@ export default function MealPlanWeekView({
           >
             Next →
           </button>
+        </div>
+      )}
+
+      {/* Today button - shown when not viewing the week containing today */}
+      {hasMultipleWeeks && !isViewingCurrentWeek && currentWeekContainsToday && (
+        <div className="mpw-today-bar">
+          <button
+            className="mpw-today-btn"
+            onClick={goToToday}
+            aria-label="Jump to current week"
+          >
+            ↩ Today
+          </button>
+          <span className="mpw-away-indicator">
+            Viewing {currentWeekIndex < todayWeekIndex ? 'past' : 'future'} week
+          </span>
         </div>
       )}
 
@@ -209,7 +317,7 @@ export default function MealPlanWeekView({
                 <div
                   key={`${day.date}-${mealType}`}
                   className={`mpw-grid-cell ${item ? 'has-meal' : 'empty'} ${day.isSkipped ? 'skipped' : ''} ${readOnly ? 'readonly' : ''} ${day.isToday ? 'is-today' : ''} ${day.isPast ? 'is-past' : ''}`}
-                  onClick={() => !day.isSkipped && handleSlotClick(day.date, mealType, item)}
+                  onClick={() => !day.isSkipped && handleSlotClick(day.date, mealType, item, day.dayId)}
                 >
                   {day.isSkipped ? (
                     <span className="mpw-skipped-label">Skipped</span>
@@ -365,6 +473,89 @@ export default function MealPlanWeekView({
         .mpw-week-indicator {
           font-size: 0.75rem;
           color: var(--muted, #666);
+        }
+
+        /* Relative week label */
+        .mpw-relative-label {
+          font-size: 0.85rem;
+          font-weight: 600;
+          color: var(--primary, #5cb85c);
+          padding: 0.15rem 0.5rem;
+          background: rgba(92, 184, 92, 0.1);
+          border-radius: 4px;
+        }
+
+        /* Visual indicator when viewing non-current week */
+        .mpw-week-nav.away-from-today {
+          border-left: 3px solid var(--info, #3b82f6);
+          padding-left: calc(0.75rem - 3px);
+          background: rgba(59, 130, 246, 0.04);
+        }
+
+        .mpw-week-nav.away-from-today .mpw-week-label {
+          color: var(--info, #3b82f6);
+        }
+
+        /* Today button bar */
+        .mpw-today-bar {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 0.75rem;
+          padding: 0.5rem;
+          background: var(--info-bg, rgba(59, 130, 246, 0.08));
+          border-radius: 8px;
+          margin-bottom: 0.75rem;
+        }
+
+        .mpw-today-btn {
+          padding: 0.4rem 0.8rem;
+          background: var(--primary, #5cb85c);
+          color: white;
+          border: none;
+          border-radius: 6px;
+          font-size: 0.85rem;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.15s;
+          display: flex;
+          align-items: center;
+          gap: 0.25rem;
+        }
+
+        .mpw-today-btn:hover {
+          background: var(--primary-700, #3E8F3E);
+          transform: translateY(-1px);
+        }
+
+        .mpw-away-indicator {
+          font-size: 0.8rem;
+          color: var(--muted, #666);
+        }
+
+        /* Plan timing indicator */
+        .mpw-plan-timing {
+          text-align: center;
+          padding: 0.5rem;
+          border-radius: 6px;
+          font-size: 0.85rem;
+          font-weight: 500;
+          margin-bottom: 0.75rem;
+        }
+
+        .mpw-plan-timing-future {
+          background: var(--info-bg, rgba(59, 130, 246, 0.1));
+          color: var(--info, #3b82f6);
+        }
+
+        .mpw-plan-timing-past {
+          background: rgba(75, 85, 99, 0.1);
+          color: var(--muted, #666);
+        }
+
+        .mpw-plan-timing-current {
+          background: var(--success-bg, rgba(22, 163, 74, 0.1));
+          color: var(--success, #16a34a);
         }
 
         /* ========================================
@@ -765,6 +956,32 @@ export default function MealPlanWeekView({
         [data-theme="dark"] .mpw-grid-day-header.is-past:not(.is-today),
         [data-theme="dark"] .mpw-accordion-day.is-past:not(.is-today) {
           opacity: 0.55;
+        }
+
+        /* Dark mode for new elements */
+        [data-theme="dark"] .mpw-relative-label {
+          background: rgba(92, 184, 92, 0.15);
+        }
+
+        [data-theme="dark"] .mpw-today-bar {
+          background: rgba(96, 165, 250, 0.12);
+        }
+
+        [data-theme="dark"] .mpw-week-nav.away-from-today {
+          border-left-color: var(--info, #60a5fa);
+          background: rgba(96, 165, 250, 0.08);
+        }
+
+        [data-theme="dark"] .mpw-week-nav.away-from-today .mpw-week-label {
+          color: var(--info, #60a5fa);
+        }
+
+        [data-theme="dark"] .mpw-plan-timing-future {
+          background: rgba(96, 165, 250, 0.15);
+        }
+
+        [data-theme="dark"] .mpw-plan-timing-past {
+          background: rgba(107, 114, 128, 0.15);
         }
       `}</style>
     </div>

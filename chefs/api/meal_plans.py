@@ -30,6 +30,44 @@ def get_chef_for_request(request):
     return request.user.chef
 
 
+def resolve_client_id(chef, client_id):
+    """
+    Resolve a unified client ID to (customer, lead) tuple.
+
+    Client IDs can be:
+    - "contact_123" -> Lead with id=123
+    - "platform_456" -> Platform customer with id=456
+    - "789" (legacy) -> Platform customer with id=789
+
+    Returns (customer, lead) tuple where one is the resolved object
+    and the other is None.
+    """
+    from crm.models import Lead
+
+    client_id_str = str(client_id)
+
+    if client_id_str.startswith('contact_'):
+        # Off-platform lead (manual contact)
+        lead_id = int(client_id_str.replace('contact_', ''))
+        lead = get_object_or_404(Lead, id=lead_id, owner=chef.user, is_deleted=False)
+        return None, lead
+
+    # Platform customer (with or without prefix)
+    if client_id_str.startswith('platform_'):
+        customer_id = int(client_id_str.replace('platform_', ''))
+    else:
+        # Legacy: plain integer ID means platform customer
+        customer_id = int(client_id_str)
+
+    connection = get_object_or_404(
+        ChefCustomerConnection,
+        chef=chef,
+        customer_id=customer_id,
+        status=ChefCustomerConnection.STATUS_ACCEPTED
+    )
+    return connection.customer, None
+
+
 def _serialize_suggestion(s):
     """Serialize a MealPlanSuggestion for API response."""
     return {
@@ -61,6 +99,28 @@ def _serialize_suggestion(s):
 
 def _serialize_plan_for_chef(plan, include_days=False):
     """Serialize a ChefMealPlan for chef API response."""
+    # Build client object based on whether this is a platform customer or lead
+    if plan.lead:
+        client_data = {
+            'id': f"contact_{plan.lead_id}",
+            'type': 'lead',
+            'display_name': f"{plan.lead.first_name} {plan.lead.last_name}".strip() or "Unknown",
+            'email': plan.lead.email or None,
+        }
+    elif plan.customer:
+        client_data = {
+            'id': f"platform_{plan.customer_id}",
+            'type': 'customer',
+            'username': plan.customer.username,
+            'display_name': f"{plan.customer.first_name} {plan.customer.last_name}".strip() or plan.customer.username,
+        }
+    else:
+        client_data = {
+            'id': None,
+            'type': 'unknown',
+            'display_name': 'Unknown',
+        }
+
     result = {
         'id': plan.id,
         'title': plan.title or f"Plan for {plan.start_date}",
@@ -72,11 +132,9 @@ def _serialize_plan_for_chef(plan, include_days=False):
         'created_at': plan.created_at.isoformat(),
         'updated_at': plan.updated_at.isoformat(),
         'pending_suggestions': plan.pending_suggestions_count,
-        'customer': {
-            'id': plan.customer.id,
-            'username': plan.customer.username,
-            'display_name': f"{plan.customer.first_name} {plan.customer.last_name}".strip() or plan.customer.username,
-        }
+        'client': client_data,
+        # Backward compatibility: keep 'customer' key for existing code
+        'customer': client_data,
     }
     
     if include_days:
@@ -112,6 +170,11 @@ def client_plans(request, client_id):
     """
     GET: List meal plans for a specific client
     POST: Create a new meal plan for a client
+
+    Supports both platform customers and off-platform leads (manual contacts).
+    Client ID format:
+    - "contact_123" -> Lead with id=123
+    - "platform_456" or "456" -> Platform customer with id=456
     """
     chef = get_chef_for_request(request)
     if not chef:
@@ -119,43 +182,45 @@ def client_plans(request, client_id):
             {'error': 'You must be a chef to access this endpoint.'},
             status=status.HTTP_403_FORBIDDEN
         )
-    
-    # Verify connection with client
-    connection = get_object_or_404(
-        ChefCustomerConnection,
-        chef=chef,
-        customer_id=client_id,
-        status=ChefCustomerConnection.STATUS_ACCEPTED
-    )
-    
+
+    # Resolve the unified client ID to customer or lead
+    customer, lead = resolve_client_id(chef, client_id)
+
     if request.method == 'GET':
         status_filter = request.query_params.get('status')
-        
-        plans = ChefMealPlan.objects.filter(
-            chef=chef,
-            customer_id=client_id
-        ).order_by('-start_date')
-        
+
+        # Query plans based on client type
+        if lead:
+            plans = ChefMealPlan.objects.filter(
+                chef=chef,
+                lead=lead
+            ).select_related('lead').order_by('-start_date')
+        else:
+            plans = ChefMealPlan.objects.filter(
+                chef=chef,
+                customer=customer
+            ).select_related('customer').order_by('-start_date')
+
         if status_filter:
             plans = plans.filter(status=status_filter)
-        
+
         return Response({
             'plans': [_serialize_plan_for_chef(plan) for plan in plans],
             'count': plans.count()
         })
-    
+
     elif request.method == 'POST':
         title = request.data.get('title', '')
         start_date = request.data.get('start_date')
         end_date = request.data.get('end_date')
         notes = request.data.get('notes', '')
-        
+
         if not start_date or not end_date:
             return Response(
                 {'error': 'start_date and end_date are required.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         try:
             from datetime import datetime
             start_date = datetime.strptime(start_date, '%Y-%m-%d').date()
@@ -165,36 +230,45 @@ def client_plans(request, client_id):
                 {'error': 'Invalid date format. Use YYYY-MM-DD.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         if start_date > end_date:
             return Response(
                 {'error': 'start_date must be before end_date.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        # Check for duplicate plan
-        existing = ChefMealPlan.objects.filter(
-            chef=chef,
-            customer_id=client_id,
-            start_date=start_date
-        ).exists()
-        
+
+        # Check for duplicate plan based on client type
+        if lead:
+            existing = ChefMealPlan.objects.filter(
+                chef=chef,
+                lead=lead,
+                start_date=start_date
+            ).exists()
+        else:
+            existing = ChefMealPlan.objects.filter(
+                chef=chef,
+                customer=customer,
+                start_date=start_date
+            ).exists()
+
         if existing:
             return Response(
                 {'error': 'A plan already exists for this client starting on this date.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
+        # Create the plan with the appropriate FK
         plan = ChefMealPlan.objects.create(
             chef=chef,
-            customer_id=client_id,
+            customer=customer,  # Will be None if this is a lead
+            lead=lead,          # Will be None if this is a customer
             title=title,
             start_date=start_date,
             end_date=end_date,
             notes=notes,
             status=ChefMealPlan.STATUS_DRAFT
         )
-        
+
         return Response(
             _serialize_plan_for_chef(plan),
             status=status.HTTP_201_CREATED
@@ -217,7 +291,7 @@ def plan_detail(request, plan_id):
         )
     
     plan = get_object_or_404(
-        ChefMealPlan.objects.select_related('customer'),
+        ChefMealPlan.objects.select_related('customer', 'lead'),
         id=plan_id,
         chef=chef
     )
@@ -287,13 +361,20 @@ def plan_detail(request, plan_id):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # Check unique constraint (same chef, customer, start_date)
+            # Check unique constraint (same chef, customer/lead, start_date)
             if start_date_str:
-                duplicate_plan = ChefMealPlan.objects.filter(
-                    chef=chef,
-                    customer=plan.customer,
-                    start_date=new_start_date
-                ).exclude(id=plan.id).exists()
+                if plan.lead:
+                    duplicate_plan = ChefMealPlan.objects.filter(
+                        chef=chef,
+                        lead=plan.lead,
+                        start_date=new_start_date
+                    ).exclude(id=plan.id).exists()
+                else:
+                    duplicate_plan = ChefMealPlan.objects.filter(
+                        chef=chef,
+                        customer=plan.customer,
+                        start_date=new_start_date
+                    ).exclude(id=plan.id).exists()
 
                 if duplicate_plan:
                     return Response(
@@ -600,7 +681,7 @@ def plan_item_detail(request, plan_id, day_id, item_id):
     
     elif request.method == 'DELETE':
         item.delete()
-        return Response({'success': True}, status=status.HTTP_204_NO_CONTENT)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @api_view(['GET'])

@@ -18,11 +18,13 @@ import { useSousChefNotifications } from '../contexts/SousChefNotificationContex
 const MEAL_TYPE_LABELS = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner', snack: 'Snack' }
 const formatMealType = (type) => MEAL_TYPE_LABELS[type] || type
 
-export default function MealSlotPicker({ 
-  isOpen, 
-  onClose, 
-  slot, 
+export default function MealSlotPicker({
+  isOpen,
+  onClose,
+  slot,
+  existingItem,
   onAssign,
+  onRemove,
   planId,
   planTitle = 'Meal Plan',
   clientName = 'Client',
@@ -37,6 +39,7 @@ export default function MealSlotPicker({
   }
   
   const [tab, setTab] = useState('meals')
+  const [mode, setMode] = useState('pick') // 'view' or 'pick'
   const [composedMeals, setComposedMeals] = useState([])
   const [singleItems, setSingleItems] = useState([])
   const [loading, setLoading] = useState(false)
@@ -59,6 +62,8 @@ export default function MealSlotPicker({
   // Load data on open
   useEffect(() => {
     if (isOpen && slot) {
+      // Set mode based on whether slot has existing item
+      setMode(existingItem ? 'view' : 'pick')
       loadMeals()
       loadAvailableDishes()
       setAiSuggestion(null)
@@ -67,7 +72,7 @@ export default function MealSlotPicker({
       setComposeName('')
       setComposeDescription('')
     }
-  }, [isOpen, slot])
+  }, [isOpen, slot, existingItem])
 
   const loadMeals = async () => {
     setLoading(true)
@@ -244,42 +249,77 @@ export default function MealSlotPicker({
       <div className="msp-backdrop" onClick={onClose} />
       <div className="msp-modal">
         <header className="msp-header">
-          <div>
-            <h3>Add Meal</h3>
+          <button className="msp-back-btn" onClick={onClose} aria-label="Close">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 12H5M12 19l-7-7 7-7"/>
+            </svg>
+          </button>
+          <div className="msp-header-text">
+            <h3>{mode === 'view' ? 'View Meal' : (existingItem ? 'Replace Meal' : 'Add Meal')}</h3>
             <span className="msp-slot-info">{dayName} {dateDisplay} • {formatMealType(slot.mealType)}</span>
           </div>
-          <button className="msp-close" onClick={onClose}>×</button>
         </header>
 
-        {/* Tabs */}
+        {/* View Mode - Show existing meal details */}
+        {mode === 'view' && existingItem && (
+          <div className="msp-view-mode">
+            <div className="msp-existing-meal">
+              <h4>{existingItem.name || existingItem.custom_name || 'Unnamed Meal'}</h4>
+              {(existingItem.description || existingItem.custom_description) && (
+                <p className="msp-existing-desc">{existingItem.description || existingItem.custom_description}</p>
+              )}
+              {existingItem.dishes?.length > 0 && (
+                <div className="msp-dishes-view">
+                  <span className="msp-dishes-label">Dishes:</span>
+                  {existingItem.dishes.map((d, i) => (
+                    <span key={i} className="msp-dish-chip">{d.name}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="msp-view-actions">
+              <button className="msp-btn msp-btn-primary" onClick={() => setMode('pick')}>
+                Replace Meal
+              </button>
+              <button className="msp-btn msp-btn-danger-outline" onClick={onRemove}>
+                Remove from Plan
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Tabs - Only shown in pick mode */}
+        {mode === 'pick' && (
         <div className="msp-tabs">
-          <button 
+          <button
             className={`msp-tab ${tab === 'meals' ? 'active' : ''}`}
             onClick={() => setTab('meals')}
           >
             My Meals
           </button>
-          <button 
+          <button
             className={`msp-tab ${tab === 'compose' ? 'active' : ''}`}
             onClick={() => setTab('compose')}
           >
             Compose
           </button>
-          <button 
+          <button
             className={`msp-tab ${tab === 'ai' ? 'active' : ''}`}
             onClick={() => setTab('ai')}
           >
             AI
           </button>
-          <button 
+          <button
             className={`msp-tab ${tab === 'custom' ? 'active' : ''}`}
             onClick={() => setTab('custom')}
           >
             Quick Add
           </button>
         </div>
+        )}
 
-        {/* Content */}
+        {/* Content - Only shown in pick mode */}
+        {mode === 'pick' && (
         <div className="msp-content">
           {tab === 'meals' && (
             <div className="msp-meals">
@@ -551,6 +591,7 @@ export default function MealSlotPicker({
             </div>
           )}
         </div>
+        )}
       </div>
 
       <style>{`
@@ -561,104 +602,113 @@ export default function MealSlotPicker({
           z-index: 2000;
         }
 
+        /* Slideout panel - slides from right */
         .msp-modal {
           position: fixed;
+          top: 0;
+          right: 0;
+          bottom: 0;
+          width: 100%;
           z-index: 2001;
           background: var(--surface, #fff);
           display: flex;
           flex-direction: column;
-          animation: mspSlideUp 0.2s ease;
-          box-shadow: 0 18px 48px rgba(0,0,0,0.28);
+          animation: mspSlideIn 0.25s ease;
+          box-shadow: -4px 0 24px rgba(0,0,0,0.15);
         }
 
-        /* Mobile: Bottom sheet */
-        @media (max-width: 639px) {
-          .msp-modal {
-            bottom: 0;
-            left: 0;
-            right: 0;
-            max-height: 85vh;
-            max-height: 85dvh;
-            border-radius: 16px 16px 0 0;
-          }
+        @keyframes mspSlideIn {
+          from { transform: translateX(100%); }
+          to { transform: translateX(0); }
         }
 
-        /* Tablet+: Centered modal */
+        /* Tablet: 85% width, max 600px */
         @media (min-width: 640px) {
           .msp-modal {
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 90%;
-            max-width: 480px;
-            max-height: 80vh;
-            max-height: 80dvh;
-            border-radius: 16px;
-            animation: mspFadeIn 0.2s ease;
+            width: 85%;
+            max-width: 600px;
+            border-radius: 16px 0 0 16px;
           }
         }
 
-        @keyframes mspSlideUp {
-          from { transform: translateY(100%); }
-          to { transform: translateY(0); }
-        }
-
-        @keyframes mspFadeIn {
-          from { opacity: 0; transform: translate(-50%, -48%); }
-          to { opacity: 1; transform: translate(-50%, -50%); }
+        /* Desktop: 50% width, max 560px */
+        @media (min-width: 1024px) {
+          .msp-modal {
+            width: 50%;
+            max-width: 560px;
+          }
         }
 
         .msp-header {
           display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
+          align-items: center;
+          gap: 0.75rem;
           padding: 1rem 1.25rem;
           border-bottom: 1px solid var(--border, #e5e7eb);
+          background: var(--surface, #fff);
+          flex-shrink: 0;
         }
 
-        .msp-header h3 {
+        .msp-back-btn {
+          width: 40px;
+          height: 40px;
+          border: none;
+          background: var(--surface-2, #f3f4f6);
+          border-radius: 10px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: var(--text, #333);
+          transition: background 0.15s;
+          flex-shrink: 0;
+        }
+
+        .msp-back-btn:hover {
+          background: var(--border, #e5e7eb);
+        }
+
+        .msp-header-text {
+          display: flex;
+          flex-direction: column;
+          gap: 0.15rem;
+        }
+
+        .msp-header-text h3 {
           margin: 0;
-          font-size: 1.1rem;
+          font-size: 1.15rem;
+          font-weight: 600;
         }
 
         .msp-slot-info {
-          font-size: 0.85rem;
+          font-size: 0.9rem;
           color: var(--muted, #666);
-        }
-
-        .msp-close {
-          background: none;
-          border: none;
-          font-size: 1.75rem;
-          line-height: 1;
-          cursor: pointer;
-          color: var(--muted, #666);
-          padding: 0;
         }
 
         .msp-tabs {
           display: flex;
           border-bottom: 1px solid var(--border, #e5e7eb);
+          flex-shrink: 0;
+          padding: 0 0.5rem;
         }
 
         .msp-tab {
           flex: 1;
-          padding: 0.75rem 0.5rem;
+          padding: 1rem 0.75rem;
           background: none;
           border: none;
           border-bottom: 2px solid transparent;
-          font-size: 0.8rem;
+          font-size: 0.9rem;
           font-weight: 500;
           color: var(--muted, #666);
           cursor: pointer;
           white-space: nowrap;
+          transition: all 0.15s;
         }
 
-        @media (min-width: 400px) {
-          .msp-tab {
-            font-size: 0.9rem;
-            padding: 0.75rem;
-          }
+        .msp-tab:hover:not(.active) {
+          background: var(--surface-2, #f9fafb);
+          color: var(--text, #333);
         }
 
         .msp-tab.active {
@@ -666,24 +716,41 @@ export default function MealSlotPicker({
           border-bottom-color: var(--primary, #5cb85c);
         }
 
+        @media (min-width: 640px) {
+          .msp-tab {
+            font-size: 0.95rem;
+            padding: 1rem 1rem;
+          }
+        }
+
         .msp-content {
           flex: 1;
           overflow-y: auto;
-          padding: 1rem;
-          padding-bottom: max(1rem, env(safe-area-inset-bottom));
+          padding: 1.25rem;
+          padding-bottom: max(1.25rem, env(safe-area-inset-bottom));
           -webkit-overflow-scrolling: touch;
         }
 
+        @media (min-width: 640px) {
+          .msp-content {
+            padding: 1.5rem;
+            padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+          }
+        }
+
         /* Meals Tab */
+        .msp-search {
+          margin-bottom: 1.25rem;
+        }
+
         .msp-search input {
           width: 100%;
-          padding: 0.65rem 0.85rem;
+          padding: 0.85rem 1rem;
           border: 1px solid var(--border, #ddd);
-          border-radius: 8px;
+          border-radius: 10px;
           background: var(--surface, #fff);
           color: var(--text, #333);
-          font-size: 0.9rem;
-          margin-bottom: 0.75rem;
+          font-size: 0.95rem;
           caret-color: var(--primary, #5cb85c);
           transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
         }
@@ -714,22 +781,23 @@ export default function MealSlotPicker({
         .msp-meals-sections {
           display: flex;
           flex-direction: column;
-          gap: 1.25rem;
+          gap: 1.5rem;
         }
 
         .msp-section {
           display: flex;
           flex-direction: column;
-          gap: 0.5rem;
+          gap: 0.75rem;
         }
 
         .msp-section-title {
           display: flex;
           align-items: center;
           gap: 0.5rem;
-          font-size: 0.9rem;
+          font-size: 0.95rem;
           font-weight: 600;
           margin: 0;
+          padding-left: 0.25rem;
           color: var(--text, #333);
         }
 
@@ -738,14 +806,14 @@ export default function MealSlotPicker({
           color: var(--muted, #666);
           font-size: 0.75rem;
           font-weight: 500;
-          padding: 0.1rem 0.5rem;
+          padding: 0.15rem 0.6rem;
           border-radius: 99px;
         }
 
         .msp-dishes-list {
           display: flex;
           flex-direction: column;
-          gap: 0.5rem;
+          gap: 0.75rem;
         }
 
         .msp-dish-card {
@@ -753,13 +821,14 @@ export default function MealSlotPicker({
           align-items: center;
           justify-content: space-between;
           width: 100%;
-          padding: 0.85rem;
+          padding: 1rem 1.25rem;
           background: var(--surface, #fff);
           border: 1px solid var(--border, #e5e7eb);
-          border-radius: 10px;
+          border-radius: 12px;
           cursor: pointer;
           text-align: left;
           transition: all 0.15s;
+          gap: 0.75rem;
         }
 
         .msp-dish-card:hover {
@@ -846,17 +915,19 @@ export default function MealSlotPicker({
 
         .msp-ai-prompt {
           text-align: center;
-          padding: 2rem 1rem;
+          padding: 3rem 1.5rem;
         }
 
         .msp-ai-icon {
-          font-size: 3rem;
-          margin-bottom: 1rem;
+          font-size: 4rem;
+          margin-bottom: 1.5rem;
         }
 
         .msp-ai-prompt p {
           color: var(--muted, #666);
-          margin-bottom: 1.5rem;
+          margin-bottom: 1.75rem;
+          font-size: 1rem;
+          line-height: 1.5;
         }
 
         .msp-ai-status {
@@ -878,24 +949,25 @@ export default function MealSlotPicker({
         .msp-ai-result {
           display: flex;
           flex-direction: column;
-          gap: 1rem;
+          gap: 1.25rem;
         }
 
         .msp-suggestion-card {
-          padding: 1rem;
+          padding: 1.25rem 1.5rem;
           background: var(--surface-2, #f9fafb);
-          border-radius: 10px;
+          border-radius: 12px;
         }
 
         .msp-suggestion-card h4 {
-          margin: 0 0 0.5rem 0;
-          font-size: 1.05rem;
+          margin: 0 0 0.75rem 0;
+          font-size: 1.1rem;
         }
 
         .msp-suggestion-desc {
-          font-size: 0.9rem;
+          font-size: 0.95rem;
           color: var(--muted, #666);
-          margin: 0 0 0.5rem 0;
+          margin: 0 0 0.75rem 0;
+          line-height: 1.5;
         }
 
         .msp-household-note {
@@ -918,17 +990,17 @@ export default function MealSlotPicker({
         .msp-compose {
           display: flex;
           flex-direction: column;
-          gap: 1rem;
+          gap: 1.25rem;
           background: var(--surface, #fff);
           border-radius: 12px;
-          padding: 0.5rem;
         }
 
         .msp-compose-hint {
           text-align: center;
           color: var(--muted, #666);
-          font-size: 0.9rem;
+          font-size: 0.95rem;
           margin: 0;
+          padding: 0.5rem;
         }
 
         .msp-compose-selected {
@@ -989,24 +1061,24 @@ export default function MealSlotPicker({
 
         .msp-compose-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-          gap: 0.5rem;
-          max-height: 200px;
+          grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+          gap: 0.75rem;
+          max-height: 280px;
           overflow-y: auto;
-          padding: 0.35rem;
+          padding: 0.5rem;
         }
 
         .msp-compose-option {
           display: flex;
           align-items: center;
-          gap: 0.4rem;
-          padding: 0.5rem 0.65rem;
+          gap: 0.5rem;
+          padding: 0.75rem 1rem;
           border: 1px solid color-mix(in oklab, var(--border, #e5e7eb) 70%, var(--primary, #5cb85c) 30%);
-          border-radius: 8px;
+          border-radius: 10px;
           background: var(--surface-2, #f3f4f6);
           color: var(--text, #333);
           cursor: pointer;
-          font-size: 0.85rem;
+          font-size: 0.9rem;
           text-align: left;
           transition: all 0.15s;
           box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
@@ -1045,27 +1117,32 @@ export default function MealSlotPicker({
 
         /* Custom Tab */
         .msp-form-row {
-          margin-bottom: 1rem;
+          margin-bottom: 1.25rem;
         }
 
         .msp-form-row label {
           display: block;
-          font-size: 0.85rem;
+          font-size: 0.9rem;
           font-weight: 500;
-          margin-bottom: 0.35rem;
-          color: var(--muted, #666);
+          margin-bottom: 0.5rem;
+          color: var(--text, #333);
         }
 
         .msp-form-row input,
         .msp-form-row textarea {
           width: 100%;
-          padding: 0.65rem 0.85rem;
+          padding: 0.85rem 1rem;
           border: 1px solid var(--border, #ddd);
-          border-radius: 8px;
-          font-size: 0.9rem;
+          border-radius: 10px;
+          font-size: 0.95rem;
           background: var(--surface, #fff);
           color: var(--text, #333);
           transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+        }
+
+        .msp-form-row textarea {
+          min-height: 100px;
+          resize: vertical;
         }
 
         .msp-form-row input::placeholder,
@@ -1083,9 +1160,9 @@ export default function MealSlotPicker({
 
         /* Buttons */
         .msp-btn {
-          padding: 0.7rem 1.25rem;
-          border-radius: 8px;
-          font-size: 0.9rem;
+          padding: 0.85rem 1.5rem;
+          border-radius: 10px;
+          font-size: 0.95rem;
           font-weight: 500;
           cursor: pointer;
           border: 1px solid transparent;
@@ -1119,6 +1196,86 @@ export default function MealSlotPicker({
         .msp-btn:disabled {
           opacity: 0.6;
           cursor: not-allowed;
+        }
+
+        .msp-btn-danger-outline {
+          background: transparent;
+          border-color: var(--danger, #dc2626);
+          color: var(--danger, #dc2626);
+        }
+
+        .msp-btn-danger-outline:hover {
+          background: var(--danger-bg, rgba(220, 38, 38, 0.1));
+        }
+
+        /* View Mode Styles */
+        .msp-view-mode {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          padding: 1.5rem;
+          gap: 1.5rem;
+        }
+
+        .msp-existing-meal {
+          flex: 1;
+          background: var(--surface-2, #f9fafb);
+          border-radius: 12px;
+          padding: 1.5rem;
+        }
+
+        .msp-existing-meal h4 {
+          margin: 0 0 0.75rem 0;
+          font-size: 1.25rem;
+          font-weight: 600;
+          color: var(--text, #333);
+        }
+
+        .msp-existing-desc {
+          font-size: 0.95rem;
+          color: var(--muted, #666);
+          line-height: 1.5;
+          margin: 0 0 1rem 0;
+        }
+
+        .msp-dishes-view {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 0.5rem;
+          margin-top: 1rem;
+        }
+
+        .msp-dishes-label {
+          font-size: 0.85rem;
+          font-weight: 500;
+          color: var(--muted, #666);
+        }
+
+        .msp-dish-chip {
+          display: inline-block;
+          padding: 0.35rem 0.75rem;
+          background: var(--surface, #fff);
+          border: 1px solid var(--border, #e5e7eb);
+          border-radius: 99px;
+          font-size: 0.85rem;
+          color: var(--text, #333);
+        }
+
+        .msp-view-actions {
+          display: flex;
+          flex-direction: column;
+          gap: 0.75rem;
+        }
+
+        @media (min-width: 480px) {
+          .msp-view-actions {
+            flex-direction: row;
+          }
+
+          .msp-view-actions .msp-btn {
+            flex: 1;
+          }
         }
       `}</style>
     </>

@@ -27,6 +27,80 @@ import { useSousChefNotifications } from '../contexts/SousChefNotificationContex
 const MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack']
 const MEAL_TYPE_LABELS = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner', snack: 'Snack' }
 
+// Helper: Get today's date in YYYY-MM-DD format
+function getTodayISO() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+// Helper: Format date as YYYY-MM-DD
+function formatDateISO(date) {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+// Helper: Get start of week (Monday) for a given date
+function getStartOfWeek(date) {
+  const d = new Date(date)
+  const day = d.getDay()
+  const diff = (day === 0 ? -6 : 1) - day // Monday as start
+  d.setDate(d.getDate() + diff)
+  d.setHours(0, 0, 0, 0)
+  return d
+}
+
+// Helper: Get default dates for a new meal plan (next Monday → Sunday)
+function getDefaultPlanDates() {
+  const today = new Date()
+  const dayOfWeek = today.getDay() // 0 = Sunday, 6 = Saturday
+
+  // Always start from next Monday
+  const daysUntilMonday = dayOfWeek === 0 ? 1 : 8 - dayOfWeek
+  const startDate = new Date(today)
+  startDate.setDate(today.getDate() + daysUntilMonday)
+
+  // End date is 6 days later (1 week: Mon-Sun)
+  const endDate = new Date(startDate)
+  endDate.setDate(startDate.getDate() + 6)
+
+  return {
+    start_date: formatDateISO(startDate),
+    end_date: formatDateISO(endDate)
+  }
+}
+
+// Helper: Get human-readable context for a date range
+function getDateRangeContext(startDate, endDate) {
+  const start = new Date(startDate + 'T00:00:00')
+  const end = new Date(endDate + 'T00:00:00')
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+
+  const daysCount = Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1
+  const weeksCount = Math.ceil(daysCount / 7)
+
+  const thisWeekStart = getStartOfWeek(today)
+  const diffFromThisWeek = Math.round((start - thisWeekStart) / (1000 * 60 * 60 * 24))
+
+  let weekContext = ''
+  if (diffFromThisWeek >= 0 && diffFromThisWeek < 7) {
+    weekContext = 'Starts this week'
+  } else if (diffFromThisWeek >= 7 && diffFromThisWeek < 14) {
+    weekContext = 'Starts next week'
+  } else if (diffFromThisWeek < 0 && diffFromThisWeek >= -7) {
+    weekContext = 'Started last week'
+  } else if (diffFromThisWeek < 0) {
+    const weeksAgo = Math.abs(Math.floor(diffFromThisWeek / 7))
+    weekContext = `Started ${weeksAgo} week${weeksAgo > 1 ? 's' : ''} ago`
+  } else {
+    const weeksAhead = Math.floor(diffFromThisWeek / 7)
+    weekContext = `Starts in ${weeksAhead} week${weeksAhead > 1 ? 's' : ''}`
+  }
+
+  return `${weekContext} · ${daysCount} day${daysCount > 1 ? 's' : ''} (${weeksCount} week${weeksCount > 1 ? 's' : ''})`
+}
+
 export default function MealPlanSlideout({ 
   isOpen, 
   onClose, 
@@ -100,6 +174,8 @@ export default function MealPlanSlideout({
     } else {
       setPlanDetail(null)
     }
+    // Close edit dates form when switching plans (prevents stale data)
+    setShowEditDates(false)
   }, [selectedPlan])
 
   const loadPlans = async () => {
@@ -107,14 +183,52 @@ export default function MealPlanSlideout({
     setLoading(true)
     setError(null)
     try {
-      // Extract numeric ID from unified client ID (e.g., "platform_123" -> 123)
-      const clientId = String(client.id).replace(/^(platform_|contact_)/, '')
+      // Keep the full client ID with prefix (e.g., "platform_123" or "contact_456")
+      const clientId = String(client.id)
       const data = await getClientPlans(clientId)
       setPlans(data?.plans || [])
-      // Auto-select first draft or most recent
+      // Smart plan selection: prioritize plans containing today > upcoming > past
       if (data?.plans?.length > 0) {
-        const draft = data.plans.find(p => p.status === 'draft')
-        setSelectedPlan(draft || data.plans[0])
+        const today = new Date()
+        today.setHours(0, 0, 0, 0)
+
+        // Categorize plans by relevance
+        let containsToday = []
+        let upcoming = []
+        let past = []
+
+        for (const plan of data.plans) {
+          const start = new Date(plan.start_date + 'T00:00:00')
+          const end = new Date(plan.end_date + 'T00:00:00')
+
+          if (start <= today && today <= end) {
+            containsToday.push(plan)
+          } else if (start > today) {
+            upcoming.push(plan)
+          } else {
+            past.push(plan)
+          }
+        }
+
+        // Sort upcoming by start_date ascending (soonest first)
+        upcoming.sort((a, b) => new Date(a.start_date) - new Date(b.start_date))
+        // Sort past by end_date descending (most recent first)
+        past.sort((a, b) => new Date(b.end_date) - new Date(a.end_date))
+
+        // Priority: contains today > upcoming > past
+        // Within each category, prefer drafts
+        const selectBest = (plans) => {
+          const draft = plans.find(p => p.status === 'draft')
+          return draft || plans[0]
+        }
+
+        if (containsToday.length > 0) {
+          setSelectedPlan(selectBest(containsToday))
+        } else if (upcoming.length > 0) {
+          setSelectedPlan(selectBest(upcoming))
+        } else if (past.length > 0) {
+          setSelectedPlan(selectBest(past))
+        }
       }
     } catch (err) {
       setError(err.message || 'Failed to load plans')
@@ -142,7 +256,7 @@ export default function MealPlanSlideout({
     setLoading(true)
     setError(null)
     try {
-      const clientId = String(client.id).replace(/^(platform_|contact_)/, '')
+      const clientId = String(client.id)
       const newPlan = await createPlan(clientId, newPlanForm)
       setPlans(prev => [newPlan, ...prev])
       setSelectedPlan(newPlan)
@@ -266,47 +380,62 @@ export default function MealPlanSlideout({
     }
   }
 
-  const handleSlotClick = useCallback((date, mealType, existingItem) => {
-    setPickerSlot({ date, mealType, existingItem })
+  const handleSlotClick = useCallback((date, mealType, existingItem, dayId) => {
+    setPickerSlot({ date, mealType, existingItem, dayId })
     setPickerOpen(true)
   }, [])
 
   const handleSlotAssign = async (assignment) => {
     if (!selectedPlan || !pickerSlot) return
-    
+
     try {
-      const { date, mealType, existingItem } = pickerSlot
-      
-      // Delete existing item if any
-      if (existingItem) {
-        const day = planDetail.days?.find(d => d.date === date)
-        if (day) {
-          await deletePlanItem(selectedPlan.id, day.id, existingItem.id)
-        }
+      const { date, mealType, existingItem, dayId } = pickerSlot
+
+      // Delete existing item if any (use dayId directly)
+      if (existingItem && dayId) {
+        await deletePlanItem(selectedPlan.id, dayId, existingItem.id)
       }
-      
-      // Find or create day
-      let day = planDetail.days?.find(d => d.date === date)
-      if (!day) {
-        day = await addPlanDay(selectedPlan.id, { date })
+
+      // Use existing dayId or create a new day
+      let targetDayId = dayId
+      if (!targetDayId) {
+        const newDay = await addPlanDay(selectedPlan.id, { date })
+        targetDayId = newDay.id
       }
-      
+
       // Add new item
-      await addPlanItem(selectedPlan.id, day.id, {
+      await addPlanItem(selectedPlan.id, targetDayId, {
         meal_type: mealType,
         meal_id: assignment.meal_id,
         custom_name: assignment.custom_name || '',
         custom_description: assignment.custom_description || '',
         servings: assignment.servings || 1
       })
-      
+
       // Refresh
       await loadPlanDetail(selectedPlan.id)
       setPickerOpen(false)
       setPickerSlot(null)
-      
+
     } catch (err) {
       setError(err.response?.data?.error || err.message || 'Failed to assign meal')
+    }
+  }
+
+  const handleSlotRemove = async () => {
+    if (!selectedPlan || !pickerSlot?.existingItem) return
+    try {
+      const { dayId, existingItem } = pickerSlot
+      if (!dayId) {
+        setError('Cannot remove meal: day information missing')
+        return
+      }
+      await deletePlanItem(selectedPlan.id, dayId, existingItem.id)
+      await loadPlanDetail(selectedPlan.id)
+      setPickerOpen(false)
+      setPickerSlot(null)
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || 'Failed to remove meal')
     }
   }
 
@@ -444,9 +573,18 @@ export default function MealPlanSlideout({
               </option>
             ))}
           </select>
-          <button 
+          <button
             className="mps-btn mps-btn-outline"
-            onClick={() => setShowNewPlanForm(true)}
+            onClick={() => {
+              const defaultDates = getDefaultPlanDates()
+              setNewPlanForm({
+                title: '',
+                start_date: defaultDates.start_date,
+                end_date: defaultDates.end_date,
+                notes: ''
+              })
+              setShowNewPlanForm(true)
+            }}
           >
             + New Plan
           </button>
@@ -518,7 +656,7 @@ export default function MealPlanSlideout({
               <div className="mps-form-row mps-form-row-2col">
                 <div>
                   <label>Start Date *</label>
-                  <input 
+                  <input
                     type="date"
                     required
                     value={newPlanForm.start_date}
@@ -527,7 +665,7 @@ export default function MealPlanSlideout({
                 </div>
                 <div>
                   <label>End Date *</label>
-                  <input 
+                  <input
                     type="date"
                     required
                     value={newPlanForm.end_date}
@@ -535,6 +673,21 @@ export default function MealPlanSlideout({
                   />
                 </div>
               </div>
+
+              {/* Date context helper */}
+              {newPlanForm.start_date && newPlanForm.end_date && (
+                <div className="mps-date-context">
+                  {getDateRangeContext(newPlanForm.start_date, newPlanForm.end_date)}
+                </div>
+              )}
+
+              {/* Past date warning */}
+              {newPlanForm.start_date && new Date(newPlanForm.start_date + 'T00:00:00') < new Date(getTodayISO() + 'T00:00:00') && (
+                <div className="mps-past-warning">
+                  ⚠️ Start date is in the past. Plans typically start today or later.
+                </div>
+              )}
+
               <div className="mps-form-row">
                 <label>Notes</label>
                 <textarea 
@@ -682,11 +835,13 @@ export default function MealPlanSlideout({
 
       {/* Slot Picker Modal */}
       {pickerOpen && (
-        <MealSlotPicker 
+        <MealSlotPicker
           isOpen={pickerOpen}
           onClose={() => { setPickerOpen(false); setPickerSlot(null) }}
           slot={pickerSlot}
+          existingItem={pickerSlot?.existingItem}
           onAssign={handleSlotAssign}
+          onRemove={handleSlotRemove}
           planId={selectedPlan?.id}
           planTitle={selectedPlan?.title || 'Meal Plan'}
           clientName={client?.name || client?.first_name || 'Client'}
@@ -959,6 +1114,35 @@ export default function MealPlanSlideout({
           gap: 0.5rem;
           justify-content: flex-end;
           margin-top: 1rem;
+        }
+
+        /* Date context helper */
+        .mps-date-context {
+          font-size: 0.85rem;
+          color: var(--muted, #666);
+          padding: 0.5rem 0.75rem;
+          background: var(--surface-2, #f9fafb);
+          border-radius: 6px;
+          margin-bottom: 0.75rem;
+        }
+
+        /* Past date warning */
+        .mps-past-warning {
+          font-size: 0.85rem;
+          color: var(--warning, #b45309);
+          background: var(--warning-bg, rgba(245, 158, 11, 0.12));
+          padding: 0.5rem 0.75rem;
+          border-radius: 6px;
+          margin-bottom: 0.75rem;
+        }
+
+        [data-theme="dark"] .mps-date-context {
+          background: var(--surface-2);
+        }
+
+        [data-theme="dark"] .mps-past-warning {
+          color: var(--warning, #fbbf24);
+          background: rgba(251, 191, 36, 0.12);
         }
 
         /* Error */

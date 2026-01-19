@@ -267,4 +267,3 @@ def time_series(request):
             {"error": "Failed to fetch analytics data. Please try again."},
             status=500
         )
-

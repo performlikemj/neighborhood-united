@@ -686,3 +686,6 @@ Guidelines:
         }
         
         return self._chef_context
+
+
+

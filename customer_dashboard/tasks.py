@@ -2,7 +2,6 @@ try:
     from groq import Groq
 except ImportError:
     Groq = None
-from celery import shared_task
 from django.conf import settings
 import logging
 from django.utils import timezone
@@ -32,7 +31,6 @@ ACTIVE_DB_AGGREGATION_SESSION_FLAG_PREFIX = "active_db_aggregation_session_user_
 
 logger = logging.getLogger(__name__)
 
-@shared_task
 def generate_chat_title(thread_id):
     """
     Celery task to generate and set the title for a ChatThread asynchronously.
@@ -96,7 +94,6 @@ def generate_chat_title(thread_id):
     except Exception as e:
         logger.error(f"Unexpected error in generate_chat_title task for thread_id {thread_id}: {e}", exc_info=True)
 
-@shared_task
 def summarize_user_chat_sessions():
     """
     Hourly task to summarize chat sessions for users when it's 3:30 AM in their timezone.
@@ -196,8 +193,8 @@ def summarize_user_chat_sessions():
                     }
                 )
                 
-                # Generate the summary in a separate task
-                generate_chat_session_summary.delay(summary_obj.id)
+                # Generate the summary
+                generate_chat_session_summary(summary_obj.id)
                 count += 1
                 
             except Exception as e:
@@ -210,13 +207,12 @@ def summarize_user_chat_sessions():
                 }
                 requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
     
-    # If any summaries were created/updated, schedule the consolidated summary task
+    # If any summaries were created/updated, run the consolidated summary
     if count > 0:
-        consolidate_user_chat_summaries.delay()
+        consolidate_user_chat_summaries()
     
     return count
 
-@shared_task
 def generate_chat_session_summary(summary_id):
     """
     Generate a summary for a specific chat session.
@@ -367,7 +363,6 @@ def generate_chat_session_summary(summary_id):
         requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return f"Error for summary {summary_id}: {str(e)}"
 
-@shared_task
 def consolidate_user_chat_summaries():
     """
     Create consolidated summaries for each user who just had chat sessions summarized.
@@ -406,7 +401,7 @@ def consolidate_user_chat_summaries():
                 continue
             
             # Generate the consolidated summary
-            generate_consolidated_user_summary.delay(user.id)
+            generate_consolidated_user_summary(user.id)
             count += 1
             
         except Exception as e:
@@ -420,7 +415,6 @@ def consolidate_user_chat_summaries():
             requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
     return count
 
-@shared_task
 def generate_consolidated_user_summary(user_id):
     """
     Generate a consolidated summary for a specific user based on all their chat session summaries.
@@ -551,8 +545,7 @@ def generate_consolidated_user_summary(user_id):
         requests.post(os.getenv('N8N_TRACEBACK_URL'), json=n8n_traceback)
         return f"Error for user summary {user_id}: {str(e)}"
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=60)
-def process_aggregated_emails(self, session_identifier_str, use_enhanced_formatting=False):
+def process_aggregated_emails(session_identifier_str, use_enhanced_formatting=False):
     """
     ENHANCED Celery task to process aggregated emails with intent-based formatting
     
@@ -988,7 +981,6 @@ def process_aggregated_emails(self, session_identifier_str, use_enhanced_formatt
 
 # Additional helper tasks for monitoring and maintenance
 
-@shared_task
 def cleanup_expired_sessions():
     """
     Cleanup task to remove expired email aggregation sessions
@@ -1015,7 +1007,6 @@ def cleanup_expired_sessions():
         logger.error(f"Error in cleanup_expired_sessions: {str(e)}")
         return {'status': 'error', 'message': str(e)}
 
-@shared_task
 def monitor_enhanced_formatting_performance():
     """
     Monitoring task to track enhanced formatting performance

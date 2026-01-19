@@ -114,7 +114,7 @@ class ChefRequestAdmin(admin.ModelAdmin):
                         from .tasks import notify_area_waitlist_users
                         chef_username = getattr(chef.user, 'username', 'chef')
                         for postal_code_obj in obj.requested_postalcodes.all():
-                            notify_area_waitlist_users.delay(
+                            notify_area_waitlist_users(
                                 postal_code_obj.code,
                                 str(postal_code_obj.country),
                                 chef_username
@@ -172,7 +172,7 @@ class ChefRequestAdmin(admin.ModelAdmin):
                             from .tasks import notify_area_waitlist_users
                             chef_username = getattr(chef.user, 'username', 'chef')
                             for postal_code_obj in chef_request.requested_postalcodes.all():
-                                notify_area_waitlist_users.delay(
+                                notify_area_waitlist_users(
                                     postal_code_obj.code,
                                     str(postal_code_obj.country),
                                     chef_username

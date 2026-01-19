@@ -872,9 +872,9 @@ def api_generate_cooking_instructions(request):
         if not valid_meal_plan_meal_ids:
             return Response({"error": "No valid meal plan meals found or you do not have permission to access them."}, status=404)
 
-        # Call the Celery task to generate cooking instructions for each valid meal plan meal
+        # Generate cooking instructions for each valid meal plan meal
         # Frontend-triggered generation should never send emails
-        generate_instructions.delay(valid_meal_plan_meal_ids)
+        generate_instructions(valid_meal_plan_meal_ids)
 
         return Response({"message": "Cooking instructions generation initiated successfully for the selected meal plan meals."}, status=200)
 
@@ -1975,26 +1975,19 @@ def api_generate_meal_plan(request):
         from .meal_plan_service import create_meal_plan_for_user
         
         try:
-            task = create_meal_plan_for_user.apply_async(
-                args=[],
-                kwargs={
-                    'user_id': request.user.id,
-                    'start_of_week': week_start_date,
-                    'end_of_week': week_end_date,
-                    'request_id': str(uuid.uuid4()),
-                    'user_prompt': request.data.get('user_prompt') if request.data else None
-                },
-                task_id=task_id  # Use deterministic task ID
+            # Execute meal plan creation directly
+            result = create_meal_plan_for_user(
+                user_id=request.user.id,
+                start_of_week=week_start_date,
+                end_of_week=week_end_date,
+                request_id=str(uuid.uuid4()),
+                user_prompt=request.data.get('user_prompt') if request.data else None
             )
         except Exception as e:
-            # Clean up the lock if task dispatch fails
+            # Clean up the lock if task fails
             delete(lock_key)
-            # N8N traceback
-            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-            try:
-                requests.post(n8n_traceback_url, json={"error": f"Error in api_generate_meal_plan: {str(e)}", "source":"api_generate_meal_plan", "traceback": traceback.format_exc()})
-            except Exception:
-                pass
+            # Log error
+            logger.exception(f"Error in api_generate_meal_plan: {str(e)}")
             
 
         logger.info(f"Started meal plan generation task {task.id} for user {request.user.username}")
@@ -2141,24 +2134,19 @@ def api_stream_meal_plan_generation(request):
         lock_val = redis_get(lock_key)
         if not lock_val:
             try:
-                # set short lock to avoid races before Celery picks it up
-                task_id = f"meal_plan_generation_{user_id}_{week_start_date.strftime('%Y_%m_%d') }"
+                # set lock to avoid races
                 lock_value_to_set = f"meal_plan_generation_{user_id}_{week_start_date.strftime('%Y_%m_%d')}"
                 redis_set(lock_key, lock_value_to_set, 7200)
                 from .meal_plan_service import create_meal_plan_for_user
-                create_meal_plan_for_user.apply_async(
-                    args=[],
-                    kwargs={
-                        'user_id': user_id,
-                        'start_of_week': week_start_date,
-                        'end_of_week': week_start_date + timedelta(days=6),
-                        'request_id': str(uuid.uuid4()),
-                        'user_prompt': request.query_params.get('user_prompt') if hasattr(request, 'query_params') else None
-                    },
-                    task_id=task_id
+                create_meal_plan_for_user(
+                    user_id=user_id,
+                    start_of_week=week_start_date,
+                    end_of_week=week_start_date + timedelta(days=6),
+                    request_id=str(uuid.uuid4()),
+                    user_prompt=request.query_params.get('user_prompt') if hasattr(request, 'query_params') else None
                 )
             except Exception:
-                # Best effort cleanup of premature lock
+                # Best effort cleanup of lock
                 try:
                     redis_delete(lock_key)
                 except Exception:

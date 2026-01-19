@@ -217,7 +217,9 @@ export default function MealPlanWeekView({
   }, [daysData])
 
   const handleSlotClick = (date, mealType, item, dayId) => {
-    if (readOnly || !onSlotClick) return
+    if (!onSlotClick) return
+    // In read-only mode, only allow clicking on occupied slots (for viewing)
+    if (readOnly && !item) return
     onSlotClick(date, mealType, item, dayId)
   }
 

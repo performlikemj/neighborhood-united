@@ -118,9 +118,9 @@ def create_order(user, event: ChefMealEvent, qty: int, idem_key: str):
             # Do not fail the transaction if OrderMeal creation fails; payment-init will fallback to ChefMealOrders
             pass
         
-        # Schedule capture at cutoff time
+        # Capture at cutoff time
         from meals.tasks import schedule_capture
-        schedule_capture.delay(event.id)
+        schedule_capture(event.id)
         
         return chef_meal_order
 

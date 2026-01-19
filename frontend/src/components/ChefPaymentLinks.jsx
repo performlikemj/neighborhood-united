@@ -375,8 +375,8 @@ export default function ChefPaymentLinks() {
                   padding: '2px 6px',
                   borderRadius: '4px',
                   fontSize: '11px',
-                  backgroundColor: link.recipient.email_verified ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
-                  color: link.recipient.email_verified ? '#10b981' : '#f59e0b'
+                  backgroundColor: link.recipient.email_verified ? 'var(--success-bg)' : 'var(--warning-bg)',
+                  color: link.recipient.email_verified ? 'var(--success)' : 'var(--warning)'
                 }}>
                   {link.recipient.email_verified ? 'Verified' : 'Not Verified'}
                 </span>
@@ -437,7 +437,7 @@ export default function ChefPaymentLinks() {
             <div style={{ fontSize: '12px', color: 'var(--muted, #666)', marginBottom: '4px' }}>Expires</div>
             <div style={{
               fontSize: '14px',
-              color: link.is_expired ? '#dc3545' : 'var(--text, #333)'
+              color: link.is_expired ? 'var(--danger)' : 'var(--text, #333)'
             }}>
               {new Date(link.expires_at).toLocaleDateString()}
               {link.is_expired && ' (Expired)'}
@@ -455,7 +455,7 @@ export default function ChefPaymentLinks() {
           {link.paid_at && (
             <div>
               <div style={{ fontSize: '12px', color: 'var(--muted, #666)', marginBottom: '4px' }}>Paid</div>
-              <div style={{ fontSize: '14px', color: '#28a745' }}>
+              <div style={{ fontSize: '14px', color: 'var(--success)' }}>
                 {new Date(link.paid_at).toLocaleDateString()}
               </div>
             </div>
@@ -467,11 +467,11 @@ export default function ChefPaymentLinks() {
           <div style={{ marginBottom: '20px' }}>
             <div style={{ fontSize: '12px', color: 'var(--muted, #666)', marginBottom: '8px' }}>Internal Notes</div>
             <div style={{
-              backgroundColor: 'rgba(245, 158, 11, 0.1)',
+              backgroundColor: 'var(--warning-bg)',
               padding: '12px',
               borderRadius: '8px',
               fontSize: '14px',
-              borderLeft: '3px solid #ffc107',
+              borderLeft: '3px solid var(--warning)',
               color: 'var(--text, #333)'
             }}>
               {link.internal_notes}
@@ -513,8 +513,8 @@ export default function ChefPaymentLinks() {
               style={{
                 padding: '12px 20px',
                 backgroundColor: 'var(--surface, #fff)',
-                color: '#dc3545',
-                border: '1px solid #dc3545',
+                color: 'var(--danger)',
+                border: '1px solid var(--danger)',
                 borderRadius: '6px',
                 cursor: cancelling ? 'not-allowed' : 'pointer',
                 fontWeight: 500,
@@ -569,8 +569,8 @@ export default function ChefPaymentLinks() {
           paddingBottom: '8px'
         }}>
           <StatCard label="Total Links" value={stats.total_count || 0} color="var(--text, #333)" />
-          <StatCard label="Pending" value={stats.pending_count || 0} color="#ffc107" />
-          <StatCard label="Paid" value={stats.paid_count || 0} color="#28a745" />
+          <StatCard label="Pending" value={stats.pending_count || 0} color="var(--warning)" />
+          <StatCard label="Paid" value={stats.paid_count || 0} color="var(--success)" />
           <StatCard
             label="Pending Amount"
             value={formatAmount(stats.total_pending_amount_cents || 0, stats.currency || 'USD')}
@@ -579,7 +579,7 @@ export default function ChefPaymentLinks() {
           <StatCard
             label="Collected"
             value={formatAmount(stats.total_paid_amount_cents || 0, stats.currency || 'USD')}
-            color="#28a745"
+            color="var(--success)"
           />
         </div>
       )}

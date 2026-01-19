@@ -388,3 +388,6 @@ def customer_receipts(request, customer_id):
 
 
 
+
+
+

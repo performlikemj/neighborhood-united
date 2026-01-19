@@ -1,7 +1,25 @@
+"""
+=============================================================================
+CELERY CONFIGURATION - DECOMMISSIONED
+=============================================================================
+Celery workers have been replaced with synchronous task execution via QStash.
+Tasks are now executed directly when QStash triggers the webhook endpoints
+defined in api/cron_triggers.py.
+
+This file is kept for reference and backwards compatibility with any code
+that imports from hood_united.celery. The Celery app is still configured
+but no workers should be running.
+
+Migration summary:
+- QStash replaces Celery Beat for scheduling
+- Tasks run synchronously in Django HTTP request context
+- No Redis polling = massive reduction in Redis usage
+=============================================================================
+"""
 from __future__ import absolute_import, unicode_literals
 import os
 from celery import Celery
-from celery.signals import worker_ready, task_postrun
+from celery.signals import task_postrun
 from django.conf import settings
 from celery.schedules import crontab
 from dotenv import load_dotenv
@@ -18,10 +36,9 @@ app.config_from_object('django.conf:settings', namespace='CELERY')
 # Load task modules from all registered Django app configs.
 app.autodiscover_tasks(lambda: settings.INSTALLED_APPS)
 
-# NOTE: Celery Beat has been replaced by QStash serverless scheduler.
-# These schedules are kept here as documentation only - actual scheduling
-# is done via QStash (see api/cron_triggers.py for the task mappings).
-# The Celery Beat container has been decommissioned.
+# NOTE: Celery Beat and workers have been DECOMMISSIONED.
+# These schedules are kept for documentation only - actual scheduling
+# is now done via QStash (see api/cron_triggers.py for task mappings).
 app.conf.beat_schedule = {
     # Meal/embedding tasks
     'update-embeddings-daily': {
@@ -68,26 +85,14 @@ def close_database_connections(**kwargs):
     """
     Close all database connections after each task to prevent stale connections.
     Critical for Azure PostgreSQL which closes idle connections after ~5 minutes.
+    
+    NOTE: With CELERY_TASK_ALWAYS_EAGER=True, tasks run in the same process
+    as Django, so this may not be necessary. Kept for safety.
     """
     from django.db import connections
     for conn in connections.all():
         conn.close()
 
 
-@worker_ready.connect
-def _start_monitor_on_worker_ready(sender=None, **kwargs):
-    """
-    Start the beat monitor task once the worker is fully booted.
-    Uses a short countdown to avoid thundering herd on multi-worker setups.
-    """
-    # Feature flag: gate the monitor wiring to reduce noise when disabled
-    if os.getenv("CELERY_BEAT_MONITOR_ENABLED", "false").lower() != "true":
-        return
-    try:
-        from meals.tasks import monitor_celery_beat
-        # delay a few seconds to ensure caches and network are available
-        monitor_celery_beat.apply_async(countdown=5)
-    except Exception:
-        # Avoid raising during startup; logging via Celery logger
-        import logging
-        logging.getLogger(__name__).exception("Failed to start monitor_celery_beat on worker_ready")
+# NOTE: worker_ready signal handler removed - Celery workers are decommissioned.
+# Beat monitoring is no longer needed since QStash handles scheduling.

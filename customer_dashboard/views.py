@@ -329,15 +329,15 @@ def api_user_summary_status(request):
             summary_date=today,
             status=UserDailySummary.PENDING
         )
-        # Queue the generation task
-        generate_user_summary.delay(user_id, today.strftime('%Y-%m-%d'))
+        # Generate the summary
+        generate_user_summary(user_id, today.strftime('%Y-%m-%d'))
         return Response({"status": "pending", "message": "Summary generation started."}, status=202)
     
     # If most recent summary has error status, regenerate it
     if user_summary.status == UserDailySummary.ERROR:
         user_summary.status = UserDailySummary.PENDING
         user_summary.save(update_fields=["status"])
-        generate_user_summary.delay(user_id, user_summary.summary_date.strftime('%Y-%m-%d'))
+        generate_user_summary(user_id, user_summary.summary_date.strftime('%Y-%m-%d'))
         return Response({"status": "pending", "message": "Summary generation restarted."}, status=202)
 
     # Return the appropriate status
@@ -375,8 +375,8 @@ def api_user_summary(request):
             summary_date=today,
             status=UserDailySummary.PENDING
         )
-        # Queue the generation task
-        generate_user_summary.delay(user_id, today.strftime('%Y-%m-%d'))
+        # Generate the summary
+        generate_user_summary(user_id, today.strftime('%Y-%m-%d'))
         return Response({
             "status": "pending",
             "message": "Summary generation started.",
@@ -387,7 +387,7 @@ def api_user_summary(request):
     if user_summary.status == UserDailySummary.ERROR:
         user_summary.status = UserDailySummary.PENDING
         user_summary.save(update_fields=["status"])
-        generate_user_summary.delay(user_id, user_summary.summary_date.strftime('%Y-%m-%d'))
+        generate_user_summary(user_id, user_summary.summary_date.strftime('%Y-%m-%d'))
         return Response({
             "status": "pending", 
             "message": "Summary generation restarted.",

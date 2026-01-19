@@ -6,5 +6,5 @@ class Command(BaseCommand):
     help = 'Triggers asynchronous update of embeddings for all chefs.'
 
     def handle(self, *args, **options):
-        update_chef_embeddings.delay()  # Enqueue the task
-        self.stdout.write(self.style.SUCCESS('Successfully triggered chef embeddings update task.'))
+        update_chef_embeddings()  # Run the task directly
+        self.stdout.write(self.style.SUCCESS('Successfully ran chef embeddings update.'))

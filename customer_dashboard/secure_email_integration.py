@@ -159,10 +159,10 @@ def process_email(request):
                 )
                 set(active_session_flag_key, str(db_aggregation_session.session_identifier), timeout=AGGREGATION_WINDOW_MINUTES * 60)
                 
-                # ENHANCED: Pass enhanced processing flag to Celery task
-                process_aggregated_emails.apply_async(
-                    args=[str(db_aggregation_session.session_identifier)],
-                    kwargs={'use_enhanced_formatting': True},  # NEW: Enable enhanced formatting
+                # Process emails with enhanced formatting
+                process_aggregated_emails(
+                    str(db_aggregation_session.session_identifier),
+                    use_enhanced_formatting=True,
                     countdown=AGGREGATION_WINDOW_MINUTES * 60
                 )
                 
@@ -289,10 +289,10 @@ def process_email(request):
                     AggregatedMessageContent.objects.create(session=db_aggregation_session, content=message_content)
                     set(active_session_flag_key, str(db_aggregation_session.session_identifier), timeout=AGGREGATION_WINDOW_MINUTES * 60)
                     
-                    # ENHANCED: Pass enhanced processing flag to Celery task
-                    process_aggregated_emails.apply_async(
-                        args=[str(db_aggregation_session.session_identifier)], 
-                        kwargs={'use_enhanced_formatting': True},  # NEW: Enable enhanced formatting
+                    # Process emails with enhanced formatting
+                    process_aggregated_emails(
+                        str(db_aggregation_session.session_identifier),
+                        use_enhanced_formatting=True,
                         countdown=AGGREGATION_WINDOW_MINUTES * 60
                     )
                     

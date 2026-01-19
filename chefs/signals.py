@@ -23,7 +23,7 @@ def on_meal_event_saved(sender, instance: ChefMealEvent, created, **kwargs):
         now = timezone.now()
         if instance.status in [STATUS_SCHEDULED, STATUS_OPEN] and instance.order_cutoff_time and instance.order_cutoff_time > now:
             if instance.max_orders is None or instance.orders_count < instance.max_orders:
-                notify_waitlist_subscribers_for_chef.delay(instance.chef_id)
+                notify_waitlist_subscribers_for_chef(instance.chef_id)
     except Exception:
         # Never raise in signal handler
         return
@@ -57,8 +57,8 @@ def on_chef_postal_code_added(sender, instance: ChefPostalCode, created, **kwarg
         # Get chef username for the notification
         chef_username = getattr(chef.user, 'username', 'chef')
         
-        # Queue the notification task
-        notify_area_waitlist_users.delay(postal_code, country, chef_username)
+        # Send the notification
+        notify_area_waitlist_users(postal_code, country, chef_username)
         
     except Exception:
         # Never raise in signal handler

@@ -339,14 +339,14 @@ class SystemUpdateAdmin(admin.ModelAdmin):
                 )
                 
                 if test_mode:
-                    queue_system_update_email.delay(
+                    queue_system_update_email(
                         system_update.id,
                         test_mode=True,
                         admin_id=request.user.id
                     )
-                    messages.success(request, "Test email has been queued!")
+                    messages.success(request, "Test email has been sent!")
                 else:
-                    queue_system_update_email.delay(
+                    queue_system_update_email(
                         system_update.id,
                         test_mode=False
                     )

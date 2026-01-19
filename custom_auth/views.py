@@ -141,10 +141,10 @@ def email_authentication_view(request, auth_token):
             active_session_flag_key = f"{ACTIVE_DB_AGGREGATION_SESSION_FLAG_PREFIX}{user.id}"
             redis_set(active_session_flag_key, str(db_aggregation_session.session_identifier), timeout=AGGREGATION_WINDOW_MINUTES * 60)
 
-            process_aggregated_emails.apply_async(
-                args=[str(db_aggregation_session.session_identifier)],
-                kwargs={'use_enhanced_formatting': True},
-                countdown=AGGREGATION_WINDOW_MINUTES * 60
+            # Process emails directly (previously had countdown for aggregation window)
+            process_aggregated_emails(
+                str(db_aggregation_session.session_identifier),
+                use_enhanced_formatting=True
             )
 
             # Optionally, send an acknowledgment for the processed pending message
@@ -293,10 +293,10 @@ def process_now_view(request):
                 }
             }, status=200)
         
-        # Process the session immediately using the existing Celery task
-        task_result = process_aggregated_emails.apply_async(
-            args=[str(active_session.session_identifier)],
-            kwargs={'use_enhanced_formatting': True},
+        # Process the session immediately
+        task_result = process_aggregated_emails(
+            str(active_session.session_identifier),
+            use_enhanced_formatting=True,
             countdown=0  # Process immediately
         )
         
@@ -782,9 +782,9 @@ def update_profile_api(request):
                 # Find newly added preferences
                 added_custom_prefs = new_custom_pref_names - original_custom_prefs
                 if added_custom_prefs:
-                    # Dispatch task for newly added custom preferences
-                    handle_custom_dietary_preference.delay(list(added_custom_prefs))
-                    logger.info(f"Dispatched tasks for new custom dietary preferences: {added_custom_prefs}")
+                    # Handle newly added custom preferences
+                    handle_custom_dietary_preference(list(added_custom_prefs))
+                    logger.info(f"Handled new custom dietary preferences: {added_custom_prefs}")
 
             if 'allergies' in user_serializer.validated_data:
                 user.allergies = user_serializer.validated_data['allergies']
@@ -1149,7 +1149,7 @@ def register_api_view(request):
         if custom_diet_prefs_input:
             for custom_pref in custom_diet_prefs_input:  # Iterating over the list directly
                 custom_pref_obj, created = CustomDietaryPreference.objects.get_or_create(name=custom_pref.strip())
-                handle_custom_dietary_preference.delay([custom_pref])
+                handle_custom_dietary_preference([custom_pref])
                 new_custom_prefs.append(custom_pref_obj)  # Collect the created objects
 
         # Create the user via serializer
@@ -1287,9 +1287,9 @@ def activate_account_api_view(request):
             user.initial_email_confirmed = True
             user.save()
             
-            # Trigger the Celery tasks to create the meal plan and generate the user summary
-            transaction.on_commit(lambda: create_meal_plan_for_new_user.delay(user.id))
-            transaction.on_commit(lambda: generate_user_summary.delay(user.id))
+            # Create meal plan and generate user summary after transaction commits
+            transaction.on_commit(lambda: create_meal_plan_for_new_user(user.id))
+            transaction.on_commit(lambda: generate_user_summary(user.id))
             
             return Response({'status': 'success', 'message': 'Account activated successfully.'})
         else:
@@ -1893,7 +1893,7 @@ def onboarding_complete_registration(request):
             if custom_diet_prefs_input:
                 for custom_pref in custom_diet_prefs_input:
                     custom_pref_obj, created = CustomDietaryPreference.objects.get_or_create(name=custom_pref.strip())
-                    handle_custom_dietary_preference.delay([custom_pref])
+                    handle_custom_dietary_preference([custom_pref])
                     new_custom_prefs.append(custom_pref_obj)
             
             # Create the user via onboarding serializer

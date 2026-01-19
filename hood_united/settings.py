@@ -514,55 +514,27 @@ else:
         },
     }
 
-# Celery settings
-CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL')
-CELERY_RESULT_BACKEND = CELERY_BROKER_URL
-CELERY_REDIS_MAX_CONNECTIONS = 10
+# =============================================================================
+# CELERY SETTINGS - DECOMMISSIONED
+# =============================================================================
+# Celery workers have been replaced with synchronous task execution via QStash.
+# Tasks are now executed directly when QStash triggers the webhook endpoints.
+# This eliminates continuous Redis polling that was causing ~77,000 commands/day.
+#
+# The following settings are kept for reference but are no longer used:
+# - CELERY_BROKER_URL: No longer needed (tasks run in Django request)
+# - CELERY_RESULT_BACKEND: No longer needed (no async results)
+# - All broker/worker settings: No longer needed (no workers running)
+#
+# To fully decommission:
+# 1. Stop the sautai-celery-worker Azure Container App
+# 2. Delete Redis keys: _kombu.binding.celery, _kombu.binding.celeryev, etc.
+# 3. Remove CELERY_BROKER_URL from environment variables
+# =============================================================================
 
-broker_pool_limit = 1                               # <— add
-broker_transport_options = {                        # <— add
-    "visibility_timeout": 3600,
-    "health_check_interval": 30,
-}
-
-# Ensure Celery doesn't fallback to localhost if broker URL is not available
-if not CELERY_BROKER_URL:
-    import logging
-    logging.getLogger(__name__).error("CELERY_BROKER_URL environment variable not set! Celery will not function properly.")
-
-# Add additional Celery configuration to prevent localhost fallback
-CELERY_TASK_ALWAYS_EAGER = False
-CELERY_TASK_EAGER_PROPAGATES = True
-CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
-CELERY_BROKER_CONNECTION_RETRY = True
-CELERY_BROKER_CONNECTION_MAX_RETRIES = 3
-
-# Database connection handling for Celery workers
-# Close database connections after each task to prevent stale connections
-CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000  # Restart worker after 1000 tasks
-CELERY_WORKER_PREFETCH_MULTIPLIER = 1  # Only fetch one task at a time
-CELERY_TASK_ACKS_LATE = True  # Acknowledge task after completion, not before
-
-# CELERY BEAT settings
-CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
-CELERY_TIMEZONE = TIME_ZONE  # or explicit e.g. 'UTC' or 'Asia/Tokyo'
-CELERY_ENABLE_UTC = True
-# Celery broker transport options
-# Upstash requires SSL with rediss:// URL scheme
-CELERY_BROKER_TRANSPORT_OPTIONS = {
-    'visibility_timeout': 3600,
-}
-
-# SSL configuration for Upstash Redis (rediss:// URLs)
-import ssl
-CELERY_BROKER_USE_SSL = {
-    'ssl_cert_reqs': ssl.CERT_REQUIRED,
-}
-CELERY_REDIS_BACKEND_USE_SSL = {
-    'ssl_cert_reqs': ssl.CERT_REQUIRED,
-}
-CELERYD_LOG_FILE = "/var/log/celery/celery.log"
-CELERYD_LOG_LEVEL = "DEBUG"
+# Keep minimal settings for any code that still imports from celery
+CELERY_TASK_ALWAYS_EAGER = True  # Execute tasks synchronously in the same process
+CELERY_TASK_EAGER_PROPAGATES = True  # Propagate exceptions from eager tasks
 
 # QStash settings (serverless cron scheduler - replaces Celery Beat)
 # Get signing keys from Upstash QStash console: https://console.upstash.com/qstash

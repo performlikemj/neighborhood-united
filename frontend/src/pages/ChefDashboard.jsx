@@ -130,15 +130,15 @@ function toCurrencyDisplay(amount, currency = 'USD'){
 function serviceStatusTone(status){
   const normalized = String(status || '').toLowerCase()
   if (['paid','completed','confirmed','active'].includes(normalized)){
-    return { label: normalized === 'paid' ? 'Paid' : normalized.charAt(0).toUpperCase()+normalized.slice(1), style: { background:'rgba(24,180,24,.15)', color:'#168516' } }
+    return { label: normalized === 'paid' ? 'Paid' : normalized.charAt(0).toUpperCase()+normalized.slice(1), style: { background:'var(--success-bg)', color:'var(--success)' } }
   }
   if (['awaiting_payment','pending','draft','open'].includes(normalized)){
-    return { label: normalized.replace('_',' '), style: { background:'rgba(60,100,200,.16)', color:'#1b3a72' } }
+    return { label: normalized.replace('_',' '), style: { background:'var(--warning-bg)', color:'var(--warning)' } }
   }
   if (['cancelled','canceled','refund_pending','failed'].includes(normalized)){
-    return { label: normalized.charAt(0).toUpperCase()+normalized.slice(1).replace('_',' '), style: { background:'rgba(200,40,40,.18)', color:'#a11919' } }
+    return { label: normalized.charAt(0).toUpperCase()+normalized.slice(1).replace('_',' '), style: { background:'var(--danger-bg)', color:'var(--danger)' } }
   }
-  return { label: status || 'Unknown', style: { background:'rgba(60,60,60,.12)', color:'#2f2f2f' } }
+  return { label: status || 'Unknown', style: { background:'var(--neutral-bg)', color:'var(--neutral)' } }
 }
 
 function extractTierLabel(order = {}){
@@ -1697,12 +1697,12 @@ function ChefDashboardContent(){
       <Icon />
       {!sidebarCollapsed && <span>{label}</span>}
       {badge > 0 && (
-        <span style={{
+        <span className="chef-nav-badge" style={{
           position: 'absolute',
           top: sidebarCollapsed ? '2px' : '50%',
           right: sidebarCollapsed ? '2px' : '8px',
           transform: sidebarCollapsed ? 'none' : 'translateY(-50%)',
-          background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+          background: 'var(--warning)',
           color: 'white',
           fontSize: '0.65rem',
           fontWeight: 700,
@@ -1713,7 +1713,7 @@ function ChefDashboardContent(){
           alignItems: 'center',
           justifyContent: 'center',
           padding: '0 5px',
-          boxShadow: '0 2px 4px rgba(245, 158, 11, 0.4)'
+          boxShadow: '0 2px 4px var(--warning-bg)'
         }}>
           {badge > 9 ? '9+' : badge}
         </span>
@@ -2259,7 +2259,7 @@ function ChefDashboardContent(){
             <span>Decline</span>
             <span>End</span>
           </div>
-          <ChefAllClients />
+          <ChefAllClients onNavigateToPrep={() => setTab('prep')} />
         </div>
       )}
 
@@ -2267,7 +2267,7 @@ function ChefDashboardContent(){
 
       {tab==='payments' && <ChefPaymentLinks />}
 
-      {tab==='prep' && <ChefPrepPlanning />}
+      {tab==='prep' && <ChefPrepPlanning onNavigateToClients={() => setTab('clients')} />}
 
       {tab==='profile' && (
         <div>

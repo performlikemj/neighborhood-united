@@ -677,4 +677,3 @@ def _fill_date_range(start_date, days: int, data_by_date: dict) -> list[dict]:
         })
     
     return results
-

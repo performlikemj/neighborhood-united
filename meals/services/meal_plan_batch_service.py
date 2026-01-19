@@ -274,7 +274,7 @@ def _schedule_synchronous_generation(
     from meals.meal_plan_service import create_meal_plan_for_user
 
     for user in users:
-        create_meal_plan_for_user.delay(
+        create_meal_plan_for_user(
             user_id=user.id,
             start_of_week=week_start,
             end_of_week=week_end,

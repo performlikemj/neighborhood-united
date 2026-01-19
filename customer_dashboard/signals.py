@@ -26,6 +26,6 @@ def name_chat_thread_on_creation_or_history_update(sender, instance, created, **
         
         if has_user_message:
             logger.info(f"Generating title for ChatThread {instance.id} with {len(instance.openai_input_history)} messages")
-            generate_chat_title.delay(instance.id)
+            generate_chat_title(instance.id)
         else:
             logger.debug(f"ChatThread {instance.id} has no user messages yet, skipping title generation")

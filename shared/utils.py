@@ -214,8 +214,8 @@ def append_custom_dietary_preference(request, preference_name):
         if user.custom_dietary_preferences.filter(name=preference_name).exists():
             return {"status": "info", "message": f"Preference '{preference_name}' already exists in the user's preferences."}
 
-        # Trigger the Celery task to handle the custom dietary preference
-        handle_custom_dietary_preference.delay([preference_name])
+        # Handle the custom dietary preference
+        handle_custom_dietary_preference([preference_name])
 
         # Add the custom preference to the user's preferences
         user.custom_dietary_preferences.create(name=preference_name)
@@ -2936,9 +2936,8 @@ def detect_and_trigger_emergency_supply_if_needed(meal_plan, user):
     if expiring_usage.exists():
         logger.info(f"[Emergency Supply] {expiring_usage.count()} usage items are from soon-to-expire pantry items!")
         
-        # Now trigger your Celery task to re-check emergency supply
-        # e.g. generate_emergency_supply_list.delay(user.id)
-        generate_emergency_supply_list.delay(user.id)
+        # Re-check emergency supply
+        generate_emergency_supply_list(user.id)
     else:
         logger.info("[Emergency Supply] No expiring pantry items used. No action needed.")
 

@@ -35,6 +35,43 @@ function formatCurrency(amount, currency = 'USD') {
   }).format(amount || 0)
 }
 
+// Helper to extract customer name from various order object shapes
+function getCustomerName(order = {}) {
+  // Try direct name fields first
+  const directName = order.customer_display_name
+    || order.customer_name
+    || order.customer_full_name
+  if (directName) return directName
+
+  // Try combining first + last name
+  const firstName = order.customer_first_name
+  const lastName = order.customer_last_name
+  if (firstName || lastName) {
+    return [firstName, lastName].filter(Boolean).join(' ')
+  }
+
+  // Try nested customer object (meal_event_details or customer_details)
+  const details = order.meal_event_details || order.customer_details || order.customer_profile || order.customer || {}
+  if (typeof details === 'object') {
+    const nestedName = details.full_name
+      || details.display_name
+      || details.name
+    if (nestedName) return nestedName
+
+    const nestedFirst = details.first_name
+    const nestedLast = details.last_name
+    if (nestedFirst || nestedLast) {
+      return [nestedFirst, nestedLast].filter(Boolean).join(' ')
+    }
+  }
+
+  // Fallback to username/email
+  const fallback = order.customer_username || order.customer_email
+  if (fallback) return fallback
+
+  return 'Customer'
+}
+
 export default function TodayDashboard({
   orders = [],
   serviceOrders = [],
@@ -219,7 +256,7 @@ export default function TodayDashboard({
                 <div className="order-status-dot" data-status={String(order.status || '').toLowerCase()} />
                 <div className="order-info">
                   <div className="order-customer">
-                    {order.customer_name || order.customer?.name || 'Customer'}
+                    {getCustomerName(order)}
                   </div>
                   <div className="order-details muted">
                     {order.service_name || order.meal_name || 'Order'} · {formatCurrency(order.total_price || order.total_value_for_chef)}
@@ -313,7 +350,32 @@ export default function TodayDashboard({
 
 const styles = `
   .today-dashboard {
-    max-width: 800px;
+    max-width: 100%;
+    color: var(--text);
+  }
+
+  /* Large screens - expand Today dashboard */
+  @media (min-width: 1600px) {
+    .today-dashboard {
+      max-width: 100%;
+    }
+    .today-cards {
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    }
+    .quick-actions {
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    }
+  }
+
+  @media (min-width: 2400px) {
+    .today-cards {
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1rem;
+    }
+  }
+
+  .today-dashboard .muted {
+    color: var(--muted);
   }
 
   .today-header {
@@ -324,11 +386,13 @@ const styles = `
     margin: 0 0 0.25rem 0;
     font-size: 1.75rem;
     font-weight: 700;
+    color: var(--text);
   }
 
   .today-greeting .muted {
     margin: 0;
     font-size: 0.95rem;
+    color: var(--muted);
   }
 
   .today-section {
@@ -362,10 +426,11 @@ const styles = `
   }
 
   .today-card {
-    background: var(--surface, #fff);
-    border: 1px solid var(--border, #e5e7eb);
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: 12px;
     padding: 1rem;
+    color: var(--text);
   }
 
   .today-card-action {
@@ -378,18 +443,19 @@ const styles = `
   }
 
   .today-card-action:hover {
-    border-color: var(--primary, #5cb85c);
-    background: rgba(92, 184, 92, 0.03);
+    border-color: var(--primary);
+    background: var(--surface-2);
   }
 
   .today-card-action.urgent {
-    border-color: rgba(245, 158, 11, 0.4);
-    background: rgba(245, 158, 11, 0.05);
+    border-color: var(--warning);
+    background: var(--warning-bg);
   }
 
   .today-card-action.urgent:hover {
-    border-color: rgba(245, 158, 11, 0.6);
-    background: rgba(245, 158, 11, 0.08);
+    border-color: var(--warning);
+    background: var(--warning-bg);
+    filter: brightness(1.05);
   }
 
   .card-icon-wrapper {
@@ -403,13 +469,13 @@ const styles = `
   }
 
   .card-icon-wrapper.orange {
-    background: rgba(245, 158, 11, 0.15);
-    color: #d97706;
+    background: var(--warning-bg);
+    color: var(--warning);
   }
 
   .card-icon-wrapper.blue {
-    background: rgba(59, 130, 246, 0.15);
-    color: #2563eb;
+    background: var(--info-bg);
+    color: var(--info);
   }
 
   .card-content {
@@ -421,6 +487,7 @@ const styles = `
     font-size: 1.5rem;
     font-weight: 700;
     line-height: 1.2;
+    color: var(--text);
   }
 
   .card-label {
@@ -435,8 +502,8 @@ const styles = `
 
   /* Onboarding Card */
   .today-onboarding {
-    background: linear-gradient(135deg, rgba(92, 184, 92, 0.08), rgba(92, 184, 92, 0.02));
-    border-color: rgba(92, 184, 92, 0.25);
+    background: var(--surface-2);
+    border-color: var(--primary);
   }
 
   .today-onboarding .card-header {
@@ -458,15 +525,17 @@ const styles = `
     margin: 0;
     font-size: 1rem;
     font-weight: 600;
+    color: var(--text);
   }
 
   .today-onboarding .card-title .muted {
     margin: 0;
     font-size: 0.8rem;
+    color: var(--muted);
   }
 
   .progress-badge {
-    background: var(--primary, #5cb85c);
+    background: var(--primary);
     color: white;
     font-size: 0.75rem;
     font-weight: 600;
@@ -476,7 +545,7 @@ const styles = `
 
   .progress-bar-container {
     height: 6px;
-    background: rgba(0, 0, 0, 0.08);
+    background: var(--border);
     border-radius: 3px;
     margin-bottom: 0.75rem;
     overflow: hidden;
@@ -484,7 +553,7 @@ const styles = `
 
   .progress-bar {
     height: 100%;
-    background: linear-gradient(90deg, var(--primary, #5cb85c), var(--primary-600, #4a9d4a));
+    background: linear-gradient(90deg, var(--primary), var(--primary-600));
     border-radius: 3px;
     transition: width 0.3s ease;
   }
@@ -500,19 +569,20 @@ const styles = `
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    background: var(--surface, #fff);
-    border: 1px solid var(--border, #e5e7eb);
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: 10px;
     padding: 0.75rem 1rem;
     cursor: pointer;
     transition: all 0.15s ease;
     text-align: left;
     width: 100%;
+    color: var(--text);
   }
 
   .today-order-item:hover {
-    border-color: var(--primary, #5cb85c);
-    background: rgba(92, 184, 92, 0.03);
+    border-color: var(--primary);
+    background: var(--surface-2);
   }
 
   .order-status-dot {
@@ -524,15 +594,15 @@ const styles = `
   }
 
   .order-status-dot[data-status="pending"] {
-    background: #f59e0b;
+    background: var(--warning);
   }
 
   .order-status-dot[data-status="confirmed"] {
-    background: #3b82f6;
+    background: var(--info);
   }
 
   .order-status-dot[data-status="in_progress"] {
-    background: #8b5cf6;
+    background: var(--pending);
   }
 
   .order-info {
@@ -543,16 +613,19 @@ const styles = `
   .order-customer {
     font-weight: 500;
     font-size: 0.95rem;
+    color: var(--text);
   }
 
   .order-details {
     font-size: 0.8rem;
+    color: var(--muted);
   }
 
   .order-time {
     font-size: 0.8rem;
     color: var(--muted);
     flex-shrink: 0;
+    font-weight: 500;
   }
 
   /* Meal Share Card */
@@ -565,7 +638,7 @@ const styles = `
   .meal-share-date {
     width: 50px;
     height: 50px;
-    background: var(--primary, #5cb85c);
+    background: var(--primary);
     border-radius: 10px;
     display: flex;
     flex-direction: column;
@@ -595,10 +668,12 @@ const styles = `
   .meal-share-name {
     font-weight: 600;
     font-size: 0.95rem;
+    color: var(--text);
   }
 
   .meal-share-details {
     font-size: 0.8rem;
+    color: var(--muted);
   }
 
   /* Quick Actions */
@@ -614,8 +689,8 @@ const styles = `
     align-items: center;
     gap: 0.5rem;
     padding: 1rem;
-    background: var(--surface, #fff);
-    border: 1px solid var(--border, #e5e7eb);
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: 12px;
     cursor: pointer;
     transition: all 0.15s ease;
@@ -623,15 +698,17 @@ const styles = `
   }
 
   .quick-action:hover {
-    border-color: var(--primary, #5cb85c);
-    background: rgba(92, 184, 92, 0.03);
-    color: var(--primary, #5cb85c);
+    border-color: var(--primary);
+    background: var(--surface-2);
+    color: var(--primary);
   }
 
   .quick-action span {
     font-size: 0.8rem;
     font-weight: 500;
   }
+
+  /* Dark mode - CSS variables already handle this automatically */
 
   @media (max-width: 640px) {
     .today-cards {

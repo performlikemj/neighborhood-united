@@ -114,7 +114,7 @@ def send_daily_meal_instructions():
                         logger.info(f"Skipping duplicate daily instructions for user {user.email} on {next_day} (already sent)")
                     else:
                         # Scheduled job: generate and send via assistant
-                        generate_instructions.delay(meal_plan_meal_ids, send_via_assistant=True)
+                        generate_instructions(meal_plan_meal_ids, send_via_assistant=True)
             elif meal_plan.meal_prep_preference == 'one_day_prep':
                 # Check for follow-up instructions scheduled for next_day
                 follow_up_instruction = MealPlanInstruction.objects.filter(
@@ -985,8 +985,8 @@ def generate_bulk_prep_instructions(meal_plan_id, send_via_assistant: bool = Tru
             
             # Queue the actual email send (single source of truth)
             if send_via_assistant:
-                logger.info(f"Generated bulk prep instructions for meal_plan_id={meal_plan_id}; queuing email send task.")
-                send_bulk_prep_instructions.delay(meal_plan_id)
+                logger.info(f"Generated bulk prep instructions for meal_plan_id={meal_plan_id}; sending email.")
+                send_bulk_prep_instructions(meal_plan_id)
         else:
             logger.error(f"Failed to generate bulk prep instructions for meal plan {meal_plan_id}")
     

@@ -362,7 +362,7 @@ def generate_and_create_meal(
                             "usage_unit": bridging_obj.usage_unit,
                         }
                     ]
-                    determine_usage_for_meal.delay(
+                    determine_usage_for_meal(
                         meal_plan_meal_id=new_meal_plan_meal.id,
                         meal_name=meal.name,
                         meal_description=meal.description,

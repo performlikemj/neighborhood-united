@@ -1,6 +1,9 @@
 """
 Focus: Sending emails, notifications, and related external communications.
 """
+"""
+Focus: Sending emails, notifications, and related external communications.
+"""
 import json
 import logging
 import os
@@ -12,7 +15,6 @@ from collections import defaultdict
 import pytz
 from zoneinfo import ZoneInfo
 import requests
-from celery import shared_task
 from django.conf import settings
 from django.db import transaction
 from django.shortcuts import get_object_or_404
@@ -68,7 +70,6 @@ def _iter_valid_shopping_items(items):
             continue
         yield item
 
-@shared_task
 @handle_task_failure
 def generate_shopping_list(meal_plan_id):
     from django.db.models import Sum
@@ -535,7 +536,6 @@ def generate_shopping_list(meal_plan_id):
     except Exception as e:
         logger.exception(f"Error sending shopping list via assistant for: {user_email}")
 
-@shared_task
 @handle_task_failure
 def generate_user_summary(user_id: int, summary_date=None) -> None:
     """
@@ -691,10 +691,9 @@ def mark_summary_stale(user, date=None):
     obj.status = UserDailySummary.PENDING
     obj.save(update_fields=["status"])
     
-    # Trigger regeneration asynchronously
-    generate_user_summary.delay(user.id, date.strftime('%Y-%m-%d'))
+    # Trigger regeneration
+    generate_user_summary(user.id, date.strftime('%Y-%m-%d'))
 
-@shared_task
 @handle_task_failure
 def generate_emergency_supply_list(user_id):
     """
@@ -1139,7 +1138,6 @@ def generate_emergency_supply_list(user_id):
     except Exception as e:
         logger.exception(f"Exception in generate_emergency_supply_list: {e}")
 
-@shared_task
 @handle_task_failure
 def send_system_update_email(subject, message, user_ids=None, template_key='system_update', template_context=None):
     """
@@ -1224,8 +1222,6 @@ def send_system_update_email(subject, message, user_ids=None, template_key='syst
         logger.exception(f"Error in send_system_update_email: {e}")
         raise
 
-@shared_task
-@shared_task
 @handle_task_failure
 def send_payment_confirmation_email(payment_data):
     """
@@ -1332,7 +1328,6 @@ def send_payment_confirmation_email(payment_data):
         logger.error(traceback.format_exc())
         raise
 
-@shared_task
 @handle_task_failure
 def send_refund_notification_email(order_id):
     """
@@ -1400,7 +1395,6 @@ def send_refund_notification_email(order_id):
     except Exception as e:
         logger.exception(f"Error generating or sending refund notification email for order {order_id}")
 
-@shared_task
 @handle_task_failure
 def send_order_cancellation_email(order_id):
     """

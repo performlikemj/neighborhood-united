@@ -278,8 +278,8 @@ export default function OnboardingChecklist({
 
 const mainStyles = `
   .onboarding-checklist {
-    background: linear-gradient(135deg, rgba(92, 184, 92, 0.08), rgba(92, 184, 92, 0.02));
-    border: 1.5px solid rgba(92, 184, 92, 0.25);
+    background: var(--surface-2);
+    border: 1.5px solid var(--primary);
     border-radius: 16px;
     padding: 1.25rem 1.5rem;
     margin-bottom: 1.5rem;
@@ -302,6 +302,7 @@ const mainStyles = `
   .header-title .muted {
     margin: 0;
     font-size: 0.9rem;
+    color: var(--muted);
   }
 
   .collapse-btn {
@@ -315,7 +316,7 @@ const mainStyles = `
   }
 
   .collapse-btn:hover {
-    background: rgba(0, 0, 0, 0.05);
+    background: var(--surface);
     color: var(--text);
   }
 
@@ -325,14 +326,14 @@ const mainStyles = `
 
   .progress-bar {
     height: 8px;
-    background: rgba(0, 0, 0, 0.08);
+    background: var(--border);
     border-radius: 4px;
     overflow: hidden;
   }
 
   .progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, var(--primary, #5cb85c), var(--primary-700, #3E8F3E));
+    background: linear-gradient(90deg, var(--primary), var(--primary-700));
     border-radius: 4px;
     transition: width 0.4s ease;
   }
@@ -347,7 +348,7 @@ const mainStyles = `
 
   .progress-percent {
     font-weight: 600;
-    color: var(--primary, #5cb85c);
+    color: var(--primary);
   }
 
   .checklist-steps {
@@ -361,20 +362,22 @@ const mainStyles = `
     align-items: center;
     gap: 0.75rem;
     padding: 0.75rem 1rem;
-    background: var(--surface, #fff);
-    border: 1px solid var(--border, #e5e7eb);
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: 12px;
     transition: all 0.2s ease;
+    color: var(--text);
   }
 
   .checklist-step.complete {
-    background: rgba(92, 184, 92, 0.05);
-    border-color: rgba(92, 184, 92, 0.2);
+    background: var(--success-bg);
+    border-color: var(--success);
+    opacity: 0.85;
   }
 
   .checklist-step.next {
-    border-color: var(--primary, #5cb85c);
-    box-shadow: 0 0 0 3px rgba(92, 184, 92, 0.1);
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px var(--success-bg);
   }
 
   .step-indicator {
@@ -390,7 +393,7 @@ const mainStyles = `
     width: 28px;
     height: 28px;
     border-radius: 50%;
-    background: var(--surface-2, #f3f4f6);
+    background: var(--surface-2);
     color: var(--muted);
     font-size: 0.85rem;
     font-weight: 600;
@@ -400,7 +403,7 @@ const mainStyles = `
   }
 
   .checklist-step.next .step-number {
-    background: var(--primary, #5cb85c);
+    background: var(--primary);
     color: white;
   }
 
@@ -408,7 +411,7 @@ const mainStyles = `
     width: 28px;
     height: 28px;
     border-radius: 50%;
-    background: var(--primary, #5cb85c);
+    background: var(--primary);
     color: white;
     display: flex;
     align-items: center;
@@ -461,7 +464,7 @@ const mainStyles = `
 
   .step-done {
     font-size: 0.8rem;
-    color: var(--primary, #5cb85c);
+    color: var(--success);
     font-weight: 500;
   }
 
@@ -493,8 +496,8 @@ const collapsedStyles = `
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    background: linear-gradient(135deg, rgba(92, 184, 92, 0.08), rgba(92, 184, 92, 0.02));
-    border: 1.5px solid rgba(92, 184, 92, 0.25);
+    background: var(--surface-2);
+    border: 1.5px solid var(--primary);
     border-radius: 12px;
     padding: 0.75rem 1rem;
     margin-bottom: 1.5rem;
@@ -520,13 +523,13 @@ const collapsedStyles = `
 
   .progress-ring-bg {
     fill: none;
-    stroke: rgba(0, 0, 0, 0.1);
+    stroke: var(--border);
     stroke-width: 3;
   }
 
   .progress-ring-fill {
     fill: none;
-    stroke: var(--primary, #5cb85c);
+    stroke: var(--primary);
     stroke-width: 3;
     stroke-linecap: round;
     transition: stroke-dasharray 0.4s ease;
@@ -565,7 +568,7 @@ const collapsedStyles = `
       align-items: stretch;
       gap: 0.75rem;
     }
-    
+
     .onboarding-collapsed .btn {
       width: 100%;
     }
@@ -574,8 +577,8 @@ const collapsedStyles = `
 
 const completeStyles = `
   .onboarding-complete {
-    background: linear-gradient(135deg, rgba(52, 211, 153, 0.12), rgba(16, 185, 129, 0.06));
-    border: 1.5px solid rgba(16, 185, 129, 0.35);
+    background: var(--success-bg);
+    border: 1.5px solid var(--success);
     border-radius: 16px;
     padding: 1.25rem 1.5rem;
     margin-bottom: 1.5rem;
@@ -629,16 +632,19 @@ const completeStyles = `
     .onboarding-complete {
       padding: 1rem;
     }
-    
+
     .complete-header {
       flex-direction: column;
       align-items: center;
       text-align: center;
     }
-    
+
     .complete-actions {
       justify-content: center;
     }
   }
 `
+
+
+
 

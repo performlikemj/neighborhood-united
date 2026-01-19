@@ -1,14 +1,12 @@
 /**
  * SousChefPage Component
- * 
+ *
  * Full-page view for the Sous Chef AI assistant.
- * Provides more space for viewing tables, meal plans, and detailed content.
- * Accessed by expanding the widget or navigating directly.
+ * Clean, centered layout with back navigation.
  */
 
 import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom'
-import { CHEF_EMOJIS } from '../utils/emojis.js'
 import FamilySelector from '../components/FamilySelector.jsx'
 import SousChefChat from '../components/SousChefChat.jsx'
 import { api } from '../api.js'
@@ -17,31 +15,28 @@ export default function SousChefPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams] = useSearchParams()
-  
+
   // Read initial family from URL params
   const initialFamilyId = searchParams.get('familyId')
   const initialFamilyType = searchParams.get('familyType') || 'customer'
   const initialFamilyName = searchParams.get('familyName')
-  
+
   // Read draft input from router state (passed from widget expansion)
   const draftInput = location.state?.draftInput || ''
-  
+
   const [selectedFamily, setSelectedFamily] = useState({
     familyId: initialFamilyId ? parseInt(initialFamilyId, 10) : null,
     familyType: initialFamilyType,
     familyName: initialFamilyName
   })
-  
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false)
-  const [currentEmoji, setCurrentEmoji] = useState('🧑‍🍳')
-  const [savingEmoji, setSavingEmoji] = useState(false)
-  const [isMinimizing, setIsMinimizing] = useState(false)
+
+  const [chefEmoji, setChefEmoji] = useState('🧑‍🍳')
 
   // Load chef's sous chef emoji on mount
   useEffect(() => {
     api.get('/chefs/api/me/chef/profile/').then(res => {
       if (res.data?.sous_chef_emoji) {
-        setCurrentEmoji(res.data.sous_chef_emoji)
+        setChefEmoji(res.data.sous_chef_emoji)
       }
     }).catch(() => {})
   }, [])
@@ -60,764 +55,319 @@ export default function SousChefPage() {
     navigate(`/chefs/dashboard/sous-chef?${params.toString()}`, { replace: true })
   }, [navigate])
 
-  const handleEmojiSelect = useCallback(async (emoji) => {
-    setCurrentEmoji(emoji)
-    setShowEmojiPicker(false)
-    setSavingEmoji(true)
-    
-    try {
-      await api.patch('/chefs/api/me/chef/profile/update/', {
-        sous_chef_emoji: emoji
-      })
-    } catch (err) {
-      console.error('Failed to save sous chef emoji:', err)
-    } finally {
-      setSavingEmoji(false)
-    }
-  }, [])
-
-  const handleMinimize = useCallback(() => {
-    setIsMinimizing(true)
-    setTimeout(() => {
-      navigate('/chefs/dashboard')
-    }, 250)
+  const handleBack = useCallback(() => {
+    navigate('/chefs/dashboard')
   }, [navigate])
 
   return (
-    <div className={`sous-chef-page ${isMinimizing ? 'minimizing' : ''}`}>
-      {/* Compact Header Bar */}
-      <header className="page-header">
-        <div className="header-content">
-          <div className="header-left">
-            <button 
-              className="emoji-btn"
-              onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-              title="Customize icon"
-            >
-              {currentEmoji}
+    <div className="sc-page">
+      {/* Header */}
+      <header className="sc-page-header">
+        <div className="sc-page-header-content">
+          <div className="sc-page-header-left">
+            <button className="sc-back-btn" onClick={handleBack} aria-label="Back to Dashboard">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M19 12H5M12 19l-7-7 7-7"/>
+              </svg>
+              <span className="sc-back-label">Dashboard</span>
             </button>
-            <div className="header-title">
-              <h1>Sous Chef</h1>
-              {selectedFamily.familyId ? (
-                <span className="current-family">with {selectedFamily.familyName}</span>
-              ) : (
-                <span className="current-family general">General Assistant</span>
-              )}
+          </div>
+
+          <div className="sc-page-header-center">
+            <div className="sc-page-title-group">
+              <div className="sc-page-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/>
+                </svg>
+              </div>
+              <h1 className="sc-page-title">Sous Chef</h1>
             </div>
           </div>
-          
-          <div className="header-right">
-            {/* Family selector in header when family is selected */}
-            {selectedFamily.familyId && (
-              <div className="header-family-selector">
-                <FamilySelector
-                  selectedFamilyId={selectedFamily.familyId}
-                  selectedFamilyType={selectedFamily.familyType}
-                  onFamilySelect={handleFamilySelect}
-                  compact
-                />
-              </div>
-            )}
-            <button 
-              className="minimize-btn"
-              onClick={handleMinimize}
-              title="Return to dashboard"
-            >
-              <span className="minimize-icon">↙</span>
-              <span className="minimize-label">Minimize</span>
-            </button>
+
+          <div className="sc-page-header-right">
+            <div className="sc-page-client-selector">
+              <FamilySelector
+                selectedFamilyId={selectedFamily.familyId}
+                selectedFamilyType={selectedFamily.familyType}
+                onFamilySelect={handleFamilySelect}
+                compact
+              />
+            </div>
           </div>
         </div>
       </header>
 
-      {/* Emoji Picker Popover */}
-      {showEmojiPicker && (
-        <div className="emoji-overlay" onClick={() => setShowEmojiPicker(false)}>
-          <div className="emoji-picker" onClick={(e) => e.stopPropagation()}>
-            <div className="picker-title">Choose your Sous Chef</div>
-            <div className="emoji-grid">
-              {CHEF_EMOJIS.map((emoji, idx) => (
-                <button
-                  key={idx}
-                  className={`emoji-item ${emoji === currentEmoji ? 'selected' : ''}`}
-                  onClick={() => handleEmojiSelect(emoji)}
-                  disabled={savingEmoji}
-                >
-                  {emoji}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Main Content Area */}
-      <main className="page-main">
-        {/* Family selector - positioned before chat for mobile flow (CSS makes it fixed on desktop) */}
-        {!selectedFamily.familyId && (
-          <div className="floating-family-selector">
-            <FamilySelector
-              selectedFamilyId={selectedFamily.familyId}
-              selectedFamilyType={selectedFamily.familyType}
-              onFamilySelect={handleFamilySelect}
-              openDirection="up"
-            />
-          </div>
-        )}
-        <div className="chat-container">
-          {/* Mode indicator banner when in general mode */}
+      {/* Main Content */}
+      <main className="sc-page-main">
+        <div className="sc-page-chat-container">
+          {/* General mode banner */}
           {!selectedFamily.familyId && (
-            <div className="general-mode-banner">
-              <span className="banner-icon">💡</span>
-              <span className="banner-text">
-                <strong>General Assistant Mode</strong> — I can help with platform questions, SOPs, and prep planning. 
-                <button 
-                  className="select-family-link"
-                  onClick={() => document.querySelector('.family-selector-trigger')?.click()}
-                >
-                  Select a client
-                </button>
-                {' '}for personalized meal planning.
+            <div className="sc-page-banner">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="16" x2="12" y2="12"/>
+                <line x1="12" y1="8" x2="12.01" y2="8"/>
+              </svg>
+              <span>
+                <strong>General Mode</strong> — Select a client from the dropdown above for personalized assistance.
               </span>
             </div>
           )}
+
+          {/* Chat */}
           <SousChefChat
             familyId={selectedFamily.familyId}
             familyType={selectedFamily.familyType}
             familyName={selectedFamily.familyName || (selectedFamily.familyId ? null : 'General Assistant')}
+            chefEmoji={chefEmoji}
             initialInput={draftInput}
           />
         </div>
       </main>
 
       <style>{`
-        .sous-chef-page {
+        /* ============================================
+           SOUS CHEF PAGE - FULL PAGE VIEW
+           ============================================ */
+
+        .sc-page {
           min-height: calc(100vh - 60px);
           display: flex;
           flex-direction: column;
-          background: var(--surface-2, var(--bg-page, #f5f5f5));
-          color: var(--text, #1a1a1a);
-          animation: pageEnter 0.3s ease-out;
-          
-          /* Ensure CSS variables cascade properly */
-          --bg-card: var(--surface, #fff);
-          --border-color: var(--border, #e0e0e0);
-          --text-muted: var(--muted, #666);
-          --accent-color: var(--primary, #5cb85c);
-          --accent-color-alpha: rgba(92, 184, 92, 0.12);
+          background: var(--sc-bg, var(--surface-2, #f5f5f5));
+          color: var(--text);
         }
 
-        @keyframes pageEnter {
-          from {
-            opacity: 0;
-            transform: translateY(8px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-
-        .sous-chef-page.minimizing {
-          animation: pageExit 0.25s ease-in forwards;
-          pointer-events: none;
-        }
-
-        @keyframes pageExit {
-          to {
-            opacity: 0;
-            transform: scale(0.98) translateY(12px);
-          }
-        }
-
-        /* ============================================
+        /* ─────────────────────────────────────────────
            HEADER
-           ============================================ */
-        .page-header {
-          background: linear-gradient(135deg, var(--primary, #5cb85c) 0%, var(--primary-700, #449d44) 100%);
-          padding: 0.75rem 1rem;
+           ───────────────────────────────────────────── */
+        .sc-page-header {
+          background: var(--sc-surface, var(--surface, #fff));
+          border-bottom: 1px solid var(--sc-border, var(--border, #e5e7eb));
           position: sticky;
           top: 0;
           z-index: 100;
-          box-shadow: 0 2px 12px rgba(0,0,0,0.15);
         }
 
-        .header-content {
-          max-width: 1400px;
+        .sc-page-header-content {
+          max-width: 1200px;
           margin: 0 auto;
+          padding: 12px 24px;
           display: flex;
           align-items: center;
           justify-content: space-between;
-          gap: 1rem;
+          gap: 16px;
         }
 
-        .header-left {
+        .sc-page-header-left {
+          flex: 1;
           display: flex;
           align-items: center;
-          gap: 0.75rem;
         }
 
-        .emoji-btn {
-          width: 42px;
-          height: 42px;
-          border: none;
-          border-radius: 10px;
-          background: rgba(255,255,255,0.2);
-          font-size: 1.5rem;
-          cursor: pointer;
-          transition: all 0.15s;
+        .sc-back-btn {
           display: flex;
           align-items: center;
-          justify-content: center;
-        }
-
-        .emoji-btn:hover {
-          background: rgba(255,255,255,0.3);
-          transform: scale(1.05);
-        }
-
-        .header-title {
-          color: white;
-        }
-
-        .header-title h1 {
-          margin: 0;
-          font-size: 1.125rem;
-          font-weight: 600;
-          line-height: 1.2;
-        }
-
-        .current-family {
-          font-size: 0.75rem;
-          opacity: 0.85;
-        }
-
-        .header-right {
-          display: flex;
-          align-items: center;
-          gap: 0.75rem;
-        }
-
-        .header-family-selector {
-          max-width: 220px;
-        }
-
-        .header-family-selector .family-selector-trigger {
-          background: rgba(255,255,255,0.15);
-          border-color: rgba(255,255,255,0.2);
-          color: white;
-          padding: 0.4rem 0.75rem;
-          font-size: 0.8rem;
-        }
-
-        .header-family-selector .family-selector-trigger:hover {
-          background: rgba(255,255,255,0.25);
-        }
-
-        .minimize-btn {
-          display: flex;
-          align-items: center;
-          gap: 0.4rem;
-          padding: 0.5rem 0.875rem;
-          background: rgba(255,255,255,0.15);
-          border: 1px solid rgba(255,255,255,0.25);
+          gap: 8px;
+          padding: 8px 12px;
+          background: transparent;
+          border: 1px solid var(--sc-border, var(--border, #e5e7eb));
           border-radius: 8px;
-          color: white;
-          font-size: 0.8rem;
+          color: var(--text);
+          font-size: 0.875rem;
           font-weight: 500;
           cursor: pointer;
-          transition: all 0.15s;
+          transition: all 0.15s ease;
         }
 
-        .minimize-btn:hover {
-          background: rgba(255,255,255,0.25);
+        .sc-back-btn:hover {
+          background: var(--sc-surface-2, var(--surface-2, #f9fafb));
+          border-color: var(--sc-primary, var(--primary, #5cb85c));
+          color: var(--sc-primary, var(--primary, #5cb85c));
         }
 
-        .minimize-icon {
-          font-size: 1rem;
+        .sc-back-label {
+          display: inline;
         }
 
-        /* ============================================
-           EMOJI PICKER
-           ============================================ */
-        .emoji-overlay {
-          position: fixed;
-          inset: 0;
-          background: rgba(0,0,0,0.4);
-          display: flex;
-          align-items: flex-start;
-          justify-content: flex-start;
-          padding: 4.5rem 1rem 1rem 1rem;
-          z-index: 1000;
-          animation: fadeIn 0.15s ease;
-        }
-
-        @keyframes fadeIn {
-          from { opacity: 0; }
-          to { opacity: 1; }
-        }
-
-        .emoji-picker {
-          background: var(--surface, #fff);
-          border-radius: 12px;
-          padding: 1rem;
-          box-shadow: 0 8px 32px rgba(0,0,0,0.25);
-          border: 1px solid var(--border, #e0e0e0);
-          animation: slideDown 0.2s ease;
-        }
-
-        @keyframes slideDown {
-          from { opacity: 0; transform: translateY(-8px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-
-        .picker-title {
-          font-size: 0.85rem;
-          font-weight: 600;
-          color: var(--muted, #666);
-          text-align: center;
-          margin-bottom: 0.75rem;
-        }
-
-        .emoji-grid {
-          display: grid;
-          grid-template-columns: repeat(6, 1fr);
-          gap: 4px;
-        }
-
-        .emoji-item {
-          width: 40px;
-          height: 40px;
-          border: 2px solid transparent;
-          border-radius: 8px;
-          background: var(--surface-2, #f5f5f5);
-          font-size: 1.25rem;
-          cursor: pointer;
-          transition: all 0.15s;
+        .sc-page-header-center {
           display: flex;
           align-items: center;
           justify-content: center;
         }
 
-        .emoji-item:hover {
-          background: var(--surface-3, #eee);
-          transform: scale(1.1);
+        .sc-page-title-group {
+          display: flex;
+          align-items: center;
+          gap: 10px;
         }
 
-        .emoji-item.selected {
-          border-color: var(--primary, #5cb85c);
-          background: rgba(92,184,92,0.15);
+        .sc-page-icon {
+          width: 36px;
+          height: 36px;
+          background: var(--sc-primary, var(--primary, #5cb85c));
+          border-radius: 10px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: white;
         }
 
-        .emoji-item:disabled {
-          opacity: 0.5;
-          cursor: not-allowed;
+        .sc-page-title {
+          margin: 0;
+          font-size: 1.25rem;
+          font-weight: 600;
+          color: var(--text);
         }
 
-        /* ============================================
+        .sc-page-header-right {
+          flex: 1;
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+        }
+
+        .sc-page-client-selector {
+          min-width: 200px;
+          max-width: 280px;
+        }
+
+        /* ─────────────────────────────────────────────
            MAIN CONTENT
-           ============================================ */
-        .page-main {
+           ───────────────────────────────────────────── */
+        .sc-page-main {
           flex: 1;
           display: flex;
           flex-direction: column;
-          padding: 1rem;
+          padding: 24px;
           min-height: 0;
         }
 
-        .chat-container {
+        .sc-page-chat-container {
           flex: 1;
           display: flex;
           flex-direction: column;
-          background: var(--surface, #fff);
-          border-radius: 12px;
-          overflow: hidden;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-          max-width: 1200px;
+          max-width: 800px;
           width: 100%;
           margin: 0 auto;
+          background: var(--sc-surface, var(--surface, #fff));
+          border-radius: 16px;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+          overflow: hidden;
+          border: 1px solid var(--sc-border, var(--border, #e5e7eb));
         }
 
-        .chat-container .sous-chef-chat {
+        .sc-page-chat-container .sc-chat {
           flex: 1;
           height: 100%;
+          border-radius: 0;
         }
 
-        /* ============================================
-           EMPTY STATE (No family selected)
-           ============================================ */
-        .empty-state {
-          flex: 1;
+        /* Show context panel and chat header in full page mode */
+        .sc-page-chat-container .sc-context {
+          display: block;
+        }
+
+        .sc-page-chat-container .sc-chat-header {
+          display: flex;
+        }
+
+        /* ─────────────────────────────────────────────
+           BANNER
+           ───────────────────────────────────────────── */
+        .sc-page-banner {
           display: flex;
           align-items: center;
-          justify-content: center;
-          padding: 2rem;
-        }
-
-        .empty-card {
-          background: var(--surface, #fff);
-          border-radius: 16px;
-          padding: 2rem 2.5rem;
-          text-align: center;
-          max-width: 420px;
-          width: 100%;
-          box-shadow: 0 4px 24px rgba(0,0,0,0.12);
-          border: 1px solid var(--border, #e5e5e5);
-        }
-
-        .empty-icon {
-          font-size: 3.5rem;
-          margin-bottom: 1rem;
-        }
-
-        .empty-card h2 {
-          margin: 0 0 0.5rem 0;
-          font-size: 1.25rem;
-          font-weight: 600;
-          color: var(--text, #1a1a1a);
-        }
-
-        .empty-card p {
-          margin: 0 0 1.5rem 0;
-          color: var(--muted, #666);
-          font-size: 0.9rem;
-          line-height: 1.5;
-        }
-
-        .empty-selector {
-          text-align: left;
-        }
-
-        /* ============================================
-           GENERAL MODE BANNER
-           ============================================ */
-        .general-mode-banner {
-          display: flex;
-          align-items: center;
-          gap: 0.75rem;
-          padding: 0.75rem 1rem;
-          background: linear-gradient(135deg, rgba(92, 184, 92, 0.1) 0%, rgba(92, 184, 92, 0.05) 100%);
-          border-bottom: 1px solid rgba(92, 184, 92, 0.2);
+          gap: 10px;
+          padding: 12px 16px;
+          background: linear-gradient(135deg, rgba(92, 184, 92, 0.08) 0%, rgba(92, 184, 92, 0.04) 100%);
+          border-bottom: 1px solid rgba(92, 184, 92, 0.15);
           font-size: 0.875rem;
-          color: var(--text, #1a1a1a);
+          color: var(--text);
         }
 
-        .banner-icon {
-          font-size: 1.25rem;
+        .sc-page-banner svg {
+          color: var(--sc-primary, var(--primary, #5cb85c));
+          flex-shrink: 0;
         }
 
-        .banner-text {
-          flex: 1;
+        .sc-page-banner strong {
+          color: var(--sc-primary, var(--primary, #5cb85c));
         }
 
-        .banner-text strong {
-          color: var(--primary, #5cb85c);
-        }
-
-        .select-family-link {
-          background: none;
-          border: none;
-          color: var(--primary, #5cb85c);
-          text-decoration: underline;
-          cursor: pointer;
-          padding: 0;
-          font: inherit;
-        }
-
-        .select-family-link:hover {
-          color: var(--primary-700, #449d44);
-        }
-
-        /* Floating family selector for general mode */
-        .floating-family-selector {
-          position: fixed;
-          bottom: 1.5rem;
-          right: 1.5rem;
-          z-index: 50;
-          background: var(--surface, #fff);
-          border-radius: 12px;
-          padding: 1rem;
-          box-shadow: 0 8px 32px rgba(0,0,0,0.15);
-          border: 1px solid var(--border, #e0e0e0);
-          width: 320px;
-          max-width: calc(100vw - 2rem);
-        }
-
-        .floating-family-selector::before {
-          content: 'Switch to client:';
-          display: block;
-          font-size: 0.75rem;
-          font-weight: 600;
-          color: var(--muted, #666);
-          margin-bottom: 0.5rem;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-        }
-
-        /* Upward-opening dropdown styling */
-        .floating-family-selector .family-selector-dropdown {
-          max-height: min(50vh, 400px);
-        }
-
-        /* Header general mode indicator */
-        .current-family.general {
-          opacity: 0.8;
-          font-style: italic;
-        }
-
-        /* ============================================
-           CHAT OVERRIDES FOR FULL PAGE
-           ============================================ */
-        .chat-container .context-panel {
-          display: block;
-        }
-
-        .chat-container .chat-header {
-          display: flex;
-          padding: 1rem 1.25rem;
-        }
-
-        .chat-container .messages-container {
-          padding: 1.25rem;
-        }
-
-        .chat-container .bubble {
-          max-width: 80%;
-        }
-
-        .chat-container .bubble.assistant {
-          max-width: 90%;
-        }
-
-        .chat-container .composer {
-          padding: 1rem 1.25rem;
-        }
-
-        /* ============================================
-           FAMILY SELECTOR DARK MODE FIXES
-           ============================================ */
-        .sous-chef-page .family-selector-trigger {
-          background: var(--surface, #fff);
-          border-color: var(--border, #e0e0e0);
-          color: var(--text, #1a1a1a);
-        }
-
-        .sous-chef-page .family-selector-trigger:hover {
-          border-color: var(--primary, #5cb85c);
-        }
-
-        .sous-chef-page .family-selector-trigger.open {
-          border-color: var(--primary, #5cb85c);
-          box-shadow: 0 0 0 3px rgba(92, 184, 92, 0.15);
-        }
-
-        .sous-chef-page .family-selector-dropdown {
-          background: var(--surface, #fff);
-          border-color: var(--border, #e0e0e0);
-          box-shadow: 0 12px 40px rgba(0,0,0,0.35);
-        }
-
-        .sous-chef-page .search-wrapper {
-          background: var(--surface, #fff);
-          border-bottom-color: var(--border, #e0e0e0);
-        }
-
-        .sous-chef-page .search-input {
-          background: var(--surface-2, #f5f5f5);
-          border-color: var(--border, #e0e0e0);
-          color: var(--text, #1a1a1a);
-        }
-
-        .sous-chef-page .search-input::placeholder {
-          color: var(--muted, #888);
-        }
-
-        .sous-chef-page .search-input:focus {
-          border-color: var(--primary, #5cb85c);
-          box-shadow: 0 0 0 3px rgba(92, 184, 92, 0.15);
-        }
-
-        .sous-chef-page .group-header {
-          background: var(--surface-2, #f5f5f5);
-          color: var(--muted, #888);
-          border-bottom-color: var(--border, #e0e0e0);
-        }
-
-        .sous-chef-page .family-option {
-          border-bottom-color: var(--border, #e0e0e0);
-          color: var(--text, #1a1a1a);
-        }
-
-        .sous-chef-page .family-option:hover {
-          background: var(--surface-2, #f5f5f5);
-        }
-
-        .sous-chef-page .family-option.selected {
-          background: rgba(92, 184, 92, 0.1);
-        }
-
-        .sous-chef-page .type-badge {
-          font-size: 0.6rem;
-          padding: 0.1rem 0.35rem;
-          border-radius: 3px;
-          font-weight: 600;
-        }
-
-        /* Badge colors - enhanced for visibility */
-        .sous-chef-page .type-badge.badge-platform {
-          background: rgba(16, 185, 129, 0.18);
-          color: #059669;
-        }
-
-        .sous-chef-page .type-badge.badge-manual {
-          background: rgba(139, 92, 246, 0.18);
-          color: #7c3aed;
-        }
-
-        .sous-chef-page .family-meta,
-        .sous-chef-page .family-dietary,
-        .sous-chef-page .family-stats {
-          color: var(--muted, #888);
-        }
-
-        .sous-chef-page .no-results {
-          color: var(--muted, #888);
-        }
-
-        /* Header family selector special styling */
-        .header-family-selector .family-selector-trigger {
-          background: rgba(255,255,255,0.12) !important;
-          border-color: rgba(255,255,255,0.2) !important;
-          color: white !important;
-          padding: 0.4rem 0.7rem;
-          min-width: 180px;
-        }
-
-        .header-family-selector .family-selector-trigger:hover {
-          background: rgba(255,255,255,0.2) !important;
-        }
-
-        .header-family-selector .family-selector-trigger .chevron {
-          color: rgba(255,255,255,0.7);
-        }
-
-        .header-family-selector .family-selector-trigger .family-name {
-          font-size: 0.85rem;
-        }
-
-        .header-family-selector .family-selector-trigger .family-meta {
-          font-size: 0.7rem;
-          color: rgba(255,255,255,0.75);
-        }
-
-        .header-family-selector .family-selector-trigger .family-avatar {
-          width: 28px;
-          height: 28px;
-          font-size: 0.9rem;
-        }
-
-        .header-family-selector .type-badge {
-          display: none;
-        }
-
-        /* ============================================
+        /* ─────────────────────────────────────────────
            RESPONSIVE
-           ============================================ */
+           ───────────────────────────────────────────── */
         @media (max-width: 768px) {
-          .page-header {
-            padding: 0.625rem 0.75rem;
-          }
-
-          .header-content {
+          .sc-page-header-content {
+            padding: 10px 16px;
             flex-wrap: wrap;
           }
 
-          .header-family-selector {
+          .sc-page-header-center {
+            order: -1;
+            width: 100%;
+            justify-content: flex-start;
+            margin-bottom: 10px;
+          }
+
+          .sc-page-header-left {
+            flex: 0;
+          }
+
+          .sc-back-label {
             display: none;
           }
 
-          .minimize-label {
-            display: none;
+          .sc-back-btn {
+            padding: 8px;
           }
 
-          .minimize-btn {
-            padding: 0.5rem 0.625rem;
+          .sc-page-header-right {
+            flex: 1;
           }
 
-          .emoji-btn {
-            width: 38px;
-            height: 38px;
-            font-size: 1.25rem;
+          .sc-page-client-selector {
+            min-width: 160px;
+            max-width: none;
+            flex: 1;
           }
 
-          .header-title h1 {
-            font-size: 1rem;
+          .sc-page-main {
+            padding: 16px;
           }
 
-          .page-main {
-            padding: 0.75rem;
-            /* Add padding at top for the repositioned family selector */
-            padding-top: 0;
+          .sc-page-chat-container {
+            border-radius: 12px;
           }
 
-          .empty-card {
-            padding: 1.5rem;
-          }
-
-          .empty-icon {
-            font-size: 2.5rem;
-          }
-
-          .empty-card h2 {
+          .sc-page-title {
             font-size: 1.1rem;
           }
 
-          /* Mobile: Reposition floating family selector to TOP to avoid chat input overlap */
-          .floating-family-selector {
-            position: relative;
-            bottom: auto;
-            right: auto;
-            top: auto;
-            width: 100%;
-            max-width: none;
-            margin: 0 0 0.75rem 0;
-            border-radius: 10px;
-            padding: 0.75rem;
-            box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+          .sc-page-icon {
+            width: 32px;
+            height: 32px;
           }
 
-          .floating-family-selector::before {
-            font-size: 0.7rem;
-            margin-bottom: 0.4rem;
-          }
-
-          /* Force dropdown to open DOWNWARD on mobile (selector is now at top) */
-          .floating-family-selector .family-selector-dropdown {
-            max-height: min(40vh, 300px);
-            bottom: auto !important;
-            top: 100% !important;
-            transform: none !important;
+          .sc-page-icon svg {
+            width: 16px;
+            height: 16px;
           }
         }
 
         @media (max-width: 480px) {
-          .page-main {
-            padding: 0.5rem;
-            padding-top: 0;
+          .sc-page-main {
+            padding: 12px;
           }
 
-          .chat-container {
-            border-radius: 8px;
+          .sc-page-chat-container {
+            border-radius: 10px;
           }
 
-          .empty-card {
-            padding: 1.25rem;
-            border-radius: 12px;
-          }
-
-          .floating-family-selector {
-            padding: 0.6rem;
-            margin-bottom: 0.5rem;
+          .sc-page-banner {
+            padding: 10px 12px;
+            font-size: 0.8rem;
           }
         }
       `}</style>

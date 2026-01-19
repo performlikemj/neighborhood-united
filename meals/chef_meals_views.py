@@ -1529,8 +1529,7 @@ def api_cancel_chef_meal_event(request, event_id):
 
                             
                             # Send refund notification email
-
-                            send_refund_notification_email.delay(order.id)
+                            send_refund_notification_email(order.id)
                     except Exception as e:
 
                         logger.error(f"Error processing refund for order {order.id}: {str(e)}")
@@ -1538,8 +1537,7 @@ def api_cancel_chef_meal_event(request, event_id):
                         order.save()
                 
                 # Send cancellation email
-
-                send_order_cancellation_email.delay(order.id)
+                send_order_cancellation_email(order.id)
             
             # Update event status
 
@@ -1885,14 +1883,14 @@ def api_create_chef_meal(request):
                 logger.info(f"Successfully generated embedding for chef meal {meal.id}")
             else:
                 logger.warning(f"Could not generate embedding for chef meal {meal.id}")
-                # Consider adding to a task queue for retry later
+                # Generate embedding
                 from meals.meal_embedding import generate_meal_embedding
-                generate_meal_embedding.delay(meal.id)
+                generate_meal_embedding(meal.id)
         except Exception as e:
             logger.error(f"Error generating embedding for chef meal {meal.id}: {e}")
-            # Add to task queue for retry
+            # Try again
             from meals.meal_embedding import generate_meal_embedding
-            generate_meal_embedding.delay(meal.id)
+            generate_meal_embedding(meal.id)
         
 
         
@@ -2984,14 +2982,14 @@ def api_update_chef_meal(request, meal_id):
                 logger.info(f"Successfully updated embedding for chef meal {meal.id}")
             else:
                 logger.warning(f"Could not update embedding for chef meal {meal.id}")
-                # Add to task queue for retry
+                # Try again
                 from meals.meal_embedding import generate_meal_embedding
-                generate_meal_embedding.delay(meal.id)
+                generate_meal_embedding(meal.id)
         except Exception as e:
             logger.error(f"Error updating embedding for chef meal {meal.id}: {e}")
-            # Add to task queue for retry
+            # Try again
             from meals.meal_embedding import generate_meal_embedding
-            generate_meal_embedding.delay(meal.id)
+            generate_meal_embedding(meal.id)
         
         # Serialize and return the updated meal
         serializer = MealSerializer(meal)
@@ -3824,7 +3822,7 @@ def payment_success(request):
                         
                         # Send email notification
                         from meals.email_service import send_payment_confirmation_email
-                        send_payment_confirmation_email.delay(chef_order.id)
+                        send_payment_confirmation_email(chef_order.id)
                     else:
                         logger.info(f"Chef meal order {chef_order.id} was already confirmed, skipping processing")
             except ChefMealOrder.DoesNotExist:

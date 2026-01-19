@@ -16,6 +16,7 @@ import {
   getPlanDetail,
   updatePlan,
   publishPlan,
+  unpublishPlan,
   startMealGeneration,
   addPlanDay,
   addPlanItem,
@@ -101,11 +102,12 @@ function getDateRangeContext(startDate, endDate) {
   return `${weekContext} · ${daysCount} day${daysCount > 1 ? 's' : ''} (${weeksCount} week${weeksCount > 1 ? 's' : ''})`
 }
 
-export default function MealPlanSlideout({ 
-  isOpen, 
-  onClose, 
+export default function MealPlanSlideout({
+  isOpen,
+  onClose,
   client,
-  onPlanUpdate 
+  onPlanUpdate,
+  onNavigateToPrep
 }) {
   // Notification context for Sous Chef
   let notifications = null
@@ -123,6 +125,7 @@ export default function MealPlanSlideout({
   const [generating, setGenerating] = useState(false)
   const [suggestions, setSuggestions] = useState([])
   const [error, setError] = useState(null)
+  const [justPublished, setJustPublished] = useState(false)
   
   // Slot picker state
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -444,9 +447,22 @@ export default function MealPlanSlideout({
     try {
       await publishPlan(selectedPlan.id)
       await loadPlans()
+      setJustPublished(true)
       if (onPlanUpdate) onPlanUpdate()
     } catch (err) {
       setError(err.response?.data?.error || err.message || 'Failed to publish plan')
+    }
+  }
+
+  const handleUnpublish = async () => {
+    if (!selectedPlan) return
+    try {
+      await unpublishPlan(selectedPlan.id)
+      await loadPlans()
+      await loadPlanDetail(selectedPlan.id)
+      if (onPlanUpdate) onPlanUpdate()
+    } catch (err) {
+      setError(err.response?.data?.error || err.message || 'Failed to revert plan to draft')
     }
   }
 
@@ -543,13 +559,22 @@ export default function MealPlanSlideout({
             </div>
           </div>
           <div className="mps-header-actions">
-            {isDraft && (
-              <button 
+            {isDraft ? (
+              <button
                 className="mps-btn mps-btn-primary"
                 onClick={handlePublish}
                 disabled={loading}
               >
                 Publish
+              </button>
+            ) : selectedPlan?.status === 'published' && (
+              <button
+                className="mps-btn mps-btn-outline"
+                onClick={handleUnpublish}
+                disabled={loading}
+                title="Revert to draft for editing"
+              >
+                Edit Plan
               </button>
             )}
           </div>
@@ -557,12 +582,13 @@ export default function MealPlanSlideout({
 
         {/* Plan Selector */}
         <div className="mps-plan-selector">
-          <select 
+          <select
             className="mps-select"
             value={selectedPlan?.id || ''}
             onChange={(e) => {
               const plan = plans.find(p => p.id === parseInt(e.target.value))
               setSelectedPlan(plan)
+              setJustPublished(false)
             }}
           >
             <option value="">Select a plan...</option>
@@ -636,6 +662,24 @@ export default function MealPlanSlideout({
                 </button>
               </div>
             </form>
+          </div>
+        )}
+
+        {/* Publish Success Banner */}
+        {justPublished && (
+          <div className="mps-publish-success">
+            <span>✓ Plan published to {client?.name || 'client'}</span>
+            {onNavigateToPrep && (
+              <button
+                className="mps-btn mps-btn-link"
+                onClick={() => {
+                  onClose()
+                  onNavigateToPrep()
+                }}
+              >
+                Start Prepping →
+              </button>
+            )}
           </div>
         )}
 
@@ -768,7 +812,7 @@ export default function MealPlanSlideout({
               
               <MealPlanWeekView
                 planDetail={planDetail}
-                onSlotClick={isDraft ? handleSlotClick : null}
+                onSlotClick={handleSlotClick}
                 readOnly={!isDraft}
                 currentWeekIndex={currentWeekIndex}
                 onWeekChange={setCurrentWeekIndex}
@@ -845,6 +889,7 @@ export default function MealPlanSlideout({
           planId={selectedPlan?.id}
           planTitle={selectedPlan?.title || 'Meal Plan'}
           clientName={client?.name || client?.first_name || 'Client'}
+          readOnly={!isDraft}
         />
       )}
 
@@ -1068,6 +1113,39 @@ export default function MealPlanSlideout({
         .mps-btn:disabled {
           opacity: 0.6;
           cursor: not-allowed;
+        }
+
+        .mps-btn-link {
+          background: none;
+          border: none;
+          color: var(--primary, #5cb85c);
+          font-weight: 500;
+          cursor: pointer;
+          padding: 0;
+        }
+
+        .mps-btn-link:hover {
+          text-decoration: underline;
+        }
+
+        /* Publish Success Banner */
+        .mps-publish-success {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 1rem;
+          padding: 0.75rem 1rem;
+          background: var(--success-bg, #f0fdf4);
+          border: 1px solid var(--success, #22c55e);
+          border-radius: 8px;
+          margin: 0.5rem 1rem;
+          font-size: 0.9rem;
+          color: var(--success-700, #15803d);
+        }
+
+        [data-theme="dark"] .mps-publish-success {
+          background: color-mix(in oklab, var(--success, #22c55e) 15%, var(--surface, #1f1f1f));
+          color: var(--success-400, #4ade80);
         }
 
         /* New Plan Form */

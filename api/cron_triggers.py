@@ -1,10 +1,16 @@
 """
-QStash webhook handlers for triggering Celery tasks.
+QStash webhook handlers for executing scheduled tasks.
 
-QStash sends HTTP POST requests on a schedule, which this endpoint converts
-to Celery task calls. This replaces Celery Beat with a serverless scheduler.
+QStash sends HTTP POST requests on a schedule, which this endpoint
+executes synchronously. This eliminates the need for Celery workers
+polling Redis continuously.
+
+For long-running tasks, QStash workflows are used to chain execution.
 """
 import logging
+import traceback
+import uuid
+from importlib import import_module
 
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -62,7 +68,29 @@ def verify_qstash_signature(request):
         return False
 
 
-# Map of URL-safe task names to Celery task paths
+def execute_task_sync(task_path: str, *args, **kwargs):
+    """
+    Execute a task function synchronously by importing and calling it directly.
+    
+    This replaces Celery's send_task() to avoid Redis broker usage.
+    
+    Args:
+        task_path: Dotted path to the task function (e.g., 'meals.tasks.sync_all_chef_payments')
+        *args, **kwargs: Arguments to pass to the task function
+        
+    Returns:
+        The result of the task function
+    """
+    module_path, func_name = task_path.rsplit('.', 1)
+    module = import_module(module_path)
+    func = getattr(module, func_name)
+    
+    # Call the function directly (not .delay())
+    return func(*args, **kwargs)
+
+
+# Map of URL-safe task names to task module paths
+# Tasks are executed synchronously - no Celery queue involved
 TASK_MAP = {
     # Meal/embedding tasks
     "update_embeddings": "meals.meal_embedding.update_embeddings",
@@ -84,10 +112,10 @@ TASK_MAP = {
 @require_POST
 def trigger_task(request, task_name):
     """
-    Generic endpoint to trigger any registered Celery task.
+    Execute a registered task synchronously.
     
     QStash calls this endpoint on a schedule. We verify the signature,
-    then queue the corresponding Celery task for the worker to execute.
+    then execute the task directly (no Celery queue).
     
     URL: /api/cron/trigger/<task_name>/
     """
@@ -102,26 +130,33 @@ def trigger_task(request, task_name):
         return JsonResponse({"error": "Unknown task"}, status=404)
     
     task_path = TASK_MAP[task_name]
+    execution_id = str(uuid.uuid4())[:8]
     
     try:
-        # Import Celery app and queue the task
-        from celery import current_app
-        result = current_app.send_task(task_path)
+        logger.info(f"[{execution_id}] QStash executing task {task_name} -> {task_path}")
         
-        logger.info(f"QStash triggered task {task_name} -> {task_path}, task_id={result.id}")
+        # Execute the task synchronously
+        result = execute_task_sync(task_path)
+        
+        logger.info(f"[{execution_id}] Task {task_name} completed successfully")
         
         return JsonResponse({
-            "status": "queued",
+            "status": "completed",
             "task_name": task_name,
             "task_path": task_path,
-            "task_id": str(result.id)
+            "execution_id": execution_id,
+            "result": str(result) if result else None
         })
         
     except Exception as e:
-        logger.error(f"Failed to queue task {task_name}: {e}")
+        logger.error(f"[{execution_id}] Task {task_name} failed: {e}")
+        logger.error(traceback.format_exc())
         return JsonResponse({
-            "error": "Failed to queue task",
-            "detail": str(e)
+            "status": "error",
+            "task_name": task_name,
+            "execution_id": execution_id,
+            "error": str(e),
+            "traceback": traceback.format_exc() if settings.DEBUG else None
         }, status=500)
 
 
@@ -142,25 +177,32 @@ def trigger_task_debug(request, task_name):
         return JsonResponse({"error": "Unknown task"}, status=404)
     
     task_path = TASK_MAP[task_name]
+    execution_id = str(uuid.uuid4())[:8]
     
     try:
-        from celery import current_app
-        result = current_app.send_task(task_path)
+        logger.info(f"[{execution_id}] DEBUG executing task {task_name} -> {task_path}")
         
-        logger.info(f"DEBUG triggered task {task_name} -> {task_path}, task_id={result.id}")
+        # Execute the task synchronously
+        result = execute_task_sync(task_path)
+        
+        logger.info(f"[{execution_id}] DEBUG task {task_name} completed")
         
         return JsonResponse({
-            "status": "queued",
+            "status": "completed",
             "task_name": task_name,
             "task_path": task_path,
-            "task_id": str(result.id)
+            "execution_id": execution_id,
+            "result": str(result) if result else None
         })
         
     except Exception as e:
-        logger.error(f"Failed to queue task {task_name}: {e}")
+        logger.error(f"[{execution_id}] DEBUG task {task_name} failed: {e}")
         return JsonResponse({
-            "error": "Failed to queue task",
-            "detail": str(e)
+            "status": "error",
+            "task_name": task_name,
+            "execution_id": execution_id,
+            "error": str(e),
+            "traceback": traceback.format_exc()
         }, status=500)
 
 

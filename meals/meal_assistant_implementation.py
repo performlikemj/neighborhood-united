@@ -2424,9 +2424,9 @@ class MealPlanningAssistant:
                 summary.ticket = ticket
                 summary.save(update_fields=["status", "ticket"])
             
-            # Start generating the summary in background
+            # Generate the summary
             from meals.email_service import generate_user_summary
-            generate_user_summary.delay(user.id, summary_date.strftime('%Y-%m-%d'))
+            generate_user_summary(user.id, summary_date.strftime('%Y-%m-%d'))
             
             # Inform frontend that generation has started
             yield {"type": "status", "status": "pending", "ticket": ticket}

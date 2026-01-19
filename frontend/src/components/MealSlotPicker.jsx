@@ -28,7 +28,8 @@ export default function MealSlotPicker({
   planId,
   planTitle = 'Meal Plan',
   clientName = 'Client',
-  chefDishes = [] // All chef dishes for compose mode
+  chefDishes = [], // All chef dishes for compose mode
+  readOnly = false // When true, only allow viewing (no edit actions)
 }) {
   // Notification context for global job tracking
   let notifications = null
@@ -276,14 +277,28 @@ export default function MealSlotPicker({
                   ))}
                 </div>
               )}
+              {existingItem.servings && existingItem.servings > 1 && (
+                <p className="msp-servings-info">Servings: {existingItem.servings}</p>
+              )}
+              {existingItem.notes && (
+                <p className="msp-notes-info">Notes: {existingItem.notes}</p>
+              )}
             </div>
             <div className="msp-view-actions">
-              <button className="msp-btn msp-btn-primary" onClick={() => setMode('pick')}>
-                Replace Meal
-              </button>
-              <button className="msp-btn msp-btn-danger-outline" onClick={onRemove}>
-                Remove from Plan
-              </button>
+              {readOnly ? (
+                <button className="msp-btn msp-btn-outline msp-btn-full" onClick={onClose}>
+                  Close
+                </button>
+              ) : (
+                <>
+                  <button className="msp-btn msp-btn-primary" onClick={() => setMode('pick')}>
+                    Replace Meal
+                  </button>
+                  <button className="msp-btn msp-btn-danger-outline" onClick={onRemove}>
+                    Remove from Plan
+                  </button>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -455,31 +470,25 @@ export default function MealSlotPicker({
                 </div>
               </div>
 
-              {/* Meal name (optional) */}
-              {composeSelectedDishes.length >= 2 && (
+              {/* Meal name (optional) - show form when 1+ dishes selected */}
+              {composeSelectedDishes.length >= 1 && (
                 <form onSubmit={handleComposeSubmit} className="msp-compose-form">
                   <div className="msp-form-row">
                     <label>Meal Name (optional)</label>
-                    <input 
+                    <input
                       type="text"
                       placeholder={composeSelectedDishes.map(d => d.name).join(' + ')}
                       value={composeName}
                       onChange={e => setComposeName(e.target.value)}
                     />
                   </div>
-                  <button 
-                    type="submit" 
+                  <button
+                    type="submit"
                     className="msp-btn msp-btn-primary msp-btn-full"
                   >
                     Add to Plan
                   </button>
                 </form>
-              )}
-
-              {composeSelectedDishes.length === 1 && (
-                <div className="msp-compose-hint-more">
-                  Select at least one more dish to compose a meal.
-                </div>
               )}
             </div>
           )}
@@ -1262,6 +1271,17 @@ export default function MealSlotPicker({
           color: var(--text, #333);
         }
 
+        .msp-servings-info,
+        .msp-notes-info {
+          font-size: 0.9rem;
+          color: var(--muted, #666);
+          margin: 0.75rem 0 0 0;
+        }
+
+        .msp-notes-info {
+          font-style: italic;
+        }
+
         .msp-view-actions {
           display: flex;
           flex-direction: column;
@@ -1276,6 +1296,43 @@ export default function MealSlotPicker({
           .msp-view-actions .msp-btn {
             flex: 1;
           }
+        }
+
+        /* Dark mode overrides for Compose tab */
+        [data-theme="dark"] .msp-compose-selected {
+          background: color-mix(in oklab, var(--primary, #5cb85c) 15%, var(--surface, #1f1f1f));
+          border-color: color-mix(in oklab, var(--primary, #5cb85c) 40%, transparent);
+        }
+
+        [data-theme="dark"] .msp-compose-selected label {
+          color: var(--primary-400, #86efac);
+        }
+
+        [data-theme="dark"] .msp-compose-chip {
+          background: var(--surface-2, #2a2a2a);
+          border-color: var(--primary, #5cb85c);
+          color: var(--primary-400, #86efac);
+        }
+
+        [data-theme="dark"] .msp-compose-chip button {
+          color: var(--primary-400, #86efac);
+        }
+
+        [data-theme="dark"] .msp-compose-option {
+          background: var(--surface-2, #2a2a2a);
+          border-color: var(--border, #3a3a3a);
+          color: var(--text, #e5e5e5);
+        }
+
+        [data-theme="dark"] .msp-compose-option:hover {
+          background: color-mix(in oklab, var(--surface-2, #2a2a2a) 70%, var(--primary, #5cb85c) 30%);
+          border-color: var(--primary, #5cb85c);
+        }
+
+        [data-theme="dark"] .msp-compose-option.selected {
+          background: color-mix(in oklab, var(--primary, #5cb85c) 25%, var(--surface-2, #2a2a2a));
+          border-color: var(--primary, #5cb85c);
+          color: var(--text, #e5e5e5);
         }
       `}</style>
     </>

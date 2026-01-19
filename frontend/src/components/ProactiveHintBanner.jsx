@@ -130,16 +130,16 @@ export default function ProactiveHintBanner({
         
         /* Type styles */
         .proactive-hint-banner.type-milestone .hint-icon {
-          background: linear-gradient(135deg, #f59e0b, #d97706);
+          background: var(--warning);
         }
-        
+
         .proactive-hint-banner.type-idle .hint-icon,
         .proactive-hint-banner.type-tip .hint-icon {
           background: linear-gradient(135deg, var(--primary, #5cb85c), var(--primary-700, #449d44));
         }
-        
+
         .proactive-hint-banner.type-error .hint-icon {
-          background: linear-gradient(135deg, #ef4444, #dc2626);
+          background: var(--danger);
         }
         
         .hint-icon {

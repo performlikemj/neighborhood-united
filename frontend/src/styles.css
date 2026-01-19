@@ -206,6 +206,20 @@ a.btn{ text-decoration:none }
 
 /* Layout */
 .container{ max-width:1180px; margin:0 auto; padding:1rem }
+
+/* Large screens - expand global container */
+@media (min-width: 1600px) {
+  .container { max-width: 1400px; padding: 1.25rem; }
+}
+@media (min-width: 1920px) {
+  .container { max-width: 1600px; padding: 1.5rem; }
+}
+@media (min-width: 2400px) {
+  .container { max-width: 2000px; }
+}
+@media (min-width: 3200px) {
+  .container { max-width: 2600px; }
+}
 .under-construction{
   min-height:100vh;
   padding:2rem;
@@ -1094,10 +1108,38 @@ a.btn{ text-decoration:none }
   width: 100%;
   min-width: 0; /* Prevent grid blowout */
 }
+
+/* Large desktop screens - expand content width */
 @media (min-width: 1600px){
   .chef-main-content{
-  height: 100%;
-    padding-left: max(2rem, calc((100vw - 1400px) / 2));
+    max-width: 1600px;
+    padding-left: 2.5rem;
+    padding-right: 2.5rem;
+  }
+}
+
+/* Extra-large screens (27"+ monitors) */
+@media (min-width: 1920px){
+  .chef-main-content{
+    max-width: 1800px;
+    padding-left: 3rem;
+    padding-right: 3rem;
+  }
+}
+
+/* Superwide screens (32"+ monitors, ultrawide) */
+@media (min-width: 2400px){
+  .chef-main-content{
+    max-width: 2200px;
+    padding-left: 4rem;
+    padding-right: 4rem;
+  }
+}
+
+/* Ultrawide screens (4K+ displays) */
+@media (min-width: 3200px){
+  .chef-main-content{
+    max-width: 2800px;
   }
 }
 
@@ -11561,6 +11603,36 @@ button.chat-recipient:hover {
   overflow: hidden;
 }
 
+/* Large screens - expand home hero */
+@media (min-width: 1600px) {
+  .home-hero {
+    max-width: 1500px;
+    gap: 4rem;
+    padding: 4rem 3rem;
+  }
+}
+
+@media (min-width: 1920px) {
+  .home-hero {
+    max-width: 1700px;
+    gap: 5rem;
+  }
+}
+
+@media (min-width: 2400px) {
+  .home-hero {
+    max-width: 2100px;
+    gap: 6rem;
+    padding: 5rem 4rem;
+  }
+}
+
+@media (min-width: 3200px) {
+  .home-hero {
+    max-width: 2700px;
+  }
+}
+
 .home-hero-bg {
   position: absolute;
   inset: 0;
@@ -11936,6 +12008,7 @@ button.chat-recipient:hover {
   overflow: hidden;
   margin-bottom: 1rem;
   border: 3px solid color-mix(in oklab, var(--primary) 20%, var(--surface));
+  background: #fff;
 }
 
 .home-chef-avatar img {
@@ -13312,4 +13385,141 @@ button.chat-recipient:hover {
 .page-orders .orders-hero-content {
   position: relative;
   z-index: 1;
+}
+
+/* ==========================================
+   LARGE SCREEN RESPONSIVE OVERRIDES
+   Ensures content expands properly on 27"+ monitors
+   ========================================== */
+
+/* Large desktop (1600px+) - expand 1200px containers */
+@media (min-width: 1600px) {
+  .chef-marketplace-container,
+  .gallery-hero-content,
+  .gallery-filters-content,
+  .gallery-container,
+  .orders-hero-content,
+  .orders-filters-content,
+  .orders-main,
+  .chefs-hero-content,
+  .chefs-search-content,
+  .chefs-results-summary,
+  .chefs-container,
+  .guest-cta-section,
+  .chef-hub-back,
+  .chef-hub-hero-content,
+  .chef-hub-content,
+  .my-chefs-hero-content,
+  .my-chefs-content,
+  .page-orders,
+  .chef-sticky-widget-content {
+    max-width: 1400px;
+  }
+  
+  .sticky-cta__inner {
+    max-width: 1300px;
+  }
+  
+  .home-section {
+    max-width: 1500px;
+  }
+}
+
+/* Extra-large screens (1920px+ / 27" monitors) */
+@media (min-width: 1920px) {
+  .chef-marketplace-container,
+  .gallery-hero-content,
+  .gallery-filters-content,
+  .gallery-container,
+  .orders-hero-content,
+  .orders-filters-content,
+  .orders-main,
+  .chefs-hero-content,
+  .chefs-search-content,
+  .chefs-results-summary,
+  .chefs-container,
+  .guest-cta-section,
+  .chef-hub-back,
+  .chef-hub-hero-content,
+  .chef-hub-content,
+  .my-chefs-hero-content,
+  .my-chefs-content,
+  .page-orders,
+  .chef-sticky-widget-content {
+    max-width: 1600px;
+  }
+  
+  .sticky-cta__inner {
+    max-width: 1500px;
+  }
+  
+  .home-section {
+    max-width: 1700px;
+  }
+}
+
+/* Superwide screens (2400px+ / 32" monitors) */
+@media (min-width: 2400px) {
+  .chef-marketplace-container,
+  .gallery-hero-content,
+  .gallery-filters-content,
+  .gallery-container,
+  .orders-hero-content,
+  .orders-filters-content,
+  .orders-main,
+  .chefs-hero-content,
+  .chefs-search-content,
+  .chefs-results-summary,
+  .chefs-container,
+  .guest-cta-section,
+  .chef-hub-back,
+  .chef-hub-hero-content,
+  .chef-hub-content,
+  .my-chefs-hero-content,
+  .my-chefs-content,
+  .page-orders,
+  .chef-sticky-widget-content {
+    max-width: 2000px;
+  }
+  
+  .sticky-cta__inner {
+    max-width: 1900px;
+  }
+  
+  .home-section {
+    max-width: 2100px;
+  }
+}
+
+/* Ultrawide screens (3200px+ / 4K displays) */
+@media (min-width: 3200px) {
+  .chef-marketplace-container,
+  .gallery-hero-content,
+  .gallery-filters-content,
+  .gallery-container,
+  .orders-hero-content,
+  .orders-filters-content,
+  .orders-main,
+  .chefs-hero-content,
+  .chefs-search-content,
+  .chefs-results-summary,
+  .chefs-container,
+  .guest-cta-section,
+  .chef-hub-back,
+  .chef-hub-hero-content,
+  .chef-hub-content,
+  .my-chefs-hero-content,
+  .my-chefs-content,
+  .page-orders,
+  .chef-sticky-widget-content {
+    max-width: 2600px;
+  }
+  
+  .sticky-cta__inner {
+    max-width: 2400px;
+  }
+  
+  .home-section {
+    max-width: 2700px;
+  }
 }

@@ -3,7 +3,6 @@ MIN_SIMILARITY = 0.6  # Adjusted similarity threshold
 MAX_ATTEMPTS = 5      # Max attempts to find or generate a meal per meal type per day
 EXPECTED_EMBEDDING_SIZE = 1536  # Example size, adjust based on your embedding model
 
-from celery import shared_task
 from .models import SystemUpdate
 from .models import MealPlan, MealPlanMeal, Meal
 from .models import Chef
@@ -83,8 +82,7 @@ def _send_n8n_traceback(message: str, source: str, extra: Optional[Dict[str, Any
         logger.error("Failed to POST traceback to n8n: %s", post_error, exc_info=True)
 
 
-@shared_task(bind=True, ignore_result=True)
-def celery_beat_heartbeat(self) -> bool:
+def celery_beat_heartbeat() -> bool:
     """
     Simple heartbeat task scheduled by Celery Beat.
     Updates a cache key with the current timestamp so workers can verify Beat is alive.
@@ -104,8 +102,7 @@ def celery_beat_heartbeat(self) -> bool:
         return False
 
 
-@shared_task(bind=True, ignore_result=True)
-def monitor_celery_beat(self) -> None:
+def monitor_celery_beat() -> None:
     """
     Self-rescheduling monitor that checks if the last beat heartbeat is fresh.
     If stale or missing, notify n8n (cooldown-limited) and continue monitoring.
@@ -155,52 +152,38 @@ def monitor_celery_beat(self) -> None:
             )
         except Exception:
             pass
-    finally:
-        # Self-reschedule regardless of outcome to keep monitoring running without Beat
-        try:
-            self.apply_async(countdown=MONITOR_INTERVAL_SECONDS)
-        except Exception as schedule_error:
-            logger.error("Failed to reschedule monitor_celery_beat: %s", schedule_error, exc_info=True)
-            try:
-                _send_n8n_traceback(
-                    message=f"Failed to reschedule monitor_celery_beat: {schedule_error}",
-                    source="monitor_celery_beat_reschedule",
-                    extra={"traceback": traceback.format_exc()},
-                )
-            except Exception:
-                pass
+    # NOTE: Self-rescheduling removed - Celery Beat monitoring is no longer needed
+    # since we've migrated to QStash for task scheduling
 
 
 
     
-@shared_task
 @handle_task_failure
 def queue_system_update_email(system_update_id, test_mode=False, admin_id=None):
     """
-    Queue system update emails through Celery
+    Send system update emails.
     """
-    print(f"Queueing system update email for {system_update_id}")
+    print(f"Sending system update email for {system_update_id}")
     from meals.email_service import send_system_update_email
     
     system_update = SystemUpdate.objects.get(id=system_update_id)
     
     if test_mode and admin_id:
         # Send test email only to admin
-        send_system_update_email.delay(
+        send_system_update_email(
             subject=system_update.subject,
             message=system_update.message,
             user_ids=[admin_id]
         )
     else:
         # Send to all users
-        send_system_update_email.delay(
+        send_system_update_email(
             subject=system_update.subject,
             message=system_update.message
         )
-        print(f"System update email queued for all users!")
+        print(f"System update email sent to all users!")
     return True
 
-@shared_task
 def sync_all_chef_payments():
     """Daily task to sync all chef payments with Stripe"""
     for chef in Chef.objects.all():
@@ -210,7 +193,6 @@ def sync_all_chef_payments():
         except Exception as e:
             logger.error(f"Error syncing payments for chef {chef.id}: {str(e)}")
 
-@shared_task
 def process_chef_meal_price_adjustments():
     """
     Weekly task to process price adjustment refunds for chef meal orders.
@@ -332,16 +314,8 @@ def process_chef_meal_price_adjustments():
     logger.info(f"Price adjustment task completed. Processed {total_processed} refunds totaling ${total_refunded}")
     return {'processed': total_processed, 'total_refunded': str(total_refunded)}
 
-@shared_task(
-    bind=True,
-    autoretry_for=(Exception,),
-    retry_kwargs={'max_retries': 3, 'countdown': 60},
-    retry_backoff=True,
-    retry_backoff_max=600,
-    retry_jitter=True
-)
 @handle_task_failure
-def generate_daily_user_summaries(self):
+def generate_daily_user_summaries():
     """
     Task to generate daily summaries for all active users.
     This task runs hourly to catch users in different time zones
@@ -406,8 +380,8 @@ def generate_daily_user_summaries(self):
                 logger.info(f"Generating summary for user {user.id} ({user.username}) in timezone {user_timezone}")
                 from meals.email_service import generate_user_summary
                 
-                # Queue the task to generate the summary
-                generate_user_summary.delay(user.id)
+                # Generate the summary
+                generate_user_summary(user.id)
                 summary_count += 1
                 
         except Exception as e:
@@ -420,22 +394,23 @@ def generate_daily_user_summaries(self):
         
     return f"Daily summary check complete: found {eligible_count} eligible users, queued {summary_count} summaries"
 
-@shared_task
 def schedule_capture(event_id):
     """
     Schedule the capture of payment intents at the event's cutoff time.
+    
+    TODO: For scheduled execution at cutoff time, consider using QStash's
+    scheduled publish feature. For now, capture is done immediately.
     
     Args:
         event_id: ID of the ChefMealEvent to schedule for
     """
     from meals.models import ChefMealEvent
     event = ChefMealEvent.objects.get(id=event_id)
-    eta = event.order_cutoff_time
     
-    # Schedule the capture task to run at the cutoff time
-    capture_payment_intents.apply_async(args=[event_id], eta=eta)
+    # NOTE: Previously scheduled via Celery apply_async(eta=...).
+    # Now executes immediately. Use QStash for delayed execution if needed.
+    capture_payment_intents(event_id)
 
-@shared_task
 def capture_payment_intents(event_id):
     """
     Capture all payment intents for a given chef meal event.
@@ -477,7 +452,6 @@ def capture_payment_intents(event_id):
         else:
             logger.warning(f"No payment intent found for order {order.id}")
 
-@shared_task
 @handle_task_failure
 def create_weekly_chat_threads():
     """
@@ -584,7 +558,6 @@ def create_weekly_chat_threads():
         "threads_with_announcements": threads_with_announcements
     }
 
-@shared_task
 @handle_task_failure
 def generate_user_chat_summaries():
     """
@@ -704,7 +677,6 @@ def generate_user_chat_summaries():
         "errors": error_count
     }
 
-@shared_task
 def generate_chat_session_summaries():
     """
     Generate summaries for individual chat sessions.
@@ -853,7 +825,6 @@ def generate_chat_session_summaries():
 
 
 
-@shared_task
 # @deprecated Legacy meal-plan maintenance task guarded by LEGACY_MEAL_PLAN.
 def cleanup_old_meal_plans_and_meals(dry_run: bool = False):
     """
@@ -958,10 +929,9 @@ def _next_week_range_from_today(today=None):
     return week_start, week_end
 
 
-@shared_task(bind=True, ignore_result=True)
 @handle_task_failure
 # @deprecated Legacy meal-plan task guarded by LEGACY_MEAL_PLAN.
-def submit_weekly_meal_plan_batch(self, request_id=None):
+def submit_weekly_meal_plan_batch(request_id=None):
     """Submit a Groq batch for all auto-enabled users for the upcoming week."""
     week_start, week_end = _next_week_range_from_today()
     job = meal_plan_batch_service.submit_weekly_batch(
@@ -975,10 +945,9 @@ def submit_weekly_meal_plan_batch(self, request_id=None):
         logger.info("Meal plan batch submission fell back to synchronous generation")
 
 
-@shared_task(bind=True, ignore_result=True)
 @handle_task_failure
 # @deprecated Legacy meal-plan task guarded by LEGACY_MEAL_PLAN.
-def poll_incomplete_meal_plan_batches(self):
+def poll_incomplete_meal_plan_batches():
     """Poll Groq for any meal plan batch jobs that are still in flight."""
     pending_statuses = [
         MealPlanBatchJob.STATUS_SUBMITTED,

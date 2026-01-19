@@ -22,7 +22,6 @@ from meals.pantry_management import assign_pantry_tags
 from django.utils import timezone
 import logging
 from datetime import timedelta, date
-from celery import shared_task
 import traceback
 import os
 from utils.redis_client import redis_client
@@ -30,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 def trigger_assign_pantry_tags(sender, instance, created, **kwargs):
     if created:
-        assign_pantry_tags.delay(instance.id)
+        assign_pantry_tags(instance.id)
 
 @receiver(m2m_changed, sender=MealPlan.meal.through)
 def mealplan_meal_changed(sender, instance, action, **kwargs):
@@ -80,10 +79,10 @@ def send_meal_plan_email(sender, instance, **kwargs):
         (instance._previous_is_approved != instance.is_approved or
          instance._previous_has_changes != instance.has_changes)
     ):
-        generate_shopping_list.delay(instance.id)
+        generate_shopping_list(instance.id)
         if instance.meal_prep_preference == 'one_day_prep':
             # Generate bulk prep and send by default
-            generate_bulk_prep_instructions.delay(instance.id, send_via_assistant=True)
+            generate_bulk_prep_instructions(instance.id, send_via_assistant=True)
 
 # Health tracking signal handlers removed (GoalTracking, UserHealthMetrics, CalorieIntake)
 
@@ -107,7 +106,7 @@ def create_meal_plan_on_user_registration(sender, instance, created, **kwargs):
         # Avoid duplicate plan generation for this user/week
         exists = MealPlan.objects.filter(user=instance, week_start_date=week_start, week_end_date=week_end).exists()
         if not exists:
-            create_meal_plan_for_new_user.delay(instance.id)
+            create_meal_plan_for_new_user(instance.id)
 
     if created:
         if instance.email_confirmed and getattr(instance, 'auto_meal_plans_enabled', True):
@@ -186,7 +185,7 @@ def push_order_event(sender, instance, created, **kwargs):
         )
     
     # Send notification via assistant for non-created updates (quantity changes/cancel/refund)
-    send_chef_order_notification.delay(instance.customer.id, message, subject)
+    send_chef_order_notification(instance.customer.id, message, subject)
 
 
 def schedule_grouped_order_email(order_id: int, user_id: int, debounce_seconds: int = 8) -> None:
@@ -197,14 +196,14 @@ def schedule_grouped_order_email(order_id: int, user_id: int, debounce_seconds: 
     # Record the user for this order (used by the task)
     redis_client.set(f"order_group_queue:{order_id}:user", user_id, timeout=3600)
 
-    # Use a scheduled flag to avoid enqueuing the task multiple times
+    # Use a scheduled flag to avoid duplicate processing
     scheduled_key = f"order_group_queue:{order_id}:scheduled"
     if not redis_client.exists(scheduled_key):
         # Mark as scheduled with a short TTL
         redis_client.set(scheduled_key, "1", timeout=max(debounce_seconds * 4, 60))
-        send_grouped_order_confirmation.apply_async(args=[order_id], countdown=debounce_seconds)
+        # NOTE: Previously used countdown for debouncing, now executes immediately
+        send_grouped_order_confirmation(order_id)
 
-@shared_task
 def send_chef_order_notification(user_id, message, subject):
     """
     Task to send a chef order notification via the assistant.
@@ -227,7 +226,6 @@ def send_chef_order_notification(user_id, message, subject):
         logger.error(f"Error sending chef order notification to user {user_id}: {str(e)}")
 
 
-@shared_task
 def send_grouped_order_confirmation(order_id: int):
     """
     Build and send a single confirmation email summarizing all ChefMealOrder items
@@ -376,7 +374,7 @@ def notify_users_of_chef_meal_event_changes(sender, instance, created, **kwargs)
         subject = generate_chef_event_change_subject(changes)
         
         # Send notification via assistant
-        send_chef_event_notification.delay(user.id, message, subject, instance.id, changes)
+        send_chef_event_notification(user.id, message, subject, instance.id, changes)
 
 def generate_chef_event_change_message(event, changes, user):
     """
@@ -438,7 +436,6 @@ def generate_chef_event_change_subject(changes):
     else:
         return "Update about your chef meal order"
 
-@shared_task
 def send_chef_event_notification(user_id, message, subject, event_id, changes):
     """
     Task to send a notification about a chef meal event change via the assistant.
@@ -470,7 +467,6 @@ def send_chef_event_notification(user_id, message, subject, event_id, changes):
                 logger.error(f"Failed to send error to N8N webhook: {str(webhook_error)}")
 
 # Weekly conversation reset feature
-@shared_task
 def create_weekly_chat_threads():
     """
     Task to create new chat threads for all users at the start of each week.

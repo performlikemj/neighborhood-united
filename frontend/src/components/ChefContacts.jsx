@@ -244,7 +244,7 @@ export default function ChefContacts() {
                 {ALLERGY_OPTIONS.map(opt => (
                   <button key={opt} type="button"
                     className={`chip small ${form.allergies.includes(opt) ? 'active' : ''}`}
-                    style={{ cursor: 'pointer', background: form.allergies.includes(opt) ? '#d9534f' : undefined, color: form.allergies.includes(opt) ? 'white' : undefined }}
+                    style={{ cursor: 'pointer', background: form.allergies.includes(opt) ? 'var(--danger)' : undefined, color: form.allergies.includes(opt) ? 'white' : undefined }}
                     onClick={() => setForm(f => ({ ...f, allergies: togglePreference(f.allergies, opt) }))}
                   >
                     {opt}
@@ -303,7 +303,7 @@ export default function ChefContacts() {
                         <span key={p} className="chip small" style={{ marginRight: '.2rem', fontSize: '.7rem' }}>{p}</span>
                       ))}
                       {c.allergies?.filter(a => a !== 'None').map(a => (
-                        <span key={a} className="chip small" style={{ marginRight: '.2rem', fontSize: '.7rem', background: '#ffeeba', color: '#856404' }}>⚠️ {a}</span>
+                        <span key={a} className="chip small" style={{ marginRight: '.2rem', fontSize: '.7rem', background: 'var(--warning-bg)', color: 'var(--warning)' }}>⚠️ {a}</span>
                       ))}
                     </div>
                   )}
@@ -369,7 +369,7 @@ export default function ChefContacts() {
                           <span key={p} className="chip small" style={{ marginRight: '.2rem', fontSize: '.7rem' }}>{p}</span>
                         ))}
                         {m.allergies?.filter(a => a !== 'None').map(a => (
-                          <span key={a} className="chip small" style={{ marginRight: '.2rem', fontSize: '.7rem', background: '#ffeeba', color: '#856404' }}>⚠️ {a}</span>
+                          <span key={a} className="chip small" style={{ marginRight: '.2rem', fontSize: '.7rem', background: 'var(--warning-bg)', color: 'var(--warning)' }}>⚠️ {a}</span>
                         ))}
                       </div>
                     )}
@@ -403,7 +403,7 @@ export default function ChefContacts() {
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '.2rem' }}>
                         {ALLERGY_OPTIONS.slice(0, 6).map(opt => (
                           <button key={opt} type="button" className="chip small"
-                            style={{ cursor: 'pointer', fontSize: '.7rem', background: memberForm.allergies.includes(opt) ? '#d9534f' : undefined, color: memberForm.allergies.includes(opt) ? 'white' : undefined }}
+                            style={{ cursor: 'pointer', fontSize: '.7rem', background: memberForm.allergies.includes(opt) ? 'var(--danger)' : undefined, color: memberForm.allergies.includes(opt) ? 'white' : undefined }}
                             onClick={() => setMemberForm(f => ({ ...f, allergies: togglePreference(f.allergies, opt) }))}
                           >{opt}</button>
                         ))}

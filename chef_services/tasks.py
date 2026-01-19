@@ -2,7 +2,6 @@ import logging
 from datetime import datetime, timezone
 
 import stripe
-from celery import shared_task
 from django.conf import settings
 from django.db import transaction
 
@@ -64,7 +63,6 @@ def _price_matches_current(price_obj, tier: ChefServicePriceTier) -> bool:
         return False
 
 
-@shared_task(name="chef_services.tasks.sync_pending_service_tiers")
 def sync_pending_service_tiers():
     """Provision Stripe Products/Prices for pending active tiers.
     Idempotent: uses existing price when matching; otherwise creates a new one.

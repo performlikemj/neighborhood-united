@@ -28,10 +28,10 @@ export default function ProfileCompletionCard({ chef }) {
 
   // Color scheme based on status
   const getStatusColor = () => {
-    if (status === PROFILE_STATUS.EXCELLENT) return '#10b981' // green
-    if (status === PROFILE_STATUS.READY) return '#5cb85c' // primary green
-    if (status === PROFILE_STATUS.INCOMPLETE) return '#f59e0b' // orange
-    return '#ef4444' // red
+    if (status === PROFILE_STATUS.EXCELLENT) return 'var(--success)'
+    if (status === PROFILE_STATUS.READY) return 'var(--primary)'
+    if (status === PROFILE_STATUS.INCOMPLETE) return 'var(--warning)'
+    return 'var(--danger)'
   }
 
   const statusColor = getStatusColor()
@@ -44,7 +44,7 @@ export default function ProfileCompletionCard({ chef }) {
           Profile Completion
         </h3>
         {isComplete && (
-          <span className="badge success" style={{background:'#d4edda', color:'#155724', padding:'.25rem .75rem', borderRadius:'6px', fontSize:'.85rem', fontWeight:600}}>
+          <span className="badge success" style={{background:'var(--success-bg)', color:'var(--success)', padding:'.25rem .75rem', borderRadius:'6px', fontSize:'.85rem', fontWeight:600}}>
             Ready
           </span>
         )}
@@ -99,7 +99,7 @@ export default function ProfileCompletionCard({ chef }) {
         }}>
           <i 
             className={`fa-solid ${stripeReady ? 'fa-check-circle' : 'fa-info-circle'}`}
-            style={{fontSize:'1.5rem', color: stripeReady ? '#5cb85c' : '#f59e0b'}}
+            style={{fontSize:'1.5rem', color: stripeReady ? 'var(--success)' : 'var(--warning)'}}
           ></i>
           <div>
             <div style={{fontWeight:600, fontSize:'.95rem', marginBottom:'.25rem'}}>
@@ -156,7 +156,7 @@ export default function ProfileCompletionCard({ chef }) {
       {/* Success State */}
       {isComplete && recommendations.length === 0 && (
         <div style={{marginTop:'1rem', textAlign:'center', padding:'1rem', background:'var(--surface-2)', borderRadius:'8px'}}>
-          <i className="fa-solid fa-check-circle" style={{fontSize:'2.5rem', color:'#10b981', marginBottom:'.5rem'}}></i>
+          <i className="fa-solid fa-check-circle" style={{fontSize:'2.5rem', color:'var(--success)', marginBottom:'.5rem'}}></i>
           <div style={{fontWeight:600, fontSize:'1.05rem', marginBottom:'.35rem'}}>Profile Complete!</div>
           <div style={{fontSize:'.9rem', color:'var(--muted)'}}>
             Your profile is ready to accept bookings and looks professional for Stripe compliance.

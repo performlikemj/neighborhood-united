@@ -7,5 +7,5 @@ class Command(BaseCommand):
     help = 'Triggers asynchronous update of embeddings for all meals, dishes, and ingredients.'
 
     def handle(self, *args, **options):
-        update_embeddings.delay()
-        self.stdout.write(self.style.SUCCESS('Successfully triggered embeddings update task.'))
+        update_embeddings()
+        self.stdout.write(self.style.SUCCESS('Successfully ran embeddings update.'))

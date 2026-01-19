@@ -2,7 +2,6 @@
 Focus: All embedding and similarity logic.
 """
 import logging
-from celery import shared_task
 from django.conf import settings
 from rest_framework.renderers import JSONRenderer
 from meals.models import Meal, Dish, Ingredient
@@ -39,7 +38,6 @@ def prepare_meal_representation(meal: Meal) -> str:
     return " | ".join(attributes)
 
 
-@shared_task
 def generate_meal_embedding(meal_id: int):
     try:
         meal = Meal.objects.get(id=meal_id)
@@ -70,7 +68,6 @@ def update_model_embeddings(queryset, embedding_func, embedding_field):
         else:
             logger.warning(f"Could not update embedding for {obj}")
 
-@shared_task
 def update_embeddings():
     from meals.models import Meal, Dish, Ingredient  # Adjust the import path based on your project structure
 

@@ -651,8 +651,8 @@ def me_set_break(request):
                                     send_refund_notification_email,
                                     send_order_cancellation_email,
                                 )
-                                send_refund_notification_email.delay(order.id)
-                                send_order_cancellation_email.delay(order.id)
+                                send_refund_notification_email(order.id)
+                                send_order_cancellation_email(order.id)
                             except Exception:
                                 pass
                             refunds_processed += 1
@@ -662,7 +662,7 @@ def me_set_break(request):
                             # Still send cancellation email
                             try:
                                 from meals.email_service import send_order_cancellation_email
-                                send_order_cancellation_email.delay(order.id)
+                                send_order_cancellation_email(order.id)
                             except Exception:
                                 pass
 

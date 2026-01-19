@@ -80,6 +80,14 @@ export async function archivePlan(planId) {
   return response?.data
 }
 
+/**
+ * Unpublish a plan (revert to draft for editing)
+ */
+export async function unpublishPlan(planId) {
+  const response = await api.post(`${BASE}/plans/${planId}/unpublish/`, {}, { skipUserId: true })
+  return response?.data
+}
+
 // ============================================================================
 // Days Management
 // ============================================================================

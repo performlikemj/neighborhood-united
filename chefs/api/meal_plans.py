@@ -456,8 +456,35 @@ def archive_plan(request, plan_id):
         )
     
     plan.archive()
-    
+
     return Response({'success': True})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def unpublish_plan(request, plan_id):
+    """Revert a published plan to draft status for editing."""
+    chef = get_chef_for_request(request)
+    if not chef:
+        return Response(
+            {'error': 'You must be a chef to access this endpoint.'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    plan = get_object_or_404(ChefMealPlan, id=plan_id, chef=chef)
+
+    if plan.status != ChefMealPlan.STATUS_PUBLISHED:
+        return Response(
+            {'error': 'Only published plans can be reverted to draft.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    plan.unpublish()
+
+    return Response({
+        'success': True,
+        'plan': _serialize_plan_for_chef(plan, include_days=True)
+    })
 
 
 @api_view(['POST'])

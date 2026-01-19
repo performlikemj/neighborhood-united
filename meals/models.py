@@ -1637,8 +1637,19 @@ class ChefMealPlan(models.Model):
     )
     customer = models.ForeignKey(
         CustomUser,
-        on_delete=models.CASCADE,
-        related_name='chef_meal_plans'
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='chef_meal_plans',
+        help_text="For platform users"
+    )
+    lead = models.ForeignKey(
+        'crm.Lead',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='chef_meal_plans',
+        help_text="For off-platform clients (manual contacts)"
     )
     
     title = models.CharField(
@@ -1669,42 +1680,89 @@ class ChefMealPlan(models.Model):
         indexes = [
             models.Index(fields=['chef', 'customer', 'status']),
             models.Index(fields=['customer', 'status', '-start_date']),
+            models.Index(fields=['chef', 'lead', 'status']),
+            models.Index(fields=['lead', 'status', '-start_date']),
         ]
         constraints = [
             models.UniqueConstraint(
                 fields=['chef', 'customer', 'start_date'],
+                condition=models.Q(customer__isnull=False),
                 name='unique_chef_customer_plan_start'
+            ),
+            models.UniqueConstraint(
+                fields=['chef', 'lead', 'start_date'],
+                condition=models.Q(lead__isnull=False),
+                name='unique_chef_lead_plan_start'
             ),
         ]
     
     def __str__(self):
         title = self.title or f"Plan {self.start_date}"
-        return f"{title} for {self.customer.username} by Chef {self.chef.user.username}"
-    
+        client_name = self.get_client_name()
+        return f"{title} for {client_name} by Chef {self.chef.user.username}"
+
     def clean(self):
         from django.core.exceptions import ValidationError
+        errors = {}
+
         if self.start_date and self.end_date and self.start_date > self.end_date:
-            raise ValidationError({'end_date': 'End date must be after start date.'})
+            errors['end_date'] = 'End date must be after start date.'
+
+        # Must have either customer or lead, but not both
+        if self.customer and self.lead:
+            errors['lead'] = 'Cannot have both a customer and a lead for the same meal plan.'
+        if not self.customer and not self.lead:
+            errors['customer'] = 'Must specify either a customer (platform user) or a lead (manual contact).'
+
+        if errors:
+            raise ValidationError(errors)
+
+    @property
+    def is_lead_plan(self):
+        """Return True if this plan is for an off-platform lead."""
+        return self.lead_id is not None
+
+    def get_client_name(self):
+        """Return the display name of the client (customer or lead)."""
+        if self.lead:
+            return f"{self.lead.first_name} {self.lead.last_name}".strip() or "Unknown"
+        if self.customer:
+            return f"{self.customer.first_name} {self.customer.last_name}".strip() or self.customer.username
+        return "Unknown"
+
+    def get_client_id(self):
+        """Return the unified client ID with appropriate prefix."""
+        if self.lead:
+            return f"contact_{self.lead_id}"
+        if self.customer:
+            return f"platform_{self.customer_id}"
+        return None
     
     def publish(self):
         """Publish the plan to make it visible to the customer."""
         self.status = self.STATUS_PUBLISHED
         self.published_at = timezone.now()
         self.save(update_fields=['status', 'published_at', 'updated_at'])
-        
-        # Update activity tracking on the connection
-        from chef_services.models import ChefCustomerConnection
-        ChefCustomerConnection.objects.filter(
-            chef=self.chef,
-            customer=self.customer,
-            status=ChefCustomerConnection.STATUS_ACCEPTED
-        ).update(last_plan_update_at=timezone.now())
+
+        # Update activity tracking on the connection (only for platform customers)
+        if self.customer:
+            from chef_services.models import ChefCustomerConnection
+            ChefCustomerConnection.objects.filter(
+                chef=self.chef,
+                customer=self.customer,
+                status=ChefCustomerConnection.STATUS_ACCEPTED
+            ).update(last_plan_update_at=timezone.now())
     
     def archive(self):
         """Archive the plan (typically after the date range has passed)."""
         self.status = self.STATUS_ARCHIVED
         self.save(update_fields=['status', 'updated_at'])
-    
+
+    def unpublish(self):
+        """Revert plan to draft status for editing."""
+        self.status = self.STATUS_DRAFT
+        self.save(update_fields=['status', 'updated_at'])
+
     @property
     def pending_suggestions_count(self):
         """Count of customer suggestions awaiting chef review."""

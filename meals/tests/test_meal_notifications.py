@@ -35,8 +35,8 @@ def test_send_meal_plan_email_skips_when_notifications_disabled(settings):
     meal_plan._previous_has_changes = True
 
     with (
-        patch("meals.signals.generate_shopping_list.delay") as mock_shopping,
-        patch("meals.signals.generate_bulk_prep_instructions.delay") as mock_bulk,
+        patch("meals.signals.generate_shopping_list") as mock_shopping,
+        patch("meals.signals.generate_bulk_prep_instructions") as mock_bulk,
     ):
         send_meal_plan_email(MealPlan, meal_plan)
 

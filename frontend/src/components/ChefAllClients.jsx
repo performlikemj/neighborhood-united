@@ -23,6 +23,14 @@ import '../styles/chef-clients.css'
 
 const API_BASE = '/chefs/api/me'
 
+// Style hints for detail panel layout
+const styles = {
+  detailContent: {
+    minHeight: '400px',
+    flex: 1
+  }
+}
+
 const INITIAL_FORM = {
   first_name: '',
   last_name: '',
@@ -290,7 +298,9 @@ export default function ChefAllClients({ onNavigateToPrep }) {
         ? 'Connection accepted!'
         : action === 'decline'
           ? 'Invitation declined.'
-          : 'Connection ended.'
+          : action === 'end'
+            ? 'Connection ended.'
+            : 'Connection updated.'
       try {
         window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: message, tone: 'success' } }))
       } catch {}

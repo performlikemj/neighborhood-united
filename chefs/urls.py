@@ -139,14 +139,15 @@ urlpatterns = [
     # Collaborative Meal Plans API (Chef endpoints)
     # ==========================================================================
     
-    # Client meal plans
-    path('api/me/clients/<int:client_id>/plans/', meal_plans_api.client_plans, name='chef_client_plans'),
+    # Client meal plans (accepts both int and prefixed IDs like "contact_123" or "platform_456")
+    path('api/me/clients/<str:client_id>/plans/', meal_plans_api.client_plans, name='chef_client_plans'),
     
     # Plan management
     path('api/me/plans/<int:plan_id>/', meal_plans_api.plan_detail, name='chef_plan_detail'),
     path('api/me/plans/<int:plan_id>/publish/', meal_plans_api.publish_plan, name='chef_publish_plan'),
     path('api/me/plans/<int:plan_id>/archive/', meal_plans_api.archive_plan, name='chef_archive_plan'),
-    
+    path('api/me/plans/<int:plan_id>/unpublish/', meal_plans_api.unpublish_plan, name='chef_unpublish_plan'),
+
     # Plan days
     path('api/me/plans/<int:plan_id>/days/', meal_plans_api.add_plan_day, name='chef_add_plan_day'),
     path('api/me/plans/<int:plan_id>/days/<int:day_id>/', meal_plans_api.plan_day_detail, name='chef_plan_day_detail'),
@@ -188,6 +189,10 @@ urlpatterns = [
     path('api/me/ingredients/shelf-life/', prep_plan_api.shelf_life_lookup, name='chef_shelf_life'),
     path('api/me/prep-plans/quick-generate/', prep_plan_api.quick_generate_prep_plan, name='chef_quick_prep_plan'),
     path('api/me/prep-plans/summary/', prep_plan_api.prep_plan_summary, name='chef_prep_plan_summary'),
+
+    # Live View Endpoints (no plan generation required)
+    path('api/me/prep-plans/live/commitments/', prep_plan_api.live_commitments, name='chef_live_commitments'),
+    path('api/me/prep-plans/live/shopping-list/', prep_plan_api.live_shopping_list, name='chef_live_shopping_list'),
     
     # ==========================================================================
     # Chef Verification Documents API

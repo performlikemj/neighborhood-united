@@ -209,8 +209,42 @@ export async function getPrepPlanSummary() {
 export async function lookupShelfLife(ingredients, storagePreference = null) {
   const payload = { ingredients }
   if (storagePreference) payload.storage_preference = storagePreference
-  
+
   const response = await api.post(`${PREP_BASE}/ingredients/shelf-life/`, payload, {
+    skipUserId: true,
+    withCredentials: true
+  })
+  return response?.data
+}
+
+
+// =============================================================================
+// Live View (No Plan Generation Required)
+// =============================================================================
+
+/**
+ * Get live upcoming commitments without creating a prep plan.
+ * @param {Object} params - Query parameters
+ * @param {number} params.days - Number of days to look ahead (default: 7, max: 30)
+ */
+export async function getLiveCommitments({ days = 7 } = {}) {
+  const response = await api.get(`${PREP_BASE}/prep-plans/live/commitments/`, {
+    params: { days },
+    skipUserId: true,
+    withCredentials: true
+  })
+  return response?.data
+}
+
+/**
+ * Get live shopping list calculated on-demand without storing.
+ * @param {Object} params - Query parameters
+ * @param {number} params.days - Number of days to look ahead (default: 7, max: 30)
+ * @param {string} params.groupBy - How to group items: 'date' or 'category' (default: 'date')
+ */
+export async function getLiveShoppingList({ days = 7, groupBy = 'date' } = {}) {
+  const response = await api.get(`${PREP_BASE}/prep-plans/live/shopping-list/`, {
+    params: { days, group_by: groupBy },
     skipUserId: true,
     withCredentials: true
   })

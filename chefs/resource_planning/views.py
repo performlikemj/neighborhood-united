@@ -19,6 +19,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from chefs.models import Chef
+from meals.models import ChefMealPlan
 from chefs.resource_planning.models import (
     ChefPrepPlan,
     ChefPrepPlanItem,
@@ -33,9 +34,12 @@ from chefs.resource_planning.serializers import (
     ShelfLifeResultSerializer,
 )
 from chefs.resource_planning.services import (
+    aggregate_ingredients,
+    calculate_shopping_timing,
     generate_prep_plan,
     get_shopping_list_by_category,
     get_shopping_list_by_date,
+    get_upcoming_commitments,
 )
 from chefs.resource_planning.shelf_life import get_ingredient_shelf_lives
 
@@ -495,13 +499,189 @@ def prep_plan_summary(request):
         plan_end_date__gte=today,
         status__in=['generated', 'in_progress']
     ).order_by('-plan_start_date').first()
-    
+
+    # Check if chef has any upcoming meal plans (for contextual empty state)
+    has_upcoming_meal_plans = ChefMealPlan.objects.filter(
+        chef=chef,
+        end_date__gte=today
+    ).exists()
+
+    # Count upcoming meal commitments
+    upcoming_commitment_count = ChefMealPlan.objects.filter(
+        chef=chef,
+        status__in=['draft', 'published'],
+        end_date__gte=today
+    ).count()
+
     return Response({
         'active_plans_count': active_plans,
         'items_to_purchase_today': items_today,
         'items_overdue': items_overdue,
-        'latest_plan': ChefPrepPlanListSerializer(latest_plan).data if latest_plan else None
+        'latest_plan': ChefPrepPlanListSerializer(latest_plan).data if latest_plan else None,
+        'has_upcoming_meal_plans': has_upcoming_meal_plans,
+        'upcoming_commitment_count': upcoming_commitment_count,
     })
+
+
+# =============================================================================
+# Live View Endpoints (No Plan Generation Required)
+# =============================================================================
+
+def _serialize_commitment(c):
+    """Serialize a Commitment dataclass to dict."""
+    return {
+        'commitment_type': c.commitment_type,
+        'service_date': c.service_date.isoformat(),
+        'servings': c.servings,
+        'meal_name': c.meal_name,
+        'customer_name': c.customer_name,
+        'chef_meal_plan_id': c.chef_meal_plan_id,
+        'dishes': c.dishes or []
+    }
+
+
+def _group_items_by_category(items):
+    """Group shopping items by storage category."""
+    from collections import defaultdict
+
+    items_by_category = defaultdict(list)
+
+    for item in items:
+        category = item.storage_type or 'pantry'
+        items_by_category[category].append({
+            'ingredient': item.ingredient_name,
+            'quantity': float(item.total_quantity),
+            'unit': item.unit,
+            'purchase_by': item.suggested_purchase_date.isoformat(),
+            'shelf_life_days': item.shelf_life_days,
+            'storage': item.storage_type,
+            'timing_status': item.timing_status,
+            'earliest_use': item.earliest_use_date.isoformat(),
+            'latest_use': item.latest_use_date.isoformat(),
+            'meals': item.meals_using
+        })
+
+    # Order categories logically
+    ordered = {}
+    for cat in ['refrigerated', 'frozen', 'counter', 'pantry']:
+        if cat in items_by_category:
+            ordered[cat] = items_by_category[cat]
+
+    return ordered
+
+
+def _group_items_by_date(items):
+    """Group shopping items by suggested purchase date."""
+    from collections import defaultdict
+
+    items_by_date = defaultdict(list)
+
+    for item in items:
+        date_key = item.suggested_purchase_date.isoformat()
+        items_by_date[date_key].append({
+            'ingredient': item.ingredient_name,
+            'quantity': float(item.total_quantity),
+            'unit': item.unit,
+            'shelf_life_days': item.shelf_life_days,
+            'storage': item.storage_type,
+            'timing_status': item.timing_status,
+            'timing_notes': item.timing_notes if hasattr(item, 'timing_notes') else None,
+            'earliest_use': item.earliest_use_date.isoformat(),
+            'latest_use': item.latest_use_date.isoformat(),
+            'meals': item.meals_using
+        })
+
+    return dict(items_by_date)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def live_commitments(request):
+    """
+    Get live upcoming commitments without creating a prep plan.
+
+    Query params:
+    - days: Number of days to look ahead (default: 7, max: 30)
+    """
+    chef = _get_chef_or_403(request.user)
+    if not chef:
+        return Response(
+            {'error': 'You must be a chef to access this resource.'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    try:
+        days_ahead = min(int(request.query_params.get('days', 7)), 30)
+    except (ValueError, TypeError):
+        days_ahead = 7
+
+    today = date.today()
+    end_date = today + timedelta(days=days_ahead - 1)
+
+    commitments = get_upcoming_commitments(chef, today, end_date)
+
+    return Response({
+        'start_date': today.isoformat(),
+        'end_date': end_date.isoformat(),
+        'commitments': [_serialize_commitment(c) for c in commitments],
+        'summary': {
+            'total_meals': len(commitments),
+            'total_servings': sum(c.servings for c in commitments),
+            'unique_clients': len(set(c.customer_name for c in commitments if c.customer_name))
+        }
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def live_shopping_list(request):
+    """
+    Calculate shopping list on-demand without storing.
+
+    Query params:
+    - days: Number of days to look ahead (default: 7, max: 30)
+    - group_by: 'date' or 'category' (default: 'date')
+    """
+    chef = _get_chef_or_403(request.user)
+    if not chef:
+        return Response(
+            {'error': 'You must be a chef to access this resource.'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    try:
+        days_ahead = min(int(request.query_params.get('days', 7)), 30)
+    except (ValueError, TypeError):
+        days_ahead = 7
+
+    group_by = request.query_params.get('group_by', 'date')
+    today = date.today()
+    end_date = today + timedelta(days=days_ahead - 1)
+
+    try:
+        commitments = get_upcoming_commitments(chef, today, end_date)
+        aggregated = aggregate_ingredients(commitments)
+        items = calculate_shopping_timing(aggregated, today)
+
+        if group_by == 'category':
+            shopping_list = _group_items_by_category(items)
+        else:
+            shopping_list = _group_items_by_date(items)
+
+        return Response({
+            'start_date': today.isoformat(),
+            'end_date': end_date.isoformat(),
+            'group_by': group_by,
+            'shopping_list': shopping_list,
+            'total_items': len(items)
+        })
+
+    except Exception as e:
+        logger.error(f"Failed to generate live shopping list: {e}")
+        return Response(
+            {'error': f'Failed to generate shopping list: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 

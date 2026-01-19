@@ -1,26 +1,14 @@
 /**
- * Chef Prep Planning Component
- * 
- * Provides intelligent shopping lists and prep planning for chefs:
- * - Generate prep plans for upcoming commitments
- * - View shopping lists organized by purchase date or category
- * - Track purchased items
- * - Batch cooking suggestions
+ * Chef Prep Planning Component - Live View
+ *
+ * Shows upcoming commitments and shopping list immediately without requiring
+ * plan generation. Chefs can see what they need to cook and buy right away.
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import {
-  getPrepPlans,
-  getPrepPlanDetail,
-  quickGeneratePrepPlan,
-  createPrepPlan,
-  updatePrepPlan,
-  deletePrepPlan,
-  regeneratePrepPlan,
-  getShoppingList,
-  markItemsPurchased,
-  unmarkItemsPurchased,
-  getPrepPlanSummary
+  getLiveCommitments,
+  getLiveShoppingList
 } from '../api/chefPrepPlanClient'
 
 // Helper: format date for display
@@ -38,24 +26,12 @@ function formatDate(dateStr) {
   }
 }
 
-// Helper: get today's date in YYYY-MM-DD format
-function getTodayISO() {
-  return new Date().toISOString().slice(0, 10)
-}
-
-// Helper: add days to a date
-function addDays(dateStr, days) {
-  const date = new Date(dateStr + 'T00:00:00')
-  date.setDate(date.getDate() + days)
-  return date.toISOString().slice(0, 10)
-}
-
-// Timing status badge colors
-const TIMING_COLORS = {
-  optimal: { bg: 'rgba(24,180,24,.15)', color: '#168516' },
-  tight: { bg: 'rgba(200,160,20,.15)', color: '#8a6d00' },
-  problematic: { bg: 'rgba(200,100,40,.15)', color: '#a14500' },
-  impossible: { bg: 'rgba(200,40,40,.18)', color: '#a11919' }
+// Timing status badge colors and human-readable labels
+const TIMING_CONFIG = {
+  optimal: { label: 'On track', bg: 'var(--success-bg)', color: 'var(--success)' },
+  tight: { label: 'Buy soon', bg: 'var(--warning-bg)', color: 'var(--warning)' },
+  problematic: { label: 'Plan ahead', bg: 'var(--warning-bg)', color: 'var(--warning)' },
+  impossible: { label: "Won't last", bg: 'var(--danger-bg)', color: 'var(--danger)' }
 }
 
 // Storage type icons
@@ -66,8 +42,11 @@ const STORAGE_ICONS = {
   counter: '🍌'
 }
 
+// Days selector options
+const DAYS_OPTIONS = [7, 14, 21, 30]
+
 function StatusBadge({ status }) {
-  const colors = TIMING_COLORS[status] || { bg: 'rgba(60,60,60,.12)', color: '#2f2f2f' }
+  const config = TIMING_CONFIG[status] || { label: status, bg: 'var(--neutral-bg)', color: 'var(--neutral)' }
   return (
     <span
       style={{
@@ -76,12 +55,11 @@ function StatusBadge({ status }) {
         borderRadius: '12px',
         fontSize: '0.75rem',
         fontWeight: 500,
-        background: colors.bg,
-        color: colors.color,
-        textTransform: 'capitalize'
+        background: config.bg,
+        color: config.color
       }}
     >
-      {status}
+      {config.label}
     </span>
   )
 }
@@ -97,206 +75,128 @@ function SummaryCard({ title, value, subtitle, icon }) {
   )
 }
 
-export default function ChefPrepPlanning() {
-  // State
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
-  const [summary, setSummary] = useState(null)
-  const [plans, setPlans] = useState([])
-  const [selectedPlan, setSelectedPlan] = useState(null)
-  const [shoppingList, setShoppingList] = useState(null)
-  const [listGroupBy, setListGroupBy] = useState('date')
-  
-  // Form state
-  const [showCreateForm, setShowCreateForm] = useState(false)
-  const [createForm, setCreateForm] = useState({
-    start_date: getTodayISO(),
-    end_date: addDays(getTodayISO(), 6),
-    notes: ''
-  })
-  const [creating, setCreating] = useState(false)
-  const [quickGenerating, setQuickGenerating] = useState(false)
+// Empty state: Chef has no upcoming meals
+function EmptyStateNoMeals({ onNavigateToClients }) {
+  return (
+    <div className="card" style={{ padding: '2rem', textAlign: 'center', maxWidth: '500px', margin: '2rem auto' }}>
+      <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📋</div>
+      <h3 style={{ marginBottom: '0.5rem' }}>No Upcoming Meals</h3>
+      <p className="muted" style={{ marginBottom: '1.5rem' }}>
+        Create meal plans for your clients to see what you need to cook and buy.
+        Your shopping list and upcoming meals will appear here automatically.
+      </p>
+      <div style={{ background: 'var(--surface-2)', padding: '1rem', borderRadius: '8px', marginBottom: '1.5rem', textAlign: 'left' }}>
+        <div style={{ fontWeight: 500, marginBottom: '0.5rem' }}>How it works:</div>
+        <ul style={{ margin: 0, paddingLeft: '1.25rem' }} className="muted">
+          <li>Create meal plans for clients in the Clients tab</li>
+          <li>Your shopping list is automatically calculated</li>
+          <li>Purchase timing is based on ingredient shelf life</li>
+        </ul>
+      </div>
+      {onNavigateToClients && (
+        <button className="btn btn-primary" onClick={onNavigateToClients}>
+          Go to Clients
+        </button>
+      )}
+    </div>
+  )
+}
 
-  // Compute unique clients from selected plan
+export default function ChefPrepPlanning({ onNavigateToClients }) {
+  // State - split loading for progressive UX
+  const [commitmentsLoading, setCommitmentsLoading] = useState(true)
+  const [shoppingLoading, setShoppingLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [daysAhead, setDaysAhead] = useState(7)
+  const [listGroupBy, setListGroupBy] = useState('date')
+  const [commitments, setCommitments] = useState([])
+  const [shoppingList, setShoppingList] = useState({})
+  const [summary, setSummary] = useState(null)
+  const [totalItems, setTotalItems] = useState(0)
+
+  // Compute unique clients from commitments
   const uniqueClients = useMemo(() => {
-    if (!selectedPlan?.commitments) return []
     const clientNames = new Set()
-    selectedPlan.commitments.forEach(c => {
+    commitments.forEach(c => {
       if (c.customer_name) clientNames.add(c.customer_name)
     })
     return Array.from(clientNames)
-  }, [selectedPlan?.commitments])
+  }, [commitments])
 
   // Group commitments by client for display
   const commitmentsByClient = useMemo(() => {
-    if (!selectedPlan?.commitments) return {}
     const grouped = {}
-    selectedPlan.commitments.forEach(c => {
+    commitments.forEach(c => {
       const client = c.customer_name || 'Other'
       if (!grouped[client]) grouped[client] = []
       grouped[client].push(c)
     })
     return grouped
-  }, [selectedPlan?.commitments])
+  }, [commitments])
 
-  // Load initial data
-  const loadData = useCallback(async () => {
-    setLoading(true)
+  // Load commitments first (fast)
+  const loadCommitments = useCallback(async () => {
+    setCommitmentsLoading(true)
     setError(null)
     try {
-      const [summaryData, plansData] = await Promise.all([
-        getPrepPlanSummary(),
-        getPrepPlans()
-      ])
-      setSummary(summaryData)
-      setPlans(Array.isArray(plansData) ? plansData : [])
+      const data = await getLiveCommitments({ days: daysAhead })
+      setCommitments(data?.commitments || [])
+      setSummary(data?.summary)
     } catch (err) {
-      console.error('Failed to load prep planning data:', err)
-      setError('Failed to load prep planning data. Please try again.')
+      console.error('Failed to load commitments:', err)
+      setError('Failed to load meal data. Please try again.')
     } finally {
-      setLoading(false)
+      setCommitmentsLoading(false)
     }
-  }, [])
+  }, [daysAhead])
 
+  // Load shopping list (slower - may involve AI)
+  const loadShoppingList = useCallback(async () => {
+    setShoppingLoading(true)
+    try {
+      const data = await getLiveShoppingList({ days: daysAhead, groupBy: listGroupBy })
+      setShoppingList(data?.shopping_list || {})
+      setTotalItems(data?.total_items || 0)
+    } catch (err) {
+      console.error('Failed to load shopping list:', err)
+      // Don't set main error - shopping list failure shouldn't block the view
+    } finally {
+      setShoppingLoading(false)
+    }
+  }, [daysAhead, listGroupBy])
+
+  // Load commitments on mount and when days change
   useEffect(() => {
-    loadData()
-  }, [loadData])
+    loadCommitments()
+  }, [loadCommitments])
 
-  // Load plan details when selected
+  // Load shopping list after commitments, or when groupBy changes
   useEffect(() => {
-    if (!selectedPlan?.id) {
-      setShoppingList(null)
-      return
+    if (!commitmentsLoading && commitments.length > 0) {
+      loadShoppingList()
     }
+  }, [commitmentsLoading, commitments.length, listGroupBy, loadShoppingList])
 
-    const loadPlanDetails = async () => {
-      try {
-        const [planDetail, listData] = await Promise.all([
-          getPrepPlanDetail(selectedPlan.id),
-          getShoppingList(selectedPlan.id, listGroupBy)
-        ])
-        setSelectedPlan(planDetail)
-        setShoppingList(listData)
-      } catch (err) {
-        console.error('Failed to load plan details:', err)
-      }
-    }
-
-    loadPlanDetails()
-  }, [selectedPlan?.id, listGroupBy])
-
-  // Quick generate (7 days)
-  const handleQuickGenerate = async () => {
-    setQuickGenerating(true)
-    try {
-      const newPlan = await quickGeneratePrepPlan({ days: 7 })
-      setPlans(prev => [newPlan, ...prev])
-      setSelectedPlan(newPlan)
-      await loadData()
-      window.dispatchEvent(new CustomEvent('global-toast', {
-        detail: { text: 'Prep plan generated!', tone: 'success' }
-      }))
-    } catch (err) {
-      console.error('Failed to generate prep plan:', err)
-      window.dispatchEvent(new CustomEvent('global-toast', {
-        detail: { text: 'Failed to generate plan', tone: 'error' }
-      }))
-    } finally {
-      setQuickGenerating(false)
-    }
-  }
-
-  // Create custom plan
-  const handleCreatePlan = async (e) => {
-    e.preventDefault()
-    setCreating(true)
-    try {
-      const newPlan = await createPrepPlan(createForm)
-      setPlans(prev => [newPlan, ...prev])
-      setSelectedPlan(newPlan)
-      setShowCreateForm(false)
-      setCreateForm({
-        start_date: getTodayISO(),
-        end_date: addDays(getTodayISO(), 6),
-        notes: ''
-      })
-      await loadData()
-      window.dispatchEvent(new CustomEvent('global-toast', {
-        detail: { text: 'Prep plan created!', tone: 'success' }
-      }))
-    } catch (err) {
-      console.error('Failed to create prep plan:', err)
-      window.dispatchEvent(new CustomEvent('global-toast', {
-        detail: { text: 'Failed to create plan', tone: 'error' }
-      }))
-    } finally {
-      setCreating(false)
-    }
-  }
-
-  // Toggle item purchased
-  const handleTogglePurchased = async (item) => {
-    if (!selectedPlan?.id) return
-    
-    try {
-      if (item.is_purchased) {
-        await unmarkItemsPurchased(selectedPlan.id, [item.id])
-      } else {
-        await markItemsPurchased(selectedPlan.id, [item.id])
-      }
-      // Refresh shopping list
-      const listData = await getShoppingList(selectedPlan.id, listGroupBy)
-      setShoppingList(listData)
-    } catch (err) {
-      console.error('Failed to update item:', err)
-    }
-  }
-
-  // Delete plan
-  const handleDeletePlan = async (planId) => {
-    if (!window.confirm('Delete this prep plan?')) return
-    
-    try {
-      await deletePrepPlan(planId)
-      setPlans(prev => prev.filter(p => p.id !== planId))
-      if (selectedPlan?.id === planId) {
-        setSelectedPlan(null)
-        setShoppingList(null)
-      }
-      await loadData()
-      window.dispatchEvent(new CustomEvent('global-toast', {
-        detail: { text: 'Plan deleted', tone: 'success' }
-      }))
-    } catch (err) {
-      console.error('Failed to delete plan:', err)
-    }
-  }
-
-  // Regenerate plan
-  const handleRegeneratePlan = async (planId) => {
-    if (!window.confirm('Regenerate this plan? This will refresh all data.')) return
-    
-    try {
-      const updatedPlan = await regeneratePrepPlan(planId)
-      setPlans(prev => prev.map(p => p.id === planId ? updatedPlan : p))
-      setSelectedPlan(updatedPlan)
-      await loadData()
-      window.dispatchEvent(new CustomEvent('global-toast', {
-        detail: { text: 'Plan regenerated!', tone: 'success' }
-      }))
-    } catch (err) {
-      console.error('Failed to regenerate plan:', err)
-    }
-  }
+  // Refresh all data
+  const handleRefresh = useCallback(() => {
+    loadCommitments()
+    // Shopping list will reload via the useEffect above
+  }, [loadCommitments])
 
   // Render shopping list items
   const renderShoppingItems = () => {
-    if (!shoppingList?.shopping_list) {
-      return <div className="muted">No shopping items</div>
+    if (shoppingLoading) {
+      return (
+        <div style={{ padding: '2rem', textAlign: 'center' }}>
+          <div style={{ marginBottom: '0.5rem' }}>Calculating shopping list...</div>
+          <div className="muted" style={{ fontSize: '0.85rem' }}>
+            Analyzing ingredients and shelf life
+          </div>
+        </div>
+      )
     }
 
-    const groupedItems = shoppingList.shopping_list
-    const groupKeys = Object.keys(groupedItems).sort()
+    const groupKeys = Object.keys(shoppingList).sort()
 
     if (groupKeys.length === 0) {
       return <div className="muted">No items to purchase</div>
@@ -305,7 +205,7 @@ export default function ChefPrepPlanning() {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
         {groupKeys.map(groupKey => {
-          const items = groupedItems[groupKey]
+          const items = shoppingList[groupKey]
           const groupLabel = listGroupBy === 'date'
             ? formatDate(groupKey)
             : groupKey.charAt(0).toUpperCase() + groupKey.slice(1)
@@ -320,30 +220,19 @@ export default function ChefPrepPlanning() {
                 </span>
               </h4>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {items.map(item => (
+                {items.map((item, idx) => (
                   <div
-                    key={item.id}
+                    key={idx}
                     className="card"
                     style={{
                       padding: '0.75rem 1rem',
                       display: 'flex',
                       alignItems: 'center',
-                      gap: '1rem',
-                      opacity: item.is_purchased ? 0.6 : 1,
-                      background: item.is_purchased ? 'rgba(0,0,0,0.02)' : undefined
+                      gap: '1rem'
                     }}
                   >
-                    <input
-                      type="checkbox"
-                      checked={item.is_purchased}
-                      onChange={() => handleTogglePurchased(item)}
-                      style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                    />
                     <div style={{ flex: 1 }}>
-                      <div style={{
-                        fontWeight: 500,
-                        textDecoration: item.is_purchased ? 'line-through' : 'none'
-                      }}>
+                      <div style={{ fontWeight: 500 }}>
                         {item.ingredient}
                       </div>
                       <div className="muted" style={{ fontSize: '0.85rem' }}>
@@ -352,7 +241,7 @@ export default function ChefPrepPlanning() {
                           <span> • {item.meals.length} meal{item.meals.length !== 1 ? 's' : ''}</span>
                         )}
                       </div>
-                      {/* Show which meals/clients use this ingredient */}
+                      {/* Show which meals use this ingredient */}
                       {item.meals && item.meals.length > 0 && (
                         <div style={{ marginTop: '4px', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                           {item.meals.slice(0, 3).map((meal, mIdx) => (
@@ -362,8 +251,8 @@ export default function ChefPrepPlanning() {
                                 fontSize: '0.7rem',
                                 padding: '1px 6px',
                                 borderRadius: '8px',
-                                background: 'rgba(0,0,0,0.06)',
-                                color: 'inherit'
+                                background: 'var(--surface-2)',
+                                color: 'var(--muted)'
                               }}
                             >
                               {meal.name?.split(' - ')[0] || meal.name}
@@ -393,390 +282,46 @@ export default function ChefPrepPlanning() {
     )
   }
 
-  // Render batch suggestions
-  const renderBatchSuggestions = () => {
-    const suggestions = selectedPlan?.batch_suggestions?.suggestions || []
-    const tips = selectedPlan?.batch_suggestions?.general_tips || []
-
-    if (suggestions.length === 0 && tips.length === 0) {
-      return <div className="muted">No batch suggestions available</div>
+  // Render commitments by client
+  const renderCommitments = () => {
+    if (commitments.length === 0) {
+      return <div className="muted">No upcoming meals</div>
     }
 
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-        {suggestions.map((sug, idx) => (
-          <div key={idx} className="card" style={{ padding: '1rem' }}>
-            <div style={{ fontWeight: 500, marginBottom: '0.5rem' }}>
-              {sug.ingredient} • {sug.total_quantity} {sug.unit}
-            </div>
-            <div style={{ marginBottom: '0.5rem' }}>{sug.suggestion}</div>
-            <div className="muted" style={{ fontSize: '0.85rem' }}>
-              Prep day: {sug.prep_day} • Covers: {sug.meals_covered.join(', ')}
-            </div>
-          </div>
-        ))}
-        
-        {tips.length > 0 && (
-          <div className="card" style={{ padding: '1rem', background: 'rgba(100,150,200,0.08)' }}>
-            <div style={{ fontWeight: 500, marginBottom: '0.5rem' }}>General Tips</div>
-            <ul style={{ margin: 0, paddingLeft: '1.25rem' }}>
-              {tips.map((tip, idx) => (
-                <li key={idx} style={{ marginBottom: '0.25rem' }}>{tip}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </div>
-    )
-  }
-
-  if (loading) {
-    return (
-      <div style={{ padding: '2rem', textAlign: 'center' }}>
-        <div className="muted">Loading prep planning...</div>
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className="card" style={{ padding: '2rem', textAlign: 'center', borderColor: '#f0d000' }}>
-        <div>{error}</div>
-        <button className="btn btn-outline" onClick={loadData} style={{ marginTop: '1rem' }}>
-          Retry
-        </button>
-      </div>
-    )
-  }
-
-  return (
-    <div>
-      {/* Header */}
-      <header style={{ marginBottom: '1.5rem' }}>
-        <h1 style={{ margin: '0 0 0.25rem 0' }}>Prep Planning</h1>
-        <p className="muted">Optimize your shopping and reduce food waste</p>
-      </header>
-
-      {/* Summary Cards */}
-      <div className="grid grid-4" style={{ marginBottom: '1.5rem' }}>
-        <SummaryCard
-          icon="👥"
-          title="Clients"
-          value={selectedPlan ? uniqueClients.length : (summary?.active_plans_count || 0)}
-          subtitle={selectedPlan ? "In this plan" : "Active plans"}
-        />
-        <SummaryCard
-          icon="🍽️"
-          title="Meals"
-          value={selectedPlan?.total_meals || plans[0]?.total_meals || 0}
-          subtitle={`${selectedPlan?.total_servings || 0} servings`}
-        />
-        <SummaryCard
-          icon="🛒"
-          title="Ingredients"
-          value={selectedPlan?.unique_ingredients || summary?.items_to_purchase_today || 0}
-          subtitle="To purchase"
-        />
-        <SummaryCard
-          icon="📅"
-          title="Time Span"
-          value={selectedPlan ? `${selectedPlan.duration_days || 7}d` : '—'}
-          subtitle={selectedPlan ? `${formatDate(selectedPlan.plan_start_date)}` : "Select a plan"}
-        />
-      </div>
-
-      {/* Actions */}
-      <div className="card" style={{ padding: '1rem', marginBottom: '1.5rem' }}>
-        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
-          <button
-            className="btn btn-primary"
-            onClick={handleQuickGenerate}
-            disabled={quickGenerating}
-          >
-            {quickGenerating ? 'Generating...' : '⚡ Quick Plan (7 days)'}
-          </button>
-          <button
-            className="btn btn-outline"
-            onClick={() => setShowCreateForm(!showCreateForm)}
-          >
-            {showCreateForm ? 'Cancel' : '📅 Custom Date Range'}
-          </button>
-        </div>
-
-        {/* Custom Create Form */}
-        {showCreateForm && (
-          <form onSubmit={handleCreatePlan} style={{ marginTop: '1rem', display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <div>
-              <label className="label">Start Date</label>
-              <input
-                type="date"
-                className="input"
-                value={createForm.start_date}
-                onChange={e => setCreateForm(prev => ({ ...prev, start_date: e.target.value }))}
-                min={getTodayISO()}
-                required
-              />
-            </div>
-            <div>
-              <label className="label">End Date</label>
-              <input
-                type="date"
-                className="input"
-                value={createForm.end_date}
-                onChange={e => setCreateForm(prev => ({ ...prev, end_date: e.target.value }))}
-                min={createForm.start_date}
-                required
-              />
-            </div>
-            <div style={{ flex: 1, minWidth: '200px' }}>
-              <label className="label">Notes (optional)</label>
-              <input
-                type="text"
-                className="input"
-                value={createForm.notes}
-                onChange={e => setCreateForm(prev => ({ ...prev, notes: e.target.value }))}
-                placeholder="e.g., Holiday prep"
-              />
-            </div>
-            <button type="submit" className="btn btn-primary" disabled={creating}>
-              {creating ? 'Creating...' : 'Create Plan'}
-            </button>
-          </form>
-        )}
-      </div>
-
-      {/* Main Content Grid */}
-      <div className="grid grid-2">
-        {/* Plans List */}
-        <div className="card">
-          <div style={{ padding: '1rem', borderBottom: '1px solid rgba(0,0,0,0.08)' }}>
-            <h3 style={{ margin: 0 }}>Your Plans</h3>
-          </div>
-          <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
-            {plans.length === 0 ? (
-              <div className="muted" style={{ padding: '2rem', textAlign: 'center' }}>
-                No plans yet. Generate your first prep plan!
+    // Group by client if multiple clients
+    if (uniqueClients.length > 1) {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          {Object.entries(commitmentsByClient).map(([clientName, clientCommitments]) => (
+            <div key={clientName}>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                marginBottom: '0.75rem',
+                paddingBottom: '0.5rem',
+                borderBottom: '2px solid var(--success)'
+              }}>
+                <span style={{ fontSize: '1.1rem' }}>👤</span>
+                <span style={{ fontWeight: 600, fontSize: '1rem' }}>{clientName}</span>
+                <span className="muted" style={{ fontSize: '0.85rem' }}>
+                  ({clientCommitments.length} meals, {clientCommitments.reduce((s, c) => s + c.servings, 0)} servings)
+                </span>
               </div>
-            ) : (
-              plans.map(plan => (
-                <div
-                  key={plan.id}
-                  style={{
-                    padding: '1rem',
-                    borderBottom: '1px solid rgba(0,0,0,0.05)',
-                    cursor: 'pointer',
-                    background: selectedPlan?.id === plan.id ? 'rgba(100,150,200,0.08)' : undefined
-                  }}
-                  onClick={() => setSelectedPlan(plan)}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div>
-                      <div style={{ fontWeight: 500 }}>
-                        {formatDate(plan.plan_start_date)} - {formatDate(plan.plan_end_date)}
-                      </div>
-                      <div className="muted" style={{ fontSize: '0.85rem' }}>
-                        {plan.total_meals} meals • {plan.unique_ingredients} ingredients
-                      </div>
-                    </div>
-                    <StatusBadge status={plan.status} />
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Selected Plan Details */}
-        <div className="card">
-          {selectedPlan ? (
-            <>
-              <div style={{ padding: '1rem', borderBottom: '1px solid rgba(0,0,0,0.08)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div>
-                    <h3 style={{ margin: '0 0 0.25rem 0' }}>
-                      {formatDate(selectedPlan.plan_start_date)} - {formatDate(selectedPlan.plan_end_date)}
-                    </h3>
-                    <div className="muted" style={{ fontSize: '0.85rem' }}>
-                      {selectedPlan.total_meals} meals • {selectedPlan.total_servings} servings • {selectedPlan.unique_ingredients} ingredients
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <button
-                      className="btn btn-outline btn-sm"
-                      onClick={() => handleRegeneratePlan(selectedPlan.id)}
-                      title="Refresh plan data"
-                    >
-                      🔄
-                    </button>
-                    <button
-                      className="btn btn-outline btn-sm"
-                      onClick={() => handleDeletePlan(selectedPlan.id)}
-                      title="Delete plan"
-                      style={{ color: '#a11919' }}
-                    >
-                      🗑️
-                    </button>
-                  </div>
-                </div>
-                
-                {/* Client breakdown chips */}
-                {uniqueClients.length > 0 && (
-                  <div style={{ marginTop: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    {uniqueClients.map(client => {
-                      const clientMeals = commitmentsByClient[client] || []
-                      const totalServings = clientMeals.reduce((sum, c) => sum + c.servings, 0)
-                      return (
-                        <span
-                          key={client}
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.25rem',
-                            padding: '4px 10px',
-                            borderRadius: '16px',
-                            fontSize: '0.8rem',
-                            background: 'rgba(76,175,80,0.12)',
-                            color: '#2e7d32',
-                            fontWeight: 500
-                          }}
-                        >
-                          👤 {client}
-                          <span style={{ opacity: 0.7, fontWeight: 400 }}>
-                            ({clientMeals.length} meals, {totalServings} servings)
-                          </span>
-                        </span>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-              
-              {/* Tabs */}
-              <div style={{ padding: '0.5rem 1rem', borderBottom: '1px solid rgba(0,0,0,0.08)', display: 'flex', gap: '1rem' }}>
-                <button
-                  className={`btn btn-sm ${listGroupBy === 'date' ? 'btn-primary' : 'btn-outline'}`}
-                  onClick={() => setListGroupBy('date')}
-                >
-                  By Date
-                </button>
-                <button
-                  className={`btn btn-sm ${listGroupBy === 'category' ? 'btn-primary' : 'btn-outline'}`}
-                  onClick={() => setListGroupBy('category')}
-                >
-                  By Category
-                </button>
-              </div>
-
-              <div style={{ padding: '1rem', maxHeight: '400px', overflowY: 'auto' }}>
-                {renderShoppingItems()}
-              </div>
-            </>
-          ) : (
-            <div className="muted" style={{ padding: '3rem', textAlign: 'center' }}>
-              Select a plan to view shopping list
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Batch Suggestions */}
-      {selectedPlan && (
-        <div className="card" style={{ marginTop: '1.5rem' }}>
-          <div style={{ padding: '1rem', borderBottom: '1px solid rgba(0,0,0,0.08)' }}>
-            <h3 style={{ margin: 0 }}>Batch Cooking Suggestions</h3>
-            <p className="muted" style={{ margin: '0.25rem 0 0 0', fontSize: '0.85rem' }}>
-              Prep smarter by cooking ingredients in batches
-            </p>
-          </div>
-          <div style={{ padding: '1rem' }}>
-            {renderBatchSuggestions()}
-          </div>
-        </div>
-      )}
-
-      {/* Commitments by Client */}
-      {selectedPlan?.commitments && selectedPlan.commitments.length > 0 && (
-        <div className="card" style={{ marginTop: '1.5rem' }}>
-          <div style={{ padding: '1rem', borderBottom: '1px solid rgba(0,0,0,0.08)' }}>
-            <h3 style={{ margin: 0 }}>Meals to Prepare</h3>
-            <p className="muted" style={{ margin: '0.25rem 0 0 0', fontSize: '0.85rem' }}>
-              {uniqueClients.length > 1 
-                ? `Serving ${uniqueClients.length} clients this period`
-                : 'All your upcoming meal commitments'
-              }
-            </p>
-          </div>
-          <div style={{ padding: '1rem' }}>
-            {/* Group by client if multiple clients */}
-            {uniqueClients.length > 1 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                {Object.entries(commitmentsByClient).map(([clientName, clientCommitments]) => (
-                  <div key={clientName}>
-                    <div style={{ 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      gap: '0.5rem',
-                      marginBottom: '0.75rem',
-                      paddingBottom: '0.5rem',
-                      borderBottom: '2px solid rgba(76,175,80,0.3)'
-                    }}>
-                      <span style={{ fontSize: '1.1rem' }}>👤</span>
-                      <span style={{ fontWeight: 600, fontSize: '1rem' }}>{clientName}</span>
-                      <span className="muted" style={{ fontSize: '0.85rem' }}>
-                        ({clientCommitments.length} meals, {clientCommitments.reduce((s, c) => s + c.servings, 0)} servings)
-                      </span>
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingLeft: '0.5rem' }}>
-                      {clientCommitments.map((c, idx) => {
-                        const typeColors = {
-                          'client_meal_plan': { bg: 'rgba(76,175,80,0.15)', color: '#2e7d32', dot: '#4caf50' },
-                          'meal_event': { bg: 'rgba(74,144,217,0.15)', color: '#2d5a8a', dot: '#4a90d9' },
-                          'service_order': { bg: 'rgba(233,160,58,0.15)', color: '#8a5a10', dot: '#e9a03a' }
-                        }
-                        const colors = typeColors[c.commitment_type] || typeColors.service_order
-                        
-                        return (
-                          <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.5rem 0', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
-                            <div style={{
-                              width: '10px',
-                              height: '10px',
-                              borderRadius: '50%',
-                              background: colors.dot,
-                              flexShrink: 0
-                            }} />
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {c.meal_name}
-                              </div>
-                              <div className="muted" style={{ fontSize: '0.85rem' }}>
-                                {formatDate(c.service_date)} • {c.servings} servings
-                              </div>
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              /* Single client or no client grouping */
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                {selectedPlan.commitments.map((c, idx) => {
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', paddingLeft: '0.5rem' }}>
+                {clientCommitments.map((c, idx) => {
                   const typeColors = {
-                    'client_meal_plan': { bg: 'rgba(76,175,80,0.15)', color: '#2e7d32', dot: '#4caf50' },
-                    'meal_event': { bg: 'rgba(74,144,217,0.15)', color: '#2d5a8a', dot: '#4a90d9' },
-                    'service_order': { bg: 'rgba(233,160,58,0.15)', color: '#8a5a10', dot: '#e9a03a' }
+                    'client_meal_plan': { bg: 'var(--success-bg)', color: 'var(--success)', dot: 'var(--success)' },
+                    'meal_event': { bg: 'var(--info-bg)', color: 'var(--info)', dot: 'var(--info)' },
+                    'service_order': { bg: 'var(--warning-bg)', color: 'var(--warning)', dot: 'var(--warning)' }
                   }
                   const colors = typeColors[c.commitment_type] || typeColors.service_order
-                  const typeLabel = c.commitment_type === 'client_meal_plan' ? 'Client Plan' 
-                    : c.commitment_type === 'meal_event' ? 'Meal Event' : 'Service'
-                  
+
                   return (
-                    <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.5rem 0', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
+                    <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.5rem 0', borderBottom: '1px solid var(--border)' }}>
                       <div style={{
-                        width: '12px',
-                        height: '12px',
+                        width: '10px',
+                        height: '10px',
                         borderRadius: '50%',
                         background: colors.dot,
                         flexShrink: 0
@@ -787,46 +332,224 @@ export default function ChefPrepPlanning() {
                         </div>
                         <div className="muted" style={{ fontSize: '0.85rem' }}>
                           {formatDate(c.service_date)} • {c.servings} servings
-                          {c.customer_name && <span> • <strong>{c.customer_name}</strong></span>}
                         </div>
                       </div>
-                      <span style={{
-                        padding: '2px 8px',
-                        borderRadius: '12px',
-                        fontSize: '0.75rem',
-                        background: colors.bg,
-                        color: colors.color,
-                        flexShrink: 0
-                      }}>
-                        {typeLabel}
-                      </span>
                     </div>
                   )
                 })}
               </div>
+            </div>
+          ))}
+        </div>
+      )
+    }
+
+    // Single client or no client grouping
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+        {commitments.map((c, idx) => {
+          const typeColors = {
+            'client_meal_plan': { bg: 'var(--success-bg)', color: 'var(--success)', dot: 'var(--success)' },
+            'meal_event': { bg: 'var(--info-bg)', color: 'var(--info)', dot: 'var(--info)' },
+            'service_order': { bg: 'var(--warning-bg)', color: 'var(--warning)', dot: 'var(--warning)' }
+          }
+          const colors = typeColors[c.commitment_type] || typeColors.service_order
+          const typeLabel = c.commitment_type === 'client_meal_plan' ? 'Client Plan'
+            : c.commitment_type === 'meal_event' ? 'Meal Event' : 'Service'
+
+          return (
+            <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.5rem 0', borderBottom: '1px solid var(--border)' }}>
+              <div style={{
+                width: '12px',
+                height: '12px',
+                borderRadius: '50%',
+                background: colors.dot,
+                flexShrink: 0
+              }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {c.meal_name}
+                </div>
+                <div className="muted" style={{ fontSize: '0.85rem' }}>
+                  {formatDate(c.service_date)} • {c.servings} servings
+                  {c.customer_name && <span> • <strong>{c.customer_name}</strong></span>}
+                </div>
+              </div>
+              <span style={{
+                padding: '2px 8px',
+                borderRadius: '12px',
+                fontSize: '0.75rem',
+                background: colors.bg,
+                color: colors.color,
+                flexShrink: 0
+              }}>
+                {typeLabel}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  if (commitmentsLoading) {
+    return (
+      <div style={{ padding: '2rem', textAlign: 'center' }}>
+        <div className="muted">Loading meals...</div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="card" style={{ padding: '2rem', textAlign: 'center', borderColor: 'var(--warning)' }}>
+        <div>{error}</div>
+        <button className="btn btn-outline" onClick={handleRefresh} style={{ marginTop: '1rem' }}>
+          Retry
+        </button>
+      </div>
+    )
+  }
+
+  // Empty state: No upcoming meals
+  if (commitments.length === 0) {
+    return (
+      <div>
+        <header style={{ marginBottom: '1.5rem' }}>
+          <h2 style={{ margin: '0 0 0.25rem 0' }}>Prep Planning</h2>
+          <p className="muted">What do I need to cook and buy?</p>
+        </header>
+        <EmptyStateNoMeals onNavigateToClients={onNavigateToClients} />
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      {/* Header */}
+      <header style={{ marginBottom: '1.5rem' }}>
+        <h2 style={{ margin: '0 0 0.25rem 0' }}>Prep Planning</h2>
+        <p className="muted">What do I need to cook and buy?</p>
+      </header>
+
+      {/* Controls */}
+      <div className="card" style={{ padding: '1rem', marginBottom: '1.5rem' }}>
+        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <span className="muted" style={{ fontSize: '0.9rem' }}>Days:</span>
+            {DAYS_OPTIONS.map(days => (
+              <button
+                key={days}
+                className={`btn btn-sm ${daysAhead === days ? 'btn-primary' : 'btn-outline'}`}
+                onClick={() => setDaysAhead(days)}
+              >
+                {days}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={handleRefresh}
+              disabled={commitmentsLoading || shoppingLoading}
+              title="Refresh data"
+            >
+              {commitmentsLoading || shoppingLoading ? 'Loading...' : '🔄 Refresh'}
+            </button>
+            {onNavigateToClients && (
+              <button
+                className="btn btn-outline btn-sm"
+                onClick={onNavigateToClients}
+                title="Manage client meal plans"
+              >
+                👥 Clients
+              </button>
             )}
           </div>
         </div>
-      )}
-      
-      {/* Empty state when no commitments */}
-      {selectedPlan && (!selectedPlan.commitments || selectedPlan.commitments.length === 0) && (
-        <div className="card" style={{ marginTop: '1.5rem', padding: '2rem', textAlign: 'center' }}>
-          <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📅</div>
-          <h3 style={{ margin: '0 0 0.5rem 0' }}>No Meals Scheduled</h3>
-          <p className="muted">
-            This prep plan has no meal commitments for the selected date range.
-            Create meal plans for your clients to see them here.
-          </p>
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid grid-4" style={{ marginBottom: '1.5rem' }}>
+        <SummaryCard
+          icon="🍽️"
+          title="Meals"
+          value={summary?.total_meals || 0}
+          subtitle="To prepare"
+        />
+        <SummaryCard
+          icon="🍴"
+          title="Servings"
+          value={summary?.total_servings || 0}
+          subtitle="Total"
+        />
+        <SummaryCard
+          icon="👥"
+          title="Clients"
+          value={summary?.unique_clients || 0}
+          subtitle="This period"
+        />
+        <SummaryCard
+          icon="🛒"
+          title="Ingredients"
+          value={shoppingLoading ? '...' : totalItems}
+          subtitle="To purchase"
+        />
+      </div>
+
+      {/* Main Content - Two Column Layout */}
+      <div className="grid grid-2">
+        {/* Shopping List */}
+        <div className="card">
+          <div style={{ padding: '1rem', borderBottom: '1px solid var(--border)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <h3 style={{ margin: 0 }}>Shopping List</h3>
+                <div className="muted" style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
+                  When to buy based on shelf life
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Group by toggle */}
+          <div style={{ padding: '0.5rem 1rem', borderBottom: '1px solid var(--border)', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <span className="muted" style={{ fontSize: '0.8rem' }}>Group by:</span>
+            <button
+              className={`btn btn-sm ${listGroupBy === 'date' ? 'btn-primary' : 'btn-outline'}`}
+              onClick={() => setListGroupBy('date')}
+            >
+              Date
+            </button>
+            <button
+              className={`btn btn-sm ${listGroupBy === 'category' ? 'btn-primary' : 'btn-outline'}`}
+              onClick={() => setListGroupBy('category')}
+            >
+              Category
+            </button>
+          </div>
+
+          <div style={{ padding: '1rem', maxHeight: '500px', overflowY: 'auto' }}>
+            {renderShoppingItems()}
+          </div>
         </div>
-      )}
+
+        {/* Upcoming Meals */}
+        <div className="card">
+          <div style={{ padding: '1rem', borderBottom: '1px solid var(--border)' }}>
+            <h3 style={{ margin: 0 }}>Upcoming Meals</h3>
+            <div className="muted" style={{ fontSize: '0.85rem', marginTop: '0.25rem' }}>
+              {uniqueClients.length > 1
+                ? `Serving ${uniqueClients.length} clients`
+                : 'Your scheduled meals'}
+            </div>
+          </div>
+
+          <div style={{ padding: '1rem', maxHeight: '500px', overflowY: 'auto' }}>
+            {renderCommitments()}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
-
-
-
-
-
-
-

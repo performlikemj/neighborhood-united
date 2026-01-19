@@ -1,11 +1,14 @@
 import React from 'react'
 import { useCart } from '../context/CartContext'
+import { useAuth } from '../context/AuthContext'
 
 export default function CartButton() {
   const { getItemCount, toggleCart } = useCart()
+  const { user } = useAuth()
   const itemCount = getItemCount()
 
-  if (itemCount === 0) return null
+  // Hide cart for unauthenticated users (they can't checkout anyway)
+  if (!user || itemCount === 0) return null
 
   return (
     <button 

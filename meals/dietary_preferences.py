@@ -3,7 +3,8 @@ Focus: Handling dietary preferences and custom dietary rules.
 """
 import json
 import logging
-from celery import shared_task
+# Note: @shared_task decorators removed as part of Celery-to-sync migration.
+# These functions are now called synchronously.
 from django.conf import settings
 try:
     from groq import Groq
@@ -18,7 +19,6 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
-@shared_task
 def handle_custom_dietary_preference(custom_prefs):
     """
     Handles the addition of a custom dietary preference.
@@ -163,7 +163,6 @@ def handle_custom_dietary_preference(custom_prefs):
                 return False
     return True  # If preference exists, nothing to do
 
-@shared_task
 def assign_dietary_preferences(meal_id: int, gpt_tags: Optional[List[str]] = None):
     """
     Attach dietary tags to a Meal.

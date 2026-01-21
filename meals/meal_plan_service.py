@@ -15,8 +15,9 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from random import shuffle
 from typing import List, Set, Optional, Tuple, Dict
-from celery import shared_task
 from meals.celery_utils import handle_task_failure
+# Note: @shared_task decorators removed as part of Celery-to-sync migration.
+# These functions are now called synchronously. QStash handles scheduled tasks.
 from django.conf import settings
 from django.db.models import Q
 from django.utils import timezone
@@ -363,7 +364,6 @@ def get_compatible_meals_for_user(user, meal_pool=None):
     
     return compatible_meals
 
-@shared_task
 @handle_task_failure
 def create_meal_plan_for_new_user(user_id):
     try:
@@ -392,7 +392,6 @@ def create_meal_plan_for_new_user(user_id):
         n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
         requests.post(n8n_traceback_url, json={"error": "User with id {user_id} does not exist.", "source":"create_meal_plan_for_new_user", "traceback": traceback.format_exc()})
 
-@shared_task
 @handle_task_failure
 def create_meal_plan_for_all_users():
     """
@@ -436,7 +435,6 @@ def day_to_offset(day_name: str) -> int:
     }
     return mapping.get(day_name, 0)
 
-@shared_task(ignore_result=True)
 @handle_task_failure
 # @deprecated Legacy meal-plan helper guarded by LEGACY_MEAL_PLAN.
 def create_meal_plan_for_user(

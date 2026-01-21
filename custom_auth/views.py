@@ -1247,7 +1247,8 @@ def register_api_view(request):
                 )
             except Exception as e:
                 logger.exception(f"Error sending activation email for: {to_email}")
-                raise 
+                # Don't fail registration for email sending errors.
+                # User was created successfully and can request activation email resend.
         # After successful registration
         refresh = RefreshToken.for_user(user)  # Assuming you have RefreshToken defined or imported
         return Response({

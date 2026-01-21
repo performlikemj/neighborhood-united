@@ -13,6 +13,8 @@ from .models import (
     ChefWaitlistSubscription,
     ChefAvailabilityState,
     ChefPaymentLink,
+    PlatformCalendlyConfig,
+    ChefVerificationMeeting,
 )
 from custom_auth.models import UserRole
 from django.contrib import messages
@@ -318,3 +320,70 @@ class ChefPaymentLinkAdmin(admin.ModelAdmin):
         amount = obj.amount_cents / 100
         return format_html('<strong>${:,.2f}</strong>', amount)
     amount_display.short_description = 'Amount'
+
+
+@admin.register(PlatformCalendlyConfig)
+class PlatformCalendlyConfigAdmin(admin.ModelAdmin):
+    """Admin for platform Calendly configuration (singleton)."""
+    list_display = ('calendly_url', 'enabled', 'is_required', 'updated_at')
+    list_editable = ('enabled', 'is_required')
+    list_display_links = ('calendly_url',)
+    readonly_fields = ('created_at', 'updated_at')
+
+    fieldsets = (
+        (None, {
+            'fields': ('enabled', 'is_required')
+        }),
+        ('Calendly Settings', {
+            'fields': ('calendly_url', 'meeting_title', 'meeting_description')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def has_add_permission(self, request):
+        # Only allow one config record
+        return not PlatformCalendlyConfig.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False  # Prevent accidental deletion
+
+
+@admin.register(ChefVerificationMeeting)
+class ChefVerificationMeetingAdmin(admin.ModelAdmin):
+    """Admin for managing chef verification meetings."""
+    list_display = ('chef', 'status', 'scheduled_at', 'completed_at', 'marked_complete_by')
+    list_filter = ('status', 'completed_at')
+    search_fields = ('chef__user__username', 'chef__user__email')
+    readonly_fields = ('created_at', 'updated_at', 'completed_at', 'marked_complete_by')
+    raw_id_fields = ('chef',)
+    actions = ['mark_as_completed', 'mark_as_no_show']
+
+    fieldsets = (
+        (None, {
+            'fields': ('chef', 'status')
+        }),
+        ('Schedule', {
+            'fields': ('scheduled_at', 'completed_at')
+        }),
+        ('Admin Notes', {
+            'fields': ('admin_notes', 'marked_complete_by')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def mark_as_completed(self, request, queryset):
+        for meeting in queryset:
+            meeting.mark_as_completed(admin_user=request.user)
+        self.message_user(request, f'Marked {queryset.count()} meeting(s) as completed')
+    mark_as_completed.short_description = 'Mark selected meetings as completed'
+
+    def mark_as_no_show(self, request, queryset):
+        queryset.update(status='no_show')
+        self.message_user(request, f'Marked {queryset.count()} meeting(s) as no-show')
+    mark_as_no_show.short_description = 'Mark selected meetings as no-show'

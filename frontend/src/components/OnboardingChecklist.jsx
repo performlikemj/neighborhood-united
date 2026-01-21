@@ -18,6 +18,15 @@ const STEPS = [
     actionLabel: 'Edit Profile'
   },
   {
+    id: 'meeting',
+    title: 'Schedule Verification Call',
+    description: 'Book a quick call with our team',
+    tab: null,
+    icon: '📅',
+    actionLabel: 'Schedule Call',
+    isCalendly: true
+  },
+  {
     id: 'kitchen',
     title: 'Build Your Kitchen',
     description: 'Create at least one meal to offer',
@@ -58,6 +67,8 @@ export default function OnboardingChecklist({
   completionState = {},
   onNavigate,
   onStartStripeOnboarding,
+  onOpenCalendly,
+  meetingConfig = {},
   className = ''
 }) {
   const [dismissed, setDismissed] = useState(() => {
@@ -70,13 +81,21 @@ export default function OnboardingChecklist({
   const [collapsed, setCollapsed] = useState(false)
   const [celebrateShown, setCelebrateShown] = useState(false)
 
-  // Compute step completion
+  // Compute step completion, filtering out meeting step if not enabled
   const steps = useMemo(() => {
-    return STEPS.map(step => ({
-      ...step,
-      complete: Boolean(completionState[step.id])
-    }))
-  }, [completionState])
+    return STEPS
+      .filter(step => {
+        // Filter out meeting step if feature is disabled
+        if (step.isCalendly && !meetingConfig.feature_enabled) {
+          return false
+        }
+        return true
+      })
+      .map(step => ({
+        ...step,
+        complete: Boolean(completionState[step.id])
+      }))
+  }, [completionState, meetingConfig.feature_enabled])
 
   const completedCount = steps.filter(s => s.complete).length
   const totalCount = steps.length
@@ -111,7 +130,9 @@ export default function OnboardingChecklist({
   const handleStepClick = (step) => {
     if (step.isStripe && onStartStripeOnboarding) {
       onStartStripeOnboarding()
-    } else if (onNavigate) {
+    } else if (step.isCalendly && onOpenCalendly) {
+      onOpenCalendly()
+    } else if (onNavigate && step.tab) {
       onNavigate(step.tab)
     }
   }

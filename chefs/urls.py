@@ -12,6 +12,7 @@ from chefs.api import meal_plans as meal_plans_api
 from chefs.api import payment_links as payment_links_api
 from chefs.api import documents as documents_api
 from chefs.api import receipts as receipts_api
+from chefs.api import verification_meeting as meeting_api
 from chefs.resource_planning import views as prep_plan_api
 from . import views
 
@@ -206,10 +207,26 @@ urlpatterns = [
     # ==========================================================================
     # Chef Receipt Management API
     # ==========================================================================
-    
+
     # Receipt CRUD
     path('api/me/receipts/', receipts_api.receipt_list, name='chef_receipts'),
     path('api/me/receipts/stats/', receipts_api.receipt_stats, name='chef_receipt_stats'),
     path('api/me/receipts/<int:receipt_id>/', receipts_api.receipt_detail, name='chef_receipt_detail'),
     path('api/me/clients/<int:customer_id>/receipts/', receipts_api.customer_receipts, name='chef_customer_receipts'),
+
+    # ==========================================================================
+    # Chef Verification Meeting API (Calendly Integration)
+    # ==========================================================================
+
+    # Public config (shows if feature is enabled)
+    path('api/calendly-config/', meeting_api.calendly_config_public, name='calendly_config_public'),
+
+    # Chef endpoints
+    path('api/me/verification-meeting/', meeting_api.chef_meeting_status, name='chef_meeting_status'),
+    path('api/me/verification-meeting/schedule/', meeting_api.chef_mark_scheduled, name='chef_mark_scheduled'),
+
+    # Admin endpoints
+    path('api/admin/calendly-config/', meeting_api.admin_calendly_config, name='admin_calendly_config'),
+    path('api/admin/chefs/<int:chef_id>/meeting/complete/', meeting_api.admin_mark_meeting_complete, name='admin_mark_meeting_complete'),
+    path('api/admin/meetings/pending/', meeting_api.admin_pending_meetings, name='admin_pending_meetings'),
 ]

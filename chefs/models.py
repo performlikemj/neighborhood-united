@@ -412,6 +412,138 @@ class AreaWaitlist(models.Model):
         return entry, created
 
 
+class PlatformCalendlyConfig(models.Model):
+    """
+    Platform-wide Calendly configuration for chef verification meetings.
+    Admin configures their Calendly link and meeting details here.
+    Singleton pattern - only one active config should exist.
+    """
+    calendly_url = models.URLField(
+        max_length=500,
+        help_text="Admin's Calendly URL for chef verification meetings"
+    )
+    meeting_title = models.CharField(
+        max_length=200,
+        default="Chef Verification Call",
+        help_text="Title shown to chefs when scheduling"
+    )
+    meeting_description = models.TextField(
+        blank=True,
+        help_text="Description of what to expect in the verification call"
+    )
+    is_required = models.BooleanField(
+        default=True,
+        help_text="Whether the meeting is required before chef can be fully activated"
+    )
+    enabled = models.BooleanField(
+        default=True,
+        help_text="Enable/disable the Calendly meeting step globally"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = 'chefs'
+        verbose_name = 'Platform Calendly Config'
+        verbose_name_plural = 'Platform Calendly Config'
+
+    def __str__(self):
+        status = 'ENABLED' if self.enabled else 'DISABLED'
+        return f"Calendly Config ({status})"
+
+    def save(self, *args, **kwargs):
+        # Ensure only one config exists (singleton pattern)
+        if not self.pk:
+            PlatformCalendlyConfig.objects.all().delete()
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get_config(cls):
+        """Get the active Calendly configuration."""
+        return cls.objects.first()
+
+    @classmethod
+    def is_enabled(cls) -> bool:
+        cfg = cls.get_config()
+        return bool(getattr(cfg, 'enabled', False)) if cfg else False
+
+    @classmethod
+    def get_calendly_url(cls) -> str:
+        cfg = cls.get_config()
+        return getattr(cfg, 'calendly_url', '') if cfg else ''
+
+
+class ChefVerificationMeeting(models.Model):
+    """
+    Tracks verification meeting status for each chef.
+    Allows admin to mark meetings as scheduled/completed.
+    """
+    STATUS_CHOICES = [
+        ('not_scheduled', 'Not Scheduled'),
+        ('scheduled', 'Scheduled'),
+        ('completed', 'Completed'),
+        ('cancelled', 'Cancelled'),
+        ('no_show', 'No Show'),
+    ]
+
+    chef = models.OneToOneField(
+        'Chef',
+        on_delete=models.CASCADE,
+        related_name='verification_meeting'
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='not_scheduled'
+    )
+    scheduled_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the meeting is/was scheduled for"
+    )
+    completed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the meeting was completed"
+    )
+    admin_notes = models.TextField(
+        blank=True,
+        help_text="Admin notes from the verification meeting"
+    )
+    marked_complete_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='completed_chef_meetings'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = 'chefs'
+        verbose_name = 'Chef Verification Meeting'
+        verbose_name_plural = 'Chef Verification Meetings'
+
+    def __str__(self):
+        return f"Meeting for {self.chef.user.username}: {self.status}"
+
+    def mark_as_scheduled(self, scheduled_time=None):
+        self.status = 'scheduled'
+        if scheduled_time:
+            self.scheduled_at = scheduled_time
+        self.save(update_fields=['status', 'scheduled_at', 'updated_at'])
+
+    def mark_as_completed(self, admin_user=None, notes=''):
+        self.status = 'completed'
+        self.completed_at = timezone.now()
+        if admin_user:
+            self.marked_complete_by = admin_user
+        if notes:
+            self.admin_notes = notes
+        self.save()
+
+
 class ChefPaymentLink(models.Model):
     """
     Tracks payment links created by chefs for clients (both platform users and manual contacts).

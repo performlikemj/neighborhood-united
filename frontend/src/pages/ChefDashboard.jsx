@@ -14,6 +14,7 @@ import ChatPanel from '../components/ChatPanel.jsx'
 import AnalyticsDrawer from '../components/AnalyticsDrawer.jsx'
 import MealDetailSlideout from '../components/MealDetailSlideout.jsx'
 import OnboardingChecklist from '../components/OnboardingChecklist.jsx'
+import CalendlyMeetingModal from '../components/CalendlyMeetingModal.jsx'
 import NavSection from '../components/NavSection.jsx'
 import TodayDashboard from '../components/TodayDashboard.jsx'
 import { SousChefNotificationProvider } from '../contexts/SousChefNotificationContext.jsx'
@@ -571,6 +572,21 @@ function ChefDashboardContent(){
   const [breakBusy, setBreakBusy] = useState(false)
   const [breakReason, setBreakReason] = useState('')
 
+  // Verification meeting state (Calendly)
+  const [meetingConfig, setMeetingConfig] = useState({
+    loading: true,
+    feature_enabled: false,
+    is_required: false,
+    calendly_url: null,
+    meeting_title: null,
+    meeting_description: null,
+    status: 'not_scheduled',
+    scheduled_at: null,
+    completed_at: null,
+    is_complete: false
+  })
+  const [calendlyModalOpen, setCalendlyModalOpen] = useState(false)
+
   // Service area management
   const [areaStatus, setAreaStatus] = useState(null) // { approved_areas, pending_requests, etc. }
   const [areaStatusLoading, setAreaStatusLoading] = useState(false)
@@ -851,11 +867,12 @@ function ChefDashboardContent(){
   // ═══════════════════════════════════════════════════════════════════════════════
   const onboardingCompletionState = useMemo(() => ({
     profile: Boolean(chef?.bio && chef?.profile_pic_url),
+    meeting: !meetingConfig.feature_enabled || !meetingConfig.is_required || meetingConfig.is_complete,
     kitchen: meals.length > 0,
     services: serviceOfferings.length > 0,
     photos: (chef?.photos?.length || 0) >= 3,
     payouts: payouts.is_active
-  }), [chef, meals, serviceOfferings, payouts.is_active])
+  }), [chef, meals, serviceOfferings, payouts.is_active, meetingConfig])
 
   const isOnboardingComplete = useMemo(() => {
     return Object.values(onboardingCompletionState).every(Boolean)
@@ -1326,6 +1343,19 @@ function ChefDashboardContent(){
   }, [profileForm.banner_image])
 
   useEffect(()=>{ loadAll() }, [])
+
+  // Load verification meeting status
+  useEffect(() => {
+    const loadMeetingStatus = async () => {
+      try {
+        const response = await api.get('/chefs/api/me/verification-meeting/')
+        setMeetingConfig({ ...response.data, loading: false })
+      } catch {
+        setMeetingConfig(prev => ({ ...prev, loading: false, feature_enabled: false }))
+      }
+    }
+    loadMeetingStatus()
+  }, [])
 
   // Set page title with chef name
   useEffect(() => {
@@ -1943,6 +1973,8 @@ function ChefDashboardContent(){
               completionState={onboardingCompletionState}
               onNavigate={(targetTab) => setTab(targetTab)}
               onStartStripeOnboarding={startOrContinueOnboarding}
+              onOpenCalendly={() => setCalendlyModalOpen(true)}
+              meetingConfig={meetingConfig}
             />
           )}
           
@@ -1987,6 +2019,8 @@ function ChefDashboardContent(){
               completionState={onboardingCompletionState}
               onNavigate={(targetTab) => setTab(targetTab)}
               onStartStripeOnboarding={startOrContinueOnboarding}
+              onOpenCalendly={() => setCalendlyModalOpen(true)}
+              meetingConfig={meetingConfig}
             />
           )}
 
@@ -4210,6 +4244,16 @@ function ChefDashboardContent(){
           // Remove the meal from local state
           setMeals(prev => prev.filter(m => m.id !== mealId))
         }}
+      />
+
+      {/* Calendly Verification Meeting Modal */}
+      <CalendlyMeetingModal
+        isOpen={calendlyModalOpen}
+        onClose={() => setCalendlyModalOpen(false)}
+        onScheduled={() => {
+          setMeetingConfig(prev => ({ ...prev, status: 'scheduled' }))
+        }}
+        meetingConfig={meetingConfig}
       />
     </div>
   )

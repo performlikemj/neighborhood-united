@@ -209,6 +209,78 @@ def _get_groq_client():
     return None
 
 
+def _build_dietary_context(plan) -> str:
+    """Build dietary context string from a ChefMealPlan's customer or lead.
+
+    Handles both Customer (M2M relationships) and Lead (ArrayField) data structures.
+    Returns a formatted string for inclusion in AI prompts.
+    """
+    dietary_summary = []
+
+    customer = plan.customer
+    lead = plan.lead
+
+    if customer:
+        # Customer: M2M relationships for dietary preferences
+        dietary_prefs = list(customer.dietary_preferences.values_list('name', flat=True))
+        if dietary_prefs:
+            dietary_summary.append(f"Dietary preferences: {', '.join(dietary_prefs)}")
+
+        # Custom dietary preferences (M2M)
+        custom_prefs = list(customer.custom_dietary_preferences.values_list('name', flat=True))
+        if custom_prefs:
+            dietary_summary.append(f"Custom dietary preferences: {', '.join(custom_prefs)}")
+
+        # Allergies (ArrayField)
+        all_allergies = set((customer.allergies or []) + (customer.custom_allergies or []))
+        if all_allergies:
+            dietary_summary.append(f"Allergies (MUST AVOID): {', '.join(all_allergies)}")
+
+        # Household members (M2M with dietary_preferences M2M)
+        if hasattr(customer, 'household_members'):
+            members = customer.household_members.all()
+            if members.exists():
+                members_desc = []
+                for m in members:
+                    desc = m.name
+                    member_prefs = list(m.dietary_preferences.values_list('name', flat=True))
+                    if member_prefs:
+                        desc += f" ({', '.join(member_prefs)})"
+                    if m.age:
+                        desc += f", age {m.age}"
+                    members_desc.append(desc)
+                dietary_summary.append(f"Household members: {', '.join(members_desc)}")
+
+    elif lead:
+        # Lead: ArrayField for dietary preferences
+        if lead.dietary_preferences:
+            dietary_summary.append(f"Dietary preferences: {', '.join(lead.dietary_preferences)}")
+
+        # Allergies (ArrayField)
+        all_allergies = set((lead.allergies or []) + (lead.custom_allergies or []))
+        if all_allergies:
+            dietary_summary.append(f"Allergies (MUST AVOID): {', '.join(all_allergies)}")
+
+        # Household members (related LeadHouseholdMember with ArrayFields)
+        members = lead.household_members.all()
+        if members.exists():
+            members_desc = []
+            for m in members:
+                desc = m.name
+                if m.dietary_preferences:
+                    desc += f" ({', '.join(m.dietary_preferences)})"
+                if m.age:
+                    desc += f", age {m.age}"
+                # LeadHouseholdMember has allergies field (unlike Customer HouseholdMember)
+                member_allergies = set((m.allergies or []) + (m.custom_allergies or []))
+                if member_allergies:
+                    desc += f" [allergies: {', '.join(member_allergies)}]"
+                members_desc.append(desc)
+            dietary_summary.append(f"Household members: {', '.join(members_desc)}")
+
+    return '\n'.join(dietary_summary) if dietary_summary else 'No specific dietary requirements.'
+
+
 def generate_meal_plan_suggestions_async(job_id: int) -> None:
     """Generate AI meal suggestions asynchronously using Groq.
     
@@ -228,7 +300,10 @@ def generate_meal_plan_suggestions_async(job_id: int) -> None:
     
     try:
         job = MealPlanGenerationJob.objects.select_related(
-            'plan__customer', 'chef'
+            'plan__customer', 'plan__lead', 'chef'
+        ).prefetch_related(
+            'plan__customer__household_members__dietary_preferences',
+            'plan__lead__household_members',
         ).get(id=job_id)
         print(f"[CELERY TASK] Job {job_id} loaded successfully")
     except MealPlanGenerationJob.DoesNotExist:
@@ -242,43 +317,9 @@ def generate_meal_plan_suggestions_async(job_id: int) -> None:
     
     try:
         plan = job.plan
-        customer = plan.customer
-        
-        # Build dietary context from customer
-        dietary_summary = []
-        
-        if customer:
-            # Get dietary preferences
-            dietary_prefs = list(customer.dietary_preferences.values_list('name', flat=True))
-            if dietary_prefs:
-                dietary_summary.append(f"Dietary preferences: {', '.join(dietary_prefs)}")
-            
-            # Get custom dietary preferences
-            custom_prefs = list(customer.custom_dietary_preferences.values_list('name', flat=True))
-            if custom_prefs:
-                dietary_summary.append(f"Custom dietary preferences: {', '.join(custom_prefs)}")
-            
-            # Get allergies
-            all_allergies = set((customer.allergies or []) + (customer.custom_allergies or []))
-            if all_allergies:
-                dietary_summary.append(f"Allergies (MUST AVOID): {', '.join(all_allergies)}")
-            
-            # Get household members
-            if hasattr(customer, 'household_members'):
-                members = customer.household_members.all()
-                if members.exists():
-                    members_desc = []
-                    for m in members:
-                        desc = m.name
-                        member_prefs = list(m.dietary_preferences.values_list('name', flat=True))
-                        if member_prefs:
-                            desc += f" ({', '.join(member_prefs)})"
-                        if m.age:
-                            desc += f", age {m.age}"
-                        members_desc.append(desc)
-                    dietary_summary.append(f"Household members: {', '.join(members_desc)}")
-        
-        dietary_text = '\n'.join(dietary_summary) if dietary_summary else 'No specific dietary requirements.'
+
+        # Build dietary context from customer OR lead
+        dietary_text = _build_dietary_context(plan)
         print(f"[CELERY TASK] Dietary context built: {dietary_text[:100]}...")
         
         # Determine which slots need meals

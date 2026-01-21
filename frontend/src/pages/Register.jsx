@@ -68,9 +68,6 @@ export default function Register(){
     <div style={{maxWidth:520, margin:'1rem auto'}}>
       <h2>Create your account</h2>
       <div className="muted" style={{marginBottom:'.5rem'}}>We only need the basics to get started. You can add the rest in your profile later.</div>
-      <div className="muted" style={{marginBottom:'.75rem'}}>
-        Prefer a guided chat? <a href="/onboarding">Try the onboarding assistant</a>.
-      </div>
       {error && <div className="card" style={{borderColor:'#d9534f'}}>{error}</div>}
       <form onSubmit={submit}>
         <div className="label">Username</div>

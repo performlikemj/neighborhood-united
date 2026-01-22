@@ -15,7 +15,8 @@ import { useSousChefNotifications } from '../contexts/SousChefNotificationContex
 // Panel size configurations (fixed sizes, no resize)
 const PANEL_SIZES = {
   small: { width: 360, height: 480 },
-  large: { width: 440, height: 600 }
+  large: { width: 440, height: 600 },
+  xlarge: { width: 520, height: 720 }
 }
 
 export default function SousChefWidget({
@@ -37,6 +38,7 @@ export default function SousChefWidget({
 
   const [isOpen, setIsOpen] = useState(false)
   const [panelSize, setPanelSize] = useState('small')
+  const [screenSize, setScreenSize] = useState('normal')
   const [selectedFamily, setSelectedFamily] = useState({
     familyId: null,
     familyType: 'customer',
@@ -58,6 +60,23 @@ export default function SousChefWidget({
   useEffect(() => {
     isMountedRef.current = true
     return () => { isMountedRef.current = false }
+  }, [])
+
+  // Detect screen size for responsive panel sizing
+  useEffect(() => {
+    const checkScreenSize = () => {
+      if (window.innerWidth >= 2400) {
+        setScreenSize('ultrawide')
+      } else if (window.innerWidth >= 1600) {
+        setScreenSize('large')
+      } else {
+        setScreenSize('normal')
+      }
+    }
+
+    checkScreenSize()
+    window.addEventListener('resize', checkScreenSize)
+    return () => window.removeEventListener('resize', checkScreenSize)
   }, [])
 
   // Watch for new notifications and show toast
@@ -143,8 +162,18 @@ export default function SousChefWidget({
   }, [])
 
   const toggleSize = useCallback(() => {
-    setPanelSize(prev => prev === 'small' ? 'large' : 'small')
-  }, [])
+    // On large screens, cycle through three sizes: small -> large -> xlarge -> small
+    if (screenSize === 'large' || screenSize === 'ultrawide') {
+      setPanelSize(prev => {
+        if (prev === 'small') return 'large'
+        if (prev === 'large') return 'xlarge'
+        return 'small'
+      })
+    } else {
+      // On normal screens, just toggle between small and large
+      setPanelSize(prev => prev === 'small' ? 'large' : 'small')
+    }
+  }, [screenSize])
 
   // Navigate to full page view
   const navigateToFullPage = useCallback(() => {
@@ -757,6 +786,43 @@ export default function SousChefWidget({
             right: 0;
             left: 16px;
             bottom: 72px;
+          }
+        }
+
+        /* ─────────────────────────────────────────────
+           LARGE SCREEN RESPONSIVE
+           ───────────────────────────────────────────── */
+
+        /* Large screens - wider widget position and launcher */
+        @media (min-width: 1600px) {
+          .sous-chef-widget {
+            bottom: 28px;
+            right: 28px;
+          }
+
+          .sc-launcher {
+            width: 56px;
+            height: 56px;
+          }
+        }
+
+        @media (min-width: 1920px) {
+          .sous-chef-widget {
+            bottom: 32px;
+            right: 32px;
+          }
+        }
+
+        /* Allow larger panel heights on tall screens */
+        @media (min-height: 900px) {
+          .sc-panel {
+            max-height: 80vh;
+          }
+        }
+
+        @media (min-height: 1200px) {
+          .sc-panel {
+            max-height: 85vh;
           }
         }
 

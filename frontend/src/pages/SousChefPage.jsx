@@ -370,6 +370,66 @@ export default function SousChefPage() {
             font-size: 0.8rem;
           }
         }
+
+        /* ─────────────────────────────────────────────
+           LARGE SCREEN RESPONSIVE
+           ───────────────────────────────────────────── */
+
+        /* Large desktop (1600px+) */
+        @media (min-width: 1600px) {
+          .sc-page-header-content {
+            max-width: 1400px;
+          }
+
+          .sc-page-chat-container {
+            max-width: 1000px;
+          }
+
+          .sc-page-main {
+            padding: 28px;
+          }
+        }
+
+        /* Extra-large screens (1920px+ / 27" monitors) */
+        @media (min-width: 1920px) {
+          .sc-page-header-content {
+            max-width: 1600px;
+          }
+
+          .sc-page-chat-container {
+            max-width: 1100px;
+          }
+
+          .sc-page-main {
+            padding: 32px;
+          }
+        }
+
+        /* Superwide screens (2400px+ / 32" monitors) */
+        @media (min-width: 2400px) {
+          .sc-page-header-content {
+            max-width: 2000px;
+          }
+
+          .sc-page-chat-container {
+            max-width: 1300px;
+          }
+
+          .sc-page-main {
+            padding: 40px;
+          }
+        }
+
+        /* Ultrawide screens (3200px+ / 4K displays) */
+        @media (min-width: 3200px) {
+          .sc-page-header-content {
+            max-width: 2400px;
+          }
+
+          .sc-page-chat-container {
+            max-width: 1500px;
+          }
+        }
       `}</style>
     </div>
   )

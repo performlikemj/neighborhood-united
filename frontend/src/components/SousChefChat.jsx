@@ -719,7 +719,7 @@ export default function SousChefChat({
         }
 
         .sc-bubble {
-          max-width: 80%;
+          max-width: min(80%, 700px);
           padding: 12px 16px;
           border-radius: 16px;
           word-wrap: break-word;
@@ -976,6 +976,29 @@ export default function SousChefChat({
 
         .sc-bubble--assistant .markdown-content > *:last-child {
           margin-bottom: 0 !important;
+        }
+
+        /* ─────────────────────────────────────────────
+           LARGE SCREEN RESPONSIVE - MESSAGE BUBBLES
+           ───────────────────────────────────────────── */
+
+        /* Large screens - allow wider bubbles but cap absolute width */
+        @media (min-width: 1600px) {
+          .sc-bubble {
+            max-width: min(75%, 800px);
+          }
+        }
+
+        @media (min-width: 1920px) {
+          .sc-bubble {
+            max-width: min(70%, 900px);
+          }
+        }
+
+        @media (min-width: 2400px) {
+          .sc-bubble {
+            max-width: min(65%, 1000px);
+          }
         }
       `}</style>
     </div>

@@ -509,7 +509,36 @@ export default function Profile(){
               />
               
               <div className="label" style={{ marginTop: '1rem' }}>Profile picture (optional)</div>
-              <input type="file" onChange={e=>setChefForm({...chefForm, profile_pic:e.target.files?.[0]||null})} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap' }}>
+                <input
+                  id="profileChefPic"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  style={{ display: 'none' }}
+                  onChange={e => setChefForm({...chefForm, profile_pic: e.target.files?.[0] || null})}
+                />
+                <label htmlFor="profileChefPic" className="btn btn-outline btn-sm" style={{ cursor: 'pointer' }}>
+                  Choose file
+                </label>
+                {chefForm.profile_pic && (
+                  <>
+                    <span className="muted">{chefForm.profile_pic.name}</span>
+                    <button
+                      type="button"
+                      className="file-clear-btn"
+                      onClick={() => {
+                        setChefForm({...chefForm, profile_pic: null})
+                        const input = document.getElementById('profileChefPic')
+                        if (input) input.value = ''
+                      }}
+                      aria-label="Remove file"
+                      title="Remove file"
+                    >
+                      ×
+                    </button>
+                  </>
+                )}
+              </div>
               <div className="actions-row" style={{marginTop:'1rem'}}>
                 <button className="btn btn-primary" disabled={submitting} onClick={async ()=>{
                   setSubmitting(true); setApplyMsg(null)

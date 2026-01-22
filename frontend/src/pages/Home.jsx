@@ -734,17 +734,32 @@ export default function Home() {
               />
               
               <div className="label">Profile picture (optional)</div>
-              <div>
-                <input 
-                  id="homeProfilePic" 
-                  type="file" 
-                  accept="image/jpeg,image/png,image/webp" 
-                  style={{ display: 'none' }} 
-                  onChange={e => setChefForm({ ...chefForm, profile_pic: e.target.files?.[0] || null })} 
+              <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap' }}>
+                <input
+                  id="homeProfilePic"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  style={{ display: 'none' }}
+                  onChange={e => setChefForm({ ...chefForm, profile_pic: e.target.files?.[0] || null })}
                 />
-                <label htmlFor="homeProfilePic" className="btn btn-outline">Choose file</label>
+                <label htmlFor="homeProfilePic" className="btn btn-outline btn-sm" style={{ cursor: 'pointer' }}>Choose file</label>
                 {chefForm.profile_pic && (
-                  <span className="muted" style={{ marginLeft: '.5rem' }}>{chefForm.profile_pic.name}</span>
+                  <>
+                    <span className="muted">{chefForm.profile_pic.name}</span>
+                    <button
+                      type="button"
+                      className="file-clear-btn"
+                      onClick={() => {
+                        setChefForm({ ...chefForm, profile_pic: null })
+                        const input = document.getElementById('homeProfilePic')
+                        if (input) input.value = ''
+                      }}
+                      aria-label="Remove file"
+                      title="Remove file"
+                    >
+                      ×
+                    </button>
+                  </>
                 )}
               </div>
               

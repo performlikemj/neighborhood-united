@@ -376,6 +376,13 @@ function formatConnectionStatus(status){
 function FileSelect({ label, accept, onChange }){
   const inputRef = useRef(null)
   const [fileName, setFileName] = useState('')
+
+  const handleClear = () => {
+    setFileName('')
+    if (inputRef.current) inputRef.current.value = ''
+    onChange && onChange(null)
+  }
+
   return (
     <div>
       <input
@@ -389,8 +396,23 @@ function FileSelect({ label, accept, onChange }){
           onChange && onChange(f)
         }}
       />
-      <button type="button" className="btn btn-outline btn-sm" onClick={()=> inputRef.current?.click()}>{label}</button>
-      {fileName && <div className="muted" style={{marginTop:'.25rem'}}>{fileName}</div>}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap' }}>
+        <button type="button" className="btn btn-outline btn-sm" onClick={()=> inputRef.current?.click()}>{label}</button>
+        {fileName && (
+          <>
+            <span className="muted">{fileName}</span>
+            <button
+              type="button"
+              className="file-clear-btn"
+              onClick={handleClear}
+              aria-label="Remove file"
+              title="Remove file"
+            >
+              ×
+            </button>
+          </>
+        )}
+      </div>
     </div>
   )
 }

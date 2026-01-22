@@ -745,6 +745,33 @@ a.btn{ text-decoration:none }
 .icon-btn{ background:var(--surface); border:1px solid var(--border); border-radius:999px; width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; color: var(--primary); font-weight: 600; font-size: 1.1rem; transition: all 0.2s ease; }
 .icon-btn:hover{ background: color-mix(in oklab, var(--primary) 10%, var(--surface)); transform: scale(1.05); border-color: var(--primary); }
 
+/* File Select Clear Button */
+.file-clear-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0;
+  transition: all 0.15s ease;
+}
+.file-clear-btn:hover {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.file-clear-btn:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
 /* Input hinting */
 .textarea.invalid{ border-color:#d9534f }
 .field-hint{ color:#a94442; font-size:.9rem; margin:.25rem 0 .35rem }

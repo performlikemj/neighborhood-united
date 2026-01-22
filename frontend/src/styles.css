@@ -488,7 +488,7 @@ a.btn{ text-decoration:none }
 
 .multi-list{ max-height:220px; overflow:auto; display:flex; flex-direction:column; gap:.25rem; margin-top:.35rem }
 .multi-item{ display:flex; align-items:center; gap:.5rem; padding:.3rem .4rem; border-radius:8px }
-.multi-item.sel{ background: color-mix(in oklab, var(--primary) 6%, white) }
+.multi-item.sel{ background: color-mix(in oklab, var(--primary) 6%, var(--surface)) }
 
 /* Toasts */
 .toast-container{ position: fixed; bottom: 16px; right: 16px; display:flex; flex-direction:column; gap:.4rem; z-index:60 }
@@ -554,8 +554,8 @@ a.btn{ text-decoration:none }
 .input[type="date"]:focus, .input[type="time"]:focus{ border-color: color-mix(in oklab, var(--primary) 40%, var(--border)); box-shadow: 0 0 0 3px rgba(92,184,92,0.18) }
 
 /* Surfaces & Cards */
-.card{ 
-  background: color-mix(in oklab, var(--surface) 101%, white); 
+.card{
+  background: var(--surface); 
   border: 1px solid color-mix(in oklab, var(--border) 65%, transparent); 
   border-radius: var(--radius-lg); 
   padding: 1rem; 
@@ -787,7 +787,7 @@ a.btn{ text-decoration:none }
 /* Role toggle (segmented control) */
 .role-toggle{ display:inline-flex; background:var(--surface); border:1px solid var(--border); border-radius:999px; padding:2px; box-shadow: var(--shadow-xs) }
 .role-toggle .seg{ background:transparent; border:0; padding:.4rem .7rem; border-radius:999px; font-weight:700; color:var(--text); cursor:pointer }
-.role-toggle .seg:hover{ background: color-mix(in oklab, var(--primary) 6%, white) }
+.role-toggle .seg:hover{ background: color-mix(in oklab, var(--primary) 6%, var(--surface)) }
 .role-toggle .seg.active{ background: var(--gradient-brand); color:#fff }
 .role-toggle .seg[disabled]{ opacity:.6; cursor:progress }
 @media (max-width: 860px){
@@ -820,7 +820,7 @@ a.btn{ text-decoration:none }
 .mode-option__title{ font-weight:700 }
 .mode-option__desc{ font-size:.88rem; color:var(--muted); font-weight:500 }
 .mode-option.active{
-  background: color-mix(in oklab, var(--primary) 14%, white);
+  background: color-mix(in oklab, var(--primary) 14%, var(--surface));
   border-color: color-mix(in oklab, var(--primary) 28%, var(--border));
   box-shadow: var(--shadow-sm);
 }
@@ -867,7 +867,7 @@ a.btn{ text-decoration:none }
 }
 
 .chef-sidebar{
-  background: color-mix(in oklab, var(--surface) 97%, black);
+  background: color-mix(in oklab, var(--surface) 97%, var(--surface-2));
   border-right: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
   padding: 1.25rem 0.6rem;
   padding-top: calc(64px + 1.25rem); /* Account for navbar height */
@@ -1490,9 +1490,9 @@ a.btn{ text-decoration:none }
   gap: 1rem;
 }
 .chef-metric-card{
-  background: linear-gradient(135deg, 
-    color-mix(in oklab, var(--surface) 103%, white) 0%, 
-    color-mix(in oklab, var(--surface-2) 102%, white) 100%
+  background: linear-gradient(135deg,
+    var(--surface) 0%,
+    var(--surface-2) 100%
   );
   border: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
   border-radius: var(--radius-lg);
@@ -1821,16 +1821,16 @@ a.btn{ text-decoration:none }
 .page-chat .composer .textarea{ resize:none; min-height:44px; max-height:160px }
 .page-chat .composer-actions{ display:flex; gap:.5rem }
 .page-chat .typing-row{ display:flex; gap:.3rem; align-items:center; color:var(--muted); padding:.2rem .4rem }
-.page-chat .typing-row .dot{ width:6px; height:6px; border-radius:999px; background: color-mix(in oklab, var(--primary) 60%, white); animation: pulse 1.3s infinite ease-in-out }
+.page-chat .typing-row .dot{ width:6px; height:6px; border-radius:999px; background: color-mix(in oklab, var(--primary) 60%, var(--surface)); animation: pulse 1.3s infinite ease-in-out }
 .page-chat .typing-row .dot:nth-child(2){ animation-delay: .15s }
 .page-chat .typing-row .dot:nth-child(3){ animation-delay: .3s }
 
 /* Tool chips (running tool call statuses) */
 .tool-row{ display:flex; flex-wrap:wrap; gap:.4rem; padding:.2rem .4rem }
 .tool-chip{ display:inline-flex; align-items:center; gap:.35rem; border:1px solid var(--border); border-radius:999px; padding:.2rem .55rem; font-weight:700; font-size:.85rem; background:var(--surface); color:var(--text) }
-.tool-chip .dot{ width:6px; height:6px; border-radius:50%; background: color-mix(in oklab, var(--primary) 60%, white) }
+.tool-chip .dot{ width:6px; height:6px; border-radius:50%; background: color-mix(in oklab, var(--primary) 60%, var(--surface)) }
 .tool-chip.running{ border-color: color-mix(in oklab, var(--primary) 48%, var(--border)); background: color-mix(in oklab, var(--primary) 8%, var(--surface)); animation: toolPulse 2400ms ease-in-out infinite }
-.tool-chip.running .tool-label{ background: linear-gradient(90deg, color-mix(in oklab, var(--text) 86%, white) 0%, var(--primary-700) 50%, color-mix(in oklab, var(--text) 86%, white) 100%); background-size:200% 100%; -webkit-background-clip:text; background-clip:text; color:transparent; animation: shimmerX 1800ms linear infinite }
+.tool-chip.running .tool-label{ background: linear-gradient(90deg, color-mix(in oklab, var(--text) 86%, var(--surface)) 0%, var(--primary-700) 50%, color-mix(in oklab, var(--text) 86%, var(--surface)) 100%); background-size:200% 100%; -webkit-background-clip:text; background-clip:text; color:transparent; animation: shimmerX 1800ms linear infinite }
 .tool-chip.done{ border-color: var(--border); background:var(--surface) }
 .tool-chip.done .tool-label{ color: var(--text) }
 @keyframes shimmerX{ 0%{ background-position:-100% 0 } 100%{ background-position:200% 0 } }
@@ -2673,9 +2673,9 @@ body.chef-gallery-modal-open{ overflow:hidden; }
 }
 
 .chef-about-card {
-  background: linear-gradient(135deg, 
-    color-mix(in oklab, var(--surface) 104%, white) 0%,
-    color-mix(in oklab, var(--surface-2) 103%, white) 100%
+  background: linear-gradient(135deg,
+    var(--surface) 0%,
+    var(--surface-2) 100%
   );
   border: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
   border-radius: var(--radius-lg);

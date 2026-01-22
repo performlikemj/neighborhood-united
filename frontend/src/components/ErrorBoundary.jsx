@@ -22,20 +22,17 @@ export default class ErrorBoundary extends React.Component {
     if (this.state.hasError) {
       return (
         <div style={{ padding: '2rem', textAlign: 'center', maxWidth: '600px', margin: '2rem auto' }}>
-          <h2 style={{ marginBottom: '1rem' }}>Something went wrong</h2>
-          <p style={{ marginBottom: '1rem', color: '#666' }}>
+          <h2 style={{ marginBottom: '1rem', color: 'var(--text)' }}>Something went wrong</h2>
+          <p style={{ marginBottom: '1rem', color: 'var(--muted)' }}>
             An unexpected error occurred. Please try refreshing the page.
           </p>
-          <button 
+          <button
             onClick={() => window.location.reload()}
+            className="btn btn-primary"
             style={{
               padding: '0.75rem 1.5rem',
               fontSize: '1rem',
-              cursor: 'pointer',
-              background: '#2f3e46',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px'
+              cursor: 'pointer'
             }}
           >
             Reload Page

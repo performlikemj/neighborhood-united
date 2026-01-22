@@ -72,8 +72,9 @@ export default function ProfileCompletionCard({ chef }) {
               alignItems:'center',
               justifyContent:'flex-end',
               paddingRight:'.5rem',
-              color:'#fff',
+              color:'white',
               fontSize:'.85rem',
+              textShadow:'0 1px 2px rgba(0,0,0,0.3)',
               fontWeight:700
             }}
           >

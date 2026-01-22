@@ -513,6 +513,12 @@ export default function Profile(){
               <div className="actions-row" style={{marginTop:'1rem'}}>
                 <button className="btn btn-primary" disabled={submitting} onClick={async ()=>{
                   setSubmitting(true); setApplyMsg(null)
+                  // Validate location before submitting
+                  if (!ensureLocationBeforeApply()){
+                    setApplyMsg('Please complete your city and country in Personal Info, then try again.')
+                    setSubmitting(false)
+                    return
+                  }
                   try{
                     const fd = new FormData()
                     fd.append('experience', chefForm.experience)
@@ -534,7 +540,7 @@ export default function Profile(){
                     } else {
                       setApplyMsg('Submission failed. Please try again later.')
                     }
-                  }catch(e){ setApplyMsg('Submission failed. Please try again.') }
+                  }catch(e){ setApplyMsg(e?.response?.data?.error || 'Submission failed. Please try again.') }
                   finally{ setSubmitting(false) }
                 }}>{submitting?'Submitting…':'Submit Application'}</button>
                 <button className="btn btn-outline" onClick={()=> setApplyOpen(false)}>Close</button>

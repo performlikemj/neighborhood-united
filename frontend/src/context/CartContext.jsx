@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import { rememberServiceOrderId } from '../utils/serviceOrdersStorage.js'
+import { useAuth } from './AuthContext.jsx'
 
 const CartContext = createContext()
 
@@ -14,30 +15,57 @@ export function useCart() {
 const CART_STORAGE_KEY = 'sautai_chef_cart'
 
 export function CartProvider({ children }) {
-  const [cart, setCart] = useState({ items: [], chefUsername: null, chefId: null })
+  const { user } = useAuth()
+  const currentUserId = user?.id || null
+
+  const [cart, setCart] = useState({ items: [], chefUsername: null, chefId: null, userId: null })
   const [isOpen, setIsOpen] = useState(false)
 
-  // Load cart from localStorage on mount
+  // Load cart from localStorage on mount or when user changes
   useEffect(() => {
     try {
       const stored = localStorage.getItem(CART_STORAGE_KEY)
       if (stored) {
         const parsed = JSON.parse(stored)
-        setCart(parsed)
+        const storedUserId = parsed.userId || null
+
+        if (currentUserId && storedUserId && storedUserId !== currentUserId) {
+          // Cart belongs to different user - clear it
+          console.debug('[Cart] Clearing cart: belongs to different user', {
+            storedUserId,
+            currentUserId
+          })
+          setCart({ items: [], chefUsername: null, chefId: null, userId: currentUserId })
+        } else if (currentUserId && !storedUserId && parsed.items?.length > 0) {
+          // Legacy cart without userId - clear it for safety (can't verify ownership)
+          console.debug('[Cart] Clearing legacy cart without userId')
+          setCart({ items: [], chefUsername: null, chefId: null, userId: currentUserId })
+        } else {
+          // Cart is valid - update userId if needed
+          setCart({ ...parsed, userId: currentUserId })
+        }
+      } else if (currentUserId) {
+        // No stored cart, but user is logged in - set userId
+        setCart(prev => ({ ...prev, userId: currentUserId }))
       }
     } catch (err) {
       console.error('Failed to load cart:', err)
     }
-  }, [])
+  }, [currentUserId])
 
   // Save cart to localStorage whenever it changes
   useEffect(() => {
     try {
-      localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart))
+      // Always include current user ID when saving
+      const cartToSave = {
+        ...cart,
+        userId: currentUserId
+      }
+      localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cartToSave))
     } catch (err) {
       console.error('Failed to save cart:', err)
     }
-  }, [cart])
+  }, [cart, currentUserId])
 
   const deriveServiceCartKey = (entry) => {
     if (!entry) return null
@@ -75,7 +103,7 @@ export function CartProvider({ children }) {
       if (!confirmed) {
         return false
       }
-      setCart({ items: [], chefUsername: null, chefId: null })
+      setCart({ items: [], chefUsername: null, chefId: null, userId: currentUserId })
     }
 
     const activeItems = shouldResetCart ? [] : cart.items
@@ -119,12 +147,13 @@ export function CartProvider({ children }) {
       return {
         items: nextItems,
         chefUsername: normalizedUsername ?? baseChefUsername,
-        chefId: chefId ?? baseChefId
+        chefId: chefId ?? baseChefId,
+        userId: currentUserId
       }
     })
 
     return true
-  }, [cart.items, cart.chefUsername, cart.chefId])
+  }, [cart.items, cart.chefUsername, cart.chefId, currentUserId])
 
   const updateCartItem = useCallback((index, updates) => {
     setCart(prev => {
@@ -162,7 +191,7 @@ export function CartProvider({ children }) {
       if (!confirmed) {
         return false
       }
-      setCart({ items: [], chefUsername: null, chefId: null })
+      setCart({ items: [], chefUsername: null, chefId: null, userId: currentUserId })
     }
 
     // Convert order to cart item format
@@ -215,7 +244,8 @@ export function CartProvider({ children }) {
       const newCart = {
         items: nextItems,
         chefUsername: normalizedUsername ?? prev.chefUsername,
-        chefId: chefId ?? prev.chefId
+        chefId: chefId ?? prev.chefId,
+        userId: currentUserId
       }
       console.log('[CartContext] New cart state', newCart)
       return newCart
@@ -223,18 +253,18 @@ export function CartProvider({ children }) {
 
     console.log('[CartContext] loadExistingOrder returning true')
     return true
-  }, [cart.items, cart.chefUsername, cart.chefId])
+  }, [cart.items, cart.chefUsername, cart.chefId, currentUserId])
 
   // Remove item from cart
   const removeFromCart = useCallback((index) => {
     const updatedItems = cart.items.filter((_, i) => i !== index)
-    setCart({ ...cart, items: updatedItems })
-    
+    setCart({ ...cart, items: updatedItems, userId: currentUserId })
+
     // Clear chef info if cart is now empty
     if (updatedItems.length === 0) {
-      setCart({ items: [], chefUsername: null, chefId: null })
+      setCart({ items: [], chefUsername: null, chefId: null, userId: currentUserId })
     }
-  }, [cart])
+  }, [cart, currentUserId])
 
   // Update item quantity
   const updateQuantity = useCallback((index, quantity) => {
@@ -244,13 +274,13 @@ export function CartProvider({ children }) {
       return
     }
     updatedItems[index] = { ...updatedItems[index], quantity }
-    setCart({ ...cart, items: updatedItems })
-  }, [cart, removeFromCart])
+    setCart({ ...cart, items: updatedItems, userId: currentUserId })
+  }, [cart, removeFromCart, currentUserId])
 
   // Clear entire cart
   const clearCart = useCallback(() => {
-    setCart({ items: [], chefUsername: null, chefId: null })
-  }, [])
+    setCart({ items: [], chefUsername: null, chefId: null, userId: currentUserId })
+  }, [currentUserId])
 
   // Calculate cart total
   const getCartTotal = useCallback(() => {

@@ -202,9 +202,9 @@ def submit_chef_request(request):
     """
     try:
         # Validate required fields
-        required_fields = ['user_id', 'experience', 'bio', 'city', 'country']
+        required_fields = ['experience', 'bio', 'city', 'country']
         missing_fields = [field for field in required_fields if not request.data.get(field)]
-        
+
         if missing_fields:
             return JsonResponse({
                 'error': f'Missing required fields: {", ".join(missing_fields)}',
@@ -216,19 +216,9 @@ def submit_chef_request(request):
                 }
             }, status=400)
 
-        user_id = request.data.get('user_id')
-        
-        try:
-            from custom_auth.models import CustomUser
-            user = CustomUser.objects.get(id=user_id)
-        except CustomUser.DoesNotExist:
-            # n8n traceback
-            n8n_traceback_url = os.getenv("N8N_TRACEBACK_URL")
-            requests.post(n8n_traceback_url, json={"error": f"User with ID {user_id} not found", "source":"submit_chef_request", "traceback": traceback.format_exc()})
-            return JsonResponse({
-                'error': f'User with ID {user_id} not found',
-                'received_user_id': user_id
-            }, status=404)
+        # Use authenticated user from request (more secure than accepting user_id in POST)
+        user = request.user
+        user_id = user.id
         
         # Check if user is already a chef
         if Chef.objects.filter(user=user).exists():

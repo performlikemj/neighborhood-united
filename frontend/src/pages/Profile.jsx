@@ -517,6 +517,11 @@ export default function Profile(){
                     const fd = new FormData()
                     fd.append('experience', chefForm.experience)
                     fd.append('bio', chefForm.bio)
+                    // Include city and country (required by backend)
+                    const city = (form?.city || user?.address?.city || '').trim()
+                    const country = (form?.country || user?.address?.country || '').trim()
+                    if (city) fd.append('city', city)
+                    if (country) fd.append('country', country)
                     // Combine selected areas with manual postal codes
                     const areaIds = (chefForm.selected_areas || []).map(a => a.area_id || a.id)
                     const manualCodes = chefForm.serving_areas || ''

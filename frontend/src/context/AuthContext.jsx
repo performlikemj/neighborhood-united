@@ -250,6 +250,13 @@ export function AuthProvider({ children }){
     lastCheckedPostal.current = null
     setConnectedChefs([])
     hasFetchedChefs.current = false
+
+    // Clear cart on logout (prevents cart data from persisting across users)
+    try {
+      localStorage.removeItem('sautai_chef_cart')
+    } catch (e) {
+      console.warn('[Auth] Failed to clear cart on logout:', e)
+    }
   }
 
   const register = async (payload) => {

@@ -305,9 +305,9 @@ export default function ServiceAreaPicker({
           background: isSelected 
             ? 'var(--accent-green-soft, rgba(92, 184, 92, 0.15))' 
             : 'transparent',
-          border: isSelected 
-            ? '1px solid var(--accent-green, #5cb85c)' 
-            : '1px solid var(--border-light, rgba(255,255,255,0.1))',
+          border: isSelected
+            ? '1px solid var(--primary)'
+            : '1px solid var(--border)',
           marginLeft: isChild ? '1rem' : 0,
           cursor: readOnly ? 'default' : 'pointer',
           display: 'flex',
@@ -345,7 +345,7 @@ export default function ServiceAreaPicker({
             onClick={(e) => { e.stopPropagation(); panToArea(area) }}
             title="Show on map"
             style={{
-              background: 'rgba(255,255,255,0.1)',
+              background: 'var(--surface-3)',
               border: 'none',
               borderRadius: '4px',
               cursor: 'pointer',
@@ -363,7 +363,7 @@ export default function ServiceAreaPicker({
               onClick={(e) => { e.stopPropagation(); loadChildren(area) }}
               title={expandedArea === areaId ? 'Collapse' : 'Show sub-areas'}
               style={{
-                background: 'rgba(255,255,255,0.1)',
+                background: 'var(--surface-3)',
                 border: 'none',
                 borderRadius: '4px',
                 cursor: 'pointer',
@@ -408,10 +408,10 @@ export default function ServiceAreaPicker({
               top: '100%',
               left: 0,
               right: 0,
-              background: 'var(--bg-elevated, var(--bg-card, #1a1a1a))',
-              border: '1px solid var(--border, rgba(255,255,255,0.15))',
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
               borderRadius: '6px',
-              boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+              boxShadow: 'var(--shadow-md)',
               zIndex: 1000,
               maxHeight: '300px',
               overflowY: 'auto'
@@ -427,11 +427,11 @@ export default function ServiceAreaPicker({
                   style={{
                     padding: '0.5rem 0.75rem',
                     cursor: 'pointer',
-                    borderBottom: '1px solid var(--border-light, rgba(255,255,255,0.08))',
-                    background: selectedIds.has(area.id) ? 'var(--accent-green-soft, rgba(92, 184, 92, 0.15))' : 'transparent'
+                    borderBottom: '1px solid var(--border)',
+                    background: selectedIds.has(area.id) ? 'rgba(92, 184, 92, 0.15)' : 'transparent'
                   }}
-                  onMouseEnter={(e) => e.currentTarget.style.background = selectedIds.has(area.id) ? 'var(--accent-green-soft, rgba(92, 184, 92, 0.2))' : 'rgba(255,255,255,0.05)'}
-                  onMouseLeave={(e) => e.currentTarget.style.background = selectedIds.has(area.id) ? 'var(--accent-green-soft, rgba(92, 184, 92, 0.15))' : 'transparent'}
+                  onMouseEnter={(e) => e.currentTarget.style.background = selectedIds.has(area.id) ? 'rgba(92, 184, 92, 0.2)' : 'var(--surface-2)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = selectedIds.has(area.id) ? 'rgba(92, 184, 92, 0.15)' : 'transparent'}
                 >
                   <div style={{ fontWeight: 500, display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                     {selectedIds.has(area.id) && <span>✓</span>}
@@ -462,7 +462,7 @@ export default function ServiceAreaPicker({
           width: '45%', 
           overflowY: 'auto', 
           paddingRight: '0.5rem',
-          borderRight: '1px solid var(--border-light, rgba(255,255,255,0.1))'
+          borderRight: '1px solid var(--border)'
         }}>
           {/* Selected areas section */}
           {selectedAreas.length > 0 && (
@@ -479,9 +479,9 @@ export default function ServiceAreaPicker({
                 gap: '0.5rem'
               }}>
                 <span>Selected Areas</span>
-                <span style={{ 
-                  background: 'var(--accent-green, #5cb85c)', 
-                  color: '#fff', 
+                <span style={{
+                  background: 'var(--primary)',
+                  color: '#fff',
                   borderRadius: '10px',
                   padding: '0 0.5rem',
                   fontSize: '0.9em'
@@ -497,8 +497,8 @@ export default function ServiceAreaPicker({
                     padding: '0.5rem 0.75rem',
                     marginBottom: '0.25rem',
                     borderRadius: '6px',
-                    background: 'var(--accent-green-soft, rgba(92, 184, 92, 0.15))',
-                    border: '1px solid var(--accent-green, #5cb85c)',
+                    background: 'rgba(92, 184, 92, 0.15)',
+                    border: '1px solid var(--primary)',
                     display: 'flex',
                     alignItems: 'center',
                     gap: '0.5rem'
@@ -521,13 +521,13 @@ export default function ServiceAreaPicker({
                     type="button"
                     onClick={() => panToArea(area)}
                     title="Show on map"
-                    style={{ 
-                      background: 'rgba(255,255,255,0.15)', 
-                      border: 'none', 
+                    style={{
+                      background: 'var(--surface-3)',
+                      border: 'none',
                       borderRadius: '4px',
-                      cursor: 'pointer', 
+                      cursor: 'pointer',
                       padding: '0.25rem 0.4rem',
-                      opacity: 0.8 
+                      opacity: 0.8
                     }}
                   >
                     🗺️
@@ -618,7 +618,7 @@ export default function ServiceAreaPicker({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              background: 'var(--bg-muted, #f5f5f5)',
+              background: 'var(--surface-2)',
               borderRadius: '8px'
             }}>
               Loading map...
@@ -631,7 +631,7 @@ export default function ServiceAreaPicker({
       <div style={{ 
         marginTop: '0.75rem', 
         paddingTop: '0.75rem', 
-        borderTop: '1px solid var(--border, #e0e0e0)',
+        borderTop: '1px solid var(--border)',
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',

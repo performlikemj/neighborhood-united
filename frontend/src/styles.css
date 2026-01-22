@@ -27,6 +27,7 @@
   --bg2:#F8FAF7;
   --surface:#FFFFFF;
   --surface-2:#FAFCFA;
+  --surface-3:#F2F5F2;
   --link:#3F7A35;
   --border:#E4ECE4;
   --radius:12px;
@@ -91,6 +92,7 @@
   --bg2:#121a14;
   --surface:#171f19;
   --surface-2:#1c261f;
+  --surface-3:#243027;
   --link:#8be28b;
   --border:#2a342c;
   --shadow-xs: 0 1px 2px rgba(0,0,0,0.5);

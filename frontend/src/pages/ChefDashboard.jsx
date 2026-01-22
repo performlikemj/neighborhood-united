@@ -2044,6 +2044,11 @@ function ChefDashboardContent(){
             isOnboardingComplete={isOnboardingComplete}
             onboardingCompletionState={onboardingCompletionState}
             meetingConfig={meetingConfig}
+            isOnBreak={isOnBreak}
+            breakBusy={breakBusy}
+            breakReason={breakReason}
+            onBreakReasonChange={setBreakReason}
+            onToggleBreak={toggleBreak}
           />
         </div>
       )}

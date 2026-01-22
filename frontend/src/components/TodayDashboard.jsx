@@ -85,7 +85,13 @@ export default function TodayDashboard({
   isOnboardingComplete = false,
   onboardingCompletionState = {},
   meetingConfig = {},
-  className = ''
+  className = '',
+  // Break mode props
+  isOnBreak = false,
+  breakBusy = false,
+  breakReason = '',
+  onBreakReasonChange,
+  onToggleBreak
 }) {
   // Get orders needing attention (next 48 hours, not completed)
   const upcomingOrders = useMemo(() => {
@@ -307,7 +313,7 @@ export default function TodayDashboard({
       <div className="today-section">
         <h2 className="section-title">Quick Actions</h2>
         <div className="quick-actions">
-          <button 
+          <button
             className="quick-action"
             onClick={() => onNavigate?.('orders')}
           >
@@ -317,7 +323,7 @@ export default function TodayDashboard({
             </svg>
             <span>Orders</span>
           </button>
-          <button 
+          <button
             className="quick-action"
             onClick={() => onNavigate?.('menu')}
           >
@@ -326,7 +332,7 @@ export default function TodayDashboard({
             </svg>
             <span>Menu</span>
           </button>
-          <button 
+          <button
             className="quick-action"
             onClick={() => onNavigate?.('clients')}
           >
@@ -336,7 +342,7 @@ export default function TodayDashboard({
             </svg>
             <span>Clients</span>
           </button>
-          <button 
+          <button
             className="quick-action"
             onClick={() => onNavigate?.('profile')}
           >
@@ -348,6 +354,52 @@ export default function TodayDashboard({
           </button>
         </div>
       </div>
+
+      {/* Take a Break Section */}
+      {onToggleBreak && (
+        <div className="today-section today-break-section">
+          <div className="today-card today-break-card">
+            <div className="break-header">
+              <div className="break-icon-wrapper">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
+                  <line x1="12" y1="2" x2="12" y2="12"/>
+                </svg>
+              </div>
+              <div className="break-title">
+                <h3>Need a break?</h3>
+                <p className="muted">Pause bookings and step away when you need to recharge.</p>
+              </div>
+            </div>
+            <div className="break-controls">
+              <label className="break-toggle">
+                <input
+                  type="checkbox"
+                  checked={isOnBreak}
+                  disabled={breakBusy}
+                  onChange={e => onToggleBreak(e.target.checked)}
+                />
+                <span className="break-status">{isOnBreak ? 'On break' : 'Available'}</span>
+                {breakBusy && <span className="spinner" aria-hidden />}
+              </label>
+              {isOnBreak && (
+                <input
+                  className="input break-reason-input"
+                  placeholder="Note for guests (e.g., 'Back in 2 weeks')"
+                  value={breakReason}
+                  disabled={breakBusy}
+                  onChange={e => onBreakReasonChange?.(e.target.value)}
+                />
+              )}
+            </div>
+            {!isOnBreak && (
+              <p className="muted break-warning">
+                Turning this on will cancel upcoming events and refund paid orders.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       <style>{styles}</style>
     </div>
@@ -723,6 +775,95 @@ const styles = `
 
     .quick-actions {
       grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  /* Take a Break Section */
+  .today-break-section {
+    margin-top: 1rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .today-break-card {
+    background: var(--surface-2);
+    border-color: var(--border);
+  }
+
+  .break-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+  }
+
+  .break-icon-wrapper {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: var(--surface);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: var(--muted);
+  }
+
+  .break-title {
+    flex: 1;
+  }
+
+  .break-title h3 {
+    margin: 0 0 0.15rem 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .break-title .muted {
+    margin: 0;
+    font-size: 0.85rem;
+  }
+
+  .break-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .break-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+  }
+
+  .break-toggle input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+  }
+
+  .break-status {
+    font-weight: 500;
+    font-size: 0.9rem;
+    color: var(--text);
+  }
+
+  .break-reason-input {
+    font-size: 0.9rem;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .break-warning {
+    margin: 0.75rem 0 0 0;
+    font-size: 0.8rem;
+  }
+
+  @media (max-width: 640px) {
+    .break-header {
+      flex-direction: column;
+      gap: 0.5rem;
     }
   }
 `

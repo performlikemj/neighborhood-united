@@ -17,6 +17,7 @@ import OnboardingChecklist from '../components/OnboardingChecklist.jsx'
 import CalendlyMeetingModal from '../components/CalendlyMeetingModal.jsx'
 import NavSection from '../components/NavSection.jsx'
 import TodayDashboard from '../components/TodayDashboard.jsx'
+import ChefInsightsDashboard from '../components/ChefInsightsDashboard.jsx'
 import { SousChefNotificationProvider } from '../contexts/SousChefNotificationContext.jsx'
 import { useMessaging } from '../context/MessagingContext.jsx'
 
@@ -431,6 +432,7 @@ const MealsIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="non
 const PrepPlanIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="m9 14 2 2 4-4"/></svg>
 const PaymentLinksIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/><path d="M7 15h4"/><path d="M15 15h2"/></svg>
 const MessagesIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+const InsightsIcon = ()=> <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
 
 /**
  * ChefMessagesSection - Messages tab for chef dashboard
@@ -1986,6 +1988,7 @@ function ChefDashboardContent(){
           {/* Primary Actions - Always visible */}
           <div className="nav-primary-items">
             <NavItem value="today" label="Today" icon={DashboardIcon} />
+            <NavItem value="insights" label="Insights" icon={InsightsIcon} />
             <NavItem value="profile" label="My Profile" icon={ProfileIcon} />
           </div>
 
@@ -2051,6 +2054,19 @@ function ChefDashboardContent(){
             onToggleBreak={toggleBreak}
           />
         </div>
+      )}
+
+      {/* Insights - Business Analytics */}
+      {tab==='insights' && (
+        <ChefInsightsDashboard
+          orders={orders}
+          serviceOrders={serviceOrders}
+          meals={meals}
+          dishes={dishes}
+          ingredients={ingredients}
+          serviceOfferings={serviceOfferings}
+          onOpenAnalyticsDrawer={openAnalyticsDrawer}
+        />
       )}
 
       {/* Legacy Dashboard redirect - now redirects to Today */}

@@ -18,7 +18,7 @@ class PublicChefProfileApiTests(TestCase):
         self.client = APIClient()
         self.user = CustomUser.objects.create_user(username='chefuser', password='password', email='chef@example.com')
         UserRole.objects.create(user=self.user, is_chef=True)
-        self.chef = Chef.objects.create(user=self.user, is_verified=True, background_checked=True, insured=True)
+        self.chef = Chef.objects.create(user=self.user, is_verified=True, background_checked=True, insured=True, is_live=True)
 
         self.postal = PostalCode.objects.create(code='10001', display_code='10001', country='US')
         ChefPostalCode.objects.create(chef=self.chef, postal_code=self.postal)
@@ -58,7 +58,7 @@ class PublicChefProfileApiTests(TestCase):
         other_user = CustomUser.objects.create_user(username='otherchef', password='password', email='other@example.com')
         UserRole.objects.create(user=other_user, is_chef=True)
         other_postal = PostalCode.objects.create(code='94110', display_code='94110', country='US')
-        other_chef = Chef.objects.create(user=other_user, is_verified=True)
+        other_chef = Chef.objects.create(user=other_user, is_verified=True, is_live=True)
         ChefPostalCode.objects.create(chef=other_chef, postal_code=other_postal)
 
         PostalCode.objects.create(code='V6B1A1', display_code='V6B 1A1', country='CA')

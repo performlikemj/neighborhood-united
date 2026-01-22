@@ -593,6 +593,8 @@ function ChefDashboardContent(){
   const [isOnBreak, setIsOnBreak] = useState(false)
   const [breakBusy, setBreakBusy] = useState(false)
   const [breakReason, setBreakReason] = useState('')
+  // Go Live state
+  const [goingLive, setGoingLive] = useState(false)
 
   // Verification meeting state (Calendly)
   const [meetingConfig, setMeetingConfig] = useState({
@@ -1217,6 +1219,31 @@ function ChefDashboardContent(){
 
   const switchToChef = async ()=>{
     try{ await api.post('/auth/api/switch_role/', { role:'chef' }); setNotice(null); await loadChefProfile() }catch{ setNotice('Unable to switch role to Chef.') }
+  }
+
+  const handleGoLive = async () => {
+    if (goingLive) return
+    setGoingLive(true)
+    try {
+      await api.post('/chefs/api/me/chef/live/', { is_live: true })
+      // Refresh chef data to get updated is_live status
+      await loadChefProfile()
+      try {
+        window.dispatchEvent(new CustomEvent('global-toast', {
+          detail: { text: 'Congratulations! Your profile is now live!', tone: 'success' }
+        }))
+      } catch {}
+    } catch (e) {
+      const errorData = e?.response?.data || {}
+      const message = errorData.message || 'Failed to go live. Please try again.'
+      try {
+        window.dispatchEvent(new CustomEvent('global-toast', {
+          detail: { text: message, tone: 'error' }
+        }))
+      } catch {}
+    } finally {
+      setGoingLive(false)
+    }
   }
 
   const loadDishes = async ()=>{
@@ -1989,17 +2016,20 @@ function ChefDashboardContent(){
       {/* Today - Smart Dashboard */}
       {tab==='today' && (
         <div>
-          {/* Onboarding Checklist - Show prominently when incomplete */}
-          {!payouts.loading && profileInit && !isOnboardingComplete && (
+          {/* Onboarding Checklist - Show prominently when incomplete or not yet live */}
+          {!payouts.loading && profileInit && (!isOnboardingComplete || !chef?.is_live) && (
             <OnboardingChecklist
               completionState={onboardingCompletionState}
               onNavigate={(targetTab) => setTab(targetTab)}
               onStartStripeOnboarding={startOrContinueOnboarding}
               onOpenCalendly={() => setCalendlyModalOpen(true)}
               meetingConfig={meetingConfig}
+              isLive={chef?.is_live}
+              onGoLive={handleGoLive}
+              goingLive={goingLive}
             />
           )}
-          
+
           <TodayDashboard
             orders={orders}
             serviceOrders={serviceOrders}
@@ -2013,6 +2043,7 @@ function ChefDashboardContent(){
             }}
             isOnboardingComplete={isOnboardingComplete}
             onboardingCompletionState={onboardingCompletionState}
+            meetingConfig={meetingConfig}
           />
         </div>
       )}
@@ -2035,14 +2066,17 @@ function ChefDashboardContent(){
             <p className="muted">Your business overview and key metrics</p>
           </header>
 
-          {/* Onboarding Checklist - Show prominently when incomplete */}
-          {!payouts.loading && profileInit && (
+          {/* Onboarding Checklist - Show prominently when incomplete or not yet live */}
+          {!payouts.loading && profileInit && (!isOnboardingComplete || !chef?.is_live) && (
             <OnboardingChecklist
               completionState={onboardingCompletionState}
               onNavigate={(targetTab) => setTab(targetTab)}
               onStartStripeOnboarding={startOrContinueOnboarding}
               onOpenCalendly={() => setCalendlyModalOpen(true)}
               meetingConfig={meetingConfig}
+              isLive={chef?.is_live}
+              onGoLive={handleGoLive}
+              goingLive={goingLive}
             />
           )}
 

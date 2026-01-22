@@ -84,6 +84,7 @@ export default function TodayDashboard({
   onViewMessages,
   isOnboardingComplete = false,
   onboardingCompletionState = {},
+  meetingConfig = {},
   className = ''
 }) {
   // Get orders needing attention (next 48 hours, not completed)
@@ -130,12 +131,17 @@ export default function TodayDashboard({
     }
   }, [orders, serviceOrders, pendingConnections, unreadMessageCount])
 
-  // Calculate onboarding progress
+  // Calculate onboarding progress (filter out meeting step if Calendly disabled, matching OnboardingChecklist)
   const onboardingProgress = useMemo(() => {
-    const completed = Object.values(onboardingCompletionState).filter(Boolean).length
-    const total = Object.keys(onboardingCompletionState).length
+    const activeSteps = Object.entries(onboardingCompletionState).filter(([key]) => {
+      // Filter out meeting step if feature is disabled (consistent with OnboardingChecklist)
+      if (key === 'meeting' && !meetingConfig?.feature_enabled) return false
+      return true
+    })
+    const completed = activeSteps.filter(([, value]) => value).length
+    const total = activeSteps.length
     return { completed, total, percent: total > 0 ? Math.round((completed / total) * 100) : 0 }
-  }, [onboardingCompletionState])
+  }, [onboardingCompletionState, meetingConfig])
 
   const hasUrgentItems = stats.pendingClients > 0 || upcomingOrders.length > 0 || stats.unreadMessages > 0
 

@@ -11,6 +11,8 @@ class Chef(models.Model):
     bio = models.TextField(blank=True)
     # Simple availability flag: when True, the chef is temporarily not accepting orders
     is_on_break = models.BooleanField(default=False, help_text="Temporarily not accepting orders")
+    # Whether chef has completed setup and chosen to be visible in public directory
+    is_live = models.BooleanField(default=False, help_text="Chef has completed setup and chosen to be visible in the public directory")
     # Default currency for payment links and stats
     default_currency = models.CharField(
         max_length=3,

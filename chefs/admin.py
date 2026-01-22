@@ -34,12 +34,12 @@ class ChefPostalCodeInline(admin.TabularInline):
     extra = 1  # Number of extra forms to display
 
 class ChefAdmin(admin.ModelAdmin):
-    list_display = ('user', 'experience', 'is_verified', 'background_checked', 'insured', 'food_handlers_cert', 'is_on_break')
+    list_display = ('user', 'experience', 'is_verified', 'is_live', 'background_checked', 'insured', 'food_handlers_cert', 'is_on_break')
     search_fields = ('user__username', 'experience', 'bio')
-    list_filter = ('user__is_active', 'is_on_break', 'is_verified', 'background_checked', 'insured', 'food_handlers_cert')
+    list_filter = ('user__is_active', 'is_on_break', 'is_verified', 'is_live', 'background_checked', 'insured', 'food_handlers_cert')
     # Exclude the pgvector field from the editable form to avoid numpy truth-value issues
     fields = (
-        'user', 'experience', 'bio', 'is_on_break', 'profile_pic', 'banner_image',
+        'user', 'experience', 'bio', 'is_on_break', 'is_live', 'profile_pic', 'banner_image',
         'is_verified', 'background_checked', 'insured', 'insurance_expiry', 'food_handlers_cert'
     )
     readonly_fields = ()

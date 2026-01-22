@@ -69,6 +69,9 @@ export default function OnboardingChecklist({
   onStartStripeOnboarding,
   onOpenCalendly,
   meetingConfig = {},
+  isLive = false,
+  onGoLive,
+  goingLive = false,
   className = ''
 }) {
   const [dismissed, setDismissed] = useState(() => {
@@ -181,25 +184,50 @@ export default function OnboardingChecklist({
     )
   }
 
-  // Celebration state when complete
-  if (isComplete) {
+  // Setup complete but not live yet - show Go Live CTA
+  if (isComplete && !isLive) {
     return (
-      <div className={`onboarding-complete ${className}`}>
+      <div className={`onboarding-complete go-live ${className}`}>
         <div className="complete-header">
           <div className="complete-icon">🎉</div>
           <div className="complete-content">
-            <h3>You're Ready to Accept Orders!</h3>
-            <p>Your chef profile is fully set up. Customers can now discover and book your services.</p>
+            <h3>You're Ready to Go Live!</h3>
+            <p>Your chef profile is fully set up. Click below to make your profile visible to customers.</p>
           </div>
         </div>
         <div className="complete-actions">
-          <button 
+          <button
+            className="btn btn-primary"
+            onClick={onGoLive}
+            disabled={goingLive}
+          >
+            {goingLive ? 'Going Live...' : 'Start Cooking!'}
+          </button>
+        </div>
+        <style>{completeStyles}</style>
+      </div>
+    )
+  }
+
+  // Already live - celebration state
+  if (isComplete && isLive) {
+    return (
+      <div className={`onboarding-complete ${className}`}>
+        <div className="complete-header">
+          <div className="complete-icon">✅</div>
+          <div className="complete-content">
+            <h3>You're Live!</h3>
+            <p>Customers can now discover and book your services.</p>
+          </div>
+        </div>
+        <div className="complete-actions">
+          <button
             className="btn btn-outline btn-sm"
             onClick={handleDismiss}
           >
             Dismiss
           </button>
-          <button 
+          <button
             className="btn btn-primary btn-sm"
             onClick={() => onNavigate && onNavigate('dashboard')}
           >
@@ -604,6 +632,11 @@ const completeStyles = `
     padding: 1.25rem 1.5rem;
     margin-bottom: 1.5rem;
     animation: celebrateFade 0.5s ease;
+  }
+
+  .onboarding-complete.go-live {
+    background: var(--primary-bg, var(--surface-2));
+    border-color: var(--primary);
   }
 
   @keyframes celebrateFade {

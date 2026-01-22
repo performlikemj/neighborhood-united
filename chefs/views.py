@@ -677,6 +677,67 @@ def me_set_break(request):
     })
 
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def me_set_live(request):
+    """
+    Toggle a chef's live status (public visibility).
+    Chef must have an active Stripe account to go live.
+
+    Request JSON:
+    - is_live: bool (required)
+
+    Response JSON:
+    - is_live: bool
+    - error: str (if validation fails)
+    - message: str (user-friendly error message)
+    """
+    try:
+        chef = Chef.objects.get(user=request.user)
+    except Chef.DoesNotExist:
+        return Response({'detail': 'Not a chef'}, status=status.HTTP_404_NOT_FOUND)
+
+    # Ensure user is in chef mode
+    try:
+        user_role = UserRole.objects.get(user=request.user)
+        if not user_role.is_chef or user_role.current_role != 'chef':
+            return Response({'detail': 'Switch to chef mode'}, status=status.HTTP_403_FORBIDDEN)
+    except UserRole.DoesNotExist:
+        return Response({'detail': 'Switch to chef mode'}, status=status.HTTP_403_FORBIDDEN)
+
+    is_live = request.data.get('is_live', None)
+    if is_live is None:
+        return Response({'error': 'is_live is required'}, status=status.HTTP_400_BAD_REQUEST)
+    if not isinstance(is_live, bool):
+        return Response({'error': 'is_live must be a boolean'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Going offline is always allowed
+    if is_live is False:
+        chef.is_live = False
+        chef.save(update_fields=['is_live'])
+        return Response({'is_live': False})
+
+    # Going live requires active Stripe account
+    try:
+        stripe_account = StripeConnectAccount.objects.get(chef=chef)
+        if not stripe_account.is_active:
+            return Response({
+                'error': 'stripe_not_active',
+                'message': 'Complete your Stripe setup before going live.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+    except StripeConnectAccount.DoesNotExist:
+        return Response({
+            'error': 'stripe_not_connected',
+            'message': 'Connect your Stripe account before going live.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+    # Set live
+    chef.is_live = True
+    chef.save(update_fields=['is_live'])
+
+    return Response({'is_live': True})
+
+
 PUBLIC_PHOTO_PREFETCH = Prefetch(
     'photos',
     queryset=ChefPhoto.objects.filter(is_public=True).order_by('-is_featured', '-created_at'),
@@ -691,7 +752,7 @@ def chef_public(request, chef_id):
         Chef.objects.select_related('user').prefetch_related('serving_postalcodes', PUBLIC_PHOTO_PREFETCH),
         id=chef_id,
     )
-    if not chef.is_verified:
+    if not chef.is_verified or not chef.is_live:
         return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
     # Ensure approved – presence of Chef row generally indicates approval; optionally check UserRole
     try:
@@ -715,7 +776,7 @@ def chef_public_by_username(request, slug):
     )
     if not chef:
         return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
-    if not chef.is_verified:
+    if not chef.is_verified or not chef.is_live:
         return Response({'detail': 'Chef not found'}, status=status.HTTP_404_NOT_FOUND)
     try:
         user_role = UserRole.objects.get(user=chef.user)
@@ -748,8 +809,8 @@ def chef_public_directory(request):
     from django.db.models import Count, Q
     queryset = Chef.objects.select_related('user').prefetch_related('serving_postalcodes', PUBLIC_PHOTO_PREFETCH)
 
-    # Only approved chefs
-    queryset = queryset.filter(user__userrole__is_chef=True, is_verified=True)
+    # Only approved and live chefs (not on break)
+    queryset = queryset.filter(user__userrole__is_chef=True, is_verified=True, is_live=True)
 
     q = request.query_params.get('q')
     serves_postal = request.query_params.get('serves_postal')

@@ -105,7 +105,7 @@ class ChefPublicSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Chef
-        fields = ['id', 'user', 'experience', 'bio', 'is_on_break',
+        fields = ['id', 'user', 'experience', 'bio', 'is_on_break', 'is_live',
                   'serving_postalcodes', 'profile_pic_url', 'banner_url',
                   'review_summary', 'photos',
                   'is_verified', 'background_checked', 'insured', 'insurance_expiry',

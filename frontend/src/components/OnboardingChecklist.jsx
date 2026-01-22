@@ -635,7 +635,7 @@ const completeStyles = `
   }
 
   .onboarding-complete.go-live {
-    background: var(--primary-bg, var(--surface-2));
+    background: var(--surface-2);
     border-color: var(--primary);
   }
 

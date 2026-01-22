@@ -1,12 +1,12 @@
 """
-Email utility module for sending HTML emails via Django's email framework.
-Replaces n8n webhook-based email sending with direct SMTP.
+Email utility module for sending HTML emails via Mailgun REST API.
+Uses requests library directly instead of django-anymail.
 """
 import logging
 from typing import List, Optional, Union
 
+import requests
 from django.conf import settings
-from django.core.mail import EmailMultiAlternatives
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
@@ -21,8 +21,8 @@ def send_html_email(
     fail_silently: bool = False,
 ) -> bool:
     """
-    Send an HTML email with automatic plain-text fallback.
-    
+    Send an HTML email with automatic plain-text fallback via Mailgun API.
+
     Args:
         subject: Email subject line
         html_content: HTML content of the email
@@ -30,43 +30,59 @@ def send_html_email(
         from_email: Sender email (defaults to DEFAULT_FROM_EMAIL)
         reply_to: Optional list of reply-to addresses
         fail_silently: If True, don't raise exceptions on failure
-        
+
     Returns:
         bool: True if email was sent successfully, False otherwise
     """
     try:
+        # Get Mailgun configuration from settings
+        api_key = settings.MAILGUN_API_KEY
+        domain = settings.MAILGUN_SENDER_DOMAIN
+        api_url = getattr(settings, 'MAILGUN_API_URL', 'https://api.mailgun.net/v3')
+
+        if not api_key or not domain:
+            raise ValueError("MAILGUN_API_KEY and MAILGUN_SENDER_DOMAIN must be configured")
+
         # Use default from email if not provided
         sender = from_email or settings.DEFAULT_FROM_EMAIL
-        
+
         # Generate plain-text version from HTML
         plain_text = BeautifulSoup(html_content, 'html.parser').get_text(separator='\n')
         # Clean up excessive whitespace in plain text
         plain_text = '\n'.join(line.strip() for line in plain_text.split('\n') if line.strip())
-        
+
         # Ensure recipient is a list
         if isinstance(recipient_email, str):
             recipients = [recipient_email]
         else:
             recipients = list(recipient_email)
-        
-        # Create email message
-        email = EmailMultiAlternatives(
-            subject=subject,
-            body=plain_text,
-            from_email=sender,
-            to=recipients,
-            reply_to=reply_to,
+
+        # Build request data
+        data = {
+            'from': sender,
+            'to': recipients,
+            'subject': subject,
+            'text': plain_text,
+            'html': html_content,
+        }
+
+        # Add reply-to if provided
+        if reply_to:
+            data['h:Reply-To'] = ', '.join(reply_to)
+
+        # Send email via Mailgun API
+        response = requests.post(
+            f"{api_url}/{domain}/messages",
+            auth=('api', api_key),
+            data=data,
+            timeout=30,
         )
-        
-        # Attach HTML version
-        email.attach_alternative(html_content, "text/html")
-        
-        # Send email
-        email.send(fail_silently=fail_silently)
-        
+
+        response.raise_for_status()
+
         logger.info(f"Email sent successfully to {recipients} with subject: {subject[:50]}...")
         return True
-        
+
     except Exception as e:
         logger.exception(f"Failed to send email to {recipient_email}: {e}")
         if not fail_silently:

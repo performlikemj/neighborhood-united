@@ -106,7 +106,6 @@ INSTALLED_APPS = [
     'stripe',
     'storages',
     'django_celery_beat',
-    'anymail',
 ]
 
 # Feature flags
@@ -441,22 +440,10 @@ STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET') #TODO: Add this to the config file
 
 
-# Email settings
-# Configurable email backend - defaults to Mailgun in production
-EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'anymail.backends.mailgun.EmailBackend')
-
-# Anymail configuration for Mailgun
-ANYMAIL = {
-    'MAILGUN_API_KEY': os.getenv('MAILGUN_API_KEY'),
-    'MAILGUN_SENDER_DOMAIN': os.getenv('MAILGUN_SENDER_DOMAIN'),
-}
-
-# Fallback SMTP settings (used if EMAIL_BACKEND is set to django.core.mail.backends.smtp.EmailBackend)
-EMAIL_HOST = os.getenv('EMAIL_HOST')
-EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
-EMAIL_USE_TLS = str_to_bool(os.getenv('EMAIL_USE_TLS', 'True'))
-EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
-EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
+# Email settings - Mailgun REST API (via requests library)
+MAILGUN_API_KEY = os.getenv('MAILGUN_API_KEY')
+MAILGUN_SENDER_DOMAIN = os.getenv('MAILGUN_SENDER_DOMAIN')
+MAILGUN_API_URL = os.getenv('MAILGUN_API_URL', 'https://api.mailgun.net/v3')
 
 # Default sender email address
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@sautai.com')

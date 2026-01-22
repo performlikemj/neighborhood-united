@@ -206,13 +206,15 @@ def submit_chef_request(request):
         missing_fields = [field for field in required_fields if not request.data.get(field)]
 
         if missing_fields:
+            # Filter out file objects to avoid JSON serialization errors
+            safe_data = {k: v for k, v in request.data.items() if not hasattr(v, 'read')}
             return JsonResponse({
                 'error': f'Missing required fields: {", ".join(missing_fields)}',
                 'required_fields': required_fields,
                 'received_data': {
-                    'data': dict(request.data),
+                    'data': safe_data,
                     'post': dict(request.POST),
-                    'files': bool(request.FILES)
+                    'files': list(request.FILES.keys()) if request.FILES else []
                 }
             }, status=400)
 

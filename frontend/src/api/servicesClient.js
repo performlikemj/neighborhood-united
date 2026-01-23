@@ -112,3 +112,15 @@ export async function listOfferings({ chefId, serviceType } = {}){
   })
   return response?.data
 }
+
+/**
+ * Delete a service offering.
+ * @param {number|string} offeringId - The ID of the offering to delete
+ * @returns {Promise<void>}
+ * @throws {Error} If the offering has orders or user is not authorized
+ */
+export async function deleteOffering(offeringId){
+  await api.delete(`/services/offerings/${offeringId}/delete/`, {
+    withCredentials: true
+  })
+}

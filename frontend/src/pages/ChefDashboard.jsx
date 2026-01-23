@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { api, stripe } from '../api'
-import { createOffering } from '../api/servicesClient.js'
+import { createOffering, deleteOffering } from '../api/servicesClient.js'
+import ConfirmDialog from '../components/ConfirmDialog.jsx'
 import { useConnections } from '../hooks/useConnections.js'
 
 import ChefAllClients from '../components/ChefAllClients.jsx'
@@ -855,6 +856,9 @@ function ChefDashboardContent(){
   const [tierForm, setTierForm] = useState(()=>({ ...INITIAL_TIER_FORM }))
   const [tierSaving, setTierSaving] = useState(false)
   const [tierErrors, setTierErrors] = useState(null)
+  const [deleteOfferingId, setDeleteOfferingId] = useState(null)
+  const [deleteOfferingBusy, setDeleteOfferingBusy] = useState(false)
+  const [editFormGlowKey, setEditFormGlowKey] = useState(0)
   const serviceErrorMessages = useMemo(()=> flattenErrors(serviceErrors), [serviceErrors])
   const tierErrorMessages = useMemo(()=> flattenErrors(tierErrors), [tierErrors])
   const tierSummaryExamples = useMemo(()=>{
@@ -1626,6 +1630,7 @@ function ChefDashboardContent(){
       targetCustomerIds: Array.isArray(targetIds) ? targetIds.filter(id => id != null).map(String) : []
     })
     setServiceErrors(null)
+    setEditFormGlowKey(k => k + 1)
   }
 
   const handleConnectionAction = async (connectionId, action)=>{
@@ -1698,6 +1703,25 @@ function ChefDashboardContent(){
       setServiceErrors(data || { detail:'Unable to save offering' })
     } finally {
       setServiceSaving(false)
+    }
+  }
+
+  const handleDeleteOffering = async () => {
+    if (!deleteOfferingId) return
+    setDeleteOfferingBusy(true)
+    try {
+      await deleteOffering(deleteOfferingId)
+      if (serviceForm.id === deleteOfferingId) {
+        resetServiceForm()
+      }
+      await loadServiceOfferings()
+      window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: 'Service deleted successfully', tone: 'success' } }))
+    } catch (e) {
+      const msg = e?.response?.data?.error || 'Unable to delete this service. It may have associated orders.'
+      window.dispatchEvent(new CustomEvent('global-toast', { detail: { text: msg, tone: 'error' } }))
+    } finally {
+      setDeleteOfferingBusy(false)
+      setDeleteOfferingId(null)
     }
   }
 
@@ -3564,7 +3588,7 @@ function ChefDashboardContent(){
           {/* Service Offerings Sub-tab */}
           {servicesSubTab === 'services' && (
         <div className="grid grid-2">
-          <div className="card">
+          <div key={serviceForm.id ? `edit-form-${editFormGlowKey}` : 'create-form'} className={`card${serviceForm.id ? ' edit-form-glow' : ''}`}>
             <h3 style={{marginTop:0}}>{serviceForm.id ? 'Edit service offering' : 'Create service offering'}</h3>
             <form onSubmit={submitServiceOffering}>
               <div className="label">Service type</div>
@@ -3723,7 +3747,7 @@ function ChefDashboardContent(){
                     const isEditingTier = tierForm.offeringId === offering.id
                     const serviceTypeLabel = offering.service_type_label || toServiceTypeLabel(offering.service_type)
                     return (
-                      <div key={offering.id} className="card" style={{padding:'.75rem'}}>
+                      <div key={offering.id} className={`card service-card-clickable${serviceForm.id === offering.id ? ' service-card-editing' : ''}`} style={{padding:'.75rem'}} onClick={() => editServiceOffering(offering)}>
                       <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'.75rem', flexWrap:'wrap'}}>
                         <div>
                           <h4 style={{margin:'0 0 .25rem 0'}}>{offering.title || 'Untitled service'}</h4>
@@ -3735,7 +3759,8 @@ function ChefDashboardContent(){
                         </div>
                         <div style={{display:'flex', flexDirection:'column', gap:'.35rem'}}>
                           <span className="chip" style={{background: offering.active ? 'var(--gradient-brand)' : '#ddd', color: offering.active ? '#fff' : '#333'}}>{offering.active ? 'Active' : 'Inactive'}</span>
-                          <button className="btn btn-outline btn-sm" type="button" onClick={()=> editServiceOffering(offering)}>Edit</button>
+                          <button className="btn btn-outline btn-sm" type="button" onClick={e => { e.stopPropagation(); editServiceOffering(offering) }}>Edit</button>
+                          <button className="btn btn-outline btn-sm" type="button" onClick={e => { e.stopPropagation(); setDeleteOfferingId(offering.id) }} style={{color: 'var(--danger)', borderColor: 'color-mix(in oklab, var(--danger) 30%, var(--border))'}}>Delete</button>
                         </div>
                       </div>
                       {offering.description && <div style={{marginTop:'.35rem'}}>{offering.description}</div>}
@@ -3795,7 +3820,7 @@ function ChefDashboardContent(){
                                       {syncError && <div style={{marginTop:'.25rem', color:'#a11919', fontSize:'.85rem'}}>{syncError}</div>}
                                       {syncText && <div className="muted" style={{marginTop:'.25rem', fontSize:'.75rem'}}>Last synced: {syncText}</div>}
                                     </div>
-                                    <button className="btn btn-outline btn-sm" type="button" onClick={()=> startTierForm(offering, tier)}>Edit</button>
+                                    <button className="btn btn-outline btn-sm" type="button" onClick={e => { e.stopPropagation(); startTierForm(offering, tier) }}>Edit</button>
                                   </div>
                                 </div>
                               )
@@ -3803,11 +3828,11 @@ function ChefDashboardContent(){
                           </div>
                         )}
                         <div style={{marginTop:'.5rem'}}>
-                          <button className="btn btn-outline btn-sm" type="button" onClick={()=> startTierForm(offering)}>Add tier</button>
+                          <button className="btn btn-outline btn-sm" type="button" onClick={e => { e.stopPropagation(); startTierForm(offering) }}>Add tier</button>
                         </div>
                       </div>
                       {isEditingTier && (
-                        <form onSubmit={submitTierForm} style={{marginTop:'.75rem', padding:'.75rem', border:'1px solid var(--border)', borderRadius:'8px', background:'rgba(0,0,0,.02)'}}>
+                        <form onSubmit={submitTierForm} onClick={e => e.stopPropagation()} style={{marginTop:'.75rem', padding:'.75rem', border:'1px solid var(--border)', borderRadius:'8px', background:'rgba(0,0,0,.02)'}}>
                           <h4 style={{margin:'0 0 .5rem 0'}}>{tierForm.id ? 'Edit tier' : 'Create tier'}</h4>
                           <div className="grid" style={{gridTemplateColumns:'1fr 1fr', gap:'.5rem'}}>
                             <div>
@@ -3884,6 +3909,17 @@ function ChefDashboardContent(){
           </div>
         </div>
           )}
+
+          <ConfirmDialog
+            open={deleteOfferingId !== null}
+            title="Delete Service"
+            message="Are you sure you want to delete this service? This will also delete all pricing tiers. This action cannot be undone."
+            confirmLabel="Delete"
+            cancelLabel="Cancel"
+            onConfirm={handleDeleteOffering}
+            onCancel={() => setDeleteOfferingId(null)}
+            busy={deleteOfferingBusy}
+          />
 
           {/* Meal Shares Sub-tab */}
           {servicesSubTab === 'meal-shares' && (

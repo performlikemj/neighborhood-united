@@ -255,6 +255,39 @@ def update_offering(request, offering_id):
     return Response(serializer.errors, status=400)
 
 
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_offering(request, offering_id):
+    """
+    Delete a service offering if it has no associated orders.
+    """
+    from django.db.models import ProtectedError
+
+    logger = logging.getLogger(__name__)
+    offering = get_object_or_404(ChefServiceOffering, id=offering_id)
+
+    if offering.chef.user_id != request.user.id and not request.user.is_staff:
+        return Response({"error": "Forbidden"}, status=403)
+
+    order_count = offering.orders.count()
+    if order_count > 0:
+        return Response({
+            "error": f"Cannot delete this service because it has {order_count} associated order{'s' if order_count > 1 else ''}. Consider deactivating it instead."
+        }, status=400)
+
+    try:
+        offering.delete()
+        return Response(status=204)
+    except ProtectedError:
+        logger.warning(f"Protected error deleting offering {offering_id}")
+        return Response({
+            "error": "Cannot delete this service because it has associated orders. Consider deactivating it instead."
+        }, status=400)
+    except Exception as e:
+        logger.exception(f"Failed to delete offering {offering_id}")
+        return Response({"error": "Failed to delete service"}, status=500)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def my_offerings(request):

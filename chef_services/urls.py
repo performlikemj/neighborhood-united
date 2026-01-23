@@ -9,6 +9,7 @@ urlpatterns = [
     # Offerings
     path('offerings/', views.offerings, name='service_offerings'),
     path('offerings/<int:offering_id>/', views.update_offering, name='service_offering_update'),
+    path('offerings/<int:offering_id>/delete/', views.delete_offering, name='service_offering_delete'),
     path('offerings/<int:offering_id>/tiers/', views.add_tier, name='service_offering_add_tier'),
     path('tiers/<int:tier_id>/', views.update_tier, name='service_tier_update'),
     path('my/offerings/', views.my_offerings, name='service_my_offerings'),

@@ -1559,6 +1559,57 @@ a.btn{ text-decoration:none }
   100%{ background: var(--surface-2); }
 }
 
+/* Service card being edited */
+.service-card-editing{
+  border-color: var(--primary) !important;
+  background: color-mix(in oklab, var(--primary) 5%, var(--surface)) !important;
+  box-shadow: 0 0 0 3px rgba(92,184,92,0.18), var(--shadow-sm);
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+[data-theme="dark"] .service-card-editing{
+  box-shadow: 0 0 0 3px rgba(92,184,92,0.25), var(--shadow-sm);
+}
+
+/* Clickable service card */
+.service-card-clickable{
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.service-card-clickable:hover:not(.service-card-editing){
+  border-color: color-mix(in oklab, var(--primary) 30%, var(--border));
+  background: color-mix(in oklab, var(--primary) 2%, var(--surface));
+}
+
+/* Edit form attention glow */
+.edit-form-glow{
+  animation: editFormGlow 2.5s ease-out forwards;
+}
+@keyframes editFormGlow{
+  0%{
+    box-shadow: 0 0 0 3px rgba(92,184,92,0.25), 0 0 20px rgba(92,184,92,0.15);
+  }
+  50%{
+    box-shadow: 0 0 0 2px rgba(92,184,92,0.15), 0 0 12px rgba(92,184,92,0.08);
+  }
+  100%{
+    box-shadow: none;
+  }
+}
+[data-theme="dark"] .edit-form-glow{
+  animation: editFormGlowDark 2.5s ease-out forwards;
+}
+@keyframes editFormGlowDark{
+  0%{
+    box-shadow: 0 0 0 3px rgba(92,184,92,0.35), 0 0 24px rgba(92,184,92,0.2);
+  }
+  50%{
+    box-shadow: 0 0 0 2px rgba(92,184,92,0.2), 0 0 14px rgba(92,184,92,0.1);
+  }
+  100%{
+    box-shadow: none;
+  }
+}
+
 /* Responsive adjustments */
 @media (max-width: 1400px){
   .chef-main-content{

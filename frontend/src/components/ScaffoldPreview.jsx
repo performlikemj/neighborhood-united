@@ -240,10 +240,11 @@ export default function ScaffoldPreview({
         <div className="scaffold-item__header">
           {/* Expand/Collapse toggle for dishes under meal */}
           {hasDishChildren && (
-            <button 
+            <button
               className="scaffold-item__toggle"
               onClick={() => toggleExpand(item.id)}
-              aria-label={isExpanded ? 'Collapse' : 'Expand'}
+              aria-expanded={isExpanded}
+              aria-label={isExpanded ? 'Collapse dishes' : 'Expand dishes'}
             >
               {isExpanded ? '▼' : '▶'}
             </button>
@@ -265,12 +266,20 @@ export default function ScaffoldPreview({
               autoFocus
             />
           ) : (
-            <span 
-              className="scaffold-item__name"
-              onClick={() => !isRemoved && item.type !== 'ingredient' && setEditingItem(item.id)}
-            >
-              {item.data.name || `Unnamed ${typeLabels[item.type]}`}
-            </span>
+            !isRemoved && item.type !== 'ingredient' ? (
+              <button
+                type="button"
+                className="scaffold-item__name scaffold-item__name--editable"
+                onClick={() => setEditingItem(item.id)}
+                aria-label={`Edit ${item.data.name || `Unnamed ${typeLabels[item.type]}`}`}
+              >
+                {item.data.name || `Unnamed ${typeLabels[item.type]}`}
+              </button>
+            ) : (
+              <span className="scaffold-item__name">
+                {item.data.name || `Unnamed ${typeLabels[item.type]}`}
+              </span>
+            )
           )}
           
           {/* Status badges */}

@@ -135,7 +135,6 @@
 .scaffold-item__name {
   flex: 1;
   font-weight: 500;
-  cursor: pointer;
   color: var(--text);
   min-width: 0;
   overflow: hidden;
@@ -143,7 +142,22 @@
   white-space: nowrap;
 }
 
-.scaffold-item__name:hover {
+.scaffold-item__name--editable {
+  cursor: pointer;
+  background: none;
+  border: none;
+  font: inherit;
+  font-weight: 500;
+  padding: 0;
+  text-align: left;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scaffold-item__name--editable:hover {
   text-decoration: underline;
   color: var(--primary);
 }

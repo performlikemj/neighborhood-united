@@ -68,21 +68,21 @@ export default function Register(){
     <div style={{maxWidth:520, margin:'1rem auto'}}>
       <h2>Create your account</h2>
       <div className="muted" style={{marginBottom:'.5rem'}}>We only need the basics to get started. You can add the rest in your profile later.</div>
-      {error && <div className="card" style={{borderColor:'#d9534f'}}>{error}</div>}
+      {error && <div className="card" style={{borderColor:'var(--danger, #d9534f)'}}>{error}</div>}
       <form onSubmit={submit}>
-        <div className="label">Username</div>
-        <input className="input" value={form.username} onChange={set('username')} required />
-        <div className="label">Email</div>
-        <input className="input" type="email" value={form.email} onChange={set('email')} required />
-        <div className="label">Password</div>
-        <input className="input" type="password" value={form.password} onChange={set('password')} required />
-        <div className="label">Confirm Password</div>
-        <input className="input" type="password" value={form.confirm} onChange={set('confirm')} required />
-        <div className="label">Time Zone</div>
-        <select className="select" value={form.timezone} onChange={set('timezone')}>
+        <label className="label" htmlFor="reg-username">Username</label>
+        <input className="input" id="reg-username" name="username" autoComplete="username" value={form.username} onChange={set('username')} required />
+        <label className="label" htmlFor="reg-email">Email</label>
+        <input className="input" id="reg-email" name="email" type="email" autoComplete="email" value={form.email} onChange={set('email')} required />
+        <label className="label" htmlFor="reg-password">Password</label>
+        <input className="input" id="reg-password" name="password" type="password" autoComplete="new-password" value={form.password} onChange={set('password')} required />
+        <label className="label" htmlFor="reg-confirm">Confirm Password</label>
+        <input className="input" id="reg-confirm" name="confirm" type="password" autoComplete="new-password" value={form.confirm} onChange={set('confirm')} required />
+        <label className="label" htmlFor="reg-timezone">Time Zone</label>
+        <select className="select" id="reg-timezone" name="timezone" value={form.timezone} onChange={set('timezone')}>
           {timezones.map(tz => <option key={tz} value={tz}>{tz}</option>)}
         </select>
-        <div className="label" style={{marginTop:'.6rem'}}>Units</div>
+        <span className="label" style={{marginTop:'.6rem'}}>Units</span>
         <div role="radiogroup" aria-label="Measurement system" style={{display:'flex', gap:'.75rem', alignItems:'center', marginBottom:'.5rem'}}>
           <label className="radio" style={{display:'flex', alignItems:'center', gap:'.35rem'}}>
             <input type="radio" name="measurement_system" checked={(form.measurement_system||'METRIC')==='US'} onChange={()=> setForm({...form, measurement_system:'US'})} />

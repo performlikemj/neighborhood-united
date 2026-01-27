@@ -207,7 +207,7 @@ export default function SousChefWidget({
     <div className="sous-chef-widget" ref={widgetRef}>
       {/* Toast Notification */}
       {showToast && toastNotification && (
-        <div className="sc-toast" onClick={handleToastClick}>
+        <div className="sc-toast" onClick={handleToastClick} onKeyDown={(e) => e.key === 'Enter' && handleToastClick()} role="alert" tabIndex={0}>
           <div className="sc-toast-icon">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/>

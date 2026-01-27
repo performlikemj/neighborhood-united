@@ -37,9 +37,17 @@ export function ThemeProvider({ children }){
   useEffect(()=>{
     const root = document.documentElement
     root.setAttribute('data-theme', theme)
+    root.style.colorScheme = theme
     try{ localStorage.setItem('theme', theme) }catch{}
     // Update favicon based on theme
     updateFavicon(theme === 'dark')
+    // Update theme-color meta for browser chrome
+    try{
+      const metaThemeColor = document.querySelector('meta[name="theme-color"]')
+      if (metaThemeColor) {
+        metaThemeColor.setAttribute('content', theme === 'dark' ? '#0d1410' : '#FFFFFF')
+      }
+    }catch{}
   }, [theme])
 
   useEffect(()=>{

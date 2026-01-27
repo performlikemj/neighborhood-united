@@ -316,10 +316,13 @@ export default function MealPlanWeekView({
             {currentWeekDays.map(day => {
               const item = day.items[mealType]
               return (
-                <div
+                <button
+                  type="button"
                   key={`${day.date}-${mealType}`}
                   className={`mpw-grid-cell ${item ? 'has-meal' : 'empty'} ${day.isSkipped ? 'skipped' : ''} ${readOnly ? 'readonly' : ''} ${day.isToday ? 'is-today' : ''} ${day.isPast ? 'is-past' : ''}`}
                   onClick={() => !day.isSkipped && handleSlotClick(day.date, mealType, item, day.dayId)}
+                  disabled={day.isSkipped || (readOnly && !item)}
+                  aria-label={`${MEAL_TYPE_LABELS[mealType]} on ${day.dayName} ${day.month} ${day.dayNum}${item ? `: ${item.name}` : day.isSkipped ? ' (skipped)' : ''}`}
                 >
                   {day.isSkipped ? (
                     <span className="mpw-skipped-label">Skipped</span>
@@ -333,7 +336,7 @@ export default function MealPlanWeekView({
                   ) : !readOnly ? (
                     <span className="mpw-add-icon">+</span>
                   ) : null}
-                </div>
+                </button>
               )
             })}
           </div>
@@ -350,6 +353,7 @@ export default function MealPlanWeekView({
             <button
               className={`mpw-accordion-header ${expandedDay === day.date ? 'expanded' : ''}`}
               onClick={() => setExpandedDay(expandedDay === day.date ? null : day.date)}
+              aria-expanded={expandedDay === day.date}
             >
               <div className="mpw-accordion-day-info">
                 <span className="mpw-accordion-day-name">{day.dayName}</span>
@@ -374,10 +378,13 @@ export default function MealPlanWeekView({
                 {MEAL_TYPES.map(mealType => {
                   const item = day.items[mealType]
                   return (
-                    <div 
+                    <button
+                      type="button"
                       key={mealType}
                       className={`mpw-accordion-slot ${item ? 'has-meal' : 'empty'} ${readOnly ? 'readonly' : ''}`}
                       onClick={() => handleSlotClick(day.date, mealType, item)}
+                      disabled={readOnly && !item}
+                      aria-label={`${MEAL_TYPE_LABELS[mealType]}${item ? `: ${item.name}` : ''}`}
                     >
                       <div className="mpw-accordion-slot-type">
                         <span className="mpw-type-icon">{MEAL_ICONS[mealType]}</span>
@@ -404,7 +411,7 @@ export default function MealPlanWeekView({
                           <span className="mpw-empty-slot">No meal</span>
                         )}
                       </div>
-                    </div>
+                    </button>
                   )
                 })}
               </div>
@@ -682,6 +689,11 @@ export default function MealPlanWeekView({
           justify-content: center;
           cursor: pointer;
           transition: background 0.15s;
+          background: none;
+          font: inherit;
+          color: inherit;
+          text-align: center;
+          width: 100%;
         }
 
         .mpw-grid-cell.readonly {
@@ -872,6 +884,14 @@ export default function MealPlanWeekView({
           border-bottom: 1px solid var(--border, #eee);
           cursor: pointer;
           transition: background 0.15s;
+          background: none;
+          border-top: none;
+          border-left: none;
+          border-right: none;
+          font: inherit;
+          color: inherit;
+          text-align: left;
+          width: 100%;
         }
 
         .mpw-accordion-slot:last-child {

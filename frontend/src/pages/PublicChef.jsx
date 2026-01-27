@@ -1323,7 +1323,7 @@ export default function PublicChef(){
                     chef?.food_handlers_cert && 'Food Safety Certified',
                     chef?.insured && (chef?.insurance_expiry ? `Insured until ${chef.insurance_expiry}` : 'Insured')
                   ].filter(Boolean).join(' · ')}>
-                    <i className="fa-solid fa-shield-check"></i>
+                    <i className="fa-solid fa-shield-halved"></i>
                     Verified
                   </span>
                 )}

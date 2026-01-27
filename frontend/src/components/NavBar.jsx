@@ -46,18 +46,28 @@ export default function NavBar(){
     nav('/login')
   }
 
-  // Close account menu when clicking outside
+  // Close account menu when clicking outside or pressing Escape
   useEffect(() => {
     const handleClickOutside = (e) => {
       if (accountMenuRef.current && !accountMenuRef.current.contains(e.target)) {
         setAccountMenuOpen(false)
       }
     }
-    if (accountMenuOpen) {
-      document.addEventListener('mousedown', handleClickOutside)
-      return () => document.removeEventListener('mousedown', handleClickOutside)
+    const handleEscape = (e) => {
+      if (e.key === 'Escape') {
+        setAccountMenuOpen(false)
+        setChefPickerOpen(false)
+      }
     }
-  }, [accountMenuOpen])
+    if (accountMenuOpen || chefPickerOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+      document.addEventListener('keydown', handleEscape)
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside)
+        document.removeEventListener('keydown', handleEscape)
+      }
+    }
+  }, [accountMenuOpen, chefPickerOpen])
 
   // Get user initials for avatar
   const userInitials = (() => {
@@ -152,6 +162,7 @@ export default function NavBar(){
 
   return (
     <div className={`navbar${isChefDashboard ? ' navbar--chef-context' : ''}${isAuthed ? ' navbar--logged-in' : ''}`}>
+      <a href="#main-content" className="sr-only" style={{position:'absolute',left:'-9999px',top:'auto',width:'1px',height:'1px',overflow:'hidden',zIndex:9999}} onFocus={(e)=>{e.target.style.position='static';e.target.style.width='auto';e.target.style.height='auto';e.target.style.overflow='visible';e.target.style.left='auto'}} onBlur={(e)=>{e.target.style.position='absolute';e.target.style.left='-9999px';e.target.style.width='1px';e.target.style.height='1px';e.target.style.overflow='hidden'}}>Skip to main content</a>
       <div className="navbar-inner container">
         <div className="brand">
           <Link to="/" onClick={closeMenu} style={{display:'inline-flex', alignItems:'center', gap:'.5rem', textDecoration:'none'}}>

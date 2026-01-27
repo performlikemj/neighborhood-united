@@ -405,7 +405,7 @@ export default function Home() {
             <div className="home-trust-divider"></div>
             <div className="home-trust-item">
               <span className="home-trust-number">
-                <i className="fa-solid fa-shield-check" style={{ fontSize: '1.5rem', color: 'var(--success)' }}></i>
+                <i className="fa-solid fa-shield-halved" style={{ fontSize: '1.5rem', color: 'var(--success)' }}></i>
               </span>
               <span className="home-trust-label">Verified Chefs</span>
             </div>

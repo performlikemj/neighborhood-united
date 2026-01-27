@@ -408,9 +408,9 @@ export default function CartSidebar() {
                 min="1"
                 value={item.householdSize ?? ''}
                 onChange={(e) => handleServiceFieldChange(index, 'householdSize', e.target.value)}
-                style={{ padding: '.45rem', borderRadius: '6px', border: fieldError(index, 'household_size') ? '1px solid #c0392b' : '1px solid var(--border-subtle)' }}
+                style={{ padding: '.45rem', borderRadius: '6px', border: fieldError(index, 'household_size') ? '1px solid var(--danger, #dc2626)' : '1px solid var(--border-subtle)' }}
               />
-              {fieldError(index, 'household_size') && <span style={{ color: '#c0392b', fontSize: '.75rem' }}>{fieldError(index, 'household_size')}</span>}
+              {fieldError(index, 'household_size') && <span style={{ color: 'var(--danger, #dc2626)', fontSize: '.75rem' }}>{fieldError(index, 'household_size')}</span>}
             </label>
             {item.requiresDateTime ? (
               <div style={{ display: 'flex', gap: '.6rem', flexWrap: 'wrap' }}>
@@ -420,9 +420,9 @@ export default function CartSidebar() {
                     type="date"
                     value={item.serviceDate ?? ''}
                     onChange={(e) => handleServiceFieldChange(index, 'serviceDate', e.target.value)}
-                    style={{ padding: '.45rem', borderRadius: '6px', border: fieldError(index, 'service_date') ? '1px solid #c0392b' : '1px solid var(--border-subtle)' }}
+                    style={{ padding: '.45rem', borderRadius: '6px', border: fieldError(index, 'service_date') ? '1px solid var(--danger, #dc2626)' : '1px solid var(--border-subtle)' }}
                   />
-                  {fieldError(index, 'service_date') && <span style={{ color: '#c0392b', fontSize: '.75rem' }}>{fieldError(index, 'service_date')}</span>}
+                  {fieldError(index, 'service_date') && <span style={{ color: 'var(--danger, #dc2626)', fontSize: '.75rem' }}>{fieldError(index, 'service_date')}</span>}
                 </label>
                 <label style={{ flex: '1 1 150px', display: 'flex', flexDirection: 'column', gap: '.25rem', fontSize: '.85rem' }}>
                   <span>Start time</span>
@@ -431,9 +431,9 @@ export default function CartSidebar() {
                     step="1800"
                     value={item.serviceStartTime ?? ''}
                     onChange={(e) => handleServiceFieldChange(index, 'serviceStartTime', e.target.value)}
-                    style={{ padding: '.45rem', borderRadius: '6px', border: fieldError(index, 'service_start_time') ? '1px solid #c0392b' : '1px solid var(--border-subtle)' }}
+                    style={{ padding: '.45rem', borderRadius: '6px', border: fieldError(index, 'service_start_time') ? '1px solid var(--danger, #dc2626)' : '1px solid var(--border-subtle)' }}
                   />
-                  {fieldError(index, 'service_start_time') && <span style={{ color: '#c0392b', fontSize: '.75rem' }}>{fieldError(index, 'service_start_time')}</span>}
+                  {fieldError(index, 'service_start_time') && <span style={{ color: 'var(--danger, #dc2626)', fontSize: '.75rem' }}>{fieldError(index, 'service_start_time')}</span>}
                 </label>
               </div>
             ) : null}
@@ -445,13 +445,13 @@ export default function CartSidebar() {
                 <div style={{ 
                   padding: '.45rem .6rem', 
                   borderRadius: '6px', 
-                  border: fieldError(index, 'address_id') ? '1px solid #c0392b' : '1px solid var(--border-subtle)',
+                  border: fieldError(index, 'address_id') ? '1px solid var(--danger, #dc2626)' : '1px solid var(--border-subtle)',
                   background: 'var(--surface-2, #f5f5f5)',
                   fontSize: '.85rem'
                 }}>
                   {addressDisplay}
                   {!addressComplete && (
-                    <div style={{ marginTop: '.35rem', color: '#c0392b', fontSize: '.75rem' }}>
+                    <div style={{ marginTop: '.35rem', color: 'var(--danger, #dc2626)', fontSize: '.75rem' }}>
                       Missing street address for checkout
                     </div>
                   )}
@@ -460,16 +460,16 @@ export default function CartSidebar() {
                 <div style={{ 
                   padding: '.45rem .6rem', 
                   borderRadius: '6px', 
-                  border: '1px solid #c0392b',
+                  border: '1px solid var(--danger, #dc2626)',
                   background: 'var(--surface-2, #f5f5f5)',
-                  color: '#666',
+                  color: 'var(--muted, #666)',
                   fontSize: '.85rem'
                 }}>
                   No address saved
                 </div>
               )}
               {fieldError(index, 'address_id') && (
-                <span style={{ color: '#c0392b', fontSize: '.75rem' }}>{fieldError(index, 'address_id')}</span>
+                <span style={{ color: 'var(--danger, #dc2626)', fontSize: '.75rem' }}>{fieldError(index, 'address_id')}</span>
               )}
               <Link 
                 to="/profile" 
@@ -497,9 +497,9 @@ export default function CartSidebar() {
                   value={item.scheduleNotes ?? ''}
                   onChange={(e) => handleScheduleNotesChange(index, e.target.value)}
                   placeholder="Share preferred weekdays, time windows, or rotation notes."
-                  style={{ padding: '.45rem', borderRadius: '6px', border: fieldError(index, 'schedule_preferences') ? '1px solid #c0392b' : '1px solid var(--border-subtle)' }}
+                  style={{ padding: '.45rem', borderRadius: '6px', border: fieldError(index, 'schedule_preferences') ? '1px solid var(--danger, #dc2626)' : '1px solid var(--border-subtle)' }}
                 />
-                {fieldError(index, 'schedule_preferences') && <span style={{ color: '#c0392b', fontSize: '.75rem' }}>{fieldError(index, 'schedule_preferences')}</span>}
+                {fieldError(index, 'schedule_preferences') && <span style={{ color: 'var(--danger, #dc2626)', fontSize: '.75rem' }}>{fieldError(index, 'schedule_preferences')}</span>}
               </label>
             ) : null}
           </div>
@@ -598,7 +598,7 @@ export default function CartSidebar() {
               <span className="cart-total-amount">{formatPrice(getCartTotal())}</span>
             </div>
             {error && (
-              <div className="cart-error" role="alert" style={{ color: '#c0392b', marginTop: '.5rem', fontSize: '.85rem' }}>
+              <div className="cart-error" role="alert" style={{ color: 'var(--danger, #dc2626)', marginTop: '.5rem', fontSize: '.85rem' }}>
                 {error}
               </div>
             )}
@@ -615,7 +615,7 @@ export default function CartSidebar() {
               </button>
             )}
             {validationDetails ? (
-              <div className="muted" style={{ marginTop: '.75rem', fontSize: '.8rem', color: '#c0392b' }}>
+              <div className="muted" style={{ marginTop: '.75rem', fontSize: '.8rem', color: 'var(--danger, #dc2626)' }}>
                 Some required details are missing. Update the highlighted fields above, then try again.
               </div>
             ) : null}

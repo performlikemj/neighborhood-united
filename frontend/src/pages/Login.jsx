@@ -65,12 +65,12 @@ export default function Login(){
   return (
     <div style={{maxWidth:420, margin:'1rem auto'}}>
       <h2>Login</h2>
-      {error && <div className="card" style={{borderColor:'#d9534f'}}>{error}</div>}
+      {error && <div className="card" style={{borderColor:'var(--danger, #d9534f)'}}>{error}</div>}
       <form onSubmit={submit}>
-        <div className="label">Username</div>
-        <input className="input" value={username} onChange={e=>setUsername(e.target.value)} required />
-        <div className="label">Password</div>
-        <input className="input" type="password" value={password} onChange={e=>setPassword(e.target.value)} required />
+        <label className="label" htmlFor="login-username">Username</label>
+        <input className="input" id="login-username" name="username" autoComplete="username" value={username} onChange={e=>setUsername(e.target.value)} required />
+        <label className="label" htmlFor="login-password">Password</label>
+        <input className="input" id="login-password" name="password" type="password" autoComplete="current-password" value={password} onChange={e=>setPassword(e.target.value)} required />
         <div style={{marginTop:'.75rem'}}>
           <button className="btn btn-primary" disabled={loading}>{loading?'Signing in…':'Sign In'}</button>
           <Link to="/register" className="btn btn-outline" style={{marginLeft:'.5rem'}}>Create account</Link>
@@ -88,9 +88,9 @@ export default function Login(){
           <div className="label">Reset your password</div>
           <p className="muted">Enter your email and we will send you a reset link.</p>
           <form onSubmit={requestReset}>
-            <div className="label">Email</div>
-            <input className="input" type="email" value={email} onChange={e=> setEmail(e.target.value)} placeholder="you@example.com" required />
-            {forgotError && <div className="card" style={{marginTop:'.5rem', borderColor:'#d9534f'}}>{forgotError}</div>}
+            <label className="label" htmlFor="reset-email">Email</label>
+            <input className="input" id="reset-email" name="email" type="email" autoComplete="email" value={email} onChange={e=> setEmail(e.target.value)} placeholder="you@example.com" required />
+            {forgotError && <div className="card" style={{marginTop:'.5rem', borderColor:'var(--danger, #d9534f)'}}>{forgotError}</div>}
             {forgotMsg && <div className="card" style={{marginTop:'.5rem'}}>{forgotMsg}</div>}
             <div style={{marginTop:'.6rem'}}>
               <button className="btn btn-primary" disabled={forgotLoading}>{forgotLoading?'Sending…':'Send reset link'}</button>

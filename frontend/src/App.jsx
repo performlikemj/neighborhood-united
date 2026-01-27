@@ -51,6 +51,7 @@ export default function App(){
       <NavBar />
       <CartButton />
       <CartSidebar />
+      <main id="main-content">
       <Routes>
         {/* Public routes */}
         <Route path="/" element={<Home />} />
@@ -197,6 +198,7 @@ export default function App(){
         {/* 404 catch-all */}
         <Route path="*" element={<NotFound />} />
       </Routes>
+      </main>
     </>
   )
 }

@@ -379,7 +379,7 @@ export default function TodayDashboard({
                   disabled={breakBusy}
                   onChange={e => onToggleBreak(e.target.checked)}
                 />
-                <span className="break-status">{isOnBreak ? 'On break' : 'Available'}</span>
+                <span className="break-status">{isOnBreak ? 'End break' : 'Go on break'}</span>
                 {breakBusy && <span className="spinner" aria-hidden />}
               </label>
               {isOnBreak && (

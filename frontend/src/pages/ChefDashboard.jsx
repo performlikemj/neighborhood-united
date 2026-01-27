@@ -588,6 +588,7 @@ function ChefDashboardContent(){
   const [profileForm, setProfileForm] = useState({ experience:'', bio:'', profile_pic:null, banner_image:null, calendly_url:'' })
   const [profileSaving, setProfileSaving] = useState(false)
   const [profileInit, setProfileInit] = useState(false)
+  const [initialLoadDone, setInitialLoadDone] = useState(false)
   const [bannerUpdating, setBannerUpdating] = useState(false)
   const [bannerJustUpdated, setBannerJustUpdated] = useState(false)
   const [profilePicPreview, setProfilePicPreview] = useState(null)
@@ -1344,10 +1345,19 @@ function ChefDashboardContent(){
     }
   }
 
+  const loadMeetingStatus = async () => {
+    try {
+      const response = await api.get('/chefs/api/me/verification-meeting/')
+      setMeetingConfig({ ...response.data, loading: false })
+    } catch {
+      setMeetingConfig(prev => ({ ...prev, loading: false, feature_enabled: false }))
+    }
+  }
+
   const loadAll = async ()=>{
     setNotice(null)
     try{ await api.get('/auth/api/user_details/') }catch{}
-    const tasks = [loadChefProfile(), loadAreaStatus(), loadIngredients(), loadDishes(), loadMeals(), loadEvents(), loadOrders(), loadServiceOrders(), loadStripeStatus(), loadServiceOfferings()]
+    const tasks = [loadChefProfile(), loadAreaStatus(), loadIngredients(), loadDishes(), loadMeals(), loadEvents(), loadOrders(), loadServiceOrders(), loadStripeStatus(), loadServiceOfferings(), loadMeetingStatus()]
     await Promise.all(tasks.map(p => p.catch(()=>undefined)))
   }
 
@@ -1397,20 +1407,9 @@ function ChefDashboardContent(){
     return ()=>{ if (url) URL.revokeObjectURL(url) }
   }, [profileForm.banner_image])
 
-  useEffect(()=>{ loadAll() }, [])
+  useEffect(()=>{ loadAll().finally(()=> setInitialLoadDone(true)) }, [])
 
-  // Load verification meeting status
-  useEffect(() => {
-    const loadMeetingStatus = async () => {
-      try {
-        const response = await api.get('/chefs/api/me/verification-meeting/')
-        setMeetingConfig({ ...response.data, loading: false })
-      } catch {
-        setMeetingConfig(prev => ({ ...prev, loading: false, feature_enabled: false }))
-      }
-    }
-    loadMeetingStatus()
-  }, [])
+  // Meeting status is now loaded as part of loadAll() above
 
   // Set page title with chef name
   useEffect(() => {
@@ -2044,7 +2043,7 @@ function ChefDashboardContent(){
       {tab==='today' && (
         <div>
           {/* Onboarding Checklist - Show prominently when incomplete or not yet live */}
-          {!payouts.loading && profileInit && (!isOnboardingComplete || !chef?.is_live) && (
+          {initialLoadDone && (!isOnboardingComplete || !chef?.is_live) && (
             <OnboardingChecklist
               completionState={onboardingCompletionState}
               onNavigate={(targetTab) => setTab(targetTab)}
@@ -2057,6 +2056,7 @@ function ChefDashboardContent(){
             />
           )}
 
+          {initialLoadDone ? (
           <TodayDashboard
             orders={orders}
             serviceOrders={serviceOrders}
@@ -2077,6 +2077,16 @@ function ChefDashboardContent(){
             onBreakReasonChange={setBreakReason}
             onToggleBreak={toggleBreak}
           />
+          ) : (
+          <div className="today-dashboard">
+            <div className="today-header">
+              <div className="today-greeting">
+                <h1>Today</h1>
+                <p className="muted">Loading your dashboard...</p>
+              </div>
+            </div>
+          </div>
+          )}
         </div>
       )}
 
@@ -2112,7 +2122,7 @@ function ChefDashboardContent(){
           </header>
 
           {/* Onboarding Checklist - Show prominently when incomplete or not yet live */}
-          {!payouts.loading && profileInit && (!isOnboardingComplete || !chef?.is_live) && (
+          {initialLoadDone && (!isOnboardingComplete || !chef?.is_live) && (
             <OnboardingChecklist
               completionState={onboardingCompletionState}
               onNavigate={(targetTab) => setTab(targetTab)}

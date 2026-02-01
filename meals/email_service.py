@@ -1242,7 +1242,8 @@ def send_payment_confirmation_email(payment_data):
     """
     from custom_auth.models import CustomUser
     from meals.meal_assistant_implementation import MealPlanningAssistant
-    from meals.models import ChefMealOrder, Chef
+    from meals.models import ChefMealOrder
+    from chefs.models import Chef
     
     try:
         # Format monetary values

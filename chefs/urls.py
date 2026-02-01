@@ -8,6 +8,7 @@ from chefs.api import leads as leads_api
 from chefs.api import unified_clients as unified_api
 from chefs.api import sous_chef as sous_chef_api
 from chefs.api import availability as availability_api
+from chefs.api import workspace as workspace_api
 from chefs.api import meal_plans as meal_plans_api
 from chefs.api import payment_links as payment_links_api
 from chefs.api import documents as documents_api
@@ -138,6 +139,14 @@ urlpatterns = [
     path('api/me/sous-chef/scaffold/execute/', sous_chef_api.sous_chef_scaffold_execute, name='sous_chef_scaffold_execute'),
 
     # ==========================================================================
+    # Sous Chef Workspace Settings API
+    # ==========================================================================
+
+    path('api/me/workspace/', workspace_api.workspace_get, name='chef_workspace'),
+    path('api/me/workspace/update/', workspace_api.workspace_update, name='chef_workspace_update'),
+    path('api/me/workspace/reset/', workspace_api.workspace_reset, name='chef_workspace_reset'),
+
+    # ==========================================================================
     # Collaborative Meal Plans API (Chef endpoints)
     # ==========================================================================
     
@@ -230,4 +239,11 @@ urlpatterns = [
     path('api/admin/calendly-config/', meeting_api.admin_calendly_config, name='admin_calendly_config'),
     path('api/admin/chefs/<int:chef_id>/meeting/complete/', meeting_api.admin_mark_meeting_complete, name='admin_mark_meeting_complete'),
     path('api/admin/meetings/pending/', meeting_api.admin_pending_meetings, name='admin_pending_meetings'),
+
+    # ==========================================================================
+    # Proactive Insights API
+    # ==========================================================================
+    
+    path('api/me/insights/', views.chef_proactive_insights, name='chef_proactive_insights'),
+    path('api/me/insights/<int:insight_id>/', views.chef_insight_action, name='chef_insight_action'),
 ]

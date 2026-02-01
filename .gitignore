@@ -99,3 +99,4 @@ CONTINUITY.md
 /frontend/tutorial_screenshots/
 
 .github/skills/
+.env.dev

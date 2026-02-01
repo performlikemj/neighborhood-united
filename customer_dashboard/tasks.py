@@ -1039,3 +1039,5 @@ def monitor_enhanced_formatting_performance():
     except Exception as e:
         logger.error(f"Error in monitor_enhanced_formatting_performance: {str(e)}")
         return {'status': 'error', 'message': str(e)}
+
+

@@ -425,6 +425,285 @@ SOUS_CHEF_TOOLS = [
             },
             "required": ["meal_name"]
         }
+    },
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # NEW TOOLS: Search, Analytics, Seasonal, Substitutions, Messaging
+    # ═══════════════════════════════════════════════════════════════════════════════
+    {
+        "type": "function",
+        "name": "search_chef_dishes",
+        "description": "Search through the chef's existing dishes by name, ingredient, or dietary tag. Use this to find dishes that match specific criteria or to check if the chef already has similar dishes in their menu.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query - can be a dish name, ingredient name, or dietary tag (e.g., 'pasta', 'chicken', 'gluten-free')"
+                },
+                "search_type": {
+                    "type": "string",
+                    "enum": ["name", "ingredient", "dietary_tag", "all"],
+                    "description": "What to search: 'name' for dish names, 'ingredient' for dishes containing an ingredient, 'dietary_tag' for dietary preferences, or 'all' to search everywhere (default: all)"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default: 10, max: 25)",
+                    "default": 10
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "suggest_ingredient_substitution",
+        "description": "Suggest safe ingredient substitutes for a given allergen or dietary restriction. Use this when a recipe contains an ingredient that conflicts with a family's allergies or dietary preferences.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ingredient": {
+                    "type": "string",
+                    "description": "The problematic ingredient that needs to be substituted (e.g., 'peanuts', 'milk', 'wheat flour')"
+                },
+                "reason": {
+                    "type": "string",
+                    "enum": ["allergy", "vegan", "vegetarian", "kosher", "halal", "gluten-free", "dairy-free", "low-sodium", "other"],
+                    "description": "Why the substitution is needed"
+                },
+                "recipe_context": {
+                    "type": ["string", "null"],
+                    "description": "Optional: What dish is this for? Helps provide context-appropriate substitutions (e.g., 'for a cake' vs 'for a stir-fry')"
+                }
+            },
+            "required": ["ingredient", "reason"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_chef_analytics",
+        "description": "Get analytics and performance metrics for the chef's business, including revenue, popular dishes, client retention, and order trends.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "time_period": {
+                    "type": "string",
+                    "enum": ["week", "month", "quarter", "year", "all_time"],
+                    "description": "Time period for analytics (default: month)"
+                },
+                "metrics": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["revenue", "orders", "popular_dishes", "client_retention", "meal_shares", "services"]
+                    },
+                    "description": "Which metrics to include (default: all)"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_seasonal_ingredients",
+        "description": "Get a list of ingredients that are currently in season based on the month. Useful for menu planning to ensure freshness, better prices, and sustainability.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "month": {
+                    "type": ["integer", "null"],
+                    "description": "Month number (1-12). If not specified, uses the current month."
+                },
+                "category": {
+                    "type": ["string", "null"],
+                    "enum": ["vegetables", "fruits", "proteins", "herbs", "all"],
+                    "description": "Filter by ingredient category (default: all)"
+                },
+                "region": {
+                    "type": ["string", "null"],
+                    "enum": ["northeast_us", "southeast_us", "midwest_us", "southwest_us", "west_coast_us", "general"],
+                    "description": "Regional seasonality (default: general US seasonality)"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "type": "function",
+        "name": "draft_client_message",
+        "description": "Draft a professional message to send to a client. The message will be shown to the chef for review before sending. Use this for meal plan updates, order confirmations, dietary discussions, or general communication.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message_type": {
+                    "type": "string",
+                    "enum": ["meal_plan_update", "order_confirmation", "dietary_question", "schedule_change", "general", "thank_you", "follow_up"],
+                    "description": "Type of message to draft"
+                },
+                "key_points": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Key points to include in the message"
+                },
+                "tone": {
+                    "type": "string",
+                    "enum": ["professional", "friendly", "casual"],
+                    "description": "Tone of the message (default: friendly)"
+                }
+            },
+            "required": ["message_type", "key_points"]
+        }
+    },
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # MEMORY SYSTEM TOOLS
+    # ═══════════════════════════════════════════════════════════════════════════════
+    {
+        "type": "function",
+        "name": "save_chef_memory",
+        "description": "Save a learning, pattern, preference, or reminder to long-term memory. Use this when you discover something important that should be remembered across conversations - like work patterns, personal preferences, lessons learned, or to-do items.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "memory_type": {
+                    "type": "string",
+                    "enum": ["pattern", "preference", "lesson", "todo"],
+                    "description": "Type of memory: 'pattern' (recurring patterns), 'preference' (chef's preferences), 'lesson' (things learned), 'todo' (reminders)"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The memory to save (max 1000 chars). Be specific and actionable."
+                },
+                "importance": {
+                    "type": "integer",
+                    "enum": [1, 2, 3, 4, 5],
+                    "description": "Importance level: 1=low, 3=normal, 5=critical (default: 3)"
+                },
+                "family_specific": {
+                    "type": "boolean",
+                    "description": "Whether this memory is about the current family (default: false, meaning it's a general chef memory)"
+                }
+            },
+            "required": ["memory_type", "content"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "recall_chef_memories",
+        "description": "Search and recall memories by type or keyword. Use this to remember what you've learned about the chef's preferences, patterns, or any to-do items.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "memory_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["pattern", "preference", "lesson", "todo"]
+                    },
+                    "description": "Filter by memory types (default: all)"
+                },
+                "keyword": {
+                    "type": ["string", "null"],
+                    "description": "Optional keyword to search for in memory content"
+                },
+                "include_family_memories": {
+                    "type": "boolean",
+                    "description": "Whether to include memories specific to the current family (default: true)"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum memories to return (default: 10, max: 20)"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "type": "function",
+        "name": "update_chef_memory",
+        "description": "Update or delete an existing memory. Use when information has changed or a to-do is complete.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "memory_id": {
+                    "type": "integer",
+                    "description": "ID of the memory to update"
+                },
+                "action": {
+                    "type": "string",
+                    "enum": ["update", "complete", "delete"],
+                    "description": "'update' to modify content, 'complete' for todos, 'delete' to remove"
+                },
+                "new_content": {
+                    "type": ["string", "null"],
+                    "description": "New content for the memory (required for 'update' action)"
+                }
+            },
+            "required": ["memory_id", "action"]
+        }
+    },
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # PROACTIVE INSIGHTS TOOLS
+    # ═══════════════════════════════════════════════════════════════════════════════
+    {
+        "type": "function",
+        "name": "get_proactive_insights",
+        "description": "Fetch unread proactive insights and recommendations for the chef. These are AI-generated suggestions like follow-up reminders, batch cooking opportunities, and client wins.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "insight_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["followup_needed", "batch_opportunity", "seasonal_suggestion", "client_win", "scheduling_tip"]
+                    },
+                    "description": "Filter by insight types (default: all)"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum insights to return (default: 5)"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "type": "function",
+        "name": "dismiss_insight",
+        "description": "Dismiss a proactive insight when it's no longer relevant or the chef has seen it.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "insight_id": {
+                    "type": "integer",
+                    "description": "ID of the insight to dismiss"
+                }
+            },
+            "required": ["insight_id"]
+        }
+    },
+    {
+        "type": "function",
+        "name": "act_on_insight",
+        "description": "Take action on a proactive insight. The action depends on the insight type - could be drafting a message, creating a prep plan, etc.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "insight_id": {
+                    "type": "integer",
+                    "description": "ID of the insight to act on"
+                },
+                "action": {
+                    "type": "string",
+                    "enum": ["draft_message", "create_prep_plan", "schedule_followup", "acknowledge", "other"],
+                    "description": "What action to take"
+                },
+                "notes": {
+                    "type": ["string", "null"],
+                    "description": "Optional notes about the action taken"
+                }
+            },
+            "required": ["insight_id", "action"]
+        }
     }
 ]
 
@@ -443,6 +722,7 @@ FAMILY_REQUIRED_TOOLS = {
     "save_family_insight",
     "get_family_insights",
     "estimate_prep_time",  # needs household size context
+    "draft_client_message",  # needs a client to message
 }
 
 
@@ -559,6 +839,20 @@ def handle_sous_chef_tool_call(
         "navigate_to_dashboard_tab": _navigate_to_dashboard_tab,
         "prefill_form": _prefill_form,
         "scaffold_meal": _scaffold_meal,
+        # New tools: Search, Analytics, Seasonal, Substitutions, Messaging
+        "search_chef_dishes": _search_chef_dishes,
+        "suggest_ingredient_substitution": _suggest_ingredient_substitution,
+        "get_chef_analytics": _get_chef_analytics,
+        "get_seasonal_ingredients": _get_seasonal_ingredients,
+        "draft_client_message": _draft_client_message,
+        # Memory system tools
+        "save_chef_memory": _save_chef_memory,
+        "recall_chef_memories": _recall_chef_memories,
+        "update_chef_memory": _update_chef_memory,
+        # Proactive insights tools
+        "get_proactive_insights": _get_proactive_insights,
+        "dismiss_insight": _dismiss_insight,
+        "act_on_insight": _act_on_insight,
     }
     
     handler = tool_map.get(name)
@@ -1815,3 +2109,1139 @@ def _scaffold_meal(
             "status": "error",
             "message": f"Failed to generate scaffold: {str(e)}"
         }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# NEW TOOL IMPLEMENTATIONS: Search, Analytics, Seasonal, Substitutions, Messaging
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _search_chef_dishes(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """
+    Search chef's existing dishes by name, ingredient, or dietary tag.
+    """
+    from meals.models import Dish, Meal, Ingredient
+    from django.db.models import Q
+    
+    query = args.get("query", "").strip().lower()
+    search_type = args.get("search_type", "all")
+    limit = min(max(args.get("limit", 10), 1), 25)
+    
+    if not query:
+        return {"status": "error", "message": "Query is required"}
+    
+    results = []
+    
+    # Search by dish name
+    if search_type in ("name", "all"):
+        dishes = Dish.objects.filter(
+            chef=chef,
+            name__icontains=query
+        ).prefetch_related('ingredients')[:limit]
+        
+        for dish in dishes:
+            ingredient_names = [i.name for i in dish.ingredients.all()[:5]]
+            results.append({
+                "type": "dish",
+                "id": dish.id,
+                "name": dish.name,
+                "featured": dish.featured,
+                "ingredients": ingredient_names,
+                "match_type": "name"
+            })
+    
+    # Search by ingredient
+    if search_type in ("ingredient", "all"):
+        # Find dishes that contain an ingredient matching the query
+        dishes = Dish.objects.filter(
+            chef=chef,
+            ingredients__name__icontains=query
+        ).distinct().prefetch_related('ingredients')[:limit]
+        
+        for dish in dishes:
+            # Don't add duplicates
+            if any(r["id"] == dish.id and r["type"] == "dish" for r in results):
+                continue
+            ingredient_names = [i.name for i in dish.ingredients.all()[:5]]
+            matching_ingredients = [i.name for i in dish.ingredients.all() if query in i.name.lower()]
+            results.append({
+                "type": "dish",
+                "id": dish.id,
+                "name": dish.name,
+                "featured": dish.featured,
+                "ingredients": ingredient_names,
+                "matching_ingredients": matching_ingredients,
+                "match_type": "ingredient"
+            })
+    
+    # Search by dietary tag (in meals)
+    if search_type in ("dietary_tag", "all"):
+        meals = Meal.objects.filter(
+            chef=chef,
+            dietary_preferences__name__icontains=query
+        ).distinct().prefetch_related('dietary_preferences', 'dishes')[:limit]
+        
+        for meal in meals:
+            prefs = [p.name for p in meal.dietary_preferences.all()]
+            dishes_in_meal = [d.name for d in meal.dishes.all()[:3]]
+            results.append({
+                "type": "meal",
+                "id": meal.id,
+                "name": meal.name,
+                "dietary_preferences": prefs,
+                "dishes": dishes_in_meal,
+                "match_type": "dietary_tag"
+            })
+    
+    # Deduplicate and limit
+    seen = set()
+    unique_results = []
+    for r in results:
+        key = (r["type"], r["id"])
+        if key not in seen:
+            seen.add(key)
+            unique_results.append(r)
+    
+    unique_results = unique_results[:limit]
+    
+    return {
+        "status": "success",
+        "query": query,
+        "search_type": search_type,
+        "total_results": len(unique_results),
+        "results": unique_results,
+        "tip": "Use these results to reference existing dishes or identify gaps in your menu."
+    }
+
+
+def _suggest_ingredient_substitution(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """
+    Suggest safe ingredient substitutes for allergens or dietary restrictions.
+    """
+    ingredient = args.get("ingredient", "").strip().lower()
+    reason = args.get("reason", "other")
+    recipe_context = args.get("recipe_context", "")
+    
+    if not ingredient:
+        return {"status": "error", "message": "Ingredient is required"}
+    
+    # Comprehensive substitution database
+    substitutions = {
+        # Dairy substitutions
+        "milk": {
+            "allergy": ["oat milk", "almond milk", "coconut milk", "soy milk", "rice milk"],
+            "vegan": ["oat milk", "almond milk", "coconut milk", "soy milk", "cashew milk"],
+            "dairy-free": ["oat milk", "almond milk", "coconut milk", "soy milk"],
+        },
+        "butter": {
+            "allergy": ["coconut oil", "olive oil", "vegan butter", "avocado"],
+            "vegan": ["coconut oil", "vegan butter", "olive oil", "nut butters"],
+            "dairy-free": ["coconut oil", "olive oil", "vegan butter"],
+        },
+        "cream": {
+            "allergy": ["coconut cream", "cashew cream", "oat cream"],
+            "vegan": ["coconut cream", "cashew cream", "silken tofu blended"],
+            "dairy-free": ["coconut cream", "oat cream"],
+        },
+        "cheese": {
+            "allergy": ["nutritional yeast", "vegan cheese", "cashew cheese"],
+            "vegan": ["nutritional yeast", "vegan cheese", "cashew cheese", "tofu ricotta"],
+            "dairy-free": ["vegan cheese", "nutritional yeast"],
+        },
+        "yogurt": {
+            "allergy": ["coconut yogurt", "almond yogurt", "soy yogurt"],
+            "vegan": ["coconut yogurt", "almond yogurt", "cashew yogurt"],
+            "dairy-free": ["coconut yogurt", "oat yogurt"],
+        },
+        
+        # Egg substitutions
+        "eggs": {
+            "allergy": ["flax egg (1 tbsp flax + 3 tbsp water)", "chia egg", "applesauce", "mashed banana"],
+            "vegan": ["flax egg", "chia egg", "aquafaba", "commercial egg replacer", "silken tofu"],
+            "vegetarian": ["eggs are vegetarian - no substitution needed"],
+        },
+        "egg": {
+            "allergy": ["flax egg (1 tbsp flax + 3 tbsp water)", "chia egg", "applesauce", "mashed banana"],
+            "vegan": ["flax egg", "chia egg", "aquafaba", "commercial egg replacer"],
+        },
+        
+        # Nut substitutions
+        "peanuts": {
+            "allergy": ["sunflower seed butter", "soy nut butter", "tahini", "pumpkin seed butter"],
+        },
+        "peanut butter": {
+            "allergy": ["sunflower seed butter", "soy nut butter", "tahini", "pumpkin seed butter"],
+        },
+        "almonds": {
+            "allergy": ["sunflower seeds", "pumpkin seeds", "oats", "coconut flakes"],
+        },
+        "tree nuts": {
+            "allergy": ["seeds (sunflower, pumpkin)", "coconut", "oats", "crispy rice"],
+        },
+        "walnuts": {
+            "allergy": ["sunflower seeds", "pumpkin seeds", "hemp seeds"],
+        },
+        
+        # Gluten substitutions
+        "wheat flour": {
+            "allergy": ["almond flour", "coconut flour", "rice flour", "oat flour (certified GF)"],
+            "gluten-free": ["almond flour", "coconut flour", "rice flour", "tapioca flour", "1-to-1 GF flour blend"],
+        },
+        "flour": {
+            "gluten-free": ["almond flour", "coconut flour", "rice flour", "1-to-1 GF flour blend"],
+            "allergy": ["rice flour", "oat flour (certified GF)", "cassava flour"],
+        },
+        "bread": {
+            "gluten-free": ["gluten-free bread", "lettuce wraps", "rice paper", "corn tortillas"],
+        },
+        "pasta": {
+            "gluten-free": ["rice pasta", "quinoa pasta", "chickpea pasta", "zucchini noodles"],
+        },
+        "breadcrumbs": {
+            "gluten-free": ["crushed rice crackers", "almond meal", "GF panko", "crushed GF cereal"],
+        },
+        
+        # Soy substitutions
+        "soy sauce": {
+            "allergy": ["coconut aminos", "liquid aminos", "tamari (if just gluten-free)"],
+            "gluten-free": ["tamari (GF certified)", "coconut aminos"],
+        },
+        "tofu": {
+            "allergy": ["chickpeas", "white beans", "seitan (if not gluten-free)", "jackfruit"],
+        },
+        
+        # Meat/protein substitutions
+        "chicken": {
+            "vegetarian": ["tofu", "seitan", "tempeh", "jackfruit", "cauliflower"],
+            "vegan": ["tofu", "seitan", "tempeh", "jackfruit", "chickpeas"],
+        },
+        "beef": {
+            "vegetarian": ["portobello mushrooms", "seitan", "tempeh", "lentils"],
+            "vegan": ["portobello mushrooms", "seitan", "lentils", "black beans"],
+        },
+        "pork": {
+            "halal": ["chicken", "turkey", "lamb", "beef"],
+            "kosher": ["chicken", "turkey", "beef"],
+            "vegetarian": ["jackfruit", "seitan", "tempeh"],
+        },
+        "bacon": {
+            "halal": ["turkey bacon", "beef bacon"],
+            "vegetarian": ["tempeh bacon", "coconut bacon", "mushroom bacon"],
+            "vegan": ["tempeh bacon", "coconut bacon", "smoked paprika + mushrooms"],
+        },
+        
+        # Shellfish
+        "shrimp": {
+            "allergy": ["hearts of palm", "king oyster mushrooms", "white fish"],
+        },
+        "crab": {
+            "allergy": ["hearts of palm", "jackfruit", "artichoke hearts"],
+        },
+        
+        # Other common substitutions
+        "sugar": {
+            "low-sodium": ["sugar is fine for low-sodium"],
+            "other": ["honey", "maple syrup", "coconut sugar", "stevia", "monk fruit"],
+        },
+        "salt": {
+            "low-sodium": ["herbs", "lemon juice", "vinegar", "garlic", "spices", "salt-free seasoning blends"],
+        },
+    }
+    
+    # Look up substitutions
+    subs = substitutions.get(ingredient, {})
+    reason_subs = subs.get(reason, subs.get("allergy", subs.get("other", [])))
+    
+    # If no specific substitution found, provide general guidance
+    if not reason_subs and not subs:
+        return {
+            "status": "success",
+            "ingredient": ingredient,
+            "reason": reason,
+            "substitutions": [],
+            "general_tips": [
+                f"No specific substitution database entry for '{ingredient}'.",
+                "Consider the function of the ingredient (binding, leavening, flavor, texture).",
+                "Search online for specific recipe-based alternatives.",
+                "Consult with the customer about their preferred alternatives."
+            ],
+            "recipe_context": recipe_context
+        }
+    
+    # Build response with context-aware tips
+    tips = []
+    if "baking" in recipe_context.lower() or "cake" in recipe_context.lower():
+        tips.append("For baking, measure substitutions carefully as ratios matter.")
+    if "sauce" in recipe_context.lower():
+        tips.append("For sauces, start with less substitute and adjust to taste.")
+    
+    return {
+        "status": "success",
+        "ingredient": ingredient,
+        "reason": reason,
+        "substitutions": reason_subs if isinstance(reason_subs, list) else list(subs.values())[0] if subs else [],
+        "all_options": {k: v for k, v in subs.items()} if subs else {},
+        "recipe_context": recipe_context,
+        "tips": tips,
+        "note": "Always verify allergen safety with specific product labels."
+    }
+
+
+def _get_chef_analytics(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """
+    Get analytics and performance metrics for the chef's business.
+    """
+    from meals.models import ChefMealOrder, ChefMealEvent, Meal
+    from chef_services.models import ChefServiceOrder
+    from django.db.models import Sum, Count, Avg, F
+    from datetime import date, timedelta
+    from decimal import Decimal
+    
+    time_period = args.get("time_period", "month")
+    requested_metrics = args.get("metrics", ["revenue", "orders", "popular_dishes", "client_retention", "meal_shares", "services"])
+    
+    # Calculate date range
+    today = date.today()
+    if time_period == "week":
+        start_date = today - timedelta(days=7)
+    elif time_period == "month":
+        start_date = today - timedelta(days=30)
+    elif time_period == "quarter":
+        start_date = today - timedelta(days=90)
+    elif time_period == "year":
+        start_date = today - timedelta(days=365)
+    else:  # all_time
+        start_date = None
+    
+    analytics = {
+        "time_period": time_period,
+        "date_range": {
+            "start": start_date.isoformat() if start_date else "all time",
+            "end": today.isoformat()
+        }
+    }
+    
+    # Revenue and orders from meal events
+    if "revenue" in requested_metrics or "orders" in requested_metrics:
+        meal_order_filter = {"meal_event__chef": chef, "status": "confirmed"}
+        if start_date:
+            meal_order_filter["created_at__date__gte"] = start_date
+        
+        meal_orders = ChefMealOrder.objects.filter(**meal_order_filter)
+        meal_order_count = meal_orders.count()
+        meal_revenue = meal_orders.aggregate(total=Sum('price_paid'))['total'] or Decimal('0')
+        
+        # Revenue from services
+        service_filter = {"chef": chef, "status": "completed"}
+        if start_date:
+            service_filter["created_at__date__gte"] = start_date
+        
+        service_orders = ChefServiceOrder.objects.filter(**service_filter)
+        service_count = service_orders.count()
+        service_revenue = service_orders.aggregate(total=Sum('total_price'))['total'] or Decimal('0')
+        
+        if "revenue" in requested_metrics:
+            analytics["revenue"] = {
+                "total": float(meal_revenue + service_revenue),
+                "from_meal_shares": float(meal_revenue),
+                "from_services": float(service_revenue),
+                "currency": "USD"
+            }
+        
+        if "orders" in requested_metrics:
+            analytics["orders"] = {
+                "total": meal_order_count + service_count,
+                "meal_share_orders": meal_order_count,
+                "service_orders": service_count
+            }
+    
+    # Popular dishes
+    if "popular_dishes" in requested_metrics:
+        popular_filter = {"events__orders__status": "confirmed", "chef": chef}
+        if start_date:
+            popular_filter["events__orders__created_at__date__gte"] = start_date
+        
+        popular_meals = Meal.objects.filter(**popular_filter).annotate(
+            order_count=Count('events__orders')
+        ).order_by('-order_count')[:5]
+        
+        analytics["popular_dishes"] = [
+            {"name": m.name, "orders": m.order_count}
+            for m in popular_meals
+        ]
+    
+    # Client retention
+    if "client_retention" in requested_metrics:
+        # Count unique customers with multiple orders
+        meal_customers = ChefMealOrder.objects.filter(
+            meal_event__chef=chef,
+            status="confirmed"
+        ).values('customer').annotate(
+            order_count=Count('id')
+        )
+        
+        total_customers = meal_customers.count()
+        repeat_customers = meal_customers.filter(order_count__gt=1).count()
+        
+        analytics["client_retention"] = {
+            "total_customers": total_customers,
+            "repeat_customers": repeat_customers,
+            "retention_rate": f"{(repeat_customers / total_customers * 100):.1f}%" if total_customers > 0 else "N/A"
+        }
+    
+    # Meal shares stats
+    if "meal_shares" in requested_metrics:
+        event_filter = {"chef": chef}
+        if start_date:
+            event_filter["event_date__gte"] = start_date
+        
+        events = ChefMealEvent.objects.filter(**event_filter)
+        analytics["meal_shares"] = {
+            "total_events": events.count(),
+            "completed": events.filter(status="completed").count(),
+            "cancelled": events.filter(status="cancelled").count(),
+            "avg_orders_per_event": events.aggregate(avg=Avg('orders_count'))['avg'] or 0
+        }
+    
+    # Services stats
+    if "services" in requested_metrics:
+        service_filter = {"chef": chef}
+        if start_date:
+            service_filter["created_at__date__gte"] = start_date
+        
+        services = ChefServiceOrder.objects.filter(**service_filter)
+        analytics["services"] = {
+            "total": services.count(),
+            "completed": services.filter(status="completed").count(),
+            "pending": services.filter(status__in=["draft", "awaiting_payment", "confirmed"]).count()
+        }
+    
+    return {
+        "status": "success",
+        **analytics
+    }
+
+
+def _get_seasonal_ingredients(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """
+    Get a list of ingredients that are currently in season.
+    """
+    from datetime import date
+    
+    month = args.get("month")
+    if month is None:
+        month = date.today().month
+    
+    category = args.get("category", "all")
+    region = args.get("region", "general")
+    
+    # Validate month
+    if not 1 <= month <= 12:
+        return {"status": "error", "message": "Month must be between 1 and 12"}
+    
+    month_names = ["January", "February", "March", "April", "May", "June",
+                   "July", "August", "September", "October", "November", "December"]
+    
+    # Comprehensive seasonal ingredient database (general US)
+    seasonal_data = {
+        # Winter (Dec, Jan, Feb)
+        1: {  # January
+            "vegetables": ["brussels sprouts", "cabbage", "kale", "leeks", "parsnips", "turnips", "winter squash", "beets", "carrots", "celery root"],
+            "fruits": ["citrus (oranges, grapefruits, lemons)", "pomegranates", "pears", "apples", "kiwi"],
+            "proteins": ["oysters", "mussels", "duck", "game birds"],
+            "herbs": ["rosemary", "thyme", "sage", "bay leaves"],
+        },
+        2: {  # February
+            "vegetables": ["brussels sprouts", "cabbage", "kale", "leeks", "parsnips", "rutabaga", "winter squash", "potatoes"],
+            "fruits": ["citrus", "apples", "pears", "blood oranges"],
+            "proteins": ["oysters", "clams", "halibut"],
+            "herbs": ["rosemary", "thyme", "sage"],
+        },
+        # Spring (Mar, Apr, May)
+        3: {  # March
+            "vegetables": ["artichokes", "asparagus", "broccoli", "green onions", "lettuce", "spinach", "peas", "radishes"],
+            "fruits": ["citrus", "strawberries (early)"],
+            "proteins": ["lamb", "salmon (wild)", "trout"],
+            "herbs": ["chives", "parsley", "mint", "dill"],
+        },
+        4: {  # April
+            "vegetables": ["artichokes", "asparagus", "fava beans", "peas", "spinach", "spring onions", "radishes", "ramps", "morels"],
+            "fruits": ["strawberries", "rhubarb"],
+            "proteins": ["lamb", "salmon", "soft-shell crab"],
+            "herbs": ["chives", "parsley", "mint", "tarragon"],
+        },
+        5: {  # May
+            "vegetables": ["asparagus", "fava beans", "peas", "artichokes", "new potatoes", "zucchini", "green beans"],
+            "fruits": ["strawberries", "cherries (early)", "apricots"],
+            "proteins": ["salmon", "halibut", "soft-shell crab"],
+            "herbs": ["basil", "cilantro", "mint", "chives"],
+        },
+        # Summer (Jun, Jul, Aug)
+        6: {  # June
+            "vegetables": ["corn", "cucumbers", "green beans", "peppers", "summer squash", "zucchini", "tomatoes", "eggplant"],
+            "fruits": ["cherries", "berries (all)", "peaches", "plums", "apricots", "melons"],
+            "proteins": ["salmon", "halibut", "swordfish", "tuna"],
+            "herbs": ["basil", "cilantro", "mint", "oregano", "dill"],
+        },
+        7: {  # July
+            "vegetables": ["corn", "cucumbers", "eggplant", "peppers", "tomatoes", "zucchini", "okra", "green beans"],
+            "fruits": ["berries", "peaches", "nectarines", "plums", "watermelon", "cantaloupe", "figs"],
+            "proteins": ["swordfish", "tuna", "lobster", "crab"],
+            "herbs": ["basil", "cilantro", "mint", "oregano"],
+        },
+        8: {  # August
+            "vegetables": ["corn", "cucumbers", "eggplant", "peppers", "tomatoes", "zucchini", "summer squash"],
+            "fruits": ["berries", "peaches", "nectarines", "plums", "grapes", "melons", "figs"],
+            "proteins": ["lobster", "crab", "tuna"],
+            "herbs": ["basil", "cilantro", "oregano"],
+        },
+        # Fall (Sep, Oct, Nov)
+        9: {  # September
+            "vegetables": ["butternut squash", "eggplant", "peppers", "tomatoes", "corn (late)", "broccoli", "cauliflower"],
+            "fruits": ["apples", "grapes", "pears", "figs", "plums"],
+            "proteins": ["salmon", "halibut", "duck"],
+            "herbs": ["sage", "rosemary", "thyme"],
+        },
+        10: {  # October
+            "vegetables": ["butternut squash", "pumpkin", "brussels sprouts", "cauliflower", "kale", "sweet potatoes", "parsnips"],
+            "fruits": ["apples", "pears", "cranberries", "pomegranates", "persimmons"],
+            "proteins": ["duck", "game birds", "venison"],
+            "herbs": ["sage", "rosemary", "thyme"],
+        },
+        11: {  # November
+            "vegetables": ["butternut squash", "pumpkin", "brussels sprouts", "kale", "turnips", "parsnips", "sweet potatoes", "celery root"],
+            "fruits": ["apples", "pears", "cranberries", "pomegranates", "citrus (beginning)"],
+            "proteins": ["turkey", "duck", "game birds"],
+            "herbs": ["sage", "rosemary", "thyme"],
+        },
+        12: {  # December
+            "vegetables": ["brussels sprouts", "cabbage", "kale", "parsnips", "turnips", "winter squash", "potatoes", "celery root"],
+            "fruits": ["citrus", "pomegranates", "pears", "apples", "cranberries"],
+            "proteins": ["oysters", "duck", "game birds", "ham"],
+            "herbs": ["rosemary", "thyme", "sage", "bay leaves"],
+        },
+    }
+    
+    # Get ingredients for the month
+    month_data = seasonal_data.get(month, {})
+    
+    if category == "all":
+        result = month_data
+    else:
+        result = {category: month_data.get(category, [])}
+    
+    # Flatten for easy reading
+    all_ingredients = []
+    for cat, items in result.items():
+        for item in items:
+            all_ingredients.append({"name": item, "category": cat})
+    
+    return {
+        "status": "success",
+        "month": month_names[month - 1],
+        "month_number": month,
+        "region": region,
+        "seasonal_ingredients": result,
+        "all_ingredients": all_ingredients,
+        "total_count": len(all_ingredients),
+        "tips": [
+            "Seasonal ingredients are typically fresher and more affordable.",
+            "Consider building your menu around what's in season for best results.",
+            "Local farmers markets are great for finding peak-season produce."
+        ]
+    }
+
+
+def _draft_client_message(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """
+    Draft a professional message to send to a client.
+    Returns the draft for chef review before sending.
+    """
+    message_type = args.get("message_type", "general")
+    key_points = args.get("key_points", [])
+    tone = args.get("tone", "friendly")
+    
+    if not key_points:
+        return {"status": "error", "message": "key_points are required"}
+    
+    # Get client name
+    if customer:
+        client_name = customer.first_name or customer.username
+        client_full = f"{customer.first_name} {customer.last_name}".strip() or customer.username
+    elif lead:
+        client_name = lead.first_name or "there"
+        client_full = f"{lead.first_name} {lead.last_name}".strip()
+    else:
+        return {"status": "error", "message": "No client context available"}
+    
+    chef_name = chef.user.first_name or chef.user.username
+    
+    # Tone adjustments
+    greeting = {
+        "professional": f"Dear {client_name},",
+        "friendly": f"Hi {client_name}!",
+        "casual": f"Hey {client_name}!"
+    }.get(tone, f"Hi {client_name},")
+    
+    sign_off = {
+        "professional": f"Best regards,\n{chef_name}",
+        "friendly": f"Looking forward to cooking for you!\n{chef_name}",
+        "casual": f"Cheers,\n{chef_name}"
+    }.get(tone, f"Best,\n{chef_name}")
+    
+    # Build message based on type
+    if message_type == "meal_plan_update":
+        intro = "I wanted to share some updates about your meal plan."
+        points_formatted = "\n".join([f"• {point}" for point in key_points])
+        body = f"{intro}\n\n{points_formatted}\n\nPlease let me know if you have any questions or would like to make any changes."
+        
+    elif message_type == "order_confirmation":
+        intro = "Great news! Your order has been confirmed."
+        points_formatted = "\n".join([f"• {point}" for point in key_points])
+        body = f"{intro}\n\n{points_formatted}\n\nI'll be preparing everything fresh for you. Looking forward to it!"
+        
+    elif message_type == "dietary_question":
+        intro = "I wanted to check in about some dietary details to make sure I'm preparing the perfect meals for your family."
+        points_formatted = "\n".join([f"• {point}" for point in key_points])
+        body = f"{intro}\n\n{points_formatted}\n\nPlease let me know your preferences, and I'll adjust accordingly."
+        
+    elif message_type == "schedule_change":
+        intro = "I need to let you know about a schedule update."
+        points_formatted = "\n".join([f"• {point}" for point in key_points])
+        body = f"{intro}\n\n{points_formatted}\n\nI apologize for any inconvenience and appreciate your understanding."
+        
+    elif message_type == "thank_you":
+        intro = "I just wanted to take a moment to thank you!"
+        points_formatted = "\n".join([f"• {point}" for point in key_points])
+        body = f"{intro}\n\n{points_formatted}\n\nIt's truly a pleasure cooking for your family."
+        
+    elif message_type == "follow_up":
+        intro = "I wanted to follow up with you."
+        points_formatted = "\n".join([f"• {point}" for point in key_points])
+        body = f"{intro}\n\n{points_formatted}\n\nPlease don't hesitate to reach out if you need anything."
+        
+    else:  # general
+        points_formatted = "\n".join([f"• {point}" for point in key_points])
+        body = points_formatted
+    
+    # Assemble full message
+    full_message = f"{greeting}\n\n{body}\n\n{sign_off}"
+    
+    return {
+        "status": "success",
+        "message_type": message_type,
+        "tone": tone,
+        "recipient": client_full,
+        "draft": full_message,
+        "editable": True,
+        "note": "This is a draft for your review. Edit as needed before sending to the client.",
+        "render_as_draft": True  # Flag for frontend to show as editable draft
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MEMORY SYSTEM TOOL IMPLEMENTATIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _save_chef_memory(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """
+    Save a learning/pattern/preference to long-term memory.
+    
+    Generates embedding for semantic search when the memory service is available.
+    """
+    from customer_dashboard.models import ChefMemory
+    
+    memory_type = args.get("memory_type", "lesson")
+    content = args.get("content", "").strip()
+    importance = args.get("importance", 3)
+    family_specific = args.get("family_specific", False)
+    
+    if not content:
+        return {"status": "error", "message": "Content is required"}
+    
+    if len(content) > 1000:
+        content = content[:1000]
+    
+    valid_types = ["pattern", "preference", "lesson", "todo"]
+    if memory_type not in valid_types:
+        return {"status": "error", "message": f"Invalid memory_type. Must be one of: {valid_types}"}
+    
+    # Clamp importance
+    importance = max(1, min(5, importance))
+    
+    # Build context metadata
+    context = {
+        "source": "conversation",
+        "created_via": "sous_chef_tool"
+    }
+    
+    # Create memory kwargs
+    memory_kwargs = {
+        "chef": chef,
+        "memory_type": memory_type,
+        "content": content,
+        "importance": importance,
+        "context": context,
+    }
+    
+    # Link to family if specified
+    if family_specific:
+        if customer:
+            memory_kwargs["customer"] = customer
+            context["family_type"] = "customer"
+            context["family_id"] = customer.id
+        elif lead:
+            memory_kwargs["lead"] = lead
+            context["family_type"] = "lead"
+            context["family_id"] = lead.id
+    
+    # Generate embedding for semantic search
+    embedding_generated = False
+    try:
+        from chefs.services import EmbeddingService
+        embedding = EmbeddingService.get_embedding(content)
+        if embedding:
+            memory_kwargs["embedding"] = embedding
+            embedding_generated = True
+    except Exception as e:
+        logger.debug(f"Embedding generation skipped: {e}")
+    
+    memory = ChefMemory.objects.create(**memory_kwargs)
+    
+    type_labels = {
+        "pattern": "Pattern",
+        "preference": "Preference",
+        "lesson": "Lesson",
+        "todo": "To-Do"
+    }
+    
+    return {
+        "status": "success",
+        "message": f"Saved {type_labels[memory_type].lower()} to long-term memory",
+        "memory_id": memory.id,
+        "memory_type": memory_type,
+        "importance": importance,
+        "family_specific": family_specific,
+        "embedding_generated": embedding_generated,
+        "content_preview": content[:100] + "..." if len(content) > 100 else content
+    }
+
+
+def _recall_chef_memories(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """
+    Search and recall memories by type or keyword.
+    
+    Uses hybrid search (vector + full-text) when a keyword is provided,
+    falling back to importance-based retrieval when no keyword given.
+    """
+    from customer_dashboard.models import ChefMemory
+    from django.db.models import Q
+    
+    memory_types = args.get("memory_types", None)
+    keyword = args.get("keyword", "")
+    include_family = args.get("include_family_memories", True)
+    limit = min(max(args.get("limit", 10), 1), 20)
+    
+    # Determine client filter
+    client_filter = None
+    lead_filter = None
+    if include_family:
+        client_filter = customer
+        lead_filter = lead
+    
+    # Try hybrid search if keyword provided
+    if keyword:
+        try:
+            from chefs.models import hybrid_memory_search
+            from chefs.services import EmbeddingService
+            
+            # Generate query embedding for semantic search
+            query_embedding = EmbeddingService.get_embedding(keyword)
+            
+            # Use hybrid search (vector + BM25)
+            search_results = hybrid_memory_search(
+                chef=chef,
+                query=keyword,
+                query_embedding=query_embedding,
+                memory_types=memory_types,
+                client=client_filter,
+                lead=lead_filter,
+                limit=limit,
+                vector_weight=0.6,  # Slightly favor semantic matching
+                text_weight=0.4,
+                min_score=0.05,  # Lower threshold to be inclusive
+            )
+            
+            # Format results with relevance scores
+            results = []
+            for memory, score in search_results:
+                memory.mark_accessed()
+                
+                family_info = None
+                if memory.customer:
+                    family_info = f"{memory.customer.first_name} {memory.customer.last_name}".strip() or memory.customer.username
+                elif memory.lead:
+                    family_info = f"{memory.lead.first_name} {memory.lead.last_name}".strip()
+                
+                results.append({
+                    "id": memory.id,
+                    "type": memory.memory_type,
+                    "content": memory.content,
+                    "importance": memory.importance,
+                    "family": family_info,
+                    "created_at": memory.created_at.isoformat(),
+                    "access_count": memory.access_count,
+                    "relevance_score": round(score, 3),
+                })
+            
+            return {
+                "status": "success",
+                "search_mode": "hybrid",
+                "total_found": len(results),
+                "memories": results,
+                "filters_applied": {
+                    "types": memory_types,
+                    "keyword": keyword,
+                    "include_family": include_family
+                }
+            }
+            
+        except Exception as e:
+            # Fall back to simple search if hybrid not available
+            logger.warning(f"Hybrid search failed, using fallback: {e}")
+    
+    # Fallback: simple importance-based retrieval
+    queryset = ChefMemory.objects.filter(chef=chef, is_active=True)
+    
+    # Filter by types
+    if memory_types:
+        queryset = queryset.filter(memory_type__in=memory_types)
+    
+    # Filter by keyword (simple contains)
+    if keyword:
+        queryset = queryset.filter(content__icontains=keyword)
+    
+    # Handle family-specific memories
+    if include_family and (customer or lead):
+        if customer:
+            queryset = queryset.filter(
+                Q(customer__isnull=True, lead__isnull=True) | Q(customer=customer)
+            )
+        elif lead:
+            queryset = queryset.filter(
+                Q(customer__isnull=True, lead__isnull=True) | Q(lead=lead)
+            )
+    else:
+        queryset = queryset.filter(customer__isnull=True, lead__isnull=True)
+    
+    # Order and limit
+    memories = queryset.order_by('-importance', '-updated_at')[:limit]
+    
+    # Mark as accessed
+    for memory in memories:
+        memory.mark_accessed()
+    
+    # Format results
+    results = []
+    for memory in memories:
+        family_info = None
+        if memory.customer:
+            family_info = f"{memory.customer.first_name} {memory.customer.last_name}".strip() or memory.customer.username
+        elif memory.lead:
+            family_info = f"{memory.lead.first_name} {memory.lead.last_name}".strip()
+        
+        results.append({
+            "id": memory.id,
+            "type": memory.memory_type,
+            "content": memory.content,
+            "importance": memory.importance,
+            "family": family_info,
+            "created_at": memory.created_at.isoformat(),
+            "access_count": memory.access_count
+        })
+    
+    return {
+        "status": "success",
+        "search_mode": "fallback",
+        "total_found": len(results),
+        "memories": results,
+        "filters_applied": {
+            "types": memory_types,
+            "keyword": keyword if keyword else None,
+            "include_family": include_family
+        }
+    }
+
+
+def _update_chef_memory(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """
+    Update or delete an existing memory.
+    """
+    from customer_dashboard.models import ChefMemory
+    
+    memory_id = args.get("memory_id")
+    action = args.get("action", "update")
+    new_content = args.get("new_content", "")
+    
+    if not memory_id:
+        return {"status": "error", "message": "memory_id is required"}
+    
+    try:
+        memory = ChefMemory.objects.get(id=memory_id, chef=chef, is_active=True)
+    except ChefMemory.DoesNotExist:
+        return {"status": "error", "message": f"Memory {memory_id} not found"}
+    
+    if action == "update":
+        if not new_content:
+            return {"status": "error", "message": "new_content is required for update action"}
+        memory.content = new_content[:1000]
+        memory.save(update_fields=['content', 'updated_at'])
+        return {
+            "status": "success",
+            "message": "Memory updated",
+            "memory_id": memory.id,
+            "new_content": memory.content
+        }
+    
+    elif action == "complete":
+        if memory.memory_type != "todo":
+            return {"status": "error", "message": "Can only complete 'todo' type memories"}
+        memory.is_active = False
+        memory.context["completed_at"] = timezone.now().isoformat()
+        memory.save(update_fields=['is_active', 'context', 'updated_at'])
+        return {
+            "status": "success",
+            "message": "To-do marked as complete",
+            "memory_id": memory.id
+        }
+    
+    elif action == "delete":
+        memory.is_active = False
+        memory.save(update_fields=['is_active', 'updated_at'])
+        return {
+            "status": "success",
+            "message": "Memory deleted",
+            "memory_id": memory.id
+        }
+    
+    return {"status": "error", "message": f"Unknown action: {action}"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PROACTIVE INSIGHTS TOOL IMPLEMENTATIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _get_proactive_insights(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """
+    Fetch unread proactive insights for the chef.
+    """
+    from customer_dashboard.models import ChefProactiveInsight
+    from django.db.models import Q
+    
+    insight_types = args.get("insight_types", None)
+    limit = min(max(args.get("limit", 5), 1), 15)
+    
+    now = timezone.now()
+    queryset = ChefProactiveInsight.objects.filter(
+        chef=chef,
+        is_dismissed=False
+    ).filter(
+        Q(expires_at__isnull=True) | Q(expires_at__gt=now)
+    )
+    
+    if insight_types:
+        queryset = queryset.filter(insight_type__in=insight_types)
+    
+    # Order by priority and recency
+    from django.db.models import Case, When, IntegerField
+    priority_order = Case(
+        When(priority='high', then=1),
+        When(priority='medium', then=2),
+        When(priority='low', then=3),
+        output_field=IntegerField(),
+    )
+    
+    insights = queryset.annotate(
+        priority_rank=priority_order
+    ).order_by('priority_rank', '-created_at')[:limit]
+    
+    # Mark as read
+    for insight in insights:
+        insight.mark_read()
+    
+    # Format results
+    results = []
+    for insight in insights:
+        family_name = None
+        if insight.customer:
+            family_name = f"{insight.customer.first_name} {insight.customer.last_name}".strip() or insight.customer.username
+        elif insight.lead:
+            family_name = f"{insight.lead.first_name} {insight.lead.last_name}".strip()
+        
+        results.append({
+            "id": insight.id,
+            "type": insight.insight_type,
+            "type_display": insight.get_insight_type_display(),
+            "title": insight.title,
+            "content": insight.content,
+            "priority": insight.priority,
+            "family": family_name,
+            "created_at": insight.created_at.isoformat(),
+            "expires_at": insight.expires_at.isoformat() if insight.expires_at else None,
+            "suggested_actions": _get_suggested_actions(insight)
+        })
+    
+    unread_count = ChefProactiveInsight.get_count_for_chef(chef)
+    
+    return {
+        "status": "success",
+        "insights": results,
+        "total_returned": len(results),
+        "unread_remaining": max(0, unread_count - len(results)),
+        "tip": "Use act_on_insight to take action or dismiss_insight to hide."
+    }
+
+
+def _get_suggested_actions(insight) -> List[str]:
+    """Get suggested actions based on insight type."""
+    action_map = {
+        'followup_needed': ['draft_message', 'schedule_followup'],
+        'batch_opportunity': ['create_prep_plan', 'acknowledge'],
+        'seasonal_suggestion': ['create_prep_plan', 'acknowledge'],
+        'client_win': ['draft_message', 'acknowledge'],
+        'scheduling_tip': ['acknowledge'],
+    }
+    return action_map.get(insight.insight_type, ['acknowledge'])
+
+
+def _dismiss_insight(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """
+    Dismiss a proactive insight.
+    """
+    from customer_dashboard.models import ChefProactiveInsight
+    
+    insight_id = args.get("insight_id")
+    
+    if not insight_id:
+        return {"status": "error", "message": "insight_id is required"}
+    
+    try:
+        insight = ChefProactiveInsight.objects.get(id=insight_id, chef=chef)
+    except ChefProactiveInsight.DoesNotExist:
+        return {"status": "error", "message": f"Insight {insight_id} not found"}
+    
+    insight.dismiss()
+    
+    return {
+        "status": "success",
+        "message": "Insight dismissed",
+        "insight_id": insight.id
+    }
+
+
+def _act_on_insight(
+    args: Dict[str, Any],
+    chef: Chef,
+    customer: Optional[CustomUser],
+    lead: Optional[Lead]
+) -> Dict[str, Any]:
+    """
+    Take action on a proactive insight.
+    """
+    from customer_dashboard.models import ChefProactiveInsight
+    
+    insight_id = args.get("insight_id")
+    action = args.get("action", "acknowledge")
+    notes = args.get("notes", "")
+    
+    if not insight_id:
+        return {"status": "error", "message": "insight_id is required"}
+    
+    try:
+        insight = ChefProactiveInsight.objects.get(id=insight_id, chef=chef)
+    except ChefProactiveInsight.DoesNotExist:
+        return {"status": "error", "message": f"Insight {insight_id} not found"}
+    
+    # Mark as actioned
+    insight.mark_actioned(action_taken=f"{action}: {notes}" if notes else action)
+    
+    # Prepare action-specific response
+    result = {
+        "status": "success",
+        "insight_id": insight.id,
+        "action": action,
+        "insight_type": insight.insight_type
+    }
+    
+    if action == "draft_message":
+        # Return data for drafting a message
+        family_name = insight.family_name or "the client"
+        result["next_step"] = "draft_client_message"
+        result["suggested_key_points"] = [
+            f"Following up on: {insight.title}",
+            insight.content[:200] if insight.content else ""
+        ]
+        result["message"] = f"Ready to draft a message to {family_name}. Use draft_client_message tool with these suggested points."
+        
+    elif action == "create_prep_plan":
+        result["next_step"] = "generate_prep_plan"
+        result["message"] = "Ready to create a prep plan. Use generate_prep_plan tool."
+        
+    elif action == "schedule_followup":
+        # This could integrate with calendar/CRM in the future
+        result["next_step"] = "add_family_note"
+        result["message"] = "Consider adding a note to track this follow-up. Use add_family_note tool."
+        
+    else:  # acknowledge or other
+        result["message"] = "Insight acknowledged and marked as handled."
+    
+    return result

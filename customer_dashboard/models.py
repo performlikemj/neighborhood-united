@@ -12,6 +12,7 @@ from django_countries.fields import CountryField
 from django.contrib.auth import get_user_model
 from datetime import date
 from django.conf import settings
+from pgvector.django import VectorField
 
 User = get_user_model()
 
@@ -634,7 +635,15 @@ class ChefMemory(models.Model):
         default=True,
         help_text="Soft delete - inactive memories won't be recalled"
     )
-    
+
+    # Vector embedding for semantic search
+    embedding = VectorField(
+        dimensions=1536,
+        null=True,
+        blank=True,
+        help_text="Embedding vector for semantic/hybrid search"
+    )
+
     class Meta:
         ordering = ['-importance', '-updated_at']
         indexes = [

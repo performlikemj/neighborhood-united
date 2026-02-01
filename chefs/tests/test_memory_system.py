@@ -475,7 +475,7 @@ class MemoryServiceTests(TestCase):
 
 class ContextAssemblyTests(TestCase):
     """Tests for ContextAssemblyService."""
-    
+
     @classmethod
     def setUpTestData(cls):
         cls.user = User.objects.create_user(
@@ -483,14 +483,14 @@ class ContextAssemblyTests(TestCase):
             email='chef6@test.com',
             password='testpass123'
         )
-        cls.client = User.objects.create_user(
+        cls.client_user = User.objects.create_user(
             username='testclient3',
             email='client3@test.com',
             password='testpass123',
             first_name='Alice',
             last_name='Smith'
         )
-    
+
     def setUp(self):
         from chefs.models import Chef
         self.chef, _ = Chef.objects.get_or_create(user=self.user)
@@ -534,22 +534,22 @@ class ContextAssemblyTests(TestCase):
         """Test context includes client preferences."""
         from chefs.models import ClientContext
         from chefs.services import ContextAssemblyService
-        
+
         ClientContext.objects.create(
             chef=self.chef,
-            client=self.client,
+            client=self.client_user,
             cuisine_preferences=['Thai', 'Indian'],
             cooking_notes='Extra spicy please'
         )
-        
+
         context = ContextAssemblyService.build_system_context(
             chef=self.chef,
-            client=self.client,
+            client=self.client_user,
             include_memories=False,
             include_analytics=False,
             include_seasonal=False
         )
-        
+
         self.assertIn('Thai', context)
         self.assertIn('Extra spicy please', context)
 

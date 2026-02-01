@@ -8,6 +8,7 @@ from chefs.api import leads as leads_api
 from chefs.api import unified_clients as unified_api
 from chefs.api import sous_chef as sous_chef_api
 from chefs.api import availability as availability_api
+from chefs.api import workspace as workspace_api
 from chefs.api import meal_plans as meal_plans_api
 from chefs.api import payment_links as payment_links_api
 from chefs.api import documents as documents_api
@@ -136,6 +137,14 @@ urlpatterns = [
     # Scaffold endpoints for meal creation
     path('api/me/sous-chef/scaffold/generate/', sous_chef_api.sous_chef_scaffold_generate, name='sous_chef_scaffold_generate'),
     path('api/me/sous-chef/scaffold/execute/', sous_chef_api.sous_chef_scaffold_execute, name='sous_chef_scaffold_execute'),
+
+    # ==========================================================================
+    # Sous Chef Workspace Settings API
+    # ==========================================================================
+
+    path('api/me/workspace/', workspace_api.workspace_get, name='chef_workspace'),
+    path('api/me/workspace/update/', workspace_api.workspace_update, name='chef_workspace_update'),
+    path('api/me/workspace/reset/', workspace_api.workspace_reset, name='chef_workspace_reset'),
 
     # ==========================================================================
     # Collaborative Meal Plans API (Chef endpoints)

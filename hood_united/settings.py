@@ -257,6 +257,10 @@ if os.getenv('SUPA_DB_HOST'):
             'sslmode': 'require',  # Supabase requires SSL
             'options': '-c statement_timeout=60000',
         },
+        # Skip creating test database for supabase - use default's test db
+        'TEST': {
+            'MIRROR': 'default',
+        },
     }
 
 # Password validation

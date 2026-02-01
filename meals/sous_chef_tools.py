@@ -2775,6 +2775,8 @@ def _save_chef_memory(
 ) -> Dict[str, Any]:
     """
     Save a learning/pattern/preference to long-term memory.
+    
+    Generates embedding for semantic search when the memory service is available.
     """
     from customer_dashboard.models import ChefMemory
     
@@ -2802,7 +2804,7 @@ def _save_chef_memory(
         "created_via": "sous_chef_tool"
     }
     
-    # Create memory
+    # Create memory kwargs
     memory_kwargs = {
         "chef": chef,
         "memory_type": memory_type,
@@ -2822,6 +2824,17 @@ def _save_chef_memory(
             context["family_type"] = "lead"
             context["family_id"] = lead.id
     
+    # Generate embedding for semantic search
+    embedding_generated = False
+    try:
+        from chefs.services import EmbeddingService
+        embedding = EmbeddingService.get_embedding(content)
+        if embedding:
+            memory_kwargs["embedding"] = embedding
+            embedding_generated = True
+    except Exception as e:
+        logger.debug(f"Embedding generation skipped: {e}")
+    
     memory = ChefMemory.objects.create(**memory_kwargs)
     
     type_labels = {
@@ -2838,6 +2851,7 @@ def _save_chef_memory(
         "memory_type": memory_type,
         "importance": importance,
         "family_specific": family_specific,
+        "embedding_generated": embedding_generated,
         "content_preview": content[:100] + "..." if len(content) > 100 else content
     }
 
@@ -2850,6 +2864,9 @@ def _recall_chef_memories(
 ) -> Dict[str, Any]:
     """
     Search and recall memories by type or keyword.
+    
+    Uses hybrid search (vector + full-text) when a keyword is provided,
+    falling back to importance-based retrieval when no keyword given.
     """
     from customer_dashboard.models import ChefMemory
     from django.db.models import Q
@@ -2859,20 +2876,87 @@ def _recall_chef_memories(
     include_family = args.get("include_family_memories", True)
     limit = min(max(args.get("limit", 10), 1), 20)
     
-    # Base queryset
+    # Determine client filter
+    client_filter = None
+    lead_filter = None
+    if include_family:
+        client_filter = customer
+        lead_filter = lead
+    
+    # Try hybrid search if keyword provided
+    if keyword:
+        try:
+            from chefs.models import hybrid_memory_search
+            from chefs.services import EmbeddingService
+            
+            # Generate query embedding for semantic search
+            query_embedding = EmbeddingService.get_embedding(keyword)
+            
+            # Use hybrid search (vector + BM25)
+            search_results = hybrid_memory_search(
+                chef=chef,
+                query=keyword,
+                query_embedding=query_embedding,
+                memory_types=memory_types,
+                client=client_filter,
+                lead=lead_filter,
+                limit=limit,
+                vector_weight=0.6,  # Slightly favor semantic matching
+                text_weight=0.4,
+                min_score=0.05,  # Lower threshold to be inclusive
+            )
+            
+            # Format results with relevance scores
+            results = []
+            for memory, score in search_results:
+                memory.mark_accessed()
+                
+                family_info = None
+                if memory.customer:
+                    family_info = f"{memory.customer.first_name} {memory.customer.last_name}".strip() or memory.customer.username
+                elif memory.lead:
+                    family_info = f"{memory.lead.first_name} {memory.lead.last_name}".strip()
+                
+                results.append({
+                    "id": memory.id,
+                    "type": memory.memory_type,
+                    "content": memory.content,
+                    "importance": memory.importance,
+                    "family": family_info,
+                    "created_at": memory.created_at.isoformat(),
+                    "access_count": memory.access_count,
+                    "relevance_score": round(score, 3),
+                })
+            
+            return {
+                "status": "success",
+                "search_mode": "hybrid",
+                "total_found": len(results),
+                "memories": results,
+                "filters_applied": {
+                    "types": memory_types,
+                    "keyword": keyword,
+                    "include_family": include_family
+                }
+            }
+            
+        except Exception as e:
+            # Fall back to simple search if hybrid not available
+            logger.warning(f"Hybrid search failed, using fallback: {e}")
+    
+    # Fallback: simple importance-based retrieval
     queryset = ChefMemory.objects.filter(chef=chef, is_active=True)
     
     # Filter by types
     if memory_types:
         queryset = queryset.filter(memory_type__in=memory_types)
     
-    # Filter by keyword
+    # Filter by keyword (simple contains)
     if keyword:
         queryset = queryset.filter(content__icontains=keyword)
     
     # Handle family-specific memories
     if include_family and (customer or lead):
-        # Include both general memories and family-specific ones
         if customer:
             queryset = queryset.filter(
                 Q(customer__isnull=True, lead__isnull=True) | Q(customer=customer)
@@ -2882,7 +2966,6 @@ def _recall_chef_memories(
                 Q(customer__isnull=True, lead__isnull=True) | Q(lead=lead)
             )
     else:
-        # Only general memories
         queryset = queryset.filter(customer__isnull=True, lead__isnull=True)
     
     # Order and limit
@@ -2913,6 +2996,7 @@ def _recall_chef_memories(
     
     return {
         "status": "success",
+        "search_mode": "fallback",
         "total_found": len(results),
         "memories": results,
         "filters_applied": {

@@ -308,6 +308,12 @@ class SousChefAssistant:
         else:
             self.family_context = "No family selected. Operating in general assistant mode."
         
+        # Load chef workspace (personality + rules) - OpenClaw pattern
+        self.workspace = self._load_workspace()
+        
+        # Load client context if family selected
+        self.client_context = self._load_client_context() if self.has_family_context else None
+        
         # Build system instructions
         self.instructions = self._build_instructions()
         
@@ -324,6 +330,41 @@ class SousChefAssistant:
                 logger.info(f"SOUS_CHEF_DEBUG: {msg}")
             except Exception:
                 pass
+
+    def _load_workspace(self):
+        """
+        Load chef's workspace configuration (personality + rules).
+        
+        Like OpenClaw's SOUL.md + AGENTS.md - defines assistant behavior.
+        Returns None if workspace system not available.
+        """
+        try:
+            from chefs.models import ChefWorkspace
+            return ChefWorkspace.get_or_create_for_chef(self.chef)
+        except Exception as e:
+            logger.debug(f"ChefWorkspace not available: {e}")
+            return None
+    
+    def _load_client_context(self):
+        """
+        Load structured client context (preferences, history).
+        
+        Like OpenClaw's USER.md - per-client info injected into context.
+        Returns None if no family selected or context not available.
+        """
+        if not self.has_family_context:
+            return None
+        
+        try:
+            from chefs.models import ClientContext
+            return ClientContext.get_or_create_for_client(
+                chef=self.chef,
+                client=self.customer,
+                lead=self.lead
+            )
+        except Exception as e:
+            logger.debug(f"ClientContext not available: {e}")
+            return None
 
     def _build_instructions(self) -> str:
         """Build the system instructions with chef and optional family context."""
@@ -373,12 +414,110 @@ class SousChefAssistant:
             language_instruction = f"\n<!-- LANGUAGE PREFERENCE -->\n<LanguagePreference>\n  This chef's preferred language is {language_name}. Please respond in {language_name} unless the chef specifically requests English or another language.\n</LanguagePreference>\n"
             instructions += language_instruction
         
+        # Inject chef workspace customizations (soul + rules)
+        workspace_context = self._build_workspace_context()
+        if workspace_context:
+            instructions += workspace_context
+        
+        # Inject structured client context if available
+        client_context = self._build_client_context_section()
+        if client_context:
+            instructions += client_context
+        
         # Inject relevant memories from long-term memory system
         memory_context = self._build_memory_context()
         if memory_context:
             instructions += memory_context
         
         return instructions
+    
+    def _build_workspace_context(self) -> str:
+        """
+        Build workspace context section from ChefWorkspace.
+        
+        Injects chef's custom personality (soul_prompt) and business rules.
+        """
+        if not self.workspace:
+            return ""
+        
+        sections = []
+        
+        # Add soul prompt (personality customization)
+        if self.workspace.soul_prompt:
+            sections.append(f"""
+<!-- CHEF PERSONALITY CUSTOMIZATION -->
+<PersonalityOverride>
+  The chef has customized your personality and communication style:
+  
+{self.workspace.soul_prompt}
+</PersonalityOverride>""")
+        
+        # Add business rules
+        if self.workspace.business_rules:
+            sections.append(f"""
+<!-- CHEF BUSINESS RULES -->
+<BusinessRules>
+  Important constraints and rules from the chef:
+  
+{self.workspace.business_rules}
+</BusinessRules>""")
+        
+        return "\n".join(sections)
+    
+    def _build_client_context_section(self) -> str:
+        """
+        Build structured client context section from ClientContext.
+        
+        Includes preferences, flavor profile, special occasions, etc.
+        """
+        if not self.client_context:
+            return ""
+        
+        ctx = self.client_context
+        sections = []
+        
+        # Build structured preferences
+        prefs = []
+        
+        if ctx.cuisine_preferences:
+            prefs.append(f"    • Cuisine preferences: {', '.join(ctx.cuisine_preferences)}")
+        
+        if ctx.flavor_profile:
+            flavors = ", ".join(f"{k}: {v}" for k, v in ctx.flavor_profile.items())
+            prefs.append(f"    • Flavor profile: {flavors}")
+        
+        if ctx.cooking_notes:
+            prefs.append(f"    • Cooking notes: {ctx.cooking_notes}")
+        
+        if ctx.communication_style:
+            prefs.append(f"    • Communication style: {ctx.communication_style}")
+        
+        if ctx.special_occasions:
+            occasions = []
+            for occ in ctx.special_occasions[:5]:  # Limit to 5
+                name = occ.get('name', 'Event')
+                date = occ.get('date', 'TBD')
+                occasions.append(f"{name} ({date})")
+            prefs.append(f"    • Special occasions: {', '.join(occasions)}")
+        
+        if ctx.total_orders > 0:
+            prefs.append(f"    • Order history: {ctx.total_orders} orders, ${ctx.total_spent_cents/100:.2f} total")
+        
+        if ctx.summary:
+            prefs.append(f"    • Summary: {ctx.summary}")
+        
+        if not prefs:
+            return ""
+        
+        client_name = ctx.get_client_name()
+        
+        return f"""
+<!-- STRUCTURED CLIENT PREFERENCES -->
+<ClientPreferences client="{client_name}">
+  You've learned these preferences about this client:
+  
+{chr(10).join(prefs)}
+</ClientPreferences>"""
     
     def _build_memory_context(self) -> str:
         """

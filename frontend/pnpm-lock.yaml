@@ -6,12 +6,6 @@ settings:
 
 overrides:
   '@xmldom/xmldom': ^0.9.8
-  geojson-rewind: npm:@mapbox/geojson-rewind@^0.5.2
-  '@mapbox/geojson-rewind': ^0.5.2
-  minimist: ^1.2.8
-  react-server-dom-webpack: ^19.2.1
-  react-server-dom-parcel: ^19.2.1
-  react-server-dom-turbopack: ^19.2.1
 
 importers:
 

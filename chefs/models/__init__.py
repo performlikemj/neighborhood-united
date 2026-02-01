@@ -5,10 +5,26 @@ Chefs models package.
 Re-exports all models for backward compatibility.
 """
 
-# Import from parent to maintain backward compatibility
-# The main models are still in chefs/models.py (parent directory)
-# This subpackage is for new organized models
+# Base models (formerly in chefs/models.py)
+from .base import (
+    Chef,
+    ChefRequest,
+    ChefPhoto,
+    ChefDefaultBanner,
+    ChefVerificationDocument,
+    ChefWaitlistConfig,
+    ChefAvailabilityState,
+    ChefWaitlistSubscription,
+    AreaWaitlist,
+    PlatformCalendlyConfig,
+    ChefVerificationMeeting,
+    ChefPaymentLink,
+)
 
+# Re-export from local_chefs for backward compatibility
+from local_chefs.models import PostalCode, ChefPostalCode
+
+# Sous Chef memory models
 from .sous_chef_memory import (
     ChefWorkspace,
     ClientContext,
@@ -17,6 +33,23 @@ from .sous_chef_memory import (
 )
 
 __all__ = [
+    # Base models
+    'Chef',
+    'ChefRequest',
+    'ChefPhoto',
+    'ChefDefaultBanner',
+    'ChefVerificationDocument',
+    'ChefWaitlistConfig',
+    'ChefAvailabilityState',
+    'ChefWaitlistSubscription',
+    'AreaWaitlist',
+    'PlatformCalendlyConfig',
+    'ChefVerificationMeeting',
+    'ChefPaymentLink',
+    # Re-exported from local_chefs
+    'PostalCode',
+    'ChefPostalCode',
+    # Sous Chef memory
     'ChefWorkspace',
     'ClientContext',
     'SousChefUsage',

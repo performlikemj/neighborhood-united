@@ -13,8 +13,8 @@ from pgvector.django import VectorField
 import json
 import logging
 
-from chefs.models import Chef
 from local_chefs.models import ChefPostalCode
+# Use string reference 'chefs.Chef' in ForeignKey fields to avoid circular import
 from custom_auth.models import CustomUser, Address
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ class DietaryPreferenceManager(models.Manager):
 
 
 class Ingredient(models.Model):
-    chef = models.ForeignKey(Chef, on_delete=models.CASCADE, related_name='ingredients')
+    chef = models.ForeignKey('chefs.Chef', on_delete=models.CASCADE, related_name='ingredients')
     name = models.CharField(max_length=200)
     calories = models.FloatField(null=True, blank=True)  # Making all nutritional info blank=True
     fat = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
@@ -105,7 +105,7 @@ class Tag(models.Model):
 
 
 class Dish(models.Model):
-    chef = models.ForeignKey(Chef, on_delete=models.CASCADE, related_name='dishes')
+    chef = models.ForeignKey('chefs.Chef', on_delete=models.CASCADE, related_name='dishes')
     name = models.CharField(max_length=200)
     ingredients = models.ManyToManyField(Ingredient)
     featured = models.BooleanField(default=False)
@@ -178,7 +178,7 @@ class Meal(models.Model):
     ]
     name = models.CharField(max_length=200, default='Meal Name')
     creator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_meals') 
-    chef = models.ForeignKey(Chef, on_delete=models.CASCADE, related_name='meals', null=True, blank=True)
+    chef = models.ForeignKey('chefs.Chef', on_delete=models.CASCADE, related_name='meals', null=True, blank=True)
     image = models.ImageField(upload_to='meals/', blank=True, null=True)
     created_date = models.DateTimeField(auto_now_add=True)
     start_date = models.DateField(null=True, blank=True)  # The first day the meal is available

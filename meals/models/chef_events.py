@@ -15,8 +15,10 @@ from datetime import timezone as py_tz
 import dateutil.parser
 import logging
 
-from chefs.models import Chef
 from custom_auth.models import CustomUser
+
+# Use string reference 'chefs.Chef' in ForeignKey fields to avoid circular import
+# (chefs/models/ directory shadows chefs/models.py)
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +63,7 @@ class ChefMealEvent(models.Model):
         (STATUS_CANCELLED, 'Cancelled'),
     ]
     
-    chef = models.ForeignKey(Chef, on_delete=models.CASCADE, related_name='meal_events')
+    chef = models.ForeignKey('chefs.Chef', on_delete=models.CASCADE, related_name='meal_events')
     meal = models.ForeignKey('Meal', on_delete=models.CASCADE, related_name='events')
     event_date = models.DateField(help_text="The date when the chef will prepare and serve this meal share")
     event_time = models.TimeField(help_text="The time when the meal will be available for pickup/delivery")
@@ -393,7 +395,7 @@ class ChefMealReview(models.Model):
     """Reviews for chef meals with ratings and comments"""
     chef_meal_order = models.OneToOneField(ChefMealOrder, on_delete=models.CASCADE, related_name='review')
     customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    chef = models.ForeignKey(Chef, on_delete=models.CASCADE, related_name='meal_reviews')
+    chef = models.ForeignKey('chefs.Chef', on_delete=models.CASCADE, related_name='meal_reviews')
     meal_event = models.ForeignKey(ChefMealEvent, on_delete=models.CASCADE, related_name='reviews')
     
     rating = models.PositiveSmallIntegerField(
@@ -436,7 +438,7 @@ class ChefMealPlan(models.Model):
     ]
     
     chef = models.ForeignKey(
-        Chef,
+        'chefs.Chef',
         on_delete=models.CASCADE,
         related_name='created_meal_plans'
     )

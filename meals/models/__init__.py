@@ -86,6 +86,11 @@ from .commerce import (
     MealPlanReceipt,
 )
 
+# Re-export from other apps for backward compatibility
+from custom_auth.models import CustomUser, Address
+from chefs.models import Chef
+from local_chefs.models import PostalCode, ChefPostalCode
+
 
 # Define __all__ for explicit exports
 __all__ = [
@@ -149,4 +154,10 @@ __all__ = [
     'PlatformFeeConfig',
     'PaymentLog',
     'MealPlanReceipt',
+    # Re-exported from other apps
+    'CustomUser',
+    'Address',
+    'Chef',
+    'PostalCode',
+    'ChefPostalCode',
 ]

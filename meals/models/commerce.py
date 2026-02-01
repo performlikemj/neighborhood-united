@@ -12,8 +12,8 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 import decimal
 import logging
 
-from chefs.models import Chef
 from custom_auth.models import CustomUser
+# Use string reference 'chefs.Chef' in ForeignKey fields to avoid circular import
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +172,7 @@ class OrderMeal(models.Model):
 
 # StripeConnect model to store chef's Stripe connection information
 class StripeConnectAccount(models.Model):
-    chef = models.OneToOneField(Chef, on_delete=models.CASCADE, related_name='stripe_account')
+    chef = models.OneToOneField('chefs.Chef', on_delete=models.CASCADE, related_name='stripe_account')
     stripe_account_id = models.CharField(max_length=255)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -230,7 +230,7 @@ class PaymentLog(models.Model):
     order = models.ForeignKey(Order, null=True, blank=True, on_delete=models.SET_NULL, related_name='payment_logs')
     chef_meal_order = models.ForeignKey('ChefMealOrder', null=True, blank=True, on_delete=models.SET_NULL, related_name='payment_logs')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
-    chef = models.ForeignKey(Chef, null=True, blank=True, on_delete=models.SET_NULL)
+    chef = models.ForeignKey('chefs.Chef', null=True, blank=True, on_delete=models.SET_NULL)
     
     action = models.CharField(max_length=20, choices=ACTION_CHOICES)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
@@ -276,7 +276,7 @@ class MealPlanReceipt(models.Model):
     
     # Ownership
     chef = models.ForeignKey(
-        Chef,
+        'chefs.Chef',
         on_delete=models.CASCADE,
         related_name='receipts',
         help_text="The chef who uploaded this receipt"

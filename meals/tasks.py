@@ -5,7 +5,7 @@ EXPECTED_EMBEDDING_SIZE = 1536  # Example size, adjust based on your embedding m
 
 from .models import SystemUpdate
 from .models import MealPlan, MealPlanMeal, Meal
-from .models import Chef
+from chefs.models import Chef
 from .chef_meals_views import sync_recent_payments
 import logging
 from datetime import timedelta

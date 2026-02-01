@@ -3363,7 +3363,7 @@ def api_get_chef_meals_by_postal_code(request):
             end_date = today + timedelta(days=6)
         
         # Find all chefs that serve this postal code
-        from .models import ChefPostalCode
+        from local_chefs.models import ChefPostalCode
         chef_ids = ChefPostalCode.objects.filter(
             postal_code__code=user_postal_code
         ).values_list('chef_id', flat=True)

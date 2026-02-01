@@ -373,7 +373,112 @@ class SousChefAssistant:
             language_instruction = f"\n<!-- LANGUAGE PREFERENCE -->\n<LanguagePreference>\n  This chef's preferred language is {language_name}. Please respond in {language_name} unless the chef specifically requests English or another language.\n</LanguagePreference>\n"
             instructions += language_instruction
         
+        # Inject relevant memories from long-term memory system
+        memory_context = self._build_memory_context()
+        if memory_context:
+            instructions += memory_context
+        
         return instructions
+    
+    def _build_memory_context(self) -> str:
+        """
+        Load and format relevant memories for injection into system prompt.
+        
+        Retrieves:
+        - Top 5 general chef memories (patterns, preferences, lessons)
+        - Top 3 active todos
+        - Top 5 family-specific memories if a family is selected
+        """
+        try:
+            from customer_dashboard.models import ChefMemory
+        except ImportError:
+            return ""
+        
+        memory_sections = []
+        
+        # Get general chef memories (not family-specific)
+        general_memories = ChefMemory.objects.filter(
+            chef=self.chef,
+            is_active=True,
+            customer__isnull=True,
+            lead__isnull=True
+        ).exclude(memory_type='todo').order_by('-importance', '-updated_at')[:5]
+        
+        if general_memories:
+            general_items = []
+            for m in general_memories:
+                type_label = dict(ChefMemory.MEMORY_TYPES).get(m.memory_type, m.memory_type)
+                general_items.append(f"    • [{type_label}] {m.content}")
+            memory_sections.append(
+                "  <GeneralMemories>\n" +
+                "    These are patterns, preferences, and lessons you've learned:\n" +
+                "\n".join(general_items) +
+                "\n  </GeneralMemories>"
+            )
+        
+        # Get active todos
+        active_todos = ChefMemory.objects.filter(
+            chef=self.chef,
+            is_active=True,
+            memory_type='todo'
+        ).order_by('-importance', '-created_at')[:3]
+        
+        if active_todos:
+            todo_items = []
+            for m in active_todos:
+                family_note = ""
+                if m.customer:
+                    family_note = f" (for {m.customer.first_name})"
+                elif m.lead:
+                    family_note = f" (for {m.lead.first_name})"
+                todo_items.append(f"    • {m.content}{family_note}")
+            memory_sections.append(
+                "  <ActiveTodos>\n" +
+                "    Remember these pending items:\n" +
+                "\n".join(todo_items) +
+                "\n  </ActiveTodos>"
+            )
+        
+        # Get family-specific memories if a family is selected
+        if self.has_family_context:
+            family_filter = {"chef": self.chef, "is_active": True}
+            if self.customer:
+                family_filter["customer"] = self.customer
+            elif self.lead:
+                family_filter["lead"] = self.lead
+            
+            family_memories = ChefMemory.objects.filter(**family_filter).order_by('-importance', '-updated_at')[:5]
+            
+            if family_memories:
+                family_items = []
+                for m in family_memories:
+                    type_label = dict(ChefMemory.MEMORY_TYPES).get(m.memory_type, m.memory_type)
+                    family_items.append(f"    • [{type_label}] {m.content}")
+                
+                family_name = "this family"
+                if self.customer:
+                    family_name = f"{self.customer.first_name}"
+                elif self.lead:
+                    family_name = f"{self.lead.first_name}"
+                
+                memory_sections.append(
+                    f"  <FamilyMemories>\n" +
+                    f"    What you've learned about {family_name}:\n" +
+                    "\n".join(family_items) +
+                    "\n  </FamilyMemories>"
+                )
+        
+        if not memory_sections:
+            return ""
+        
+        return (
+            "\n\n<!-- LONG-TERM MEMORY -->\n"
+            "<LongTermMemory>\n" +
+            "  Use these memories to provide continuity across conversations.\n" +
+            "  Save new learnings with save_chef_memory tool.\n\n" +
+            "\n\n".join(memory_sections) +
+            "\n</LongTermMemory>\n"
+        )
 
     def _get_tools(self) -> List[Dict[str, Any]]:
         """Get the tools available for sous chef operations.

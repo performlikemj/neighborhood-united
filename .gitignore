@@ -96,3 +96,4 @@ CONTINUITY.md
 /frontend/tests/chef_dashboard_e2e_report.md
 /frontend/tests/E2E_REMEDIATION_REPORT.md
 /frontend/tests/assets/
+.env.dev

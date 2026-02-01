@@ -1120,3 +1120,155 @@ def chef_gallery_photo_detail(request, username, photo_id):
     }
     
     return Response(data)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PROACTIVE INSIGHTS API
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def chef_proactive_insights(request):
+    """
+    Get proactive insights for the current chef.
+    
+    Query params:
+    - limit: Max insights to return (default: 10, max: 20)
+    - type: Filter by insight type (optional)
+    - include_read: Include already-read insights (default: false)
+    
+    Response:
+    {
+        "insights": [...],
+        "unread_count": int,
+        "total_count": int
+    }
+    """
+    from customer_dashboard.models import ChefProactiveInsight
+    
+    # Get chef
+    try:
+        chef = Chef.objects.get(user=request.user)
+    except Chef.DoesNotExist:
+        return Response({'detail': 'Not a chef'}, status=status.HTTP_403_FORBIDDEN)
+    
+    # Parse query params
+    limit = min(max(int(request.query_params.get('limit', 10)), 1), 20)
+    insight_type = request.query_params.get('type', None)
+    include_read = request.query_params.get('include_read', 'false').lower() == 'true'
+    
+    # Build query
+    now = timezone.now()
+    queryset = ChefProactiveInsight.objects.filter(
+        chef=chef,
+        is_dismissed=False
+    ).filter(
+        Q(expires_at__isnull=True) | Q(expires_at__gt=now)
+    )
+    
+    if not include_read:
+        queryset = queryset.filter(is_read=False)
+    
+    if insight_type:
+        queryset = queryset.filter(insight_type=insight_type)
+    
+    # Order by priority, then recency
+    from django.db.models import Case, When, IntegerField
+    priority_order = Case(
+        When(priority='high', then=1),
+        When(priority='medium', then=2),
+        When(priority='low', then=3),
+        output_field=IntegerField(),
+    )
+    
+    insights = queryset.annotate(
+        priority_rank=priority_order
+    ).order_by('priority_rank', '-created_at').select_related('customer', 'lead')[:limit]
+    
+    # Format response
+    results = []
+    for insight in insights:
+        family_name = None
+        if insight.customer:
+            family_name = f"{insight.customer.first_name} {insight.customer.last_name}".strip() or insight.customer.username
+        elif insight.lead:
+            family_name = f"{insight.lead.first_name} {insight.lead.last_name}".strip()
+        
+        results.append({
+            'id': insight.id,
+            'type': insight.insight_type,
+            'type_display': insight.get_insight_type_display(),
+            'title': insight.title,
+            'content': insight.content,
+            'priority': insight.priority,
+            'family': family_name,
+            'family_id': insight.customer_id or insight.lead_id,
+            'family_type': 'customer' if insight.customer_id else 'lead' if insight.lead_id else None,
+            'is_read': insight.is_read,
+            'created_at': insight.created_at.isoformat(),
+            'expires_at': insight.expires_at.isoformat() if insight.expires_at else None,
+            'action_data': insight.action_data,
+        })
+    
+    # Get counts
+    unread_count = ChefProactiveInsight.get_count_for_chef(chef)
+    total_count = ChefProactiveInsight.objects.filter(
+        chef=chef,
+        is_dismissed=False
+    ).filter(
+        Q(expires_at__isnull=True) | Q(expires_at__gt=now)
+    ).count()
+    
+    return Response({
+        'insights': results,
+        'unread_count': unread_count,
+        'total_count': total_count
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def chef_insight_action(request, insight_id):
+    """
+    Take action on a proactive insight.
+    
+    Request body:
+    {
+        "action": "read" | "dismiss" | "act",
+        "action_taken": "string (optional, for 'act')"
+    }
+    """
+    from customer_dashboard.models import ChefProactiveInsight
+    
+    # Get chef
+    try:
+        chef = Chef.objects.get(user=request.user)
+    except Chef.DoesNotExist:
+        return Response({'detail': 'Not a chef'}, status=status.HTTP_403_FORBIDDEN)
+    
+    # Get insight
+    try:
+        insight = ChefProactiveInsight.objects.get(id=insight_id, chef=chef)
+    except ChefProactiveInsight.DoesNotExist:
+        return Response({'detail': 'Insight not found'}, status=status.HTTP_404_NOT_FOUND)
+    
+    action = request.data.get('action', 'read')
+    
+    if action == 'read':
+        insight.mark_read()
+        message = 'Insight marked as read'
+    elif action == 'dismiss':
+        insight.dismiss()
+        message = 'Insight dismissed'
+    elif action == 'act':
+        action_taken = request.data.get('action_taken', '')
+        insight.mark_actioned(action_taken=action_taken)
+        message = 'Insight marked as actioned'
+    else:
+        return Response({'detail': f'Unknown action: {action}'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    return Response({
+        'status': 'success',
+        'message': message,
+        'insight_id': insight.id
+    })

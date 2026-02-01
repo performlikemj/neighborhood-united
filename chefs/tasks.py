@@ -4,6 +4,8 @@ from django.db.models import Q
 import os
 import logging
 
+from celery import shared_task
+
 from .models import Chef, ChefWaitlistSubscription, ChefWaitlistConfig, AreaWaitlist
 from meals.email_service import send_system_update_email
 
@@ -496,3 +498,76 @@ Respond ONLY with a valid JSON object containing a "suggestions" array."""
         if self.request.retries < self.max_retries:
             print(f"[CELERY TASK] Retrying task (attempt {self.request.retries + 1})")
             raise self.retry(exc=e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PROACTIVE INSIGHTS GENERATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=300)
+def generate_chef_proactive_insights(self, chef_id: int = None):
+    """
+    Generate proactive insights for chefs.
+    
+    Run daily for all chefs, or on-demand for a specific chef.
+    Uses the service module for insight generation logic.
+    
+    Args:
+        chef_id: If provided, generate for this chef only. Otherwise, all active chefs.
+    """
+    from chefs.services.proactive_insights import (
+        generate_chef_insights,
+        save_insights,
+        expire_old_insights
+    )
+    
+    try:
+        # Get chefs to process
+        if chef_id:
+            chefs = Chef.objects.filter(id=chef_id, user__is_active=True)
+        else:
+            chefs = Chef.objects.filter(user__is_active=True)
+        
+        total_insights = 0
+        chefs_processed = 0
+        
+        for chef in chefs:
+            try:
+                # Expire old insights first
+                expired = expire_old_insights(chef)
+                if expired > 0:
+                    logger.info(f"Expired {expired} old insights for chef {chef.id}")
+                
+                # Generate new insights
+                insights = generate_chef_insights(chef)
+                created = save_insights(insights)
+                
+                total_insights += created
+                chefs_processed += 1
+                
+                if created > 0:
+                    logger.info(f"Generated {created} insights for chef {chef.id}")
+                    
+            except Exception as e:
+                logger.error(f"Failed to generate insights for chef {chef.id}: {e}")
+                continue
+        
+        return {
+            'status': 'success',
+            'chefs_processed': chefs_processed,
+            'insights_created': total_insights
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in generate_chef_proactive_insights: {e}")
+        raise self.retry(exc=e)
+
+
+@shared_task
+def generate_daily_chef_insights():
+    """
+    Daily task to generate proactive insights for all active chefs.
+    
+    Schedule this in celerybeat to run daily (e.g., 6 AM).
+    """
+    return generate_chef_proactive_insights.delay(chef_id=None)

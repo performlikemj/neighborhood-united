@@ -230,4 +230,11 @@ urlpatterns = [
     path('api/admin/calendly-config/', meeting_api.admin_calendly_config, name='admin_calendly_config'),
     path('api/admin/chefs/<int:chef_id>/meeting/complete/', meeting_api.admin_mark_meeting_complete, name='admin_mark_meeting_complete'),
     path('api/admin/meetings/pending/', meeting_api.admin_pending_meetings, name='admin_pending_meetings'),
+
+    # ==========================================================================
+    # Proactive Insights API
+    # ==========================================================================
+    
+    path('api/me/insights/', views.chef_proactive_insights, name='chef_proactive_insights'),
+    path('api/me/insights/<int:insight_id>/', views.chef_insight_action, name='chef_insight_action'),
 ]

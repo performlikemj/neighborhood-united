@@ -9,6 +9,9 @@ from chefs.api import unified_clients as unified_api
 from chefs.api import sous_chef as sous_chef_api
 from chefs.api import availability as availability_api
 from chefs.api import workspace as workspace_api
+from chefs.api import onboarding as onboarding_api
+from chefs.api import proactive as proactive_api
+from chefs.api import notifications as notifications_api
 from chefs.api import meal_plans as meal_plans_api
 from chefs.api import payment_links as payment_links_api
 from chefs.api import documents as documents_api
@@ -145,6 +148,41 @@ urlpatterns = [
     path('api/me/workspace/', workspace_api.workspace_get, name='chef_workspace'),
     path('api/me/workspace/update/', workspace_api.workspace_update, name='chef_workspace_update'),
     path('api/me/workspace/reset/', workspace_api.workspace_reset, name='chef_workspace_reset'),
+
+    # ==========================================================================
+    # Sous Chef Onboarding API
+    # ==========================================================================
+
+    path('api/me/onboarding/', onboarding_api.onboarding_get, name='chef_onboarding'),
+    path('api/me/onboarding/welcomed/', onboarding_api.onboarding_welcomed, name='chef_onboarding_welcomed'),
+    path('api/me/onboarding/start/', onboarding_api.onboarding_start, name='chef_onboarding_start'),
+    path('api/me/onboarding/complete/', onboarding_api.onboarding_complete, name='chef_onboarding_complete'),
+    path('api/me/onboarding/skip/', onboarding_api.onboarding_skip, name='chef_onboarding_skip'),
+    path('api/me/onboarding/milestone/', onboarding_api.onboarding_milestone, name='chef_onboarding_milestone'),
+    path('api/me/onboarding/tip/show/', onboarding_api.onboarding_tip_show, name='chef_onboarding_tip_show'),
+    path('api/me/onboarding/tip/dismiss/', onboarding_api.onboarding_tip_dismiss, name='chef_onboarding_tip_dismiss'),
+    path('api/me/onboarding/personality/', onboarding_api.onboarding_personality, name='chef_onboarding_personality'),
+
+    # ==========================================================================
+    # Sous Chef Proactive Settings API
+    # ==========================================================================
+
+    path('api/me/proactive/', proactive_api.proactive_get, name='chef_proactive'),
+    path('api/me/proactive/update/', proactive_api.proactive_update, name='chef_proactive_update'),
+    path('api/me/proactive/disable/', proactive_api.proactive_disable, name='chef_proactive_disable'),
+    path('api/me/proactive/enable/', proactive_api.proactive_enable, name='chef_proactive_enable'),
+
+    # ==========================================================================
+    # Sous Chef Notifications API
+    # ==========================================================================
+
+    path('api/me/notifications/', notifications_api.notifications_list, name='chef_notifications'),
+    path('api/me/notifications/unread-count/', notifications_api.notifications_unread_count, name='chef_notifications_unread_count'),
+    path('api/me/notifications/mark-all-read/', notifications_api.notifications_mark_all_read, name='chef_notifications_mark_all_read'),
+    path('api/me/notifications/dismiss-all/', notifications_api.notifications_dismiss_all, name='chef_notifications_dismiss_all'),
+    path('api/me/notifications/<int:notification_id>/', notifications_api.notification_detail, name='chef_notification_detail'),
+    path('api/me/notifications/<int:notification_id>/read/', notifications_api.notification_mark_read, name='chef_notification_read'),
+    path('api/me/notifications/<int:notification_id>/dismiss/', notifications_api.notification_dismiss, name='chef_notification_dismiss'),
 
     # ==========================================================================
     # Collaborative Meal Plans API (Chef endpoints)

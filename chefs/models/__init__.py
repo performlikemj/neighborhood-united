@@ -32,6 +32,13 @@ from .sous_chef_memory import (
     hybrid_memory_search,
 )
 
+# Proactive engine models
+from .proactive import (
+    ChefProactiveSettings,
+    ChefOnboardingState,
+    ChefNotification,
+)
+
 __all__ = [
     # Base models
     'Chef',
@@ -54,4 +61,8 @@ __all__ = [
     'ClientContext',
     'SousChefUsage',
     'hybrid_memory_search',
+    # Proactive engine
+    'ChefProactiveSettings',
+    'ChefOnboardingState',
+    'ChefNotification',
 ]

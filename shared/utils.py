@@ -572,14 +572,19 @@ def generate_family_context_for_chef(chef, customer=None, lead=None):
                     member_line = f"- **{member.name}**"
                     if member.age:
                         member_line += f" (Age: {member.age})"
-                    
+
                     member_dietary = ', '.join([pref.name for pref in member.dietary_preferences.all()]) if member.dietary_preferences.exists() else None
                     if member_dietary:
                         member_line += f" — Dietary: {member_dietary}"
-                    
+
+                    # Include allergies for household members
+                    member_allergies = set((member.allergies or []) + (member.custom_allergies or []))
+                    if member_allergies:
+                        member_line += f" — Allergies: {', '.join(member_allergies)}"
+
                     if member.notes:
                         member_line += f" — Notes: {member.notes}"
-                    
+
                     context_parts.append(member_line)
         
         # Connection status with this chef

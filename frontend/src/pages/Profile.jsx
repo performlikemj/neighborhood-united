@@ -23,7 +23,7 @@ export default function Profile(){
   const [toasts, setToasts] = useState([]) // {id, text, tone, closing}
   const [locationHint, setLocationHint] = useState(false)
   // Household & communication
-  const [household, setHousehold] = useState([]) // [{name, age, dietary_preferences:[], notes}]
+  const [household, setHousehold] = useState([]) // [{name, age, dietary_preferences:[], allergies:[], custom_allergies:'', notes}]
   const [householdIdx, setHouseholdIdx] = useState(0)
   const [receiveEmails, setReceiveEmails] = useState(true)
   const [prefLang, setPrefLang] = useState('en')
@@ -62,6 +62,8 @@ export default function Profile(){
           name: m.name || '',
           age: typeof m.age === 'number' ? m.age : (m.age ? parseInt(m.age, 10) || 0 : 0),
           dietary_preferences: Array.isArray(m.dietary_preferences) ? m.dietary_preferences : [],
+          allergies: Array.isArray(m.allergies) ? m.allergies : [],
+          custom_allergies: Array.isArray(m.custom_allergies) ? m.custom_allergies.join(', ') : (m.custom_allergies || ''),
           notes: m.notes || ''
         })))
       }
@@ -190,7 +192,7 @@ export default function Profile(){
     return true
   }
 
-  const addMember = ()=> setHousehold(arr => ([...arr, { name:'', age:0, dietary_preferences:[], notes:'' }]))
+  const addMember = ()=> setHousehold(arr => ([...arr, { name:'', age:0, dietary_preferences:[], allergies:[], custom_allergies:'', notes:'' }]))
   const removeMember = (idx)=> setHousehold(arr => arr.filter((_,i)=> i!==idx))
   const updateMember = (idx, key, value)=> setHousehold(arr => arr.map((m,i)=> i===idx ? ({...m, [key]: value}) : m))
 
@@ -215,9 +217,11 @@ export default function Profile(){
         name: (m.name||'').trim(),
         age: m.age ? Number(m.age) : null,
         dietary_preferences: Array.isArray(m.dietary_preferences) ? m.dietary_preferences : [],
+        allergies: Array.isArray(m.allergies) ? m.allergies : [],
+        custom_allergies: normalizeCommaList(m.custom_allergies),
         notes: (m.notes||'').trim(),
       }))
-      .filter(m => m.name || m.age || (m.dietary_preferences && m.dietary_preferences.length) || m.notes)
+      .filter(m => m.name || m.age || (m.dietary_preferences && m.dietary_preferences.length) || (m.allergies && m.allergies.length) || m.notes)
     // Normalize postal/country: send both or neither
     const postal = (form?.post_code || form?.postal_code || user?.address?.postalcode || '').trim()
     const countryVal = (form?.country || user?.address?.country || '').trim()
@@ -405,7 +409,7 @@ export default function Profile(){
               <span className="muted" style={{marginLeft:'.25rem'}}>({householdIdx+1} of {household.length})</span>
             </div>
           )}
-          {household.length > 0 && (()=>{ const idx = householdIdx; const m = household[idx] || { name:'', age:0, dietary_preferences:[], notes:'' }
+          {household.length > 0 && (()=>{ const idx = householdIdx; const m = household[idx] || { name:'', age:0, dietary_preferences:[], allergies:[], custom_allergies:'', notes:'' }
             return (
               <div className="card" style={{padding:'.75rem', marginBottom:'.5rem'}}>
                 <div className="grid" style={{gridTemplateColumns:'1fr 140px', gap:'.5rem'}}>
@@ -424,6 +428,20 @@ export default function Profile(){
                   selected={m.dietary_preferences||[]}
                   onChange={(arr)=> updateMember(idx,'dietary_preferences', arr)}
                   placeholder="Select preferences for this member"
+                />
+                <div className="label" style={{marginTop:'.4rem'}}>Allergies</div>
+                <DietMultiSelect
+                  options={allergyOptions}
+                  selected={m.allergies||[]}
+                  onChange={(arr)=> updateMember(idx,'allergies', arr)}
+                  placeholder="Select allergies for this member"
+                />
+                <div className="label" style={{marginTop:'.4rem'}}>Custom allergies (comma separated)</div>
+                <input
+                  className="input"
+                  value={m.custom_allergies||''}
+                  onChange={e=>updateMember(idx,'custom_allergies',e.target.value)}
+                  placeholder="e.g., Avocado, Mango"
                 />
                 <div className="label" style={{marginTop:'.4rem'}}>Notes</div>
                 <textarea className="textarea" rows={2} value={m.notes} onChange={e=>updateMember(idx,'notes',e.target.value)} />

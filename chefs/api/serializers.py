@@ -352,11 +352,11 @@ class PlatformHouseholdMemberSerializer(serializers.ModelSerializer):
     Household member for platform users.
     """
     dietary_preferences = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = HouseholdMember
-        fields = ['id', 'name', 'age', 'dietary_preferences', 'notes']
-    
+        fields = ['id', 'name', 'age', 'dietary_preferences', 'allergies', 'custom_allergies', 'notes']
+
     def get_dietary_preferences(self, obj):
         return list(obj.dietary_preferences.values_list('name', flat=True))
 

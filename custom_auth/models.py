@@ -337,6 +337,16 @@ class HouseholdMember(models.Model):
         blank=True,
         related_name='household_members'
     )
+    allergies = ArrayField(
+        models.CharField(max_length=50),
+        default=list,
+        blank=True,
+    )
+    custom_allergies = ArrayField(
+        models.CharField(max_length=100),
+        default=list,
+        blank=True,
+    )
     notes = models.TextField(blank=True, null=True)
 
     def __str__(self):

@@ -20,10 +20,20 @@ class HouseholdMemberSerializer(serializers.ModelSerializer):
         queryset=DietaryPreference.objects.all(),
         required=False,
     )
+    allergies = serializers.ListField(
+        child=serializers.CharField(max_length=50),
+        allow_empty=True,
+        required=False,
+    )
+    custom_allergies = serializers.ListField(
+        child=serializers.CharField(max_length=100),
+        allow_empty=True,
+        required=False,
+    )
 
     class Meta:
         model = HouseholdMember
-        fields = ['id', 'name', 'age', 'dietary_preferences', 'notes']
+        fields = ['id', 'name', 'age', 'dietary_preferences', 'allergies', 'custom_allergies', 'notes']
 
     def create(self, validated_data):
         prefs = validated_data.pop('dietary_preferences', [])

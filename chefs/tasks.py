@@ -248,6 +248,10 @@ def _build_dietary_context(plan) -> str:
                         desc += f" ({', '.join(member_prefs)})"
                     if m.age:
                         desc += f", age {m.age}"
+                    # Include allergies for HouseholdMember (mirrors LeadHouseholdMember)
+                    member_allergies = set((m.allergies or []) + (m.custom_allergies or []))
+                    if member_allergies:
+                        desc += f" [allergies: {', '.join(member_allergies)}]"
                     members_desc.append(desc)
                 dietary_summary.append(f"Household members: {', '.join(members_desc)}")
 
@@ -303,6 +307,8 @@ def generate_meal_plan_suggestions_async(job_id: int) -> None:
             'plan__customer', 'plan__lead', 'chef'
         ).prefetch_related(
             'plan__customer__household_members__dietary_preferences',
+            'plan__customer__dietary_preferences',
+            'plan__customer__custom_dietary_preferences',
             'plan__lead__household_members',
         ).get(id=job_id)
         print(f"[CELERY TASK] Job {job_id} loaded successfully")

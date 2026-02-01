@@ -615,7 +615,7 @@ packages:
     peerDependencies:
       vite: ^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0
 
-  '@xmldom/xmldom@0.8.3':
+  '@xmldom/xmldom@0.8.11':
     resolution: {integrity: sha512-Lv2vySXypg4nfa51LY1nU8yDAGo/5YwF+EY/rUZgIbfvwVARcd67ttCM8SMsTeJy51YhHYavEq+FS6R0hW9PFQ==}
     engines: {node: '>=10.0.0'}
     deprecated: this version has critical issues, please update to the latest version
@@ -2558,7 +2558,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@xmldom/xmldom@0.8.3': {}
+  '@xmldom/xmldom@0.8.11': {}
 
   JSONStream@0.8.0:
     dependencies:
@@ -3900,7 +3900,7 @@ snapshots:
   osmtogeojson@3.0.0-beta.5:
     dependencies:
       '@mapbox/geojson-rewind': 0.5.2
-      '@xmldom/xmldom': 0.8.3
+      '@xmldom/xmldom': 0.8.11
       JSONStream: 0.8.0
       concat-stream: 2.0.0
       geojson-numeric: 0.2.1

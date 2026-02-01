@@ -11,7 +11,9 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import FamilySelector from './FamilySelector.jsx'
 import SousChefChat from './SousChefChat.jsx'
 import WorkspaceSettings from './WorkspaceSettings.jsx'
+import SousChefNotificationPanel from './SousChefNotificationPanel.jsx'
 import { useSousChefNotifications } from '../contexts/SousChefNotificationContext.jsx'
+import { useUnreadCount, useMarkAsRead } from '../hooks/useNotifications'
 
 // Panel size configurations (fixed sizes, no resize)
 const PANEL_SIZES = {
@@ -29,7 +31,7 @@ export default function SousChefWidget({
   // Hide widget when on the full-page Sous Chef view
   const isOnSousChefPage = location.pathname === '/chefs/dashboard/sous-chef'
 
-  // Notification context
+  // Notification context (for local/frontend notifications)
   let notifications = null
   try {
     notifications = useSousChefNotifications()
@@ -37,8 +39,13 @@ export default function SousChefWidget({
     // Context not available
   }
 
+  // Backend notification count (polls every 30 seconds)
+  const { data: backendUnreadCount = 0 } = useUnreadCount({ enabled: true })
+  const markReadMutation = useMarkAsRead()
+
   const [isOpen, setIsOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [notifPanelOpen, setNotifPanelOpen] = useState(false)
   const [panelSize, setPanelSize] = useState('small')
   const [screenSize, setScreenSize] = useState('normal')
   const [selectedFamily, setSelectedFamily] = useState({
@@ -197,7 +204,9 @@ export default function SousChefWidget({
     })
   }, [navigate, selectedFamily])
 
-  const unreadCount = notifications?.unreadCount || 0
+  // Combine frontend and backend notification counts
+  const frontendUnreadCount = notifications?.unreadCount || 0
+  const unreadCount = frontendUnreadCount + backendUnreadCount
   const currentSize = PANEL_SIZES[panelSize]
 
   // Don't render if on the full-page Sous Chef view
@@ -248,6 +257,21 @@ export default function SousChefWidget({
               <span className="sc-header-title">Sous Chef</span>
             </div>
             <div className="sc-header-actions">
+              {/* Notification Bell */}
+              <button
+                className="sc-header-btn sc-notif-btn"
+                onClick={() => setNotifPanelOpen(!notifPanelOpen)}
+                aria-label="Notifications"
+                title="Notifications"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                </svg>
+                {unreadCount > 0 && (
+                  <span className="sc-header-badge">{unreadCount > 9 ? '9+' : unreadCount}</span>
+                )}
+              </button>
               <button
                 className="sc-header-btn"
                 onClick={() => setSettingsOpen(true)}
@@ -365,6 +389,28 @@ export default function SousChefWidget({
       <WorkspaceSettings
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
+      />
+
+      {/* Notification Panel */}
+      <SousChefNotificationPanel
+        isOpen={notifPanelOpen}
+        onClose={() => setNotifPanelOpen(false)}
+        onNotificationClick={(notif) => {
+          // Mark as read on backend
+          if (notif.id) {
+            markReadMutation.mutate(notif.id)
+          }
+          // Store context and open chat
+          if (notif.context) {
+            setPendingContext({
+              clientName: notif.context?.client_name || notif.context?.clientName,
+              familyId: notif.context?.family_id || notif.context?.familyId,
+              ...notif.context
+            })
+          }
+          setNotifPanelOpen(false)
+          setIsOpen(true)
+        }}
       />
 
       <style>{`
@@ -624,6 +670,29 @@ export default function SousChefWidget({
         .sc-close-btn:hover {
           background: rgba(239, 68, 68, 0.1);
           color: var(--danger, #ef4444);
+        }
+
+        /* Notification button with badge */
+        .sc-notif-btn {
+          position: relative;
+        }
+
+        .sc-header-badge {
+          position: absolute;
+          top: -2px;
+          right: -2px;
+          min-width: 14px;
+          height: 14px;
+          background: var(--danger, #ef4444);
+          color: white;
+          font-size: 0.6rem;
+          font-weight: 600;
+          border-radius: 7px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 0 3px;
+          animation: sc-badge-pop 0.3s ease;
         }
 
         /* ─────────────────────────────────────────────

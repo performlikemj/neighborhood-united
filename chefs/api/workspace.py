@@ -63,6 +63,9 @@ def workspace_get(request):
         "include_analytics": workspace.include_analytics,
         "include_seasonal": workspace.include_seasonal,
         "auto_memory_save": workspace.auto_memory_save,
+        "chef_nickname": workspace.chef_nickname,
+        "chef_specialties": workspace.chef_specialties,
+        "sous_chef_name": workspace.sous_chef_name,
         "created_at": workspace.created_at.isoformat(),
         "updated_at": workspace.updated_at.isoformat(),
     })
@@ -104,6 +107,9 @@ def workspace_update(request):
         'include_analytics',
         'include_seasonal',
         'auto_memory_save',
+        'chef_nickname',
+        'chef_specialties',
+        'sous_chef_name',
     ]
 
     updated_fields = []
@@ -127,6 +133,9 @@ def workspace_update(request):
         "include_analytics": workspace.include_analytics,
         "include_seasonal": workspace.include_seasonal,
         "auto_memory_save": workspace.auto_memory_save,
+        "chef_nickname": workspace.chef_nickname,
+        "chef_specialties": workspace.chef_specialties,
+        "sous_chef_name": workspace.sous_chef_name,
         "updated_at": workspace.updated_at.isoformat(),
     })
 
@@ -169,6 +178,9 @@ def workspace_reset(request):
         'include_analytics': True,
         'include_seasonal': True,
         'auto_memory_save': True,
+        'chef_nickname': '',
+        'chef_specialties': [],
+        'sous_chef_name': '',
     }
 
     reset_fields = []
@@ -191,5 +203,8 @@ def workspace_reset(request):
         "include_analytics": workspace.include_analytics,
         "include_seasonal": workspace.include_seasonal,
         "auto_memory_save": workspace.auto_memory_save,
+        "chef_nickname": workspace.chef_nickname,
+        "chef_specialties": workspace.chef_specialties,
+        "sous_chef_name": workspace.sous_chef_name,
         "updated_at": workspace.updated_at.isoformat(),
     })

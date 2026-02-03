@@ -7,7 +7,7 @@ for use with OpenAI Agents SDK.
 """
 
 import logging
-from typing import List, Any, Optional, Dict
+from typing import List, Any, Optional
 from functools import wraps
 
 from .categories import (
@@ -65,7 +65,7 @@ class ToolContext:
 # Sensitive data wrapper for agents tools
 # =============================================================================
 
-def _check_sensitive_restriction(tool_name: str) -> Optional[Dict[str, Any]]:
+def _check_sensitive_restriction(tool_name: str) -> Optional[dict]:
     """
     Check if tool should be restricted on current channel.
     
@@ -93,7 +93,7 @@ def _check_sensitive_restriction(tool_name: str) -> Optional[Dict[str, Any]]:
 # =============================================================================
 
 @function_tool
-def get_family_dietary_summary() -> Dict[str, Any]:
+def get_family_dietary_summary() -> dict:
     """
     Get dietary preferences and restrictions for the current family.
     
@@ -112,7 +112,7 @@ def get_family_dietary_summary() -> Dict[str, Any]:
 
 
 @function_tool
-def get_household_members() -> Dict[str, Any]:
+def get_household_members() -> dict:
     """
     Get information about household members.
     
@@ -132,7 +132,7 @@ def get_household_members() -> Dict[str, Any]:
 def check_recipe_compliance(
     ingredients: List[str],
     recipe_name: str = "Recipe",
-) -> Dict[str, Any]:
+) -> dict:
     """
     Check if a recipe is safe for the family's dietary needs.
     
@@ -167,7 +167,7 @@ def check_recipe_compliance(
 
 
 @function_tool
-def get_family_order_history(limit: int = 10) -> Dict[str, Any]:
+def get_family_order_history(limit: int = 10) -> dict:
     """
     Get order history between chef and family.
     
@@ -185,7 +185,7 @@ def get_family_order_history(limit: int = 10) -> Dict[str, Any]:
 
 
 @function_tool
-def get_upcoming_family_orders() -> Dict[str, Any]:
+def get_upcoming_family_orders() -> dict:
     """
     Get upcoming/scheduled orders for this family.
     
@@ -203,7 +203,7 @@ def add_family_note(
     summary: str,
     details: Optional[str] = None,
     interaction_type: str = "note",
-) -> Dict[str, Any]:
+) -> dict:
     """
     Add a note about this family to the CRM.
     
@@ -223,7 +223,7 @@ def add_family_note(
 
 
 @function_tool
-def search_chef_dishes(query: str, limit: int = 10) -> Dict[str, Any]:
+def search_chef_dishes(query: str, limit: int = 10) -> dict:
     """
     Search dishes in the chef's catalog.
     
@@ -245,7 +245,7 @@ def search_chef_dishes(query: str, limit: int = 10) -> Dict[str, Any]:
 def get_seasonal_ingredients(
     month: Optional[int] = None,
     category: str = "all",
-) -> Dict[str, Any]:
+) -> dict:
     """
     Get ingredients that are currently in season.
     
@@ -264,7 +264,7 @@ def get_seasonal_ingredients(
 
 
 @function_tool
-def get_chef_analytics(days: int = 30) -> Dict[str, Any]:
+def get_chef_analytics(days: int = 30) -> dict:
     """
     Get analytics and performance metrics for the chef.
     
@@ -286,7 +286,7 @@ def draft_client_message(
     message_type: str,
     key_points: List[str],
     tone: str = "friendly",
-) -> Dict[str, Any]:
+) -> dict:
     """
     Draft a message to send to a client.
     
@@ -309,7 +309,7 @@ def draft_client_message(
 # Navigation tools (web only)
 
 @function_tool
-def navigate_to_dashboard_tab(tab_name: str) -> Dict[str, Any]:
+def navigate_to_dashboard_tab(tab_name: str) -> dict:
     """
     Navigate the user to a specific dashboard tab.
     
@@ -329,18 +329,24 @@ def navigate_to_dashboard_tab(tab_name: str) -> Dict[str, Any]:
 @function_tool
 def prefill_form(
     form_type: str,
-    values: Dict[str, Any],
-) -> Dict[str, Any]:
+    values_json: str,
+) -> dict:
     """
     Pre-fill a form with suggested values.
     
     Args:
         form_type: Type of form to prefill
-        values: Key-value pairs to fill
+        values_json: JSON string of key-value pairs to fill, e.g. '{"name": "John", "email": "john@example.com"}'
     
     Returns:
         Prefill action for the frontend.
     """
+    import json
+    try:
+        values = json.loads(values_json)
+    except json.JSONDecodeError:
+        return {"error": "Invalid JSON in values_json parameter"}
+    
     from meals.sous_chef_tools import _prefill_form
     return _prefill_form(
         {"form_type": form_type, "values": values},

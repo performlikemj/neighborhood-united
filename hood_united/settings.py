@@ -481,13 +481,25 @@ else:
     if not RAW_REDIS_URL:
         raise RuntimeError("REDIS_URL is not set")
 
-    # Upstash and most modern Redis providers use properly formatted rediss:// URLs
-    # No URL manipulation needed - the provider URL is used as-is
+    # Strip ssl_cert_reqs parameter from URL - django-redis doesn't understand it
+    # Celery needs it in URL, but django-redis needs it in OPTIONS
+    from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
+    parsed = urlparse(RAW_REDIS_URL)
+    query_params = parse_qs(parsed.query)
+    query_params.pop('ssl_cert_reqs', None)  # Remove if present
+    clean_query = urlencode(query_params, doseq=True)
+    REDIS_CACHE_URL = urlunparse(parsed._replace(query=clean_query))
+
+    # Check if SSL is needed (rediss:// scheme)
+    import ssl
+    ssl_options = {}
+    if parsed.scheme == "rediss":
+        ssl_options["ssl_cert_reqs"] = ssl.CERT_REQUIRED
 
     CACHES = {
         "default": {
             "BACKEND": "django_redis.cache.RedisCache",
-            "LOCATION": RAW_REDIS_URL,
+            "LOCATION": REDIS_CACHE_URL,
             "OPTIONS": {
                 "CLIENT_CLASS": "django_redis.client.DefaultClient",
                 # password is already embedded in the URL; no need for extra key
@@ -495,6 +507,7 @@ else:
                 "SOCKET_TIMEOUT": 15,
                 "RETRY_ON_TIMEOUT": True,
                 "SOCKET_KEEPALIVE": True,
+                "CONNECTION_POOL_KWARGS": ssl_options,
             },
         }
     }

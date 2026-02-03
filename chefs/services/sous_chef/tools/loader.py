@@ -17,35 +17,61 @@ from .categories import (
 logger = logging.getLogger(__name__)
 
 
+def _normalize_tool_schema(tool: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize a tool schema to OpenAI/Groq format.
+
+    Converts flat format: {"type": "function", "name": "...", ...}
+    To nested format: {"type": "function", "function": {"name": "...", ...}}
+    """
+    # Already in correct format
+    if "function" in tool and isinstance(tool.get("function"), dict):
+        return tool
+
+    # Convert flat format to nested
+    if tool.get("type") == "function" and "name" in tool:
+        return {
+            "type": "function",
+            "function": {
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+                "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
+            }
+        }
+
+    # Unknown format, return as-is
+    return tool
+
+
 def get_tool_schemas_for_channel(channel: str) -> List[Dict[str, Any]]:
     """
     Get OpenAI-format tool schemas filtered for the given channel.
-    
+
     Args:
         channel: One of 'web', 'telegram', 'line', 'api'
-    
+
     Returns:
         List of tool schemas in OpenAI function format
     """
     from meals.sous_chef_tools import SOUS_CHEF_TOOLS
-    
+
     allowed_categories = get_categories_for_channel(channel)
     filtered_tools = []
-    
+
     for tool in SOUS_CHEF_TOOLS:
         tool_name = tool.get("name") or tool.get("function", {}).get("name")
-        
+
         if tool_name is None:
             continue
-        
+
         category = TOOL_REGISTRY.get(tool_name)
-        
+
         if category is None:
             # Tool not in registry - include by default (backwards compat)
             logger.warning(f"Tool '{tool_name}' not in registry, including by default")
-            filtered_tools.append(tool)
+            filtered_tools.append(_normalize_tool_schema(tool))
         elif category in allowed_categories:
-            filtered_tools.append(tool)
+            filtered_tools.append(_normalize_tool_schema(tool))
         else:
             logger.debug(f"Tool '{tool_name}' ({category}) excluded for channel '{channel}'")
     

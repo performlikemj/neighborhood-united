@@ -79,8 +79,8 @@ def process_chef_message(chef, text: str) -> str:
     """
     Process a message from a chef and generate a response.
     
-    This is a placeholder that integrates with the Sous Chef AI assistant.
-    For now, returns a simple acknowledgment.
+    Routes the message through Sous Chef AI assistant in general mode
+    (no specific family context).
     
     Args:
         chef: Chef model instance
@@ -89,14 +89,29 @@ def process_chef_message(chef, text: str) -> str:
     Returns:
         str: Response text to send back
     """
-    # TODO: Integrate with Sous Chef AI assistant
-    # For now, return a simple acknowledgment
     logger.info(f"Processing message from chef {chef.id}: {text[:50]}...")
     
-    return (
-        f"Hi {chef.user.first_name or 'Chef'}! "
-        "I received your message. Sous Chef integration coming soon! 🍳"
-    )
+    try:
+        from meals.sous_chef_assistant import SousChefAssistant
+        
+        # General mode - no family context for Telegram
+        assistant = SousChefAssistant(
+            chef_id=chef.id,
+            family_id=None,
+            family_type=None
+        )
+        
+        result = assistant.send_message(text)
+        
+        if result.get("status") == "success":
+            return result.get("message", "I processed your request but have nothing to say.")
+        else:
+            logger.error(f"Sous Chef error for chef {chef.id}: {result.get('message')}")
+            return "Sorry, I ran into an issue. Please try again or check the dashboard."
+            
+    except Exception as e:
+        logger.error(f"Failed to process message for chef {chef.id}: {e}")
+        return "Sorry, something went wrong. Please try again later or use the dashboard."
 
 
 def filter_sensitive_data(response: str) -> str:

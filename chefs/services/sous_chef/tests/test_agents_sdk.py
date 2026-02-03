@@ -176,9 +176,9 @@ class TestToolConversion:
     """Test converting existing tools to @function_tool format."""
     
     def test_function_tool_decorator_works(self):
-        """@function_tool decorator creates callable with metadata."""
+        """@function_tool decorator creates FunctionTool with metadata."""
         try:
-            from agents import function_tool
+            from agents import function_tool, FunctionTool
         except ImportError:
             pytest.skip("openai-agents not installed")
         
@@ -187,12 +187,11 @@ class TestToolConversion:
             """A sample tool that does something useful."""
             return {"arg1": arg1, "arg2": arg2}
         
-        # Should be callable
-        result = sample_tool("test", 10)
-        assert result == {"arg1": "test", "arg2": 10}
+        # Should be a FunctionTool instance (not directly callable)
+        assert isinstance(sample_tool, FunctionTool)
         
         # Should have name attribute
-        assert hasattr(sample_tool, 'name') or callable(sample_tool)
+        assert hasattr(sample_tool, 'name')
     
     def test_agents_tools_module_exists(self):
         """agents_tools.py module should exist and be importable."""

@@ -107,6 +107,112 @@ def get_channel_context(channel: str) -> str:
     return CHANNEL_CONTEXTS.get(channel, CHANNEL_CONTEXTS["web"])
 
 
+class SousChefPromptBuilder:
+    """
+    Class-based prompt builder for Sous Chef.
+    
+    Provides a fluent interface for building system prompts with
+    chef, family, and channel context.
+    """
+    
+    def __init__(
+        self,
+        chef,
+        channel: str = "web",
+        customer=None,
+        lead=None,
+    ):
+        """
+        Initialize the prompt builder.
+        
+        Args:
+            chef: Chef model instance
+            channel: Channel type ('web', 'telegram', 'line', 'api')
+            customer: Optional CustomUser instance
+            lead: Optional Lead instance
+        """
+        self.chef = chef
+        self.channel = channel
+        self.customer = customer
+        self.lead = lead
+    
+    def _get_chef_name(self) -> str:
+        """Get the chef's display name."""
+        return self.chef.user.first_name or self.chef.user.username
+    
+    def _build_family_context(self) -> str:
+        """Build the family context block."""
+        if self.customer:
+            return self._build_customer_context()
+        elif self.lead:
+            return self._build_lead_context()
+        return "    <NoFamilySelected>No family context loaded.</NoFamilySelected>"
+    
+    def _build_customer_context(self) -> str:
+        """Build context for a customer family."""
+        if not self.customer:
+            return ""
+        
+        lines = [f"    <Customer name=\"{self.customer.get_full_name() or self.customer.email}\">"]
+        
+        # Add dietary preferences if available
+        if hasattr(self.customer, 'dietary_preference') and self.customer.dietary_preference:
+            lines.append(f"      <DietaryPreference>{self.customer.dietary_preference}</DietaryPreference>")
+        
+        # Add allergies if available
+        if hasattr(self.customer, 'allergies') and self.customer.allergies:
+            allergies = self.customer.allergies if isinstance(self.customer.allergies, list) else [self.customer.allergies]
+            lines.append(f"      <Allergies>{', '.join(allergies)}</Allergies>")
+        
+        lines.append("    </Customer>")
+        return "\n".join(lines)
+    
+    def _build_lead_context(self) -> str:
+        """Build context for a lead family."""
+        if not self.lead:
+            return ""
+        
+        name = f"{self.lead.first_name} {self.lead.last_name}".strip() or self.lead.email
+        lines = [f"    <Lead name=\"{name}\">"]
+        
+        # Add notes if available
+        if hasattr(self.lead, 'notes') and self.lead.notes:
+            lines.append(f"      <Notes>{self.lead.notes}</Notes>")
+        
+        lines.append("    </Lead>")
+        return "\n".join(lines)
+    
+    def _build_tools_description(self) -> str:
+        """Build tools description for the prompt."""
+        from ..tools.categories import get_categories_for_channel
+        
+        categories = get_categories_for_channel(self.channel)
+        lines = []
+        for category in categories:
+            lines.append(f"    • {category.value} tools available")
+        
+        if self.channel == "telegram":
+            lines.append("    • Note: Navigation and UI tools are NOT available via Telegram")
+        elif self.channel == "line":
+            lines.append("    • Note: Navigation tools unavailable, but LINE messaging is available")
+        
+        return "\n".join(lines) if lines else "    • Core tools available"
+    
+    def build(self) -> str:
+        """
+        Build the complete system prompt.
+        
+        Returns:
+            Complete system prompt string
+        """
+        return build_system_prompt(
+            chef_name=self._get_chef_name(),
+            family_context=self._build_family_context(),
+            tools_description=self._build_tools_description(),
+            channel=self.channel,
+        )
+
+
 def build_system_prompt(
     chef_name: str,
     family_context: str,

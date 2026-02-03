@@ -424,6 +424,42 @@ chefs/services/sous_chef/
 
 ---
 
+## Phase 6: Update Web API Endpoints
+
+### Goal
+Replace `SousChefAssistant` usage in `chefs/api/sous_chef.py` with `get_sous_chef_service()`.
+
+### Endpoints to Update
+- `sous_chef_stream_message` (line 132)
+- `sous_chef_send_message` (line 195)
+- `sous_chef_structured_message` (line 253)
+- `sous_chef_new_conversation` (line 317)
+- `sous_chef_thread_history` (line 369)
+- `sous_chef_family_context` (line 433)
+
+### Pattern
+```python
+# Before:
+from meals.sous_chef_assistant import SousChefAssistant
+assistant = SousChefAssistant(chef=chef, customer=customer)
+response = assistant.send_message(message)
+
+# After:
+from chefs.services.sous_chef import get_sous_chef_service
+service = get_sous_chef_service(
+    chef_id=chef.id,
+    channel="web",
+    family_id=customer.id if customer else None,
+    family_type="customer" if customer else None,
+)
+result = service.send_message(message)
+```
+
+### Deprecation
+Add deprecation warning to `meals/sous_chef_assistant.py`.
+
+---
+
 ## Next Step
 
-Start with Phase 1 tests - create `test_agents_sdk.py` with agent creation tests.
+Execute Phase 6 - update web API to use unified service layer.

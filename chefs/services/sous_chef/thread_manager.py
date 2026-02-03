@@ -52,34 +52,55 @@ class ThreadManager:
         }
         
         if self.family_id and self.family_type:
-            filter_kwargs["family_id"] = self.family_id
-            filter_kwargs["family_type"] = self.family_type
+            # Model uses customer/lead ForeignKeys, not family_id/family_type
+            if self.family_type == "customer":
+                filter_kwargs["customer_id"] = self.family_id
+                filter_kwargs["lead__isnull"] = True
+            else:  # lead
+                filter_kwargs["lead_id"] = self.family_id
+                filter_kwargs["customer__isnull"] = True
         else:
-            # General mode (no family)
-            filter_kwargs["family_id__isnull"] = True
+            # General mode (no family) - both customer and lead are null
+            filter_kwargs["customer__isnull"] = True
+            filter_kwargs["lead__isnull"] = True
         
         # Try to find existing active thread
         thread = SousChefThread.objects.filter(**filter_kwargs).first()
         
         if thread is None:
-            # Create new thread
-            thread = SousChefThread.objects.create(
-                chef_id=self.chef_id,
-                family_id=self.family_id,
-                family_type=self.family_type or "customer",
-                family_name=self._get_family_name(),
-                is_active=True,
-            )
+            # Create new thread with correct field names
+            create_kwargs = {
+                "chef_id": self.chef_id,
+                "is_active": True,
+            }
+            
+            if self.family_id and self.family_type:
+                if self.family_type == "customer":
+                    create_kwargs["customer_id"] = self.family_id
+                else:
+                    create_kwargs["lead_id"] = self.family_id
+            
+            thread = SousChefThread.objects.create(**create_kwargs)
             logger.info(f"Created new thread {thread.id} for chef {self.chef_id}")
         
         self._thread = thread
         return thread
     
-    def _get_family_name(self) -> str:
+    def _get_family_name(self, thread=None) -> str:
         """Get the family name for thread display."""
         if not self.family_id:
             return "General Assistant"
         
+        # If thread provided, try to get from related objects
+        if thread:
+            if thread.customer:
+                user = thread.customer
+                return f"{user.first_name} {user.last_name}".strip() or user.username
+            elif thread.lead:
+                lead = thread.lead
+                return f"{lead.first_name} {lead.last_name}".strip()
+        
+        # Fallback to direct lookup
         try:
             if self.family_type == "customer":
                 from custom_auth.models import CustomUser
@@ -188,10 +209,13 @@ class ThreadManager:
         }
         
         if self.family_id and self.family_type:
-            filter_kwargs["family_id"] = self.family_id
-            filter_kwargs["family_type"] = self.family_type
+            if self.family_type == "customer":
+                filter_kwargs["customer_id"] = self.family_id
+            else:
+                filter_kwargs["lead_id"] = self.family_id
         else:
-            filter_kwargs["family_id__isnull"] = True
+            filter_kwargs["customer__isnull"] = True
+            filter_kwargs["lead__isnull"] = True
         
         SousChefThread.objects.filter(**filter_kwargs).update(is_active=False)
         

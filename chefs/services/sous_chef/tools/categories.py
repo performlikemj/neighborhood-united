@@ -61,6 +61,12 @@ TOOL_REGISTRY: Dict[str, ToolCategory] = {
     # Memory system
     "save_chef_memory": ToolCategory.CORE,
     "recall_chef_memories": ToolCategory.CORE,
+    "update_chef_memory": ToolCategory.CORE,
+    
+    # Proactive insights
+    "get_proactive_insights": ToolCategory.CORE,
+    "dismiss_insight": ToolCategory.CORE,
+    "act_on_insight": ToolCategory.CORE,
     
     # ═══════════════════════════════════════════════════════════════════════
     # NAVIGATION TOOLS - Web dashboard only

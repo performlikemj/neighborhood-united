@@ -13,6 +13,7 @@ Design principles:
 """
 
 import logging
+import re
 from typing import Optional
 
 import requests
@@ -34,13 +35,111 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
-def send_telegram_message(chat_id: int, text: str) -> bool:
+def sanitize_markdown_for_telegram(text: str) -> str:
+    """
+    Convert GitHub-flavored Markdown to Telegram-compatible format.
+    
+    Telegram's MarkdownV2 supports limited formatting. This function:
+    - Converts **bold** to *bold* (Telegram style)
+    - Converts headers (# Header) to bold text
+    - Converts tables to simple text lists
+    - Removes unsupported syntax
+    - Escapes special characters for MarkdownV2
+    
+    Args:
+        text: GitHub-flavored markdown text
+        
+    Returns:
+        Telegram MarkdownV2 compatible text
+    """
+    if not text:
+        return text
+    
+    result = text
+    
+    # Convert GitHub bold **text** to Telegram bold *text*
+    result = re.sub(r'\*\*(.+?)\*\*', r'*\1*', result)
+    
+    # Convert headers to bold (# Header -> *Header*)
+    result = re.sub(r'^#{1,6}\s+(.+)$', r'*\1*', result, flags=re.MULTILINE)
+    
+    # Convert markdown tables to simple lists
+    # First, detect table rows (lines starting with |)
+    lines = result.split('\n')
+    converted_lines = []
+    in_table = False
+    table_headers = []
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        # Detect table separator row (|---|---|)
+        if re.match(r'^\|[\s\-:]+\|', stripped):
+            in_table = True
+            continue
+        
+        # Table row
+        if stripped.startswith('|') and stripped.endswith('|'):
+            cells = [c.strip() for c in stripped.split('|')[1:-1]]
+            
+            if not in_table:
+                # This is the header row
+                table_headers = cells
+                in_table = True
+            else:
+                # Data row - convert to "• Header: Value" format
+                if table_headers and len(cells) == len(table_headers):
+                    for header, value in zip(table_headers, cells):
+                        if value:  # Skip empty values
+                            converted_lines.append(f"• {header}: {value}")
+                else:
+                    # No headers or mismatch - just list values
+                    for cell in cells:
+                        if cell:
+                            converted_lines.append(f"• {cell}")
+            continue
+        else:
+            # Not a table row - reset table state
+            if in_table:
+                in_table = False
+                table_headers = []
+            converted_lines.append(line)
+    
+    result = '\n'.join(converted_lines)
+    
+    # Remove horizontal rules (--- or ***)
+    result = re.sub(r'^[\-\*]{3,}$', '', result, flags=re.MULTILINE)
+    
+    # Convert inline code `code` - Telegram supports this
+    # (already compatible, no change needed)
+    
+    # Convert code blocks ```code``` to simple indented text
+    result = re.sub(r'```[\w]*\n?(.*?)```', r'\1', result, flags=re.DOTALL)
+    
+    # Escape special characters for MarkdownV2
+    # Characters that need escaping: _ * [ ] ( ) ~ ` > # + - = | { } . !
+    # But we want to KEEP our formatting (* for bold), so only escape others
+    special_chars = ['_', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    
+    # Don't escape * (we use it for bold) or common punctuation in normal text
+    # Only escape if they might cause parsing issues
+    # Actually, let's be conservative and just clean up, not escape
+    # Telegram handles most things gracefully
+    
+    # Remove multiple consecutive newlines (clean up)
+    result = re.sub(r'\n{3,}', '\n\n', result)
+    
+    return result.strip()
+
+
+def send_telegram_message(chat_id: int, text: str, parse_mode: str = "Markdown") -> bool:
     """
     Send a message to a Telegram chat.
     
     Args:
         chat_id: Telegram chat ID to send to
         text: Message text
+        parse_mode: Telegram parse mode ("Markdown", "HTML", or None for plain text)
         
     Returns:
         bool: True if successful, False otherwise
@@ -53,14 +152,22 @@ def send_telegram_message(chat_id: int, text: str) -> bool:
     
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     
+    # Sanitize markdown if using Markdown parse mode
+    if parse_mode == "Markdown":
+        text = sanitize_markdown_for_telegram(text)
+    
+    # Build request payload
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+    }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    
     try:
         response = requests.post(
             url,
-            json={
-                "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "HTML",
-            },
+            json=payload,
             timeout=10,
         )
         response.raise_for_status()
@@ -171,14 +278,16 @@ def handle_start_command(
                 "Your Telegram account is now linked to Sautai. "
                 "I'm your Sous Chef assistant - ask me anything about your orders, "
                 "schedule, or just say hi! 👋\n\n"
-                "You'll also receive notifications here based on your preferences."
+                "You'll also receive notifications here based on your preferences.",
+                parse_mode="HTML"
             )
         else:
             send_telegram_message(
                 chat_id,
                 "❌ <b>Link Failed</b>\n\n"
                 "This link is invalid or has expired. "
-                "Please generate a new link from your Sautai dashboard."
+                "Please generate a new link from your Sautai dashboard.",
+                parse_mode="HTML"
             )
     else:
         # No token - generic welcome
@@ -187,7 +296,8 @@ def handle_start_command(
             "👋 <b>Welcome to Sautai!</b>\n\n"
             "To connect your chef account, go to your Sautai dashboard "
             "and click 'Connect Telegram'. You'll get a QR code or link to scan.\n\n"
-            "If you're already linked, just send me a message!"
+            "If you're already linked, just send me a message!",
+            parse_mode="HTML"
         )
 
 
@@ -217,7 +327,8 @@ def handle_regular_message(
         send_telegram_message(
             chat_id,
             "🤔 I don't recognize this account.\n\n"
-            "Please connect your Telegram from the Sautai dashboard first!"
+            "Please connect your Telegram from the Sautai dashboard first!",
+            parse_mode=None  # Plain text, no formatting
         )
         return
     

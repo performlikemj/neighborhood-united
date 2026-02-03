@@ -79,8 +79,8 @@ def process_chef_message(chef, text: str) -> str:
     """
     Process a message from a chef and generate a response.
     
-    Routes the message through Sous Chef AI assistant in general mode
-    (no specific family context).
+    Routes the message through channel-aware Sous Chef service.
+    Telegram channel excludes navigation tools (can't navigate UI from chat).
     
     Args:
         chef: Chef model instance
@@ -92,16 +92,15 @@ def process_chef_message(chef, text: str) -> str:
     logger.info(f"Processing message from chef {chef.id}: {text[:50]}...")
     
     try:
-        from meals.sous_chef_assistant import SousChefAssistant
+        from chefs.services.sous_chef import SousChefService
         
-        # General mode - no family context for Telegram
-        assistant = SousChefAssistant(
+        # Channel-aware service - Telegram excludes navigation tools
+        service = SousChefService(
             chef_id=chef.id,
-            family_id=None,
-            family_type=None
+            channel="telegram",  # Key: channel-aware tool filtering
         )
         
-        result = assistant.send_message(text)
+        result = service.send_message(text)
         
         if result.get("status") == "success":
             return result.get("message", "I processed your request but have nothing to say.")

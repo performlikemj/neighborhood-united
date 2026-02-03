@@ -164,7 +164,7 @@ class SousChefService:
         Returns:
             Final response text
         """
-        from meals.sous_chef_tools import handle_sous_chef_tool_call
+        from .tools.loader import execute_tool
         
         context = self.factory.get_context()
         
@@ -205,13 +205,20 @@ class SousChefService:
                 ]
             })
             
-            # Execute tool calls
+            # Execute tool calls with channel-aware sensitive data handling
             for tool_call in tool_calls:
                 try:
-                    result = handle_sous_chef_tool_call(
-                        name=tool_call.function.name,
-                        arguments=tool_call.function.arguments,
-                        **context,
+                    # Parse arguments
+                    args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+                    
+                    # Execute with channel awareness (sensitive tools blocked on restricted channels)
+                    result = execute_tool(
+                        tool_name=tool_call.function.name,
+                        args=args,
+                        chef=context.get("chef"),
+                        customer=context.get("customer"),
+                        lead=context.get("lead"),
+                        channel=self.channel,  # Key: pass channel for sensitive data handling
                     )
                 except Exception as e:
                     logger.error(f"Tool call error ({tool_call.function.name}): {e}")
@@ -281,7 +288,7 @@ class SousChefService:
         
         Yields text chunks and tool events.
         """
-        from meals.sous_chef_tools import handle_sous_chef_tool_call
+        from .tools.loader import execute_tool
         
         context = self.factory.get_context()
         
@@ -349,15 +356,22 @@ class SousChefService:
                 ]
             })
             
-            # Execute tool calls
+            # Execute tool calls with channel-aware sensitive data handling
             for tc in tool_calls_data.values():
                 try:
                     yield {"type": "tool_call", "name": tc["name"]}
                     
-                    result = handle_sous_chef_tool_call(
-                        name=tc["name"],
-                        arguments=tc["arguments"],
-                        **context,
+                    # Parse arguments
+                    args = json.loads(tc["arguments"]) if tc["arguments"] else {}
+                    
+                    # Execute with channel awareness
+                    result = execute_tool(
+                        tool_name=tc["name"],
+                        args=args,
+                        chef=context.get("chef"),
+                        customer=context.get("customer"),
+                        lead=context.get("lead"),
+                        channel=self.channel,  # Key: pass channel for sensitive data handling
                     )
                 except Exception as e:
                     logger.error(f"Tool error ({tc['name']}): {e}")

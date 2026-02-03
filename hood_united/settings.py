@@ -481,33 +481,58 @@ else:
     if not RAW_REDIS_URL:
         raise RuntimeError("REDIS_URL is not set")
 
-    # Strip ssl_cert_reqs parameter from URL - django-redis doesn't understand it
-    # Celery needs it in URL, but django-redis needs it in OPTIONS
-    from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
-    parsed = urlparse(RAW_REDIS_URL)
-    query_params = parse_qs(parsed.query)
-    query_params.pop('ssl_cert_reqs', None)  # Remove if present
-    clean_query = urlencode(query_params, doseq=True)
-    REDIS_CACHE_URL = urlunparse(parsed._replace(query=clean_query))
-
-    # Check if SSL is needed (rediss:// scheme)
-    import ssl
-    ssl_options = {}
-    if parsed.scheme == "rediss":
-        ssl_options["ssl_cert_reqs"] = ssl.CERT_REQUIRED
+    # Parse SSL options from URL query params (django-redis doesn't parse these)
+    # Example: rediss://...?ssl_cert_reqs=none
+    from urllib.parse import urlparse, parse_qs, urlunparse
+    
+    parsed_redis = urlparse(RAW_REDIS_URL)
+    redis_query_params = parse_qs(parsed_redis.query)
+    
+    # Extract ssl_cert_reqs if present, then strip it from URL
+    ssl_cert_reqs_value = redis_query_params.pop('ssl_cert_reqs', [None])[0]
+    
+    # Rebuild URL without ssl_cert_reqs (django-redis will error on unknown params)
+    clean_query = '&'.join(f'{k}={v[0]}' for k, v in redis_query_params.items())
+    CLEAN_REDIS_URL = urlunparse((
+        parsed_redis.scheme,
+        parsed_redis.netloc,
+        parsed_redis.path,
+        parsed_redis.params,
+        clean_query,
+        parsed_redis.fragment
+    ))
+    
+    # Build CONNECTION_POOL_KWARGS with SSL settings
+    connection_pool_kwargs = {}
+    if ssl_cert_reqs_value:
+        # Map string value to ssl constant
+        import ssl
+        ssl_cert_map = {
+            'none': ssl.CERT_NONE,
+            'optional': ssl.CERT_OPTIONAL,
+            'required': ssl.CERT_REQUIRED,
+        }
+        ssl_cert_reqs_value_lower = ssl_cert_reqs_value.lower()
+        if ssl_cert_reqs_value_lower in ssl_cert_map:
+            connection_pool_kwargs['ssl_cert_reqs'] = ssl_cert_map[ssl_cert_reqs_value_lower]
+    
+    # For rediss:// URLs, ensure SSL is enabled
+    if parsed_redis.scheme == 'rediss' and 'ssl_cert_reqs' not in connection_pool_kwargs:
+        # Default to CERT_NONE for cloud Redis providers (Upstash, etc.)
+        import ssl
+        connection_pool_kwargs['ssl_cert_reqs'] = ssl.CERT_NONE
 
     CACHES = {
         "default": {
             "BACKEND": "django_redis.cache.RedisCache",
-            "LOCATION": REDIS_CACHE_URL,
+            "LOCATION": CLEAN_REDIS_URL,
             "OPTIONS": {
                 "CLIENT_CLASS": "django_redis.client.DefaultClient",
-                # password is already embedded in the URL; no need for extra key
                 "SOCKET_CONNECT_TIMEOUT": 15,
                 "SOCKET_TIMEOUT": 15,
                 "RETRY_ON_TIMEOUT": True,
                 "SOCKET_KEEPALIVE": True,
-                "CONNECTION_POOL_KWARGS": ssl_options,
+                "CONNECTION_POOL_KWARGS": connection_pool_kwargs,
             },
         }
     }
@@ -524,13 +549,17 @@ else:
     # Production: Use Redis channel layer
     # For SSL-enabled Redis (rediss://) like Upstash, we need to pass host config
     # as a dictionary with ssl_cert_reqs option to handle TLS connections properly
+    
+    # Build host config with SSL settings if using rediss://
+    channel_host_config = {"address": CLEAN_REDIS_URL}
+    if connection_pool_kwargs.get('ssl_cert_reqs') is not None:
+        channel_host_config['ssl_cert_reqs'] = connection_pool_kwargs['ssl_cert_reqs']
+    
     CHANNEL_LAYERS = {
         "default": {
             "BACKEND": "channels_redis.core.RedisChannelLayer",
             "CONFIG": {
-                "hosts": [{
-                    "address": RAW_REDIS_URL,
-                }],
+                "hosts": [channel_host_config],
             },
         },
     }

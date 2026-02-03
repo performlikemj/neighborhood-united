@@ -18,8 +18,8 @@ from datetime import time as dt_time, timedelta
 from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
-from django.test import RequestFactory
 from django.utils import timezone
+from rest_framework.test import APIRequestFactory
 
 
 # =============================================================================
@@ -34,6 +34,7 @@ def mock_chef():
     chef.id = 1
     chef.user = MagicMock()
     chef.user.id = 1
+    chef.user.pk = 1
     chef.user.username = "test_chef"
     chef.user.is_authenticated = True
     return chef
@@ -42,9 +43,25 @@ def mock_chef():
 @pytest.fixture
 def mock_request(mock_chef):
     """Create a mock authenticated request."""
-    factory = RequestFactory()
+    factory = APIRequestFactory()
     request = factory.get('/')
     request.user = mock_chef.user
+    return request
+
+
+def _create_drf_request(factory, method, path, data=None, content_type=None, user=None):
+    """Helper to create a DRF-compatible request with proper user setup."""
+    if method == 'get':
+        request = factory.get(path)
+    elif method == 'post':
+        request = factory.post(path, data=data, format='json' if data else None)
+    elif method == 'patch':
+        request = factory.patch(path, data=data, format='json' if data else None)
+    else:
+        request = getattr(factory, method)(path)
+
+    if user:
+        request.user = user
     return request
 
 
@@ -88,7 +105,7 @@ class TestGenerateTelegramLink:
         """Successful request returns QR code data URL and deep link."""
         from chefs.api.telegram_views import telegram_generate_link
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.post('/chefs/api/telegram/generate-link/')
         request.user = mock_chef.user
 
@@ -98,9 +115,9 @@ class TestGenerateTelegramLink:
 
         with patch('chefs.api.telegram_views.Chef') as MockChef, \
              patch('chefs.api.telegram_views.TelegramLinkService') as MockService:
-            
+
             MockChef.objects.get.return_value = mock_chef
-            
+
             mock_service = MagicMock()
             mock_service.generate_link_token.return_value = mock_token
             mock_service.get_deep_link.return_value = "https://t.me/SautaiChefBot?start=test_token_abc123"
@@ -110,7 +127,7 @@ class TestGenerateTelegramLink:
             response = telegram_generate_link(request)
 
         assert response.status_code == 200
-        data = json.loads(response.content)
+        data = response.data
         assert 'deep_link' in data
         assert 'qr_code' in data
         assert 'expires_at' in data
@@ -121,10 +138,11 @@ class TestGenerateTelegramLink:
         """Unauthenticated request returns 401 or 403."""
         from chefs.api.telegram_views import telegram_generate_link
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.post('/chefs/api/telegram/generate-link/')
         request.user = MagicMock()
         request.user.is_authenticated = False
+        request.user.pk = None
 
         # The decorator should handle this, but let's verify the view behavior
         with patch('chefs.api.telegram_views.Chef') as MockChef:
@@ -142,7 +160,7 @@ class TestGenerateTelegramLink:
         from chefs.models import Chef
 
         # Create a POST request (this endpoint only accepts POST)
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.post('/chefs/api/telegram/generate-link/')
         request.user = mock_request.user
 
@@ -153,14 +171,14 @@ class TestGenerateTelegramLink:
             response = telegram_generate_link(request)
 
         assert response.status_code == 403
-        data = json.loads(response.content)
+        data = response.data
         assert 'error' in data
 
     def test_generate_link_only_accepts_post(self, mock_chef):
         """GET request returns 405 Method Not Allowed."""
         from chefs.api.telegram_views import telegram_generate_link
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.get('/chefs/api/telegram/generate-link/')
         request.user = mock_chef.user
 
@@ -181,15 +199,15 @@ class TestUnlinkTelegram:
         """Successful unlink returns 200."""
         from chefs.api.telegram_views import telegram_unlink
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.post('/chefs/api/telegram/unlink/')
         request.user = mock_chef.user
 
         with patch('chefs.api.telegram_views.Chef') as MockChef, \
              patch('chefs.api.telegram_views.TelegramLinkService') as MockService:
-            
+
             MockChef.objects.get.return_value = mock_chef
-            
+
             mock_service = MagicMock()
             mock_service.unlink.return_value = True
             MockService.return_value = mock_service
@@ -197,22 +215,22 @@ class TestUnlinkTelegram:
             response = telegram_unlink(request)
 
         assert response.status_code == 200
-        data = json.loads(response.content)
+        data = response.data
         assert data.get('success') is True
 
     def test_unlink_when_not_linked(self, mock_chef):
         """Unlink when not linked returns 400."""
         from chefs.api.telegram_views import telegram_unlink
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.post('/chefs/api/telegram/unlink/')
         request.user = mock_chef.user
 
         with patch('chefs.api.telegram_views.Chef') as MockChef, \
              patch('chefs.api.telegram_views.TelegramLinkService') as MockService:
-            
+
             MockChef.objects.get.return_value = mock_chef
-            
+
             mock_service = MagicMock()
             mock_service.unlink.return_value = False  # Not linked
             MockService.return_value = mock_service
@@ -220,7 +238,7 @@ class TestUnlinkTelegram:
             response = telegram_unlink(request)
 
         assert response.status_code == 400
-        data = json.loads(response.content)
+        data = response.data
         assert 'error' in data
 
     def test_unlink_requires_chef_account(self, mock_request):
@@ -228,7 +246,7 @@ class TestUnlinkTelegram:
         from chefs.api.telegram_views import telegram_unlink
         from chefs.models import Chef
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.post('/chefs/api/telegram/unlink/')
         request.user = mock_request.user
 
@@ -244,7 +262,7 @@ class TestUnlinkTelegram:
         """GET request returns 405 Method Not Allowed."""
         from chefs.api.telegram_views import telegram_unlink
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.get('/chefs/api/telegram/unlink/')
         request.user = mock_chef.user
 
@@ -265,7 +283,7 @@ class TestTelegramStatus:
         """Status when linked returns link info and settings."""
         from chefs.api.telegram_views import telegram_status
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.get('/chefs/api/telegram/status/')
         request.user = mock_chef.user
 
@@ -277,8 +295,8 @@ class TestTelegramStatus:
             response = telegram_status(request)
 
         assert response.status_code == 200
-        data = json.loads(response.content)
-        
+        data = response.data
+
         assert data['linked'] is True
         assert data['telegram_username'] == "test_tg_user"
         assert data['telegram_first_name'] == "Test"
@@ -293,7 +311,7 @@ class TestTelegramStatus:
         from chefs.api.telegram_views import telegram_status
         from chefs.models.telegram_integration import ChefTelegramLink
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.get('/chefs/api/telegram/status/')
         request.user = mock_chef.user
 
@@ -305,7 +323,7 @@ class TestTelegramStatus:
             response = telegram_status(request)
 
         assert response.status_code == 200
-        data = json.loads(response.content)
+        data = response.data
         assert data['linked'] is False
         assert 'settings' not in data or data.get('settings') is None
 
@@ -313,7 +331,7 @@ class TestTelegramStatus:
         """Status when link is inactive returns linked=False."""
         from chefs.api.telegram_views import telegram_status
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.get('/chefs/api/telegram/status/')
         request.user = mock_chef.user
 
@@ -326,7 +344,7 @@ class TestTelegramStatus:
             response = telegram_status(request)
 
         assert response.status_code == 200
-        data = json.loads(response.content)
+        data = response.data
         assert data['linked'] is False
 
     def test_status_requires_chef_account(self, mock_request):
@@ -346,7 +364,7 @@ class TestTelegramStatus:
         """POST request returns 405 Method Not Allowed."""
         from chefs.api.telegram_views import telegram_status
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.post('/chefs/api/telegram/status/')
         request.user = mock_chef.user
 
@@ -367,24 +385,24 @@ class TestTelegramSettings:
         """Update a single notification setting."""
         from chefs.api.telegram_views import telegram_settings
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.patch(
             '/chefs/api/telegram/settings/',
-            data=json.dumps({'notify_new_orders': False}),
-            content_type='application/json'
+            data={'notify_new_orders': False},
+            format='json'
         )
         request.user = mock_chef.user
 
         with patch('chefs.api.telegram_views.Chef') as MockChef, \
              patch('chefs.api.telegram_views.ChefTelegramSettings') as MockSettings:
-            
+
             MockChef.objects.get.return_value = mock_chef
             MockSettings.objects.get.return_value = mock_telegram_settings
 
             response = telegram_settings(request)
 
         assert response.status_code == 200
-        data = json.loads(response.content)
+        data = response.data
         assert 'settings' in data
         # The setting should have been updated
         assert mock_telegram_settings.notify_new_orders is False
@@ -394,21 +412,21 @@ class TestTelegramSettings:
         """Update multiple notification settings at once."""
         from chefs.api.telegram_views import telegram_settings
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.patch(
             '/chefs/api/telegram/settings/',
-            data=json.dumps({
+            data={
                 'notify_new_orders': False,
                 'notify_order_updates': False,
                 'quiet_hours_enabled': False,
-            }),
-            content_type='application/json'
+            },
+            format='json'
         )
         request.user = mock_chef.user
 
         with patch('chefs.api.telegram_views.Chef') as MockChef, \
              patch('chefs.api.telegram_views.ChefTelegramSettings') as MockSettings:
-            
+
             MockChef.objects.get.return_value = mock_chef
             MockSettings.objects.get.return_value = mock_telegram_settings
 
@@ -423,20 +441,20 @@ class TestTelegramSettings:
         """Update quiet hours start and end times."""
         from chefs.api.telegram_views import telegram_settings
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.patch(
             '/chefs/api/telegram/settings/',
-            data=json.dumps({
+            data={
                 'quiet_hours_start': '23:00',
                 'quiet_hours_end': '07:00',
-            }),
-            content_type='application/json'
+            },
+            format='json'
         )
         request.user = mock_chef.user
 
         with patch('chefs.api.telegram_views.Chef') as MockChef, \
              patch('chefs.api.telegram_views.ChefTelegramSettings') as MockSettings:
-            
+
             MockChef.objects.get.return_value = mock_chef
             MockSettings.objects.get.return_value = mock_telegram_settings
 
@@ -451,20 +469,20 @@ class TestTelegramSettings:
         """Updating invalid field is ignored."""
         from chefs.api.telegram_views import telegram_settings
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.patch(
             '/chefs/api/telegram/settings/',
-            data=json.dumps({
+            data={
                 'invalid_field': True,
                 'notify_new_orders': False,  # Valid field
-            }),
-            content_type='application/json'
+            },
+            format='json'
         )
         request.user = mock_chef.user
 
         with patch('chefs.api.telegram_views.Chef') as MockChef, \
              patch('chefs.api.telegram_views.ChefTelegramSettings') as MockSettings:
-            
+
             MockChef.objects.get.return_value = mock_chef
             MockSettings.objects.get.return_value = mock_telegram_settings
 
@@ -479,17 +497,17 @@ class TestTelegramSettings:
         from chefs.api.telegram_views import telegram_settings
         from chefs.models.telegram_integration import ChefTelegramSettings
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.patch(
             '/chefs/api/telegram/settings/',
-            data=json.dumps({'notify_new_orders': False}),
-            content_type='application/json'
+            data={'notify_new_orders': False},
+            format='json'
         )
         request.user = mock_chef.user
 
         with patch('chefs.api.telegram_views.Chef') as MockChef, \
              patch('chefs.api.telegram_views.ChefTelegramSettings') as MockSettings:
-            
+
             MockChef.objects.get.return_value = mock_chef
             MockSettings.DoesNotExist = ChefTelegramSettings.DoesNotExist
             MockSettings.objects.get.side_effect = ChefTelegramSettings.DoesNotExist
@@ -497,7 +515,7 @@ class TestTelegramSettings:
             response = telegram_settings(request)
 
         assert response.status_code == 404
-        data = json.loads(response.content)
+        data = response.data
         assert 'error' in data
 
     def test_update_settings_requires_chef_account(self, mock_request):
@@ -505,11 +523,11 @@ class TestTelegramSettings:
         from chefs.api.telegram_views import telegram_settings
         from chefs.models import Chef
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.patch(
             '/chefs/api/telegram/settings/',
-            data=json.dumps({'notify_new_orders': False}),
-            content_type='application/json'
+            data={'notify_new_orders': False},
+            format='json'
         )
         request.user = mock_request.user
 
@@ -525,7 +543,7 @@ class TestTelegramSettings:
         """GET request returns 405 Method Not Allowed."""
         from chefs.api.telegram_views import telegram_settings
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
         request = factory.get('/chefs/api/telegram/settings/')
         request.user = mock_chef.user
 
@@ -537,7 +555,8 @@ class TestTelegramSettings:
         """Invalid JSON returns 400."""
         from chefs.api.telegram_views import telegram_settings
 
-        factory = RequestFactory()
+        factory = APIRequestFactory()
+        # Send raw invalid JSON - DRF will handle the parse error
         request = factory.patch(
             '/chefs/api/telegram/settings/',
             data='not valid json{',
@@ -551,3 +570,41 @@ class TestTelegramSettings:
             response = telegram_settings(request)
 
         assert response.status_code == 400
+
+
+# =============================================================================
+# INTEGRATION TESTS - Real HTTP requests without authentication
+# =============================================================================
+
+
+@pytest.mark.django_db
+class TestTelegramApiAuthentication:
+    """Integration tests verifying 401 for unauthenticated requests.
+
+    These tests use Django's test client to make real HTTP requests,
+    testing the full authentication middleware chain.
+    """
+
+    def test_status_endpoint_returns_401_for_unauthenticated(self, client):
+        """GET /chefs/api/telegram/status/ without auth returns 401."""
+        response = client.get('/chefs/api/telegram/status/')
+        assert response.status_code == 401
+
+    def test_generate_link_returns_401_for_unauthenticated(self, client):
+        """POST /chefs/api/telegram/generate-link/ without auth returns 401."""
+        response = client.post('/chefs/api/telegram/generate-link/')
+        assert response.status_code == 401
+
+    def test_unlink_returns_401_for_unauthenticated(self, client):
+        """POST /chefs/api/telegram/unlink/ without auth returns 401."""
+        response = client.post('/chefs/api/telegram/unlink/')
+        assert response.status_code == 401
+
+    def test_settings_returns_401_for_unauthenticated(self, client):
+        """PATCH /chefs/api/telegram/settings/ without auth returns 401."""
+        response = client.patch(
+            '/chefs/api/telegram/settings/',
+            data=json.dumps({'notify_new_orders': False}),
+            content_type='application/json'
+        )
+        assert response.status_code == 401

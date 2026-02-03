@@ -15,9 +15,9 @@ import json
 import logging
 from datetime import time as dt_time
 
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_http_methods
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 
 from chefs.models import Chef
 from chefs.models.telegram_integration import ChefTelegramLink, ChefTelegramSettings
@@ -29,13 +29,13 @@ logger = logging.getLogger(__name__)
 def _get_chef_or_403(request):
     """
     Get the Chef instance for the authenticated user.
-    Returns (chef, None) on success, (None, JsonResponse) on failure.
+    Returns (chef, None) on success, (None, Response) on failure.
     """
     try:
         chef = Chef.objects.get(user=request.user)
         return chef, None
     except Chef.DoesNotExist:
-        return None, JsonResponse(
+        return None, Response(
             {"error": "Not a chef. Only chefs can access this endpoint."},
             status=403
         )
@@ -54,15 +54,15 @@ def _serialize_settings(settings):
     }
 
 
-@csrf_exempt
-@require_http_methods(["POST"])
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def telegram_generate_link(request):
     """
     POST /chefs/api/telegram/generate-link/
-    
+
     Generates a one-time link token for connecting Telegram.
     Returns QR code data URL and deep link.
-    
+
     Response:
     {
         "deep_link": "https://t.me/SautaiChefBot?start=TOKEN",
@@ -77,29 +77,29 @@ def telegram_generate_link(request):
     try:
         service = TelegramLinkService()
         token = service.generate_link_token(chef)
-        
-        return JsonResponse({
+
+        return Response({
             'deep_link': service.get_deep_link(token.token),
             'qr_code': service.get_qr_code_data_url(token.token),
             'expires_at': token.expires_at.isoformat(),
         })
     except Exception as e:
         logger.exception(f"Error generating Telegram link for chef {chef.id}: {e}")
-        return JsonResponse(
+        return Response(
             {"error": "Failed to generate link. Please try again."},
             status=500
         )
 
 
-@csrf_exempt
-@require_http_methods(["POST"])
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def telegram_unlink(request):
     """
     POST /chefs/api/telegram/unlink/
-    
+
     Unlinks the chef's Telegram account.
     Sets is_active=False on the ChefTelegramLink.
-    
+
     Response:
     {
         "success": true
@@ -112,30 +112,30 @@ def telegram_unlink(request):
     try:
         service = TelegramLinkService()
         success = service.unlink(chef)
-        
+
         if success:
-            return JsonResponse({'success': True})
+            return Response({'success': True})
         else:
-            return JsonResponse(
+            return Response(
                 {"error": "Telegram account not linked."},
                 status=400
             )
     except Exception as e:
         logger.exception(f"Error unlinking Telegram for chef {chef.id}: {e}")
-        return JsonResponse(
+        return Response(
             {"error": "Failed to unlink. Please try again."},
             status=500
         )
 
 
-@csrf_exempt
-@require_http_methods(["GET"])
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def telegram_status(request):
     """
     GET /chefs/api/telegram/status/
-    
+
     Returns the current Telegram link status and settings.
-    
+
     Response when linked:
     {
         "linked": true,
@@ -147,7 +147,7 @@ def telegram_status(request):
             ...
         }
     }
-    
+
     Response when not linked:
     {
         "linked": false
@@ -159,19 +159,19 @@ def telegram_status(request):
 
     try:
         link = chef.telegram_link
-        
+
         # Check if link is active
         if not link.is_active:
-            return JsonResponse({'linked': False})
-        
+            return Response({'linked': False})
+
         # Get settings
         try:
             settings = chef.telegram_settings
             settings_data = _serialize_settings(settings)
         except ChefTelegramSettings.DoesNotExist:
             settings_data = None
-        
-        return JsonResponse({
+
+        return Response({
             'linked': True,
             'telegram_username': link.telegram_username,
             'telegram_first_name': link.telegram_first_name,
@@ -179,23 +179,23 @@ def telegram_status(request):
             'settings': settings_data,
         })
     except ChefTelegramLink.DoesNotExist:
-        return JsonResponse({'linked': False})
+        return Response({'linked': False})
     except Exception as e:
         logger.exception(f"Error fetching Telegram status for chef {chef.id}: {e}")
-        return JsonResponse(
+        return Response(
             {"error": "Failed to fetch status. Please try again."},
             status=500
         )
 
 
-@csrf_exempt
-@require_http_methods(["PATCH"])
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
 def telegram_settings(request):
     """
     PATCH /chefs/api/telegram/settings/
-    
+
     Updates Telegram notification settings.
-    
+
     Request body (all fields optional):
     {
         "notify_new_orders": true,
@@ -206,7 +206,7 @@ def telegram_settings(request):
         "quiet_hours_end": "08:00",
         "quiet_hours_enabled": true
     }
-    
+
     Response:
     {
         "settings": { ... }
@@ -216,11 +216,11 @@ def telegram_settings(request):
     if error_response:
         return error_response
 
-    # Parse JSON body
+    # Parse JSON body (DRF handles this, but keep for backwards compatibility)
     try:
-        data = json.loads(request.body)
+        data = request.data if hasattr(request, 'data') else json.loads(request.body)
     except (json.JSONDecodeError, ValueError):
-        return JsonResponse(
+        return Response(
             {"error": "Invalid JSON body."},
             status=400
         )
@@ -229,7 +229,7 @@ def telegram_settings(request):
     try:
         settings = ChefTelegramSettings.objects.get(chef=chef)
     except ChefTelegramSettings.DoesNotExist:
-        return JsonResponse(
+        return Response(
             {"error": "Telegram not linked. Link your account first."},
             status=404
         )
@@ -242,7 +242,7 @@ def telegram_settings(request):
         'notify_customer_messages',
         'quiet_hours_enabled',
     ]
-    
+
     for field in boolean_fields:
         if field in data:
             setattr(settings, field, bool(data[field]))
@@ -264,7 +264,7 @@ def telegram_settings(request):
 
     # Save and return
     settings.save()
-    
-    return JsonResponse({
+
+    return Response({
         'settings': _serialize_settings(settings)
     })

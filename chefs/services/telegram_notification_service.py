@@ -22,7 +22,6 @@ import logging
 from django.conf import settings
 
 from chefs.models import ChefTelegramLink, ChefTelegramSettings
-from chefs.tasks.telegram_tasks import send_telegram_message
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +192,9 @@ class TelegramNotificationService:
         Returns:
             True if message was queued for sending
         """
+        # Import here to avoid circular import (tasks -> services -> tasks)
+        from chefs.tasks.telegram_tasks import send_telegram_message
+
         try:
             chat_id = chef.telegram_link.telegram_user_id
             success = send_telegram_message(chat_id, message)

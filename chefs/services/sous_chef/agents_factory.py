@@ -154,10 +154,10 @@ class AgentsSousChefFactory:
             lead=self.lead,
         )
     
-    def _get_mcp_servers(self) -> Optional[List[Any]]:
+    def _get_mcp_servers(self) -> List[Any]:
         """Get MCP servers for this channel."""
         if not MCP_AVAILABLE:
-            return None
+            return []
         
         servers = []
         
@@ -167,7 +167,7 @@ class AgentsSousChefFactory:
             if line_server:
                 servers.append(line_server)
         
-        return servers if servers else None
+        return servers
     
     def _create_line_mcp(self) -> Optional[Any]:
         """Create LINE MCP server if configured."""

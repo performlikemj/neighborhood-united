@@ -379,7 +379,7 @@ class TestAgentsSousChefService:
         mock_runner.return_value = mock_result
         
         from chefs.services.sous_chef.agents_service import AgentsSousChefService
-        from chefs.models import SousChefThread
+        from customer_dashboard.models import SousChefThread
         
         service = AgentsSousChefService(
             chef_id=test_chef.id,

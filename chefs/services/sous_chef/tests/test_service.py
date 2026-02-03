@@ -97,7 +97,7 @@ class TestSendMessage:
         """send_message should use channel-specific tools."""
         from chefs.services.sous_chef import SousChefService
         
-        with patch("chefs.services.sous_chef.service.Groq") as mock_groq_class:
+        with patch("groq.Groq") as mock_groq_class:
             mock_groq = MagicMock()
             mock_groq_class.return_value = mock_groq
             mock_response = MagicMock()
@@ -133,7 +133,7 @@ class TestSendMessageErrorHandling:
         """send_message should handle Groq errors gracefully."""
         from chefs.services.sous_chef import SousChefService
         
-        with patch("chefs.services.sous_chef.service.Groq") as mock_groq_class:
+        with patch("groq.Groq") as mock_groq_class:
             mock_groq = MagicMock()
             mock_groq_class.return_value = mock_groq
             mock_groq.chat.completions.create.side_effect = Exception("API Error")
@@ -148,7 +148,7 @@ class TestSendMessageErrorHandling:
         """send_message should handle empty responses."""
         from chefs.services.sous_chef import SousChefService
         
-        with patch("chefs.services.sous_chef.service.Groq") as mock_groq_class:
+        with patch("groq.Groq") as mock_groq_class:
             mock_groq = MagicMock()
             mock_groq_class.return_value = mock_groq
             mock_response = MagicMock()
@@ -183,7 +183,7 @@ class TestToolExecution:
         """send_message should handle tool execution errors."""
         from chefs.services.sous_chef import SousChefService
         
-        with patch("chefs.services.sous_chef.service.Groq") as mock_groq_class:
+        with patch("groq.Groq") as mock_groq_class:
             mock_groq = MagicMock()
             mock_groq_class.return_value = mock_groq
             

@@ -20,7 +20,7 @@ class TestProcessChefMessage:
         """process_chef_message should return AI response."""
         from chefs.tasks.telegram_tasks import process_chef_message
         
-        with patch("chefs.services.sous_chef.service.Groq") as mock_groq_class:
+        with patch("groq.Groq") as mock_groq_class:
             mock_groq = MagicMock()
             mock_groq_class.return_value = mock_groq
             mock_response = MagicMock()
@@ -153,7 +153,7 @@ class TestFullWebhookFlow:
         """Webhook should process message and send response."""
         from chefs.tasks.telegram_tasks import process_telegram_update
         
-        with patch("chefs.services.sous_chef.service.Groq") as mock_groq_class:
+        with patch("groq.Groq") as mock_groq_class:
             mock_groq = MagicMock()
             mock_groq_class.return_value = mock_groq
             mock_response = MagicMock()
@@ -241,7 +241,7 @@ class TestConversationPersistence:
         """Conversation context should be maintained across messages."""
         from chefs.tasks.telegram_tasks import process_chef_message
         
-        with patch("chefs.services.sous_chef.service.Groq") as mock_groq_class:
+        with patch("groq.Groq") as mock_groq_class:
             mock_groq = MagicMock()
             mock_groq_class.return_value = mock_groq
             mock_response = MagicMock()

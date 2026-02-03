@@ -54,7 +54,7 @@ def telegram_link(db, test_chef):
 @pytest.fixture
 def mock_groq():
     """Mock Groq client with standard response."""
-    with patch("chefs.services.sous_chef.service.Groq") as mock_class:
+    with patch("groq.Groq") as mock_class:
         mock_client = MagicMock()
         mock_class.return_value = mock_client
         
@@ -71,7 +71,7 @@ def mock_groq():
 @pytest.fixture
 def mock_groq_with_tool_call():
     """Mock Groq client that returns a tool call."""
-    with patch("chefs.services.sous_chef.service.Groq") as mock_class:
+    with patch("groq.Groq") as mock_class:
         mock_client = MagicMock()
         mock_class.return_value = mock_client
         

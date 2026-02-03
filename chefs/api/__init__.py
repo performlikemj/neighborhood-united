@@ -9,6 +9,7 @@ from . import leads
 from . import serializers
 from . import sous_chef
 from . import availability
+from . import telegram_views
 
 __all__ = [
     'waitlist',
@@ -19,6 +20,7 @@ __all__ = [
     'serializers',
     'sous_chef',
     'availability',
+    'telegram_views',
 ]
 
 

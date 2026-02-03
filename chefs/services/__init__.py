@@ -18,6 +18,8 @@ from .memory_service import (
     ContextAssemblyService,
     MemoryExtractionService,
 )
+from .telegram_link_service import TelegramLinkService
+from .telegram_notification_service import TelegramNotificationService
 
 __all__ = [
     # Client insights
@@ -36,4 +38,8 @@ __all__ = [
     'MemoryService',
     'ContextAssemblyService',
     'MemoryExtractionService',
+    # Telegram linking
+    'TelegramLinkService',
+    # Telegram notifications
+    'TelegramNotificationService',
 ]

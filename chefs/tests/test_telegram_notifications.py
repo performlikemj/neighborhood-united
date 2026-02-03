@@ -410,12 +410,12 @@ class TelegramNotificationEdgeCasesTests(TelegramNotificationTestMixin, TestCase
 
         service = TelegramNotificationService()
 
-        with patch('chefs.services.telegram_notification_service.send_telegram_message') as mock_task:
-            mock_task.delay = MagicMock()
+        with patch('chefs.tasks.telegram_tasks.send_telegram_message') as mock_send:
+            mock_send.return_value = True
             result = service._send(self.chef, "Test message")
 
         self.assertTrue(result)
-        mock_task.delay.assert_called_once_with(123456789, "Test message")
+        mock_send.assert_called_once_with(123456789, "Test message")
 
     def test_notification_outside_quiet_hours_is_sent(self):
         """Notification sent when outside quiet hours."""

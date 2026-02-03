@@ -22,22 +22,9 @@ import logging
 from django.conf import settings
 
 from chefs.models import ChefTelegramLink, ChefTelegramSettings
+from chefs.tasks.telegram_tasks import send_telegram_message
 
 logger = logging.getLogger(__name__)
-
-
-# Placeholder for Celery task - will be implemented in Phase 4
-def send_telegram_message(chat_id: int, message: str):
-    """
-    Celery task stub for sending messages.
-    Will be replaced with actual implementation.
-    """
-    class MockDelay:
-        @staticmethod
-        def delay(chat_id: int, message: str):
-            logger.info(f"[Telegram] Would send to {chat_id}: {message}")
-    
-    return MockDelay()
 
 
 class TelegramNotificationService:
@@ -208,11 +195,14 @@ class TelegramNotificationService:
         """
         try:
             chat_id = chef.telegram_link.telegram_user_id
-            send_telegram_message.delay(chat_id, message)
-            logger.info(f"Queued Telegram notification for chef {chef.id}")
-            return True
+            success = send_telegram_message(chat_id, message)
+            if success:
+                logger.info(f"Sent Telegram notification for chef {chef.id}")
+            else:
+                logger.warning(f"Failed to send Telegram notification for chef {chef.id}")
+            return success
         except Exception as e:
-            logger.error(f"Failed to queue Telegram notification for chef {chef.id}: {e}")
+            logger.error(f"Failed to send Telegram notification for chef {chef.id}: {e}")
             return False
 
     def _dashboard_link(self, order) -> str:

@@ -18,12 +18,19 @@ logger = logging.getLogger(__name__)
 
 # Check if Agents SDK is available
 try:
-    from agents import Agent, MCPServerStdio
+    from agents import Agent
     AGENTS_SDK_AVAILABLE = True
 except ImportError:
     AGENTS_SDK_AVAILABLE = False
     Agent = None
+
+# MCPServerStdio may not exist in all versions
+try:
+    from agents import MCPServerStdio
+    MCP_AVAILABLE = True
+except ImportError:
     MCPServerStdio = None
+    MCP_AVAILABLE = False
 
 
 def _get_groq_model() -> str:
@@ -147,8 +154,11 @@ class AgentsSousChefFactory:
             lead=self.lead,
         )
     
-    def _get_mcp_servers(self) -> Optional[List["MCPServerStdio"]]:
+    def _get_mcp_servers(self) -> Optional[List[Any]]:
         """Get MCP servers for this channel."""
+        if not MCP_AVAILABLE:
+            return None
+        
         servers = []
         
         # LINE MCP server for LINE channel
@@ -159,8 +169,11 @@ class AgentsSousChefFactory:
         
         return servers if servers else None
     
-    def _create_line_mcp(self) -> Optional["MCPServerStdio"]:
+    def _create_line_mcp(self) -> Optional[Any]:
         """Create LINE MCP server if configured."""
+        if not MCP_AVAILABLE or MCPServerStdio is None:
+            return None
+        
         line_token = getattr(settings, 'LINE_CHANNEL_ACCESS_TOKEN', None) or \
                      os.getenv('LINE_CHANNEL_ACCESS_TOKEN')
         

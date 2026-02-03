@@ -5,6 +5,7 @@ from chefs.services.sous_chef.tools.categories import (
     ToolCategory,
     TOOL_REGISTRY,
     CHANNEL_TOOLS,
+    SENSITIVE_RESTRICTED_CHANNELS,
     get_categories_for_channel,
     is_tool_allowed,
 )
@@ -16,6 +17,7 @@ class TestToolCategories:
     def test_tool_category_enum_values(self):
         """ToolCategory enum has expected values."""
         assert ToolCategory.CORE == "core"
+        assert ToolCategory.SENSITIVE == "sensitive"
         assert ToolCategory.NAVIGATION == "navigation"
         assert ToolCategory.MESSAGING == "messaging"
     
@@ -56,15 +58,26 @@ class TestToolCategories:
     def test_core_tools_identified(self):
         """Core tools must be in CORE category."""
         core_tools = [
-            "get_family_dietary_summary",
             "get_upcoming_family_orders",
             "search_chef_dishes",
-            "get_household_members",
-            "check_recipe_compliance",
+            "get_family_order_history",
+            "add_family_note",
         ]
         for tool in core_tools:
             assert TOOL_REGISTRY.get(tool) == ToolCategory.CORE, \
                 f"Tool '{tool}' should be CORE"
+    
+    def test_sensitive_tools_identified(self):
+        """Sensitive tools must be in SENSITIVE category."""
+        sensitive_tools = [
+            "get_family_dietary_summary",
+            "get_household_members",
+            "check_recipe_compliance",
+            "suggest_ingredient_substitution",
+        ]
+        for tool in sensitive_tools:
+            assert TOOL_REGISTRY.get(tool) == ToolCategory.SENSITIVE, \
+                f"Tool '{tool}' should be SENSITIVE"
     
     def test_messaging_tools_identified(self):
         """Messaging tools must be in MESSAGING category."""
@@ -87,20 +100,23 @@ class TestChannelTools:
         """Web channel should have all categories."""
         web_categories = CHANNEL_TOOLS["web"]
         assert ToolCategory.CORE in web_categories
+        assert ToolCategory.SENSITIVE in web_categories
         assert ToolCategory.NAVIGATION in web_categories
         assert ToolCategory.MESSAGING in web_categories
     
     def test_telegram_excludes_navigation(self):
-        """Telegram should NOT have navigation."""
+        """Telegram should NOT have navigation but has SENSITIVE (wrapped)."""
         telegram_categories = CHANNEL_TOOLS["telegram"]
         assert ToolCategory.CORE in telegram_categories
+        assert ToolCategory.SENSITIVE in telegram_categories  # Available but wrapped
         assert ToolCategory.NAVIGATION not in telegram_categories
         assert ToolCategory.MESSAGING in telegram_categories
     
     def test_line_excludes_navigation(self):
-        """LINE should NOT have navigation."""
+        """LINE should NOT have navigation but has SENSITIVE (wrapped)."""
         line_categories = CHANNEL_TOOLS["line"]
         assert ToolCategory.CORE in line_categories
+        assert ToolCategory.SENSITIVE in line_categories  # Available but wrapped
         assert ToolCategory.NAVIGATION not in line_categories
     
     def test_api_has_core_only(self):
@@ -116,12 +132,14 @@ class TestGetCategoriesForChannel:
         """Web channel returns all categories."""
         allowed = get_categories_for_channel("web")
         assert ToolCategory.CORE in allowed
+        assert ToolCategory.SENSITIVE in allowed
         assert ToolCategory.NAVIGATION in allowed
     
     def test_telegram_channel(self):
-        """Telegram excludes navigation."""
+        """Telegram excludes navigation but has SENSITIVE."""
         allowed = get_categories_for_channel("telegram")
         assert ToolCategory.CORE in allowed
+        assert ToolCategory.SENSITIVE in allowed
         assert ToolCategory.NAVIGATION not in allowed
     
     def test_unknown_channel_defaults_to_core(self):
@@ -140,10 +158,19 @@ class TestIsToolAllowed:
     
     def test_core_tool_allowed_everywhere(self):
         """Core tools allowed on all channels."""
+        assert is_tool_allowed("get_family_order_history", "web") is True
+        assert is_tool_allowed("get_family_order_history", "telegram") is True
+        assert is_tool_allowed("get_family_order_history", "line") is True
+        assert is_tool_allowed("get_family_order_history", "api") is True
+    
+    def test_sensitive_tool_allowed_on_user_channels(self):
+        """Sensitive tools allowed on user channels (but wrapped at execution)."""
+        # Sensitive tools are available on user-facing channels
         assert is_tool_allowed("get_family_dietary_summary", "web") is True
         assert is_tool_allowed("get_family_dietary_summary", "telegram") is True
         assert is_tool_allowed("get_family_dietary_summary", "line") is True
-        assert is_tool_allowed("get_family_dietary_summary", "api") is True
+        # But NOT on API (no sensitive data via programmatic access)
+        assert is_tool_allowed("get_family_dietary_summary", "api") is False
     
     def test_navigation_tool_web_only(self):
         """Navigation tools only allowed on web."""

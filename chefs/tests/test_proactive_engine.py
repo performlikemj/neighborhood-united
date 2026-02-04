@@ -374,12 +374,13 @@ class TestCheckSeasonal:
         proactive_settings.notify_seasonal = True
         proactive_settings.save()
         
-        with patch('chefs.tasks.proactive_engine.SEASONAL_INGREDIENTS', {
+        seasonal_data = {
             timezone.now().month: {
                 'vegetables': ['asparagus', 'peas'],
                 'fruits': ['strawberries']
             }
-        }):
+        }
+        with patch('meals.sous_chef_tools.SEASONAL_INGREDIENTS', seasonal_data, create=True):
             notifications = check_seasonal(proactive_settings)
         
         assert len(notifications) == 1
@@ -396,7 +397,7 @@ class TestCheckSeasonal:
             timezone.now().month: {'vegetables': ['asparagus']}
         }
         
-        with patch('chefs.tasks.proactive_engine.SEASONAL_INGREDIENTS', seasonal_data):
+        with patch('meals.sous_chef_tools.SEASONAL_INGREDIENTS', seasonal_data, create=True):
             # First call creates notification
             notifications1 = check_seasonal(proactive_settings)
             assert len(notifications1) == 1
@@ -412,7 +413,7 @@ class TestCheckSeasonal:
         proactive_settings.notify_seasonal = True
         proactive_settings.save()
         
-        with patch('chefs.tasks.proactive_engine.SEASONAL_INGREDIENTS', {}):
+        with patch('meals.sous_chef_tools.SEASONAL_INGREDIENTS', {}, create=True):
             notifications = check_seasonal(proactive_settings)
         
         assert len(notifications) == 0

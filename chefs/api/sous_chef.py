@@ -164,15 +164,16 @@ def sous_chef_stream_message(request):
     def stream_generator() -> Generator[str, None, None]:
         """Generate SSE events from the assistant."""
         try:
-            from meals.sous_chef_assistant import SousChefAssistant
+            from chefs.services.sous_chef import get_sous_chef_service
             
-            assistant = SousChefAssistant(
+            service = get_sous_chef_service(
                 chef_id=chef.id,
+                channel="web",
                 family_id=family_id,
-                family_type=family_type
+                family_type=family_type,
             )
             
-            for event in assistant.stream_message(message):
+            for event in service.stream_message(message):
                 yield _sse_event(event)
                 
         except Exception as e:
@@ -231,15 +232,16 @@ def sous_chef_send_message(request):
         return error_response
     
     try:
-        from meals.sous_chef_assistant import SousChefAssistant
+        from chefs.services.sous_chef import get_sous_chef_service
         
-        assistant = SousChefAssistant(
+        service = get_sous_chef_service(
             chef_id=chef.id,
+            channel="web",
             family_id=family_id,
-            family_type=family_type
+            family_type=family_type,
         )
         
-        result = assistant.send_message(message)
+        result = service.send_message(message)
         return Response(result)
         
     except Exception as e:
@@ -295,15 +297,16 @@ def sous_chef_structured_message(request):
         return error_response
     
     try:
-        from meals.sous_chef_assistant import SousChefAssistant
+        from chefs.services.sous_chef import get_sous_chef_service
         
-        assistant = SousChefAssistant(
+        service = get_sous_chef_service(
             chef_id=chef.id,
+            channel="web",
             family_id=family_id,
-            family_type=family_type
+            family_type=family_type,
         )
         
-        result = assistant.send_structured_message(message)
+        result = service.send_structured_message(message)
         return Response(result)
         
     except Exception as e:
@@ -348,15 +351,16 @@ def sous_chef_new_conversation(request):
         return error_response
     
     try:
-        from meals.sous_chef_assistant import SousChefAssistant
+        from chefs.services.sous_chef import get_sous_chef_service
         
-        assistant = SousChefAssistant(
+        service = get_sous_chef_service(
             chef_id=chef.id,
+            channel="web",
             family_id=family_id,
-            family_type=family_type
+            family_type=family_type,
         )
         
-        result = assistant.new_conversation()
+        result = service.new_conversation()
         return Response(result)
         
     except Exception as e:
@@ -400,20 +404,21 @@ def sous_chef_thread_history(request, family_type, family_id):
         actual_family_type = family_type
     
     try:
-        from meals.sous_chef_assistant import SousChefAssistant
+        from chefs.services.sous_chef import get_sous_chef_service
         
-        assistant = SousChefAssistant(
+        service = get_sous_chef_service(
             chef_id=chef.id,
+            channel="web",
             family_id=actual_family_id,
-            family_type=actual_family_type
+            family_type=actual_family_type,
         )
         
-        history = assistant.get_conversation_history()
-        thread = assistant._get_or_create_thread()
+        history = service.get_history()
+        thread = service.thread_manager.get_or_create_thread()
         
         # Get family name or "General Assistant" for no-family mode
         family_name = getattr(thread, 'family_name', None)
-        if not family_name and not assistant.has_family_context:
+        if not family_name and actual_family_id is None:
             family_name = "General Assistant"
         
         return Response({

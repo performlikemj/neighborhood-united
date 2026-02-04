@@ -240,6 +240,10 @@ class SousChefAssistant:
     """
     AI assistant for chefs to help with meal planning and platform guidance.
     
+    .. deprecated::
+        Use `chefs.services.sous_chef.get_sous_chef_service()` instead.
+        This class will be removed in a future version.
+    
     Can operate in two modes:
     1. Family mode: Scoped to a specific chef + family combination with full
        context about the family's dietary needs, household composition, and order history.
@@ -260,7 +264,16 @@ class SousChefAssistant:
             chef_id: The ID of the Chef using the assistant
             family_id: Optional - The ID of the family (CustomUser or Lead)
             family_type: Optional - Either 'customer' or 'lead' (required if family_id provided)
+        
+        .. deprecated::
+            Use `chefs.services.sous_chef.get_sous_chef_service()` instead.
         """
+        import warnings
+        warnings.warn(
+            "SousChefAssistant is deprecated. Use chefs.services.sous_chef.get_sous_chef_service() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         self.chef_id = chef_id
         self.family_id = family_id
         self.family_type = family_type

@@ -2001,7 +2001,8 @@ def _navigate_to_dashboard_tab(
         "tab": tab,
         "label": f"Go to {tab_label}",
         "reason": reason,
-        "render_as_action": True  # Flag for response builder to render as clickable action
+        "render_as_action": True,  # Flag for response builder to render as clickable action
+        "auto_execute": True  # Auto-navigate without requiring button click
     }
 
 

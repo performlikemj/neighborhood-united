@@ -61,6 +61,16 @@ export default function SousChefPage() {
     navigate('/chefs/dashboard')
   }, [navigate])
 
+  // Handle actions from Sous Chef (navigation, prefill, etc.)
+  const handleSousChefAction = useCallback((action) => {
+    if (action.action_type === 'navigate') {
+      const tab = action.payload?.tab || action.payload?.tab_name
+      if (tab) {
+        navigate(`/chefs/dashboard?tab=${tab}`)
+      }
+    }
+  }, [navigate])
+
   return (
     <div className="sc-page">
       {/* Header */}
@@ -134,6 +144,7 @@ export default function SousChefPage() {
             familyName={selectedFamily.familyName || (selectedFamily.familyId ? null : 'General Assistant')}
             chefEmoji={chefEmoji}
             initialInput={draftInput}
+            onAction={handleSousChefAction}
           />
         </div>
       </main>

@@ -185,18 +185,28 @@ def send_telegram_message(chat_id: int, text: str, parse_mode: str = "Markdown")
 def process_chef_message(chef, text: str) -> str:
     """
     Process a message from a chef and generate a response.
-    
+
     Routes the message through channel-aware Sous Chef service.
     Telegram channel excludes navigation tools (can't navigate UI from chat).
-    
+
     Args:
         chef: Chef model instance
         text: Message text from chef
-        
+
     Returns:
         str: Response text to send back
     """
+    from chefs.services.sous_chef.filters.pii_detector import detect_health_pii
+
     logger.info(f"Processing message from chef {chef.id}: {text[:50]}...")
+
+    # Check for PII in incoming message - log but don't process
+    contains_pii, pii_type = detect_health_pii(text)
+    if contains_pii:
+        logger.info(
+            f"Incoming message from chef {chef.id} contains health PII "
+            f"(type: {pii_type}), will not process the PII content"
+        )
     
     try:
         from chefs.services.sous_chef import SousChefService

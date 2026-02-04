@@ -331,15 +331,142 @@ class TestToolLoaderIntegration:
 
 class TestServiceIntegration:
     """Integration test: Service layer respects sensitive data rules."""
-    
+
     @pytest.mark.django_db
     def test_service_telegram_blocks_dietary_tool(self):
         """SousChefService on Telegram should block sensitive tool results."""
         # This is an integration test - will be implemented after unit tests pass
         pass
-    
-    @pytest.mark.django_db 
+
+    @pytest.mark.django_db
     def test_service_web_allows_dietary_tool(self):
         """SousChefService on web should allow sensitive tool results."""
         # This is an integration test - will be implemented after unit tests pass
         pass
+
+
+class TestAntiSolicitationPrompts:
+    """Tests for anti-solicitation rules in channel prompts."""
+
+    def test_telegram_prompt_includes_anti_solicitation_rules(self):
+        """Verify Telegram prompt prohibits asking for PII."""
+        from chefs.services.sous_chef.prompts.builder import get_channel_context
+
+        telegram_context = get_channel_context("telegram")
+
+        # Check anti-solicitation language is present
+        assert "DO NOT" in telegram_context
+        assert "ask" in telegram_context.lower()
+        assert "tell" in telegram_context.lower() or "let me know" in telegram_context.lower()
+
+    def test_line_prompt_includes_anti_solicitation_rules(self):
+        """Verify LINE prompt prohibits asking for PII."""
+        from chefs.services.sous_chef.prompts.builder import get_channel_context
+
+        line_context = get_channel_context("line")
+
+        assert "DO NOT" in line_context
+        assert "ask" in line_context.lower()
+
+    def test_telegram_prompt_includes_meal_planning_guidance(self):
+        """Verify Telegram prompt includes meal planning guidance."""
+        from chefs.services.sous_chef.prompts.builder import get_channel_context
+
+        telegram_context = get_channel_context("telegram")
+
+        assert "MealPlanningGuidance" in telegram_context
+        assert "general" in telegram_context.lower()
+
+    def test_line_prompt_includes_meal_planning_guidance(self):
+        """Verify LINE prompt includes meal planning guidance."""
+        from chefs.services.sous_chef.prompts.builder import get_channel_context
+
+        line_context = get_channel_context("line")
+
+        assert "MealPlanningGuidance" in line_context
+
+
+class TestPIIDetector:
+    """Tests for incoming PII detection."""
+
+    def test_pii_detector_catches_allergy_mentions(self):
+        """Verify PII detector identifies allergy information."""
+        from chefs.services.sous_chef.filters.pii_detector import detect_health_pii
+
+        test_cases = [
+            ("they're allergic to peanuts", True, "allergy"),
+            ("the family has a nut allergy", True, "allergy"),
+            ("she can't eat dairy", True, "restriction"),
+            ("he's celiac", True, "medical_condition"),
+            ("they're vegan", True, "dietary_preference"),
+            ("what time is the delivery?", False, None),
+            ("let's do chicken for dinner", False, None),
+        ]
+
+        for message, expected_pii, expected_type in test_cases:
+            has_pii, pii_type = detect_health_pii(message)
+            assert has_pii == expected_pii, f"Failed for: {message}"
+            if expected_type:
+                assert pii_type == expected_type, f"Wrong type for: {message}"
+
+    def test_pii_detector_catches_intolerance(self):
+        """Verify PII detector identifies intolerance mentions."""
+        from chefs.services.sous_chef.filters.pii_detector import detect_health_pii
+
+        has_pii, pii_type = detect_health_pii("she's lactose intolerant")
+        assert has_pii is True
+        assert pii_type == "intolerance"
+
+    def test_pii_detector_catches_medical_conditions(self):
+        """Verify PII detector identifies medical conditions."""
+        from chefs.services.sous_chef.filters.pii_detector import detect_health_pii
+
+        conditions = ["he has diabetes", "she has crohn's", "they have ibs"]
+        for message in conditions:
+            has_pii, pii_type = detect_health_pii(message)
+            assert has_pii is True, f"Failed for: {message}"
+            assert pii_type == "medical_condition", f"Wrong type for: {message}"
+
+    def test_pii_detector_catches_dietary_preferences(self):
+        """Verify PII detector identifies dietary preferences."""
+        from chefs.services.sous_chef.filters.pii_detector import detect_health_pii
+
+        prefs = ["they're vegetarian", "she's pescatarian", "kosher meals only"]
+        for message in prefs:
+            has_pii, pii_type = detect_health_pii(message)
+            assert has_pii is True, f"Failed for: {message}"
+            assert pii_type == "dietary_preference", f"Wrong type for: {message}"
+
+    def test_pii_detector_catches_free_from(self):
+        """Verify PII detector identifies 'free from' mentions."""
+        from chefs.services.sous_chef.filters.pii_detector import detect_health_pii
+
+        free_from = ["they need gluten-free", "dairy free please", "nut-free options"]
+        for message in free_from:
+            has_pii, pii_type = detect_health_pii(message)
+            assert has_pii is True, f"Failed for: {message}"
+            assert pii_type == "free_from", f"Wrong type for: {message}"
+
+    def test_pii_ignored_on_telegram(self):
+        """Verify PII in messages is flagged for ignoring on Telegram."""
+        from chefs.services.sous_chef.filters.pii_detector import should_ignore_pii_in_message
+
+        # Should ignore on Telegram
+        assert should_ignore_pii_in_message("they're allergic to nuts", "telegram") is True
+
+        # Should NOT ignore on web (full access)
+        assert should_ignore_pii_in_message("they're allergic to nuts", "web") is False
+
+    def test_pii_ignored_on_line(self):
+        """Verify PII in messages is flagged for ignoring on LINE."""
+        from chefs.services.sous_chef.filters.pii_detector import should_ignore_pii_in_message
+
+        assert should_ignore_pii_in_message("she's lactose intolerant", "line") is True
+
+    def test_non_pii_not_ignored(self):
+        """Verify non-PII messages are not flagged."""
+        from chefs.services.sous_chef.filters.pii_detector import should_ignore_pii_in_message
+
+        # Even on Telegram, normal messages should not be ignored
+        assert should_ignore_pii_in_message("what time is the delivery?", "telegram") is False
+        assert should_ignore_pii_in_message("let's plan some meals", "telegram") is False

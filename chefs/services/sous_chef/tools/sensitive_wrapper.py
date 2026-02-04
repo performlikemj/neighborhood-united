@@ -23,28 +23,27 @@ logger = logging.getLogger(__name__)
 
 
 # Redirect messages for each sensitive tool
-# These tell the user where to find the data instead
+# These tell the user where to find the data instead AND offer alternatives
 SENSITIVE_REDIRECT_MESSAGES: Dict[str, str] = {
     "get_family_dietary_summary": (
-        "🔒 For privacy, I can't share dietary details or allergies over {channel}. "
-        "Please check the dashboard: go to your client's profile → Dietary Info. "
-        "Or ask me again when you're using the web app!"
+        "🔒 Dietary details can't be shared over {channel}. "
+        "I can offer general meal suggestions, or for a fully personalized "
+        "plan that accounts for allergies, please use Chef Hub where I have "
+        "full access to their profile!"
     ),
     "get_household_members": (
-        "🔒 Household member details (including dietary info) aren't available over {channel}. "
+        "🔒 Household member details aren't available over {channel}. "
         "View them on the dashboard: Client Profile → Household Members. "
-        "I can help with other questions here though!"
+        "I can help with general questions here though!"
     ),
     "check_recipe_compliance": (
         "🔒 I can't share specific allergy details over {channel}. "
-        "For a full compliance check with names and specific allergens, "
-        "please use the web dashboard. I can tell you the recipe has "
-        "{compliance_hint} - check the dashboard for details."
+        "This recipe has {compliance_hint}—check the dashboard for specifics."
     ),
     "suggest_ingredient_substitution": (
-        "🔒 Substitution suggestions reference specific allergies, which I can't share over {channel}. "
-        "Please check the dashboard for personalized substitution advice, "
-        "or tell me the specific restriction and I can give general guidance."
+        "🔒 Personalized substitution advice references specific allergies. "
+        "Please check the dashboard, or I can give general substitution tips "
+        "if you tell me what you're trying to achieve (e.g., 'make it dairy-free')."
     ),
 }
 

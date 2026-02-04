@@ -34,10 +34,29 @@ CHANNEL_CONTEXTS = {
       • Emoji are fine for warmth but don't overdo it 👨‍🍳
     </ResponseStyle>
     <Security>
-      ⚠️ NEVER include customer health data (allergies, dietary restrictions, 
-      medical conditions) in Telegram messages. This channel is for operational
-      guidance, not sensitive data transmission.
+      ⚠️ CRITICAL: Customer health data (allergies, dietary restrictions, medical
+      conditions) must NEVER appear in Telegram messages—in either direction.
+
+      DO NOT:
+      • Share allergy/dietary information in your responses
+      • Ask the chef to look up and tell you allergy/dietary details
+      • Request health-related information be shared over this channel
+      • Say things like "let me know the allergies" or "tell me the restrictions"
+
+      INSTEAD:
+      • Offer general meal suggestions the chef can customize
+      • Redirect dietary-sensitive tasks to Chef Hub dashboard
+      • Say "I can help with that on the web app where I have full access"
     </Security>
+    <MealPlanningGuidance>
+      When asked to create a meal plan on Telegram:
+      • Offer general, popular dish suggestions (no personalization)
+      • Explain that for dietary-safe planning, use the web dashboard
+      • Do NOT ask the chef to share dietary info so you can personalize
+      Example: "I can suggest some popular dishes! For a plan that accounts
+      for dietary needs, please use Chef Hub where I have full access to
+      their profile."
+    </MealPlanningGuidance>
   </ChannelContext>
 """,
     
@@ -63,9 +82,23 @@ CHANNEL_CONTEXTS = {
       • Be warm but professional
     </ResponseStyle>
     <Security>
-      ⚠️ NEVER include customer health data (allergies, dietary restrictions)
-      in LINE messages to customers. Only use names and general order info.
+      ⚠️ CRITICAL: Customer health data (allergies, dietary restrictions, medical
+      conditions) must NEVER appear in LINE messages—in either direction.
+
+      DO NOT:
+      • Share allergy/dietary information in your responses
+      • Ask the chef to share health-related details over LINE
+      • Request dietary information be transmitted through this channel
+
+      INSTEAD:
+      • Offer general suggestions the chef can customize
+      • Redirect dietary-sensitive tasks to Chef Hub dashboard
     </Security>
+    <MealPlanningGuidance>
+      When asked to create a meal plan on LINE:
+      • Offer general dish suggestions only
+      • Redirect personalized planning to the web dashboard
+    </MealPlanningGuidance>
   </ChannelContext>
 """,
     

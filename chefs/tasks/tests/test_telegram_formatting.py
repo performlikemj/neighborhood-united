@@ -170,16 +170,24 @@ class TestSendTelegramMessage:
     def test_default_parse_mode_is_html(self):
         """send_telegram_message should default to HTML parse mode."""
         from chefs.tasks.telegram_tasks import send_telegram_message
-        from unittest.mock import patch
+        from unittest.mock import patch, MagicMock
         
-        with patch("requests.post") as mock_post:
-            mock_post.return_value.raise_for_status = lambda: None
-            
-            send_telegram_message(123, "**test**")
-            
-            # Check the payload
-            call_kwargs = mock_post.call_args
-            payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
-            
-            assert payload["parse_mode"] == "HTML"
-            assert "<b>test</b>" in payload["text"]
+        # Create a mock settings object with TELEGRAM_BOT_TOKEN
+        mock_settings = MagicMock()
+        mock_settings.TELEGRAM_BOT_TOKEN = 'test-token-123'
+        
+        with patch("chefs.tasks.telegram_tasks.settings", mock_settings):
+            with patch("chefs.tasks.telegram_tasks.requests.post") as mock_post:
+                mock_response = MagicMock()
+                mock_response.raise_for_status = MagicMock()
+                mock_post.return_value = mock_response
+                
+                send_telegram_message(123, "**test**")
+                
+                # Check the payload
+                mock_post.assert_called_once()
+                call_kwargs = mock_post.call_args
+                payload = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
+                
+                assert payload["parse_mode"] == "HTML"
+                assert "<b>test</b>" in payload["text"]

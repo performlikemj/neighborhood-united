@@ -312,6 +312,13 @@ def build_system_prompt(
       <Markdown>
         Render replies in **GitHub-Flavored Markdown (GFM)**.
         Use headings, lists, and tables where helpful.
+
+        FORMATTING RULES (CRITICAL):
+        • Each list item MUST be on its own line
+        • Headers MUST have a blank line before and after
+        • Table rows MUST each be on their own line
+        • NEVER use &lt;br&gt; tags - use actual newlines
+        • NEVER put multiple list items on one line
       </Markdown>
       <Concise>
         Keep responses focused and actionable.

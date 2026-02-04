@@ -93,39 +93,52 @@ def _check_sensitive_restriction(tool_name: str) -> Optional[dict]:
 # =============================================================================
 
 @function_tool
-def get_family_dietary_summary() -> dict:
+def get_family_dietary_summary(include_member_details: bool = True) -> dict:
     """
     Get dietary preferences and restrictions for the current family.
-    
-    Returns comprehensive dietary info including allergies, 
+
+    Args:
+        include_member_details: Include per-member dietary details (default True)
+
+    Returns comprehensive dietary info including allergies,
     dietary restrictions, and per-member details.
     """
     # Check sensitive restriction
     restricted = _check_sensitive_restriction("get_family_dietary_summary")
     if restricted:
         return restricted
-    
+
     from meals.sous_chef_tools import _get_family_dietary_summary
-    return _get_family_dietary_summary(
+    result = _get_family_dietary_summary(
         {}, ToolContext.chef, ToolContext.customer, ToolContext.lead
     )
+    if not include_member_details and isinstance(result, dict):
+        result.pop("member_details", None)
+    return result
 
 
 @function_tool
-def get_household_members() -> dict:
+def get_household_members(include_dietary_info: bool = True) -> dict:
     """
     Get information about household members.
-    
+
+    Args:
+        include_dietary_info: Include dietary preferences per member (default True)
+
     Returns member names, ages, and dietary information.
     """
     restricted = _check_sensitive_restriction("get_household_members")
     if restricted:
         return restricted
-    
+
     from meals.sous_chef_tools import _get_household_members
-    return _get_household_members(
+    result = _get_household_members(
         {}, ToolContext.chef, ToolContext.customer, ToolContext.lead
     )
+    if not include_dietary_info and isinstance(result, dict) and "members" in result:
+        for member in result.get("members", []):
+            member.pop("dietary_info", None)
+    return result
 
 
 @function_tool
@@ -185,16 +198,19 @@ def get_family_order_history(limit: int = 10) -> dict:
 
 
 @function_tool
-def get_upcoming_family_orders() -> dict:
+def get_upcoming_family_orders(days_ahead: int = 30) -> dict:
     """
     Get upcoming/scheduled orders for this family.
-    
+
+    Args:
+        days_ahead: Number of days ahead to look for orders (default 30)
+
     Returns:
         List of upcoming orders with dates and details.
     """
     from meals.sous_chef_tools import _get_upcoming_family_orders
     return _get_upcoming_family_orders(
-        {}, ToolContext.chef, ToolContext.customer, ToolContext.lead
+        {"days_ahead": days_ahead}, ToolContext.chef, ToolContext.customer, ToolContext.lead
     )
 
 
@@ -321,7 +337,7 @@ def navigate_to_dashboard_tab(tab_name: str) -> dict:
     """
     from meals.sous_chef_tools import _navigate_to_dashboard_tab
     return _navigate_to_dashboard_tab(
-        {"tab_name": tab_name},
+        {"tab": tab_name},  # Use "tab" key to match what the underlying function expects
         ToolContext.chef, ToolContext.customer, ToolContext.lead
     )
 

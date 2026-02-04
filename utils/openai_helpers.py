@@ -4,9 +4,8 @@ Utility functions for OpenAI API interactions.
 import tiktoken
 
 # Initialize the encoder once
-# Use a well-known model name that tiktoken recognizes
-# gpt-4 tokenizer works for gpt-5 family as well
-enc = tiktoken.encoding_for_model("gpt-5")
+# Use cl100k_base encoding (used by gpt-4, gpt-4o, o1, o3 models)
+enc = tiktoken.get_encoding("cl100k_base")
 
 def token_length(text: str) -> int:
     """

@@ -306,9 +306,7 @@ def sous_chef_structured_message(request):
             family_type=family_type,
         )
         
-        # TODO: Add structured output support to service layer
-        # For now, use regular send_message
-        result = service.send_message(message)
+        result = service.send_structured_message(message)
         return Response(result)
         
     except Exception as e:

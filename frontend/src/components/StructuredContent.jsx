@@ -9,9 +9,10 @@
  * - Legacy markdown text (backwards compatibility with ReactMarkdown)
  */
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
 import ScaffoldPreview from './ScaffoldPreview.jsx'
 import { api } from '../api.js'
 
@@ -68,31 +69,77 @@ function parseContent(content) {
 }
 
 /**
- * Render a text block as a paragraph.
- * Handles markdown-like formatting within text content.
+ * Preprocess markdown to fix missing newlines.
+ * Some LLMs output markdown without proper line breaks.
+ * This is a safety net - backend normalization should catch most cases.
+ */
+function preprocessMarkdown(text) {
+  if (!text) return text
+
+  let result = text
+
+  // Convert <br> tags to newlines for better markdown parsing
+  result = result.replace(/<br\s*\/?>/gi, '\n')
+
+  // Fix inline list items by processing line by line
+  // This avoids breaking table cells like "| Item - Value |"
+  const lines = result.split('\n')
+  const fixedLines = lines.map(line => {
+    // Skip table rows (lines that start and end with |)
+    const trimmed = line.trim()
+    if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+      return line
+    }
+    // Convert " - " to newline + "- " for list items
+    let fixed = line.replace(/([.:!?])\s+-\s+/g, '$1\n\n- ')
+    // Then handle any remaining " - " sequences
+    fixed = fixed.replace(/\s+-\s+/g, '\n- ')
+    return fixed
+  })
+  result = fixedLines.join('\n')
+
+  // Add newline before headers (##, ###, etc.) if not at line start
+  result = result.replace(/([^\n])(#{1,6}\s)/g, '$1\n\n$2')
+
+  // Ensure double newline before headers for proper rendering
+  result = result.replace(/\n(#{1,6}\s)/g, '\n\n$1')
+
+  // Add newlines around table rows (| ... |)
+  // First, add newline before table start (line starting with |)
+  result = result.replace(/([^\n|])\s*(\|[^|]+\|)/g, '$1\n$2')
+
+  // Add newline after table separator row (|---|)
+  result = result.replace(/(\|[-:|\s]+\|)([^\n])/g, '$1\n$2')
+
+  // Fix table rows concatenated on single line (but not separator rows)
+  result = result.replace(/(\|[^|\n]+\|)\s*(?=\|[^-])/g, '$1\n')
+
+  // Clean up excessive newlines (more than 2 in a row)
+  result = result.replace(/\n{3,}/g, '\n\n')
+
+  return result
+}
+
+/**
+ * Render a text block.
+ * Always uses ReactMarkdown since the assistant is instructed to use markdown.
  */
 function TextBlock({ content }) {
   if (!content) return null
-  
+
   // Convert content to string if it's not already (edge case: number or object)
   const textContent = typeof content === 'string' ? content : String(content)
-  
-  // Split on double newlines for paragraphs
-  const paragraphs = textContent.split(/\n\n+/).filter(Boolean)
-  
+
+  // Preprocess to fix malformed markdown (missing newlines)
+  const processedContent = preprocessMarkdown(textContent)
+
+  // Always use ReactMarkdown - the prompt instructs markdown output
   return (
-    <>
-      {paragraphs.map((para, i) => (
-        <p key={i} className="structured-text">
-          {para.split('\n').map((line, j) => (
-            <span key={j}>
-              {j > 0 && <br />}
-              {formatInlineText(line)}
-            </span>
-          ))}
-        </p>
-      ))}
-    </>
+    <div className="markdown-content">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+        {processedContent}
+      </ReactMarkdown>
+    </div>
   )
 }
 
@@ -397,13 +444,35 @@ function ScaffoldBlock({ scaffold: initialScaffold, summary, onAction }) {
 export default function StructuredContent({ content, className = '', onAction }) {
   // Parse content to blocks or detect legacy markdown
   const parsed = useMemo(() => parseContent(content), [content])
+
+  // Track which auto-execute actions we've already executed to avoid duplicates
+  const executedActionsRef = useRef(new Set())
+
+  // Auto-execute actions that have auto_execute: true
+  useEffect(() => {
+    if (!parsed.blocks || !onAction) return
+
+    for (const block of parsed.blocks) {
+      if (block?.type === 'action' && block.auto_execute) {
+        // Create a unique key for this action to avoid re-executing
+        const actionKey = `${block.action_type}-${block.payload?.tab || ''}-${block.payload?.form_type || ''}`
+
+        if (!executedActionsRef.current.has(actionKey)) {
+          executedActionsRef.current.add(actionKey)
+          // Execute the action
+          onAction({ action_type: block.action_type, payload: block.payload })
+        }
+      }
+    }
+  }, [parsed.blocks, onAction])
   
   // Handle legacy markdown content with ReactMarkdown
   if (parsed.isLegacyMarkdown) {
+    const processedContent = preprocessMarkdown(parsed.rawContent || '')
     return (
       <div className={`structured-content legacy-markdown ${className}`}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-          {parsed.rawContent || ''}
+        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+          {processedContent}
         </ReactMarkdown>
         <style>{legacyMarkdownStyles}</style>
       </div>
@@ -596,6 +665,111 @@ export default function StructuredContent({ content, className = '', onAction })
         /* First/last element spacing */
         .structured-content > *:first-child { margin-top: 0 !important; }
         .structured-content > *:last-child { margin-bottom: 0 !important; }
+
+        /* Markdown Content (ReactMarkdown rendered) */
+        .markdown-content {
+          line-height: 1.6;
+          color: var(--text);
+        }
+
+        .markdown-content p {
+          margin: 0.75em 0;
+          color: var(--text);
+        }
+
+        .markdown-content p:first-child { margin-top: 0; }
+        .markdown-content p:last-child { margin-bottom: 0; }
+
+        .markdown-content h1,
+        .markdown-content h2,
+        .markdown-content h3,
+        .markdown-content h4 {
+          color: var(--text);
+          font-weight: 600;
+          line-height: 1.3;
+          margin-top: 1.25em;
+          margin-bottom: 0.5em;
+        }
+
+        .markdown-content h1 { font-size: 1.3em; }
+        .markdown-content h2 { font-size: 1.15em; }
+        .markdown-content h3 { font-size: 1.05em; }
+        .markdown-content h4 { font-size: 1em; }
+
+        .markdown-content h1:first-child,
+        .markdown-content h2:first-child,
+        .markdown-content h3:first-child { margin-top: 0; }
+
+        .markdown-content ul,
+        .markdown-content ol {
+          margin: 0.75em 0;
+          padding-left: 1.5em;
+          color: var(--text);
+        }
+
+        .markdown-content li {
+          margin: 0.35em 0;
+          line-height: 1.5;
+          color: var(--text);
+        }
+
+        .markdown-content ul { list-style-type: disc; }
+        .markdown-content ol { list-style-type: decimal; }
+
+        .markdown-content strong { font-weight: 700; color: var(--text); }
+        .markdown-content em { font-style: italic; }
+
+        .markdown-content code {
+          background: var(--surface-2, #f3f4f6);
+          border: 1px solid var(--border, #e5e7eb);
+          padding: 0.15em 0.4em;
+          border-radius: 4px;
+          font-size: 0.85em;
+        }
+
+        .markdown-content pre {
+          background: var(--surface-2, #f3f4f6);
+          border: 1px solid var(--border, #e5e7eb);
+          border-radius: 6px;
+          padding: 0.75em 1em;
+          margin: 0.75em 0;
+          overflow-x: auto;
+        }
+
+        .markdown-content pre code {
+          background: transparent;
+          border: none;
+          padding: 0;
+        }
+
+        .markdown-content table {
+          border-collapse: collapse;
+          margin: 0.75em 0;
+          font-size: 0.85em;
+          width: 100%;
+        }
+
+        .markdown-content th {
+          background: var(--surface-2, #f3f4f6);
+          border: 1px solid var(--border, #e5e7eb);
+          padding: 0.5em 0.75em;
+          color: var(--text);
+          font-weight: 600;
+          text-align: left;
+        }
+
+        .markdown-content td {
+          border: 1px solid var(--border, #e5e7eb);
+          padding: 0.5em 0.75em;
+          color: var(--text);
+        }
+
+        .markdown-content tbody tr:nth-child(even) {
+          background: rgba(128, 128, 128, 0.05);
+        }
+
+        .markdown-content > *:first-child { margin-top: 0 !important; }
+        .markdown-content > *:last-child { margin-bottom: 0 !important; }
         
         /* Action Block Styles */
         .action-block {

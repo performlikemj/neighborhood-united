@@ -431,6 +431,148 @@ class TestMigration:
             chef_id=test_chef.id,
             channel="telegram",
         )
-        
+
         assert service is not None
         assert hasattr(service, 'send_message')
+
+
+# =============================================================================
+# Phase 6: Navigation Tool Fix
+# =============================================================================
+
+class TestNavigationToolParameterFix:
+    """Test that navigation tool passes correct parameter to underlying function."""
+
+    def test_navigate_tool_uses_tab_key(self):
+        """navigate_to_dashboard_tab should pass 'tab' key, not 'tab_name'."""
+        try:
+            from agents import function_tool
+        except ImportError:
+            pytest.skip("openai-agents not installed")
+
+        # Test the underlying function directly to verify it expects "tab" key
+        from meals.sous_chef_tools import _navigate_to_dashboard_tab
+
+        # With correct "tab" key, should return the requested tab
+        result = _navigate_to_dashboard_tab(
+            {"tab": "clients"},
+            None, None, None
+        )
+        assert result.get("tab") == "clients"
+        assert result.get("status") == "success"
+
+        # With wrong "tab_name" key (old bug), would fall back to "dashboard"
+        result_wrong = _navigate_to_dashboard_tab(
+            {"tab_name": "clients"},  # This was the bug
+            None, None, None
+        )
+        assert result_wrong.get("tab") == "dashboard"  # Falls back to default
+
+
+class TestActionCaptureHooks:
+    """Test the ActionCaptureHooks for capturing action tool results."""
+
+    def test_captures_action_tool_results(self):
+        """on_tool_end captures results with render_as_action flag."""
+        try:
+            from agents import function_tool
+        except ImportError:
+            pytest.skip("openai-agents not installed")
+
+        import asyncio
+        import json
+        from chefs.services.sous_chef.agents_service import ActionCaptureHooks
+
+        hooks = ActionCaptureHooks()
+        result_json = json.dumps({
+            "status": "success",
+            "action_type": "navigate",
+            "tab": "clients",
+            "label": "Go to Clients",
+            "render_as_action": True
+        })
+
+        asyncio.get_event_loop().run_until_complete(
+            hooks.on_tool_end(None, None, None, result_json)
+        )
+
+        assert len(hooks.captured_actions) == 1
+        assert hooks.captured_actions[0]["tab"] == "clients"
+        assert hooks.captured_actions[0]["action_type"] == "navigate"
+
+    def test_ignores_non_action_results(self):
+        """on_tool_end ignores results without render_as_action."""
+        try:
+            from agents import function_tool
+        except ImportError:
+            pytest.skip("openai-agents not installed")
+
+        import asyncio
+        import json
+        from chefs.services.sous_chef.agents_service import ActionCaptureHooks
+
+        hooks = ActionCaptureHooks()
+        result_json = json.dumps({"status": "success", "data": "some info"})
+
+        asyncio.get_event_loop().run_until_complete(
+            hooks.on_tool_end(None, None, None, result_json)
+        )
+
+        assert len(hooks.captured_actions) == 0
+
+    def test_handles_invalid_json(self):
+        """on_tool_end handles non-JSON results gracefully."""
+        try:
+            from agents import function_tool
+        except ImportError:
+            pytest.skip("openai-agents not installed")
+
+        import asyncio
+        from chefs.services.sous_chef.agents_service import ActionCaptureHooks
+
+        hooks = ActionCaptureHooks()
+        asyncio.get_event_loop().run_until_complete(
+            hooks.on_tool_end(None, None, None, "not valid json")
+        )
+
+        assert len(hooks.captured_actions) == 0
+
+
+class TestConvertToBlocksWithActions:
+    """Test _convert_to_blocks merges captured actions."""
+
+    @pytest.mark.django_db
+    def test_merges_actions_into_blocks(self, test_chef):
+        """_convert_to_blocks includes action blocks from captured actions."""
+        try:
+            from agents import Agent
+        except ImportError:
+            pytest.skip("openai-agents not installed")
+
+        from chefs.services.sous_chef.agents_service import AgentsSousChefService
+
+        service = AgentsSousChefService(chef_id=test_chef.id, channel="web")
+
+        actions = [{
+            "action_type": "navigate",
+            "tab": "clients",
+            "label": "Go to Clients",
+            "reason": "Taking you to clients"
+        }]
+
+        result = service._convert_to_blocks(
+            "I'll navigate you to the clients tab.",
+            actions=actions
+        )
+
+        assert "blocks" in result
+        blocks = result["blocks"]
+
+        # Should have text block and action block
+        text_blocks = [b for b in blocks if b["type"] == "text"]
+        action_blocks = [b for b in blocks if b["type"] == "action"]
+
+        assert len(text_blocks) == 1
+        assert len(action_blocks) == 1
+        assert action_blocks[0]["payload"]["tab"] == "clients"
+        assert action_blocks[0]["action_type"] == "navigate"

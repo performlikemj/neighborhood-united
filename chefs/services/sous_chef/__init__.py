@@ -58,7 +58,7 @@ def get_sous_chef_service(
     """
     use_agents_sdk = getattr(settings, 'USE_AGENTS_SDK', None)
     if use_agents_sdk is None:
-        use_agents_sdk = os.getenv('USE_AGENTS_SDK', 'false').lower() == 'true'
+        use_agents_sdk = os.getenv('USE_AGENTS_SDK', 'true').lower() == 'true'
     
     if use_agents_sdk and AGENTS_SDK_AVAILABLE:
         return AgentsSousChefService(

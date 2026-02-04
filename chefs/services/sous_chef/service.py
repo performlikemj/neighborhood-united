@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 def _get_groq_model() -> str:
     """Get the Groq model from settings."""
-    return getattr(settings, 'GROQ_MODEL', None) or os.getenv('GROQ_MODEL', 'llama-3.3-70b-versatile')
+    return getattr(settings, 'GROQ_MODEL', None) or os.getenv('GROQ_MODEL', 'openai/gpt-oss-120b')
 
 
 class SousChefService:

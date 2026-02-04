@@ -25,7 +25,8 @@ class StreamingClient {
 
     private init() {
         #if DEBUG
-        self.baseURL = URL(string: "http://localhost:8000")!
+        // Use 127.0.0.1 instead of localhost to avoid IPv6 issues
+        self.baseURL = URL(string: "http://127.0.0.1:8000")!
         #else
         self.baseURL = URL(string: "https://api.sautai.com")!
         #endif
@@ -45,7 +46,11 @@ class StreamingClient {
         // Cancel any existing stream
         cancel()
 
-        let url = baseURL.appendingPathComponent("/chefs/api/me/sous-chef/stream/")
+        // Use URL(string:relativeTo:) to properly construct the URL
+        guard let url = URL(string: "/chefs/api/me/sous-chef/stream/", relativeTo: baseURL) else {
+            await MainActor.run { onError(StreamingError.invalidResponse) }
+            return
+        }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"

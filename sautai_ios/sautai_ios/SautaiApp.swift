@@ -75,14 +75,14 @@ struct ChefTabView: View {
                     Label("Clients", systemImage: "person.2.fill")
                 }
 
+            LeadsListView()
+                .tabItem {
+                    Label("Leads", systemImage: "person.badge.plus")
+                }
+
             SousChefView()
                 .tabItem {
                     Label("Sous Chef", systemImage: "bubble.left.and.bubble.right.fill")
-                }
-
-            MealPlansListView()
-                .tabItem {
-                    Label("Plans", systemImage: "list.clipboard.fill")
                 }
 
             SettingsView()

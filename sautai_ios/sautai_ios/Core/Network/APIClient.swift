@@ -94,6 +94,29 @@ class APIClient {
         let _: EmptyResponse = try await post("/auth/api/switch_role/", body: body)
     }
 
+    /// Request password reset
+    func requestPasswordReset(email: String) async throws {
+        let body = ["email": email]
+        let _: EmptyResponse = try await post("/auth/api/password_reset_request/", body: body, authenticated: false)
+    }
+
+    /// Reset password with token
+    func resetPassword(token: String, newPassword: String) async throws {
+        let body = ["token": token, "new_password": newPassword]
+        let _: EmptyResponse = try await post("/auth/api/reset_password/", body: body, authenticated: false)
+    }
+
+    /// Resend activation email
+    func resendActivationEmail(email: String) async throws {
+        let body = ["email": email]
+        let _: EmptyResponse = try await post("/auth/api/resend-activation-link/", body: body, authenticated: false)
+    }
+
+    /// Update user profile
+    func updateProfile(data: [String: Any]) async throws -> User {
+        return try await patch("/auth/api/update_profile/", body: data)
+    }
+
     // MARK: - Chef Dashboard Endpoints
 
     /// Get chef dashboard summary
@@ -114,6 +137,111 @@ class APIClient {
     /// Get upcoming orders
     func getUpcomingOrders() async throws -> [Order] {
         return try await get("/chefs/api/me/orders/upcoming/")
+    }
+
+    /// Get revenue breakdown
+    func getRevenueBreakdown() async throws -> RevenueStats {
+        return try await get("/chefs/api/me/revenue/")
+    }
+
+    // MARK: - Leads Endpoints
+
+    /// Get all leads
+    func getLeads(page: Int = 1) async throws -> PaginatedResponse<Lead> {
+        return try await get("/chefs/api/me/leads/?page=\(page)")
+    }
+
+    /// Get lead details
+    func getLead(id: Int) async throws -> Lead {
+        return try await get("/chefs/api/me/leads/\(id)/")
+    }
+
+    /// Create a new lead
+    func createLead(data: [String: Any]) async throws -> Lead {
+        return try await post("/chefs/api/me/leads/", body: data)
+    }
+
+    /// Update a lead
+    func updateLead(id: Int, data: [String: Any]) async throws -> Lead {
+        return try await patch("/chefs/api/me/leads/\(id)/", body: data)
+    }
+
+    /// Delete a lead
+    func deleteLead(id: Int) async throws {
+        try await delete("/chefs/api/me/leads/\(id)/")
+    }
+
+    /// Get lead interactions
+    func getLeadInteractions(leadId: Int) async throws -> [LeadInteraction] {
+        return try await get("/chefs/api/me/leads/\(leadId)/interactions/")
+    }
+
+    /// Add lead interaction
+    func addLeadInteraction(leadId: Int, data: [String: Any]) async throws -> LeadInteraction {
+        return try await post("/chefs/api/me/leads/\(leadId)/interactions/", body: data)
+    }
+
+    // MARK: - Prep Plans Endpoints
+
+    /// Get all prep plans
+    func getPrepPlans() async throws -> [PrepPlan] {
+        return try await get("/chefs/api/me/prep-plans/")
+    }
+
+    /// Get prep plan details
+    func getPrepPlan(id: Int) async throws -> PrepPlan {
+        return try await get("/chefs/api/me/prep-plans/\(id)/")
+    }
+
+    /// Create prep plan
+    func createPrepPlan(data: [String: Any]) async throws -> PrepPlan {
+        return try await post("/chefs/api/me/prep-plans/", body: data)
+    }
+
+    /// Quick generate prep plan
+    func quickGeneratePrepPlan(clientIds: [Int], days: Int) async throws -> PrepPlan {
+        let body: [String: Any] = ["client_ids": clientIds, "days": days]
+        return try await post("/chefs/api/me/prep-plans/quick-generate/", body: body)
+    }
+
+    /// Get prep plan shopping list
+    func getPrepPlanShoppingList(planId: Int) async throws -> ShoppingList {
+        return try await get("/chefs/api/me/prep-plans/\(planId)/shopping-list/")
+    }
+
+    /// Get live shopping list (upcoming commitments)
+    func getLiveShoppingList() async throws -> ShoppingList {
+        return try await get("/chefs/api/me/prep-plans/live/shopping-list/")
+    }
+
+    // MARK: - Proactive Insights Endpoints
+
+    /// Get proactive insights
+    func getProactiveInsights() async throws -> [ProactiveInsight] {
+        return try await get("/chefs/api/me/insights/")
+    }
+
+    /// Dismiss or act on insight
+    func handleInsight(id: Int, action: String) async throws {
+        let body = ["action": action]
+        let _: EmptyResponse = try await post("/chefs/api/me/insights/\(id)/", body: body)
+    }
+
+    // MARK: - Telegram Integration
+
+    /// Generate Telegram link code
+    func generateTelegramLink() async throws -> TelegramLinkResponse {
+        return try await post("/chefs/api/telegram/generate-link/", body: [:])
+    }
+
+    /// Unlink Telegram
+    func unlinkTelegram() async throws {
+        let _: EmptyResponse = try await post("/chefs/api/telegram/unlink/", body: [:])
+    }
+
+    /// Get Telegram status
+    func getTelegramStatus() async throws -> TelegramStatus {
+        return try await get("/chefs/api/telegram/status/")
     }
 
     // MARK: - Sous Chef AI Endpoints
@@ -153,6 +281,72 @@ class APIClient {
     /// Get customer's connected chefs
     func getMyChefs() async throws -> [ConnectedChef] {
         return try await get("/customer_dashboard/api/my-chefs/")
+    }
+
+    /// Get chef hub (customer view of specific chef)
+    func getChefHub(chefId: Int) async throws -> ChefHub {
+        return try await get("/customer_dashboard/api/my-chefs/\(chefId)/")
+    }
+
+    // MARK: - Customer Meal Plan Endpoints
+
+    /// Get customer's meal plans
+    func getMyMealPlans() async throws -> [CustomerMealPlan] {
+        return try await get("/meals/api/my-plans/")
+    }
+
+    /// Get current meal plan
+    func getCurrentMealPlan() async throws -> CustomerMealPlan {
+        return try await get("/meals/api/my-plans/current/")
+    }
+
+    /// Get meal plan details
+    func getMealPlanDetail(id: Int) async throws -> CustomerMealPlan {
+        return try await get("/meals/api/my-plans/\(id)/")
+    }
+
+    /// Submit meal plan suggestion
+    func submitMealPlanSuggestion(planId: Int, suggestion: String) async throws {
+        let body = ["suggestion": suggestion]
+        let _: EmptyResponse = try await post("/meals/api/my-plans/\(planId)/suggest/", body: body)
+    }
+
+    // MARK: - Customer Orders Endpoints
+
+    /// Get customer's orders
+    func getMyOrders() async throws -> [Order] {
+        return try await get("/meals/api/my-orders/")
+    }
+
+    /// Get chef meal order details
+    func getChefMealOrder(orderId: Int) async throws -> ChefMealOrder {
+        return try await get("/meals/api/chef-meal-orders/\(orderId)/")
+    }
+
+    /// Create chef meal order
+    func createChefMealOrder(eventId: Int, quantity: Int, specialRequests: String?) async throws -> ChefMealOrder {
+        var body: [String: Any] = ["quantity": quantity]
+        if let requests = specialRequests {
+            body["special_requests"] = requests
+        }
+        return try await post("/meals/api/chef-meal-events/\(eventId)/order/", body: body)
+    }
+
+    /// Cancel chef meal order
+    func cancelChefMealOrder(orderId: Int) async throws {
+        let _: EmptyResponse = try await post("/meals/api/chef-meal-orders/\(orderId)/cancel/", body: [:])
+    }
+
+    // MARK: - Stripe Payment Endpoints
+
+    /// Process chef meal payment
+    func processChefMealPayment(orderId: Int) async throws -> PaymentIntentResponse {
+        return try await post("/meals/api/process-chef-meal-payment/\(orderId)/", body: [:])
+    }
+
+    /// Get order payment status
+    func getOrderPaymentStatus(orderId: Int) async throws -> PaymentStatus {
+        return try await get("/meals/api/order-payment-status/\(orderId)/")
     }
 
     // MARK: - Messaging Endpoints

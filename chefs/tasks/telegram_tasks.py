@@ -35,36 +35,60 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
-def sanitize_markdown_for_telegram(text: str) -> str:
+def markdown_to_telegram_html(text: str) -> str:
     """
-    Convert GitHub-flavored Markdown to Telegram-compatible format.
+    Convert GitHub-flavored Markdown to Telegram HTML format.
     
-    Telegram's MarkdownV2 supports limited formatting. This function:
-    - Converts **bold** to *bold* (Telegram style)
-    - Converts headers (# Header) to bold text
+    Telegram's HTML parser is more forgiving than Markdown.
+    Supported tags: <b>, <i>, <code>, <pre>, <a>
+    
+    This function:
+    - Escapes HTML entities first (safety)
+    - Converts **bold** and *bold* to <b>bold</b>
+    - Converts _italic_ to <i>italic</i>
+    - Converts `code` to <code>code</code>
+    - Converts headers (# Header) to <b>Header</b>
     - Converts tables to simple text lists
     - Removes unsupported syntax
-    - Escapes special characters for MarkdownV2
     
     Args:
         text: GitHub-flavored markdown text
         
     Returns:
-        Telegram MarkdownV2 compatible text
+        Telegram HTML compatible text
     """
     if not text:
-        return text
+        return ""
     
     result = text
     
-    # Convert GitHub bold **text** to Telegram bold *text*
-    result = re.sub(r'\*\*(.+?)\*\*', r'*\1*', result)
+    # Step 1: Escape HTML entities FIRST (before we add our own HTML tags)
+    result = result.replace('&', '&amp;')
+    result = result.replace('<', '&lt;')
+    result = result.replace('>', '&gt;')
     
-    # Convert headers to bold (# Header -> *Header*)
-    result = re.sub(r'^#{1,6}\s+(.+)$', r'*\1*', result, flags=re.MULTILINE)
+    # Step 2: Convert code blocks ```code``` BEFORE other processing
+    # (to avoid converting markdown inside code blocks)
+    result = re.sub(r'```[\w]*\n?(.*?)```', r'\1', result, flags=re.DOTALL)
     
-    # Convert markdown tables to simple lists
-    # First, detect table rows (lines starting with |)
+    # Step 3: Convert inline code `code` to <code>code</code>
+    result = re.sub(r'`([^`]+)`', r'<code>\1</code>', result)
+    
+    # Step 4: Convert headers to bold (# Header -> <b>Header</b>)
+    result = re.sub(r'^#{1,6}\s+(.+)$', r'<b>\1</b>', result, flags=re.MULTILINE)
+    
+    # Step 5: Convert bold **text** to <b>text</b>
+    result = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', result)
+    
+    # Step 6: Convert remaining *text* to <b>text</b> (but only balanced pairs)
+    # Use word boundaries to avoid matching things like "4* hotel"
+    result = re.sub(r'(?<!\w)\*([^\*\n]+?)\*(?!\w)', r'<b>\1</b>', result)
+    
+    # Step 7: Convert _italic_ to <i>italic</i>
+    # Be careful with underscores in variable_names
+    result = re.sub(r'(?<!\w)_([^_\n]+?)_(?!\w)', r'<i>\1</i>', result)
+    
+    # Step 8: Convert markdown tables to simple lists
     lines = result.split('\n')
     converted_lines = []
     in_table = False
@@ -107,39 +131,28 @@ def sanitize_markdown_for_telegram(text: str) -> str:
     
     result = '\n'.join(converted_lines)
     
-    # Remove horizontal rules (--- or ***)
+    # Step 9: Remove horizontal rules (--- or ***)
     result = re.sub(r'^[\-\*]{3,}$', '', result, flags=re.MULTILINE)
     
-    # Convert inline code `code` - Telegram supports this
-    # (already compatible, no change needed)
-    
-    # Convert code blocks ```code``` to simple indented text
-    result = re.sub(r'```[\w]*\n?(.*?)```', r'\1', result, flags=re.DOTALL)
-    
-    # Escape special characters for MarkdownV2
-    # Characters that need escaping: _ * [ ] ( ) ~ ` > # + - = | { } . !
-    # But we want to KEEP our formatting (* for bold), so only escape others
-    special_chars = ['_', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
-    
-    # Don't escape * (we use it for bold) or common punctuation in normal text
-    # Only escape if they might cause parsing issues
-    # Actually, let's be conservative and just clean up, not escape
-    # Telegram handles most things gracefully
-    
-    # Remove multiple consecutive newlines (clean up)
+    # Step 10: Clean up multiple consecutive newlines
     result = re.sub(r'\n{3,}', '\n\n', result)
     
     return result.strip()
 
 
-def send_telegram_message(chat_id: int, text: str, parse_mode: str = "Markdown") -> bool:
+# Keep old name as alias for backwards compatibility
+sanitize_markdown_for_telegram = markdown_to_telegram_html
+
+
+def send_telegram_message(chat_id: int, text: str, parse_mode: str = "HTML") -> bool:
     """
     Send a message to a Telegram chat.
     
     Args:
         chat_id: Telegram chat ID to send to
-        text: Message text
-        parse_mode: Telegram parse mode ("Markdown", "HTML", or None for plain text)
+        text: Message text (markdown will be converted to HTML)
+        parse_mode: Telegram parse mode ("HTML", "Markdown", or None for plain text)
+                    Default is HTML as it's more forgiving than Markdown.
         
     Returns:
         bool: True if successful, False otherwise
@@ -152,9 +165,9 @@ def send_telegram_message(chat_id: int, text: str, parse_mode: str = "Markdown")
     
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     
-    # Sanitize markdown if using Markdown parse mode
-    if parse_mode == "Markdown":
-        text = sanitize_markdown_for_telegram(text)
+    # Convert markdown to HTML (handles both markdown input and plain text safely)
+    if parse_mode == "HTML":
+        text = markdown_to_telegram_html(text)
     
     # Build request payload
     payload = {

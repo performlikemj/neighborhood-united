@@ -1,6 +1,6 @@
-# sautAI iOS
+# sautai iOS
 
-Chef-first iOS application for the sautAI platform.
+Chef-first iOS application for the sautai platform.
 
 ## Requirements
 
@@ -34,7 +34,7 @@ sautai_ios/
 
 ## Design System
 
-Based on the **sautAI Brand Guide 2025**:
+Based on the **sautai Brand Guide 2025**:
 
 ### Colors
 
@@ -110,7 +110,7 @@ xcodebuild test -scheme sautai_ios -destination 'platform=iOS Simulator,name=iPh
 
 > *"Cook together. Eat together. Be together."*
 >
-> — sautAI Brand Essence
+> — sautai Brand Essence
 
 ---
 

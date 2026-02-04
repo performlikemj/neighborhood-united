@@ -14,15 +14,18 @@ logger = logging.getLogger(__name__)
 
 # Patterns that indicate health/dietary PII
 HEALTH_PII_PATTERNS = [
-    # Allergy mentions
-    (r'\b(allergic|allergy|allergies)\s+(to\s+)?\w+', 'allergy'),
-    (r'\b(intoleran(?:t|ce))\s+(to\s+)?\w+', 'intolerance'),
+    # Allergy mentions - various phrasings
+    (r'\b(allergic|allergy|allergies)\b', 'allergy'),
+    (r'\b\w+\s+allergy\b', 'allergy'),  # "nut allergy", "peanut allergy"
+    # Intolerance mentions
+    (r'\b(intoleran(?:t|ce)|intolerant)\b', 'intolerance'),
+    (r'\blactose\s+intolerant\b', 'intolerance'),
     # Dietary restrictions with specifics
     (r"\b(can'?t|cannot|doesn'?t|don'?t)\s+eat\s+\w+", 'restriction'),
     # Specific conditions
     (r'\b(celiac|crohn|ibs|diabetic|diabetes)\b', 'medical_condition'),
-    # Common allergens being listed
-    (r'\b(peanut|tree\s*nut|shellfish|dairy|egg|wheat|soy|fish|sesame)\s*(allergy|free|intolerant)?\b', 'allergen_mention'),
+    # Common allergens being listed as allergens
+    (r'\b(peanut|tree\s*nut|shellfish|egg|wheat|soy|fish|sesame)\s*(allergy|allergic|intolerant)?\b', 'allergen_mention'),
 ]
 
 # General dietary preferences (less sensitive, but still shouldn't be solicited)

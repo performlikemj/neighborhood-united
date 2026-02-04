@@ -12,11 +12,10 @@ Runs periodically via Celery Beat to check for:
 
 import logging
 from datetime import timedelta
-from typing import List, Optional
+from typing import List
 
 from celery import shared_task
 from django.utils import timezone
-from django.db.models import Q
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +28,11 @@ def run_proactive_check():
     Checks each chef with proactive enabled and generates
     appropriate notifications based on their settings.
     """
-    from chefs.models import Chef
     from chefs.models import ChefProactiveSettings
     
     # Get all chefs with proactive enabled
     enabled_settings = ChefProactiveSettings.objects.filter(
-        proactive_enabled=True
+        enabled=True
     ).select_related('chef')
     
     processed = 0
@@ -42,7 +40,8 @@ def run_proactive_check():
     
     for settings in enabled_settings:
         try:
-            if not settings.should_notify_now():
+            # Check quiet hours
+            if settings.is_within_quiet_hours():
                 continue
             
             # Check frequency
@@ -65,16 +64,15 @@ def should_run_for_frequency(settings) -> bool:
     """Check if we should run based on frequency setting."""
     from chefs.models import ChefNotification
     
-    if settings.frequency == 'realtime':
-        return True
+    freq = settings.notification_frequency
     
-    if settings.frequency == 'manual':
-        return False
+    if freq == ChefProactiveSettings.FREQUENCY_REALTIME:
+        return True
     
     # Get last notification sent
     last_notification = ChefNotification.objects.filter(
         chef=settings.chef,
-        status__in=['sent', 'read']
+        status__in=[ChefNotification.STATUS_SENT, ChefNotification.STATUS_READ]
     ).order_by('-sent_at').first()
     
     if not last_notification or not last_notification.sent_at:
@@ -82,11 +80,11 @@ def should_run_for_frequency(settings) -> bool:
     
     now = timezone.now()
     
-    if settings.frequency == 'daily':
+    if freq == ChefProactiveSettings.FREQUENCY_DAILY:
         # Check if it's a new day (9 AM local time)
         try:
             import pytz
-            tz = pytz.timezone(settings.timezone)
+            tz = pytz.timezone(settings.quiet_hours_timezone)
             local_now = now.astimezone(tz)
             local_last = last_notification.sent_at.astimezone(tz)
             
@@ -99,11 +97,11 @@ def should_run_for_frequency(settings) -> bool:
                 return True
         return False
     
-    if settings.frequency == 'weekly':
+    if freq == ChefProactiveSettings.FREQUENCY_WEEKLY:
         # Check if it's Monday 9 AM local time
         try:
             import pytz
-            tz = pytz.timezone(settings.timezone)
+            tz = pytz.timezone(settings.quiet_hours_timezone)
             local_now = now.astimezone(tz)
             
             if local_now.weekday() == 0 and local_now.hour >= 9:
@@ -118,6 +116,10 @@ def should_run_for_frequency(settings) -> bool:
         return False
     
     return False
+
+
+# Import settings class for frequency constants
+from chefs.models import ChefProactiveSettings
 
 
 def generate_insights_for_chef(settings) -> int:
@@ -148,13 +150,11 @@ def check_special_occasions(settings) -> List:
     
     notifications = []
     chef = settings.chef
-    lead_days = settings.occasion_lead_days
     
     # Get all client contexts with special occasions
     contexts = ClientContext.objects.filter(chef=chef).exclude(special_occasions=[])
     
     today = timezone.now().date()
-    check_until = today + timedelta(days=lead_days)
     
     for context in contexts:
         for occasion in context.special_occasions:
@@ -186,45 +186,47 @@ def check_special_occasions(settings) -> List:
                     except ValueError:
                         continue
                 
+                # Determine lead days based on occasion type
+                is_birthday = 'birthday' in occasion_name.lower()
+                lead_days = settings.birthday_lead_days if is_birthday else settings.anniversary_lead_days
+                check_until = today + timedelta(days=lead_days)
+                
                 # Check if within lead days
                 if today <= occasion_this_year <= check_until:
                     days_until = (occasion_this_year - today).days
                     client_name = context.get_client_name()
                     
-                    # Check if we already sent this notification recently
-                    existing = ChefNotification.objects.filter(
-                        chef=chef,
-                        notification_type='birthday' if 'birthday' in occasion_name.lower() else 'anniversary',
-                        related_client=context.client,
-                        related_lead=context.lead,
-                        created_at__gte=timezone.now() - timedelta(days=lead_days)
-                    ).exists()
+                    notification_type = ChefNotification.TYPE_BIRTHDAY if is_birthday else ChefNotification.TYPE_ANNIVERSARY
                     
-                    if not existing:
-                        notification_type = 'birthday' if 'birthday' in occasion_name.lower() else 'anniversary'
-                        
-                        if settings.notify_birthdays and notification_type == 'birthday':
-                            notif = create_notification(
-                                chef=chef,
-                                notification_type='birthday',
-                                title=f"🎂 {client_name}'s {occasion_name} in {days_until} days",
-                                message=f"{client_name}'s {occasion_name} is coming up on {occasion_this_year.strftime('%B %d')}. Consider reaching out!",
-                                client=context.client,
-                                lead=context.lead,
-                                settings=settings
-                            )
+                    # Use deduplication
+                    dedup_key = f"{notification_type}_{context.id}_{occasion_this_year.isoformat()}"
+                    
+                    if is_birthday and settings.notify_birthdays:
+                        notif = ChefNotification.create_notification(
+                            chef=chef,
+                            notification_type=notification_type,
+                            title=f"🎂 {client_name}'s {occasion_name} in {days_until} days",
+                            message=f"{client_name}'s {occasion_name} is coming up on {occasion_this_year.strftime('%B %d')}. Consider reaching out!",
+                            related_client=context.client,
+                            related_lead=context.lead,
+                            dedup_key=dedup_key,
+                        )
+                        if notif.status == ChefNotification.STATUS_PENDING:
+                            _auto_send_if_enabled(notif, settings)
                             notifications.append(notif)
-                        
-                        elif settings.notify_anniversaries and notification_type == 'anniversary':
-                            notif = create_notification(
-                                chef=chef,
-                                notification_type='anniversary',
-                                title=f"💍 {client_name}'s {occasion_name} in {days_until} days",
-                                message=f"{client_name}'s {occasion_name} is on {occasion_this_year.strftime('%B %d')}. A great opportunity to do something special!",
-                                client=context.client,
-                                lead=context.lead,
-                                settings=settings
-                            )
+                    
+                    elif not is_birthday and settings.notify_anniversaries:
+                        notif = ChefNotification.create_notification(
+                            chef=chef,
+                            notification_type=notification_type,
+                            title=f"💍 {client_name}'s {occasion_name} in {days_until} days",
+                            message=f"{client_name}'s {occasion_name} is on {occasion_this_year.strftime('%B %d')}. A great opportunity to do something special!",
+                            related_client=context.client,
+                            related_lead=context.lead,
+                            dedup_key=dedup_key,
+                        )
+                        if notif.status == ChefNotification.STATUS_PENDING:
+                            _auto_send_if_enabled(notif, settings)
                             notifications.append(notif)
             
             except (ValueError, TypeError) as e:
@@ -237,7 +239,6 @@ def check_special_occasions(settings) -> List:
 def check_followups(settings) -> List:
     """Check for clients who haven't ordered recently."""
     from chefs.models import ClientContext, ChefNotification
-    from meals.models import ChefMealOrder
     
     notifications = []
     chef = settings.chef
@@ -254,25 +255,19 @@ def check_followups(settings) -> List:
             client_name = context.get_client_name()
             days_since = (timezone.now().date() - context.last_order_date).days
             
-            # Check if we already notified about this client recently
-            existing = ChefNotification.objects.filter(
+            dedup_key = f"followup_{context.id}_{timezone.now().date().isoformat()}"
+            
+            notif = ChefNotification.create_notification(
                 chef=chef,
-                notification_type='followup',
+                notification_type=ChefNotification.TYPE_FOLLOWUP,
+                title=f"👋 Haven't heard from {client_name} in {days_since} days",
+                message=f"It's been {days_since} days since {client_name}'s last order. Maybe reach out to see how they're doing?",
                 related_client=context.client,
                 related_lead=context.lead,
-                created_at__gte=timezone.now() - timedelta(days=threshold_days)
-            ).exists()
-            
-            if not existing:
-                notif = create_notification(
-                    chef=chef,
-                    notification_type='followup',
-                    title=f"👋 Haven't heard from {client_name} in {days_since} days",
-                    message=f"It's been {days_since} days since {client_name}'s last order. Maybe reach out to see how they're doing?",
-                    client=context.client,
-                    lead=context.lead,
-                    settings=settings
-                )
+                dedup_key=dedup_key,
+            )
+            if notif.status == ChefNotification.STATUS_PENDING:
+                _auto_send_if_enabled(notif, settings)
                 notifications.append(notif)
     
     return notifications
@@ -294,37 +289,32 @@ def check_todos(settings) -> List:
     ).order_by('-importance', '-created_at')[:5]
     
     for todo in todos:
-        # Check if we already reminded about this todo in the last week
-        existing = ChefNotification.objects.filter(
-            chef=chef,
-            notification_type='todo',
-            message__icontains=todo.content[:50],
-            created_at__gte=timezone.now() - timedelta(days=7)
-        ).exists()
+        dedup_key = f"todo_{todo.id}"
         
-        if not existing:
-            client_info = ""
-            if todo.customer:
-                client_info = f" (for {todo.customer.first_name})"
-            elif todo.lead:
-                client_info = f" (for {todo.lead.first_name})"
-            
-            notif = create_notification(
-                chef=chef,
-                notification_type='todo',
-                title=f"📝 Reminder: {todo.content[:50]}{'...' if len(todo.content) > 50 else ''}{client_info}",
-                message=todo.content,
-                client=todo.customer,
-                lead=todo.lead,
-                settings=settings
-            )
+        client_info = ""
+        if todo.customer:
+            client_info = f" (for {todo.customer.first_name})"
+        elif todo.lead:
+            client_info = f" (for {todo.lead.first_name})"
+        
+        notif = ChefNotification.create_notification(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_TODO,
+            title=f"📝 Reminder: {todo.content[:50]}{'...' if len(todo.content) > 50 else ''}{client_info}",
+            message=todo.content,
+            related_client=todo.customer,
+            related_lead=todo.lead,
+            dedup_key=dedup_key,
+        )
+        if notif.status == ChefNotification.STATUS_PENDING:
+            _auto_send_if_enabled(notif, settings)
             notifications.append(notif)
     
     return notifications
 
 
 def check_milestones(settings) -> List:
-    """Check for client milestones (10th order, etc.)."""
+    """Check for client milestones (5th, 10th, 25th, 50th, 100th order)."""
     from chefs.models import ClientContext, ChefNotification
     
     notifications = []
@@ -335,26 +325,20 @@ def check_milestones(settings) -> List:
     contexts = ClientContext.objects.filter(chef=chef, total_orders__in=milestones)
     
     for context in contexts:
-        # Check if we already celebrated this milestone
-        existing = ChefNotification.objects.filter(
+        client_name = context.get_client_name()
+        dedup_key = f"milestone_{context.id}_{context.total_orders}"
+        
+        notif = ChefNotification.create_notification(
             chef=chef,
-            notification_type='milestone',
+            notification_type=ChefNotification.TYPE_MILESTONE,
+            title=f"🎉 {client_name} just hit {context.total_orders} orders!",
+            message=f"Congratulations! {client_name} has placed {context.total_orders} orders with you. Consider sending a thank you!",
             related_client=context.client,
             related_lead=context.lead,
-            title__icontains=str(context.total_orders)
-        ).exists()
-        
-        if not existing:
-            client_name = context.get_client_name()
-            notif = create_notification(
-                chef=chef,
-                notification_type='milestone',
-                title=f"🎉 {client_name} just hit {context.total_orders} orders!",
-                message=f"Congratulations! {client_name} has placed {context.total_orders} orders with you. Consider sending a thank you!",
-                client=context.client,
-                lead=context.lead,
-                settings=settings
-            )
+            dedup_key=dedup_key,
+        )
+        if notif.status == ChefNotification.STATUS_PENDING:
+            _auto_send_if_enabled(notif, settings)
             notifications.append(notif)
     
     return notifications
@@ -363,7 +347,6 @@ def check_milestones(settings) -> List:
 def check_seasonal(settings) -> List:
     """Check for seasonal ingredient suggestions."""
     from chefs.models import ChefNotification
-    from meals.sous_chef_tools import SEASONAL_INGREDIENTS
     
     notifications = []
     chef = settings.chef
@@ -371,75 +354,44 @@ def check_seasonal(settings) -> List:
     current_month = timezone.now().month
     month_name = timezone.now().strftime('%B')
     
-    seasonal = SEASONAL_INGREDIENTS.get(current_month, {})
+    # Try to import seasonal ingredients, gracefully handle if not available
+    try:
+        from meals.sous_chef_tools import SEASONAL_INGREDIENTS
+        seasonal = SEASONAL_INGREDIENTS.get(current_month, {})
+    except (ImportError, AttributeError):
+        seasonal = {}
     
     if not seasonal:
         return notifications
     
-    # Check if we already sent a seasonal notification this month
-    month_start = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    existing = ChefNotification.objects.filter(
-        chef=chef,
-        notification_type='seasonal',
-        created_at__gte=month_start
-    ).exists()
+    # Dedup key for this month
+    dedup_key = f"seasonal_{chef.id}_{timezone.now().year}_{current_month}"
     
-    if not existing:
-        # Build a nice message with seasonal highlights
-        highlights = []
-        for category, items in list(seasonal.items())[:3]:
-            if items:
-                highlights.append(f"{category.title()}: {', '.join(items[:3])}")
-        
-        if highlights:
-            notif = create_notification(
-                chef=chef,
-                notification_type='seasonal',
-                title=f"🌱 What's in season for {month_name}",
-                message="Fresh seasonal ingredients to inspire your menus:\n\n• " + "\n• ".join(highlights),
-                settings=settings
-            )
+    # Build a nice message with seasonal highlights
+    highlights = []
+    for category, items in list(seasonal.items())[:3]:
+        if items:
+            highlights.append(f"{category.title()}: {', '.join(items[:3])}")
+    
+    if highlights:
+        notif = ChefNotification.create_notification(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_SEASONAL,
+            title=f"🌱 What's in season for {month_name}",
+            message="Fresh seasonal ingredients to inspire your menus:\n\n• " + "\n• ".join(highlights),
+            dedup_key=dedup_key,
+        )
+        if notif.status == ChefNotification.STATUS_PENDING:
+            _auto_send_if_enabled(notif, settings)
             notifications.append(notif)
     
     return notifications
 
 
-def create_notification(
-    chef,
-    notification_type: str,
-    title: str,
-    message: str,
-    client=None,
-    lead=None,
-    settings=None,
-    action_type: str = '',
-    action_payload: dict = None
-):
-    """Create and optionally send a notification."""
-    from chefs.models import ChefNotification
-    
-    notification = ChefNotification.objects.create(
-        chef=chef,
-        notification_type=notification_type,
-        title=title,
-        message=message,
-        related_client=client,
-        related_lead=lead,
-        action_type=action_type,
-        action_payload=action_payload or {}
-    )
-    
-    # Auto-send based on settings
-    if settings and settings.channel_inapp:
-        notification.mark_sent('inapp')
-    
-    # TODO: Implement email and push delivery
-    # if settings and settings.channel_email:
-    #     send_notification_email(notification)
-    # if settings and settings.channel_push:
-    #     send_push_notification(notification)
-    
-    return notification
+def _auto_send_if_enabled(notification, settings):
+    """Auto-send notification based on channel preferences."""
+    if settings.channel_in_app:
+        notification.mark_sent('in_app')
 
 
 @shared_task(name='chefs.proactive_engine.send_welcome_notification')
@@ -452,19 +404,21 @@ def send_welcome_notification(chef_id: int):
         state = ChefOnboardingState.get_or_create_for_chef(chef)
         
         if state.welcomed:
-            return
+            return {'status': 'already_welcomed'}
         
-        ChefNotification.objects.create(
+        notif = ChefNotification.objects.create(
             chef=chef,
-            notification_type='welcome',
+            notification_type=ChefNotification.TYPE_WELCOME,
             title="👋 Welcome to your Chef Dashboard!",
             message="I'm your Sous Chef — think of me as your kitchen partner who never forgets a detail. Ready to get started?",
-            action_type='start_onboarding',
-            action_payload={'show_welcome': True}
+            action_context={'action': 'start_onboarding', 'show_welcome': True}
         )
+        notif.mark_sent('in_app')
         
-        state.welcomed = True
-        state.save(update_fields=['welcomed', 'updated_at'])
+        state.mark_welcomed()
+        
+        return {'status': 'sent', 'notification_id': notif.id}
         
     except Chef.DoesNotExist:
         logger.error(f"Chef {chef_id} not found for welcome notification")
+        return {'status': 'error', 'error': 'chef_not_found'}

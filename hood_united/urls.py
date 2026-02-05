@@ -20,6 +20,7 @@ from django.http import HttpResponse
 from django.conf.urls.static import static
 from django.conf import settings
 from meals.api_dashboard_views import chef_dashboard
+from chefs.api.telegram_webhook import telegram_webhook
 
 
 urlpatterns = [
@@ -28,6 +29,8 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     # API endpoints including QStash cron triggers
     path('api/', include('api.urls')),
+    # Telegram webhook at /api/ prefix for Azure SWA linked backend routing
+    path('api/telegram/webhook/', telegram_webhook, name='telegram_webhook_swa'),
     path('chefs/', include('chefs.urls')),
     path('chef_admin/', include('chef_admin.urls')),
     path('customer_dashboard/', include('customer_dashboard.urls')),

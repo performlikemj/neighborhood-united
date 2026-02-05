@@ -1,17 +1,19 @@
 /**
  * SousChefNotificationPanel
- * 
+ *
  * Slide-out panel showing all notifications from Sous Chef.
  * Opens from the widget, shows proactive notifications with actions.
+ *
+ * Uses TanStack Query hooks for backend notification management.
  */
 
 import React, { useCallback } from 'react'
-import { useSousChefNotifications } from '../contexts/SousChefNotificationContext.jsx'
+import { useNotificationManager } from '../hooks/useNotifications'
 
 // Format relative time
 function formatRelativeTime(dateString) {
   if (!dateString) return ''
-  
+
   const date = new Date(dateString)
   const now = new Date()
   const diffMs = now - date
@@ -23,7 +25,7 @@ function formatRelativeTime(dateString) {
   if (diffMins < 60) return `${diffMins}m ago`
   if (diffHours < 24) return `${diffHours}h ago`
   if (diffDays < 7) return `${diffDays}d ago`
-  
+
   return date.toLocaleDateString()
 }
 
@@ -42,20 +44,20 @@ const TYPE_ICONS = {
   info: '💬',
 }
 
-export default function SousChefNotificationPanel({ 
-  isOpen, 
-  onClose, 
+export default function SousChefNotificationPanel({
+  isOpen,
+  onClose,
   onNotificationClick,
-  onClearAll 
+  onClearAll
 }) {
-  const { 
-    notifications, 
-    unreadCount, 
-    markAsRead, 
-    markAllAsRead, 
-    clearNotification,
-    clearAll 
-  } = useSousChefNotifications() || {}
+  const {
+    notifications = [],
+    unreadCount = 0,
+    markAsRead,
+    markAllAsRead,
+    dismiss,
+    isLoading,
+  } = useNotificationManager({ enabled: isOpen })
 
   const handleNotificationClick = useCallback((notification) => {
     if (markAsRead) {
@@ -66,17 +68,18 @@ export default function SousChefNotificationPanel({
 
   const handleDismiss = useCallback((e, notificationId) => {
     e.stopPropagation()
-    if (clearNotification) {
-      clearNotification(notificationId)
+    if (dismiss) {
+      dismiss(notificationId)
     }
-  }, [clearNotification])
+  }, [dismiss])
 
   const handleClearAll = useCallback(() => {
-    if (clearAll) {
-      clearAll()
+    // No bulk clear in current API - dismiss individually or mark all read
+    if (markAllAsRead) {
+      markAllAsRead()
     }
     onClearAll?.()
-  }, [clearAll, onClearAll])
+  }, [markAllAsRead, onClearAll])
 
   const handleMarkAllRead = useCallback(() => {
     if (markAllAsRead) {
@@ -86,11 +89,13 @@ export default function SousChefNotificationPanel({
 
   if (!isOpen) return null
 
-  const sortedNotifications = [...(notifications || [])].sort((a, b) => {
-    // Unread first, then by timestamp
-    if (a.read !== b.read) return a.read ? 1 : -1
-    const aTime = new Date(a.timestamp || a.createdAt || 0)
-    const bTime = new Date(b.timestamp || b.createdAt || 0)
+  // Sort: unread first, then by timestamp
+  const sortedNotifications = [...notifications].sort((a, b) => {
+    const aRead = a.status === 'read'
+    const bRead = b.status === 'read'
+    if (aRead !== bRead) return aRead ? 1 : -1
+    const aTime = new Date(a.created_at || a.timestamp || 0)
+    const bTime = new Date(b.created_at || b.timestamp || 0)
     return bTime - aTime
   })
 
@@ -106,7 +111,7 @@ export default function SousChefNotificationPanel({
         </div>
         <div className="sc-notif-header-actions">
           {unreadCount > 0 && (
-            <button 
+            <button
               className="sc-notif-action-btn"
               onClick={handleMarkAllRead}
               title="Mark all as read"
@@ -117,7 +122,7 @@ export default function SousChefNotificationPanel({
             </button>
           )}
           {notifications?.length > 0 && (
-            <button 
+            <button
               className="sc-notif-action-btn"
               onClick={handleClearAll}
               title="Clear all"
@@ -128,7 +133,7 @@ export default function SousChefNotificationPanel({
               </svg>
             </button>
           )}
-          <button 
+          <button
             className="sc-notif-close-btn"
             onClick={onClose}
             aria-label="Close"
@@ -142,7 +147,14 @@ export default function SousChefNotificationPanel({
 
       {/* Notification List */}
       <div className="sc-notif-list">
-        {sortedNotifications.length === 0 ? (
+        {isLoading ? (
+          <div className="sc-notif-empty">
+            <div className="sc-notif-empty-icon">
+              <span className="sc-notif-spinner" />
+            </div>
+            <p>Loading notifications...</p>
+          </div>
+        ) : sortedNotifications.length === 0 ? (
           <div className="sc-notif-empty">
             <div className="sc-notif-empty-icon">🔔</div>
             <p>No notifications yet</p>
@@ -150,9 +162,12 @@ export default function SousChefNotificationPanel({
           </div>
         ) : (
           sortedNotifications.map((notif) => {
-            const icon = TYPE_ICONS[notif.type] || '🔔'
-            const isUnread = !notif.read
-            
+            const icon = TYPE_ICONS[notif.notification_type] || TYPE_ICONS[notif.type] || '🔔'
+            const isUnread = notif.status !== 'read'
+            const title = notif.title || notif.notification_type || 'Notification'
+            const message = notif.message || notif.content || ''
+            const clientName = notif.context?.client_name || notif.context?.clientName
+
             return (
               <div
                 key={notif.id}
@@ -164,15 +179,15 @@ export default function SousChefNotificationPanel({
               >
                 <div className="sc-notif-icon">{icon}</div>
                 <div className="sc-notif-content">
-                  <div className="sc-notif-title">{notif.title}</div>
-                  <div className="sc-notif-message">{notif.message}</div>
+                  <div className="sc-notif-title">{title}</div>
+                  <div className="sc-notif-message">{message}</div>
                   <div className="sc-notif-meta">
                     <span className="sc-notif-time">
-                      {formatRelativeTime(notif.timestamp || notif.createdAt)}
+                      {formatRelativeTime(notif.created_at || notif.timestamp)}
                     </span>
-                    {notif.context?.clientName && (
+                    {clientName && (
                       <span className="sc-notif-client">
-                        • {notif.context.clientName}
+                        • {clientName}
                       </span>
                     )}
                   </div>
@@ -313,6 +328,20 @@ export default function SousChefNotificationPanel({
           color: var(--muted);
         }
 
+        .sc-notif-spinner {
+          display: inline-block;
+          width: 24px;
+          height: 24px;
+          border: 3px solid var(--border, #e5e7eb);
+          border-top-color: var(--primary, #5cb85c);
+          border-radius: 50%;
+          animation: sc-spin 0.8s linear infinite;
+        }
+
+        @keyframes sc-spin {
+          to { transform: rotate(360deg); }
+        }
+
         .sc-notif-item {
           display: flex;
           align-items: flex-start;
@@ -358,6 +387,7 @@ export default function SousChefNotificationPanel({
           font-size: 0.9rem;
           margin-bottom: 2px;
           color: var(--text);
+          text-transform: capitalize;
         }
 
         .sc-notif-message {

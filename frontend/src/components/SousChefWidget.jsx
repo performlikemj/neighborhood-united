@@ -11,10 +11,9 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import FamilySelector from './FamilySelector.jsx'
 import SousChefChat from './SousChefChat.jsx'
 import WorkspaceSettings from './WorkspaceSettings.jsx'
-import SousChefWelcomeModal from './SousChefWelcomeModal.jsx'
 import SousChefNotificationPanel from './SousChefNotificationPanel.jsx'
 import { useSousChefNotifications } from '../contexts/SousChefNotificationContext.jsx'
-import { useBackendNotifications } from '../hooks/useBackendNotifications.js'
+import { useUnreadCount, useMarkAsRead } from '../hooks/useNotifications'
 
 // Panel size configurations (fixed sizes, no resize)
 const PANEL_SIZES = {
@@ -32,7 +31,7 @@ export default function SousChefWidget({
   // Hide widget when on the full-page Sous Chef view
   const isOnSousChefPage = location.pathname === '/chefs/dashboard/sous-chef'
 
-  // Notification context
+  // Notification context (for local/frontend notifications)
   let notifications = null
   try {
     notifications = useSousChefNotifications()
@@ -40,8 +39,9 @@ export default function SousChefWidget({
     // Context not available
   }
 
-  // Poll backend for proactive notifications (birthdays, followups, etc.)
-  const { markReadOnBackend } = useBackendNotifications({ enabled: !!notifications })
+  // Backend notification count (polls every 30 seconds)
+  const { data: backendUnreadCount = 0 } = useUnreadCount({ enabled: true })
+  const markReadMutation = useMarkAsRead()
 
   const [isOpen, setIsOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -204,7 +204,9 @@ export default function SousChefWidget({
     })
   }, [navigate, selectedFamily])
 
-  const unreadCount = notifications?.unreadCount || 0
+  // Combine frontend and backend notification counts
+  const frontendUnreadCount = notifications?.unreadCount || 0
+  const unreadCount = frontendUnreadCount + backendUnreadCount
   const currentSize = PANEL_SIZES[panelSize]
 
   // Don't render if on the full-page Sous Chef view
@@ -394,27 +396,20 @@ export default function SousChefWidget({
         isOpen={notifPanelOpen}
         onClose={() => setNotifPanelOpen(false)}
         onNotificationClick={(notif) => {
-          // Mark as read on backend if it came from there
-          if (notif.backendId) {
-            markReadOnBackend(notif.backendId)
+          // Mark as read on backend
+          if (notif.id) {
+            markReadMutation.mutate(notif.id)
           }
           // Store context and open chat
           if (notif.context) {
-            setPendingContext(notif.context)
+            setPendingContext({
+              clientName: notif.context?.client_name || notif.context?.clientName,
+              familyId: notif.context?.family_id || notif.context?.familyId,
+              ...notif.context
+            })
           }
           setNotifPanelOpen(false)
           setIsOpen(true)
-        }}
-      />
-
-      {/* Welcome Modal for first-time chefs */}
-      <SousChefWelcomeModal
-        onStartSetup={() => {
-          // Open settings for personality setup
-          setSettingsOpen(true)
-        }}
-        onSkip={() => {
-          // Just close, they'll explore on their own
         }}
       />
 

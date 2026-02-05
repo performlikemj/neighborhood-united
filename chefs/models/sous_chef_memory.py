@@ -88,6 +88,27 @@ class ChefWorkspace(models.Model):
         help_text="Automatically save important insights to memory"
     )
     
+    # Chef Profile
+    chef_nickname = models.CharField(
+        max_length=100,
+        blank=True,
+        default='',
+        help_text="How Sous Chef addresses the chef (e.g., 'Chef Marcus', 'Marcus')"
+    )
+    
+    chef_specialties = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Chef's specialties: ['comfort', 'meal-prep', 'health']"
+    )
+    
+    sous_chef_name = models.CharField(
+        max_length=50,
+        blank=True,
+        default='',
+        help_text="Custom name for the assistant (default: 'Sous Chef')"
+    )
+    
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

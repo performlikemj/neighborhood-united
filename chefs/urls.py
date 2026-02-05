@@ -17,6 +17,8 @@ from chefs.api import payment_links as payment_links_api
 from chefs.api import documents as documents_api
 from chefs.api import receipts as receipts_api
 from chefs.api import verification_meeting as meeting_api
+from chefs.api import telegram_views as telegram_api
+from chefs.api import telegram_webhook
 from chefs.resource_planning import views as prep_plan_api
 from . import views
 
@@ -284,4 +286,16 @@ urlpatterns = [
     
     path('api/me/insights/', views.chef_proactive_insights, name='chef_proactive_insights'),
     path('api/me/insights/<int:insight_id>/', views.chef_insight_action, name='chef_insight_action'),
+
+    # ==========================================================================
+    # Telegram Integration API
+    # ==========================================================================
+    
+    path('api/telegram/generate-link/', telegram_api.telegram_generate_link, name='telegram_generate_link'),
+    path('api/telegram/unlink/', telegram_api.telegram_unlink, name='telegram_unlink'),
+    path('api/telegram/status/', telegram_api.telegram_status, name='telegram_status'),
+    path('api/telegram/settings/', telegram_api.telegram_settings, name='telegram_settings'),
+    
+    # Telegram Webhook (public - validated via secret token header)
+    path('api/telegram/webhook/', telegram_webhook.telegram_webhook, name='telegram_webhook'),
 ]

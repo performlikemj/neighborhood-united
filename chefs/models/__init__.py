@@ -39,6 +39,13 @@ from .proactive import (
     ChefNotification,
 )
 
+# Telegram integration models
+from .telegram_integration import (
+    ChefTelegramLink,
+    TelegramLinkToken,
+    ChefTelegramSettings,
+)
+
 __all__ = [
     # Base models
     'Chef',
@@ -65,4 +72,8 @@ __all__ = [
     'ChefProactiveSettings',
     'ChefOnboardingState',
     'ChefNotification',
+    # Telegram integration
+    'ChefTelegramLink',
+    'TelegramLinkToken',
+    'ChefTelegramSettings',
 ]

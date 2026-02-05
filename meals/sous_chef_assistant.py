@@ -240,6 +240,10 @@ class SousChefAssistant:
     """
     AI assistant for chefs to help with meal planning and platform guidance.
     
+    .. deprecated::
+        Use `chefs.services.sous_chef.get_sous_chef_service()` instead.
+        This class will be removed in a future version.
+    
     Can operate in two modes:
     1. Family mode: Scoped to a specific chef + family combination with full
        context about the family's dietary needs, household composition, and order history.
@@ -260,7 +264,16 @@ class SousChefAssistant:
             chef_id: The ID of the Chef using the assistant
             family_id: Optional - The ID of the family (CustomUser or Lead)
             family_type: Optional - Either 'customer' or 'lead' (required if family_id provided)
+        
+        .. deprecated::
+            Use `chefs.services.sous_chef.get_sous_chef_service()` instead.
         """
+        import warnings
+        warnings.warn(
+            "SousChefAssistant is deprecated. Use chefs.services.sous_chef.get_sous_chef_service() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         self.chef_id = chef_id
         self.family_id = family_id
         self.family_type = family_type
@@ -368,8 +381,11 @@ class SousChefAssistant:
 
     def _build_instructions(self) -> str:
         """Build the system instructions with chef and optional family context."""
-        # Get chef name
-        chef_name = self.chef.user.get_full_name() or self.chef.user.username
+        # Get chef name - prefer nickname from workspace, fall back to user name
+        if self.workspace and self.workspace.chef_nickname:
+            chef_name = self.workspace.chef_nickname
+        else:
+            chef_name = self.chef.user.get_full_name() or self.chef.user.username
         
         # Get tool descriptions (filtered based on family context)
         tools = self._get_tools()
@@ -435,12 +451,29 @@ class SousChefAssistant:
         """
         Build workspace context section from ChefWorkspace.
         
-        Injects chef's custom personality (soul_prompt) and business rules.
+        Injects chef's profile, personality (soul_prompt), and business rules.
         """
         if not self.workspace:
             return ""
         
         sections = []
+        
+        # Add chef profile info (nickname, specialties, assistant name)
+        profile_parts = []
+        if self.workspace.chef_nickname:
+            profile_parts.append(f"  Address the chef as: {self.workspace.chef_nickname}")
+        if self.workspace.chef_specialties:
+            specialties = ', '.join(self.workspace.chef_specialties)
+            profile_parts.append(f"  Chef specializes in: {specialties}")
+        if self.workspace.sous_chef_name:
+            profile_parts.append(f"  Your name is: {self.workspace.sous_chef_name} (not 'Sous Chef')")
+        
+        if profile_parts:
+            sections.append(f"""
+<!-- CHEF PROFILE -->
+<ChefProfile>
+{chr(10).join(profile_parts)}
+</ChefProfile>""")
         
         # Add soul prompt (personality customization)
         if self.workspace.soul_prompt:

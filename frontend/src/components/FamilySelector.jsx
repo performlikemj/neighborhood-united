@@ -129,6 +129,18 @@ export default function FamilySelector({
     setSearch('')
   }
 
+  const handleClear = (e) => {
+    e.stopPropagation()  // Prevent dropdown from opening
+    onFamilySelect({ familyId: null, familyType: null, familyName: null })
+    setSearch('')
+  }
+
+  const handleSelectGeneralMode = () => {
+    onFamilySelect({ familyId: null, familyType: null, familyName: null })
+    setIsOpen(false)
+    setSearch('')
+  }
+
   const formatFamilyName = (family) => {
     const fullName = `${family.firstName} ${family.lastName}`.trim()
     return fullName || family.username || family.email || 'Family'
@@ -205,6 +217,14 @@ export default function FamilySelector({
                 </span>
               </div>
             </div>
+            <button
+              className="family-clear-btn"
+              onClick={handleClear}
+              title="Clear selection (General Mode)"
+              aria-label="Clear family selection"
+            >
+              ×
+            </button>
           </div>
         ) : (
           <div className="placeholder">
@@ -229,6 +249,26 @@ export default function FamilySelector({
           </div>
           
           <div className="family-list">
+            {/* General Mode option - always shown at top */}
+            <div
+              className={`family-option general-mode-option ${!selectedFamilyId ? 'selected' : ''}`}
+              onClick={handleSelectGeneralMode}
+            >
+              <div className="family-avatar general-mode-avatar">
+                🌐
+              </div>
+              <div className="family-details">
+                <div className="family-name">
+                  General Mode
+                  <span className="type-badge badge-general">All Clients</span>
+                </div>
+                <div className="family-email muted">
+                  Work without a specific client selected
+                </div>
+              </div>
+            </div>
+            <div className="group-divider" />
+
             {filteredFamilies.length === 0 ? (
               <div className="no-results">No families match your search</div>
             ) : (
@@ -362,6 +402,35 @@ export default function FamilySelector({
           color: var(--manual-color);
         }
 
+        .type-badge.badge-general {
+          background: var(--success-bg);
+          color: var(--success);
+        }
+
+        .family-clear-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 24px;
+          height: 24px;
+          border: none;
+          border-radius: 50%;
+          background: transparent;
+          color: var(--muted);
+          font-size: 1.25rem;
+          line-height: 1;
+          cursor: pointer;
+          transition: background 0.15s, color 0.15s;
+          margin-left: auto;
+          margin-right: 0.5rem;
+          flex-shrink: 0;
+        }
+
+        .family-clear-btn:hover {
+          background: var(--danger-bg);
+          color: var(--danger);
+        }
+
         .placeholder {
           display: flex;
           align-items: center;
@@ -456,6 +525,30 @@ export default function FamilySelector({
           border-bottom: 1px solid var(--border);
           position: sticky;
           top: 0;
+        }
+
+        .group-divider {
+          height: 1px;
+          background: var(--border);
+          margin: 0;
+        }
+
+        .general-mode-option {
+          background: var(--surface);
+        }
+
+        .general-mode-option:hover {
+          background: var(--success-bg);
+        }
+
+        .general-mode-option.selected {
+          background: var(--success-bg);
+          border-left: 3px solid var(--success);
+        }
+
+        .general-mode-avatar {
+          background: var(--success);
+          font-size: 1.1rem;
         }
         
         .family-option {

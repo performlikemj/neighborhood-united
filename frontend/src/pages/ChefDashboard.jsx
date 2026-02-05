@@ -9,6 +9,9 @@ import ChefAllClients from '../components/ChefAllClients.jsx'
 import ChefPrepPlanning from '../components/ChefPrepPlanning.jsx'
 import ChefPaymentLinks from '../components/ChefPaymentLinks.jsx'
 import SousChefWidget from '../components/SousChefWidget.jsx'
+import WelcomeModal from '../components/souschef/WelcomeModal.jsx'
+import OnboardingWizard from '../components/souschef/OnboardingWizard.jsx'
+import { useOnboardingStatus } from '../hooks/useOnboarding.js'
 import ServiceAreaPicker from '../components/ServiceAreaPicker.jsx'
 import ServiceAreasModal, { getAreaSummary } from '../components/ServiceAreasModal.jsx'
 import ChatPanel from '../components/ChatPanel.jsx'
@@ -736,6 +739,53 @@ function ChefDashboardContent(){
     clearScaffold
   } = useScaffold()
   const [showScaffoldPreview, setShowScaffoldPreview] = useState(false)
+
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // Sous Chef Onboarding
+  // ═══════════════════════════════════════════════════════════════════════════════
+
+  const {
+    shouldShowWelcome,
+    shouldShowSetup,
+    isSetupComplete,
+    isLoading: onboardingLoading
+  } = useOnboardingStatus({ enabled: !!chef })
+
+  const [showWelcomeModal, setShowWelcomeModal] = useState(false)
+  const [showOnboardingWizard, setShowOnboardingWizard] = useState(false)
+
+  // Check if we should show onboarding modals
+  useEffect(() => {
+    // Skip if no chef or still loading or already onboarded via localStorage
+    if (!chef || onboardingLoading) return
+    if (localStorage.getItem('sous_chef_onboarded') === 'true') return
+
+    // Show welcome modal if not welcomed
+    if (shouldShowWelcome && !showWelcomeModal && !showOnboardingWizard) {
+      setShowWelcomeModal(true)
+    }
+    // Show wizard if welcomed but setup not complete
+    else if (shouldShowSetup && !showOnboardingWizard && !showWelcomeModal) {
+      setShowOnboardingWizard(true)
+    }
+  }, [chef, onboardingLoading, shouldShowWelcome, shouldShowSetup, showWelcomeModal, showOnboardingWizard])
+
+  const handleStartOnboarding = () => {
+    setShowWelcomeModal(false)
+    setShowOnboardingWizard(true)
+  }
+
+  const handleOnboardingComplete = () => {
+    setShowOnboardingWizard(false)
+    // Show a success notice
+    setNotice('Setup complete! Sous Chef is ready to help.')
+    setTimeout(() => setNotice(null), 4000)
+  }
+
+  const handleOnboardingClose = () => {
+    setShowWelcomeModal(false)
+    setShowOnboardingWizard(false)
+  }
 
   // Track tab changes for context
   useEffect(() => {
@@ -4275,6 +4325,18 @@ function ChefDashboardContent(){
           suggestionPriority={suggestionPriority}
         />
       )}
+
+      {/* Sous Chef Onboarding Modals */}
+      <WelcomeModal
+        isOpen={showWelcomeModal}
+        onClose={handleOnboardingClose}
+        onStartSetup={handleStartOnboarding}
+      />
+      <OnboardingWizard
+        isOpen={showOnboardingWizard}
+        onClose={handleOnboardingClose}
+        onComplete={handleOnboardingComplete}
+      />
 
       {/* Analytics Drawer */}
       {/* Scaffold Preview Modal */}

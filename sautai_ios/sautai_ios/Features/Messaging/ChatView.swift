@@ -121,7 +121,8 @@ struct ChatView: View {
     private func loadMessages() async {
         isLoading = true
         do {
-            messages = try await APIClient.shared.getMessages(conversationId: conversation.id)
+            let response = try await APIClient.shared.getConversationMessages(conversationId: conversation.id)
+            messages = response.results
         } catch {
             // Handle error
         }
@@ -129,7 +130,7 @@ struct ChatView: View {
     }
 
     private func markAsRead() async {
-        try? await APIClient.shared.markConversationAsRead(conversationId: conversation.id)
+        try? await APIClient.shared.markConversationRead(conversationId: conversation.id)
     }
 
     private func sendMessage() async {
@@ -337,8 +338,8 @@ struct NewMessageSheet: View {
     private func startConversation() async {
         isSending = true
         do {
-            _ = try await APIClient.shared.startConversationWithChef(
-                chefId: chef.id,
+            _ = try await APIClient.shared.startConversation(
+                userId: chef.id,
                 message: messageText
             )
             dismiss()

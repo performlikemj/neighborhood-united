@@ -126,7 +126,7 @@ struct CustomerMealPlan: Codable, Identifiable {
     let name: String?
     let weekOf: Date
     let status: String
-    let days: [MealPlanDay]?
+    let days: [CustomerMealPlanDay]?
     let totalMeals: Int?
     let createdAt: Date?
     let approvedAt: Date?
@@ -138,7 +138,7 @@ struct CustomerMealPlan: Codable, Identifiable {
     }
 }
 
-struct MealPlanDay: Codable, Identifiable {
+struct CustomerMealPlanDay: Codable, Identifiable {
     let id: Int
     let date: Date
     let breakfast: MealPlanMeal?

@@ -1,8 +1,8 @@
 # Sautai iOS App - Feature Parity Roadmap
 
-> **Django Backend**: ~400 endpoints | **iOS App Current Coverage**: ~5%
+> **Django Backend**: ~400 endpoints | **iOS App Current Coverage**: ~70%
 >
-> Last Updated: February 2026
+> Last Updated: February 5, 2026
 
 ---
 
@@ -148,25 +148,25 @@ The Django backend is a sophisticated, full-featured platform with AI-powered me
 
 ---
 
-## Phase 2: Core Business Features
+## Phase 2: Core Business Features ✅
 *Goal: Orders, meals, and service management*
 
 ### 2.1 Order Management
 | Feature | Status | iOS File | Django Endpoint | Notes |
 |---------|--------|----------|-----------------|-------|
-| List Orders | ⬜ | - | `GET /meals/api/chef-meal-orders/` | |
-| Order Detail | ⬜ | - | `GET /meals/api/chef-meal-orders/{id}/` | |
-| Confirm Order | ⬜ | - | `POST /meals/api/chef-meal-orders/{id}/confirm/` | |
-| Cancel Order | ⬜ | - | `POST /meals/api/chef-meal-orders/{id}/cancel/` | |
-| Adjust Quantity | ⬜ | - | `POST /meals/api/chef-meal-orders/{id}/adjust-quantity/` | |
-| Order Calendar | ⬜ | - | `GET /meals/api/chef-calendar/` | |
+| List Orders | ✅ | `OrdersListView.swift` | `GET /meals/api/chef-meal-orders/` | With status filter tabs |
+| Order Detail | ✅ | `OrderDetailView.swift` | `GET /meals/api/chef-meal-orders/{id}/` | Full detail view |
+| Confirm Order | ✅ | `OrderDetailView.swift` | `POST /meals/api/chef-meal-orders/{id}/confirm/` | Action button |
+| Cancel Order | ✅ | `OrderDetailView.swift` | `POST /meals/api/chef-meal-orders/{id}/cancel/` | With reason |
+| Adjust Quantity | ✅ | `OrderDetailView.swift` | `POST /meals/api/chef-meal-orders/{id}/adjust-quantity/` | Stepper UI |
+| Order Calendar | ✅ | `OrderCalendarView.swift` | `GET /meals/api/chef-calendar/` | Monthly view |
 
 **Implementation Plan:**
 ```
-[ ] Create OrdersListView
-[ ] Create OrderDetailView with actions
-[ ] Add order status badges and colors
-[ ] Create OrderCalendarView
+[x] Create OrdersListView ✅
+[x] Create OrderDetailView with actions ✅
+[x] Add order status badges and colors ✅
+[x] Create OrderCalendarView ✅
 [ ] Implement push notifications for new orders
 [ ] Test: Receive order → Confirm → Complete flow
 ```
@@ -176,19 +176,19 @@ The Django backend is a sophisticated, full-featured platform with AI-powered me
 ### 2.2 Meal Events (Meal Shares)
 | Feature | Status | iOS File | Django Endpoint | Notes |
 |---------|--------|----------|-----------------|-------|
-| List Events | ⬜ | - | `GET /meals/api/chef-meal-events/` | |
-| Create Event | ⬜ | - | `POST /meals/api/chef-meal-events/` | |
-| Update Event | ⬜ | - | `POST /meals/api/chef-meal-events/{id}/update/` | |
-| Cancel Event | ⬜ | - | `POST /meals/api/chef-meal-events/{id}/cancel/` | |
-| Duplicate Event | ⬜ | - | `POST /meals/api/chef-meal-events/{id}/duplicate/` | |
-| Event Orders | ⬜ | - | `GET /meals/api/chef-meal-events/{id}/order/` | |
+| List Events | ✅ | `MealEventsListView.swift` | `GET /meals/api/chef-meal-events/` | With filters |
+| Create Event | ✅ | `AddMealEventView.swift` | `POST /meals/api/chef-meal-events/` | Full form |
+| Update Event | ✅ | `EditMealEventView.swift` | `POST /meals/api/chef-meal-events/{id}/update/` | All fields |
+| Cancel Event | ✅ | `MealEventDetailView.swift` | `POST /meals/api/chef-meal-events/{id}/cancel/` | With confirmation |
+| Duplicate Event | ✅ | `MealEventDetailView.swift` | `POST /meals/api/chef-meal-events/{id}/duplicate/` | Quick action |
+| Event Orders | ✅ | `MealEventDetailView.swift` | `GET /meals/api/chef-meal-events/{id}/order/` | Orders list |
 
 **Implementation Plan:**
 ```
-[ ] Create MealEventsListView
-[ ] Create MealEventDetailView
-[ ] Create AddMealEventView with date picker
-[ ] Add event management actions
+[x] Create MealEventsListView ✅
+[x] Create MealEventDetailView ✅
+[x] Create AddMealEventView with date picker ✅
+[x] Add event management actions ✅
 [ ] Test: Create event → Get orders → Complete
 ```
 
@@ -197,21 +197,21 @@ The Django backend is a sophisticated, full-featured platform with AI-powered me
 ### 2.3 Meals & Dishes
 | Feature | Status | iOS File | Django Endpoint | Notes |
 |---------|--------|----------|-----------------|-------|
-| List Meals | ⬜ | - | `GET /meals/api/chef/meals/` | |
-| Create Meal | ⬜ | - | `POST /meals/api/chef/meals/` | |
-| Update Meal | ⬜ | - | `PUT /meals/api/chef/meals/{id}/update/` | |
-| List Dishes | ⬜ | - | `GET /meals/api/dishes/` | |
-| Create Dish | ⬜ | - | `POST /meals/api/create-chef-dish/` | |
-| Update Dish | ⬜ | - | `PUT /meals/api/dishes/{id}/update/` | |
-| Delete Dish | ⬜ | - | `DELETE /meals/api/dishes/{id}/delete/` | |
+| List Meals | ✅ | `MealsListView.swift` | `GET /meals/api/chef/meals/` | With search |
+| Create Meal | ✅ | `AddMealView.swift` | `POST /meals/api/chef/meals/` | With dish picker |
+| Update Meal | ✅ | `MealDetailView.swift` | `PUT /meals/api/chef/meals/{id}/update/` | Inline edit |
+| List Dishes | ✅ | `DishesListView.swift` | `GET /meals/api/dishes/` | Grid view |
+| Create Dish | ✅ | `AddDishView.swift` | `POST /meals/api/create-chef-dish/` | Full form |
+| Update Dish | ✅ | `EditDishView.swift` | `PUT /meals/api/dishes/{id}/update/` | All fields |
+| Delete Dish | ✅ | `DishDetailView.swift` | `DELETE /meals/api/dishes/{id}/delete/` | With confirmation |
 
 **Implementation Plan:**
 ```
-[ ] Create KitchenView (meals/dishes hub)
-[ ] Create MealDetailView
-[ ] Create DishDetailView
-[ ] Create AddMealView with dish picker
-[ ] Create AddDishView with ingredients
+[x] Create KitchenView (meals/dishes hub) ✅
+[x] Create MealDetailView ✅
+[x] Create DishDetailView ✅
+[x] Create AddMealView with dish picker ✅
+[x] Create AddDishView with ingredients ✅
 [ ] Test: Create dish → Add to meal → Publish
 ```
 
@@ -220,17 +220,17 @@ The Django backend is a sophisticated, full-featured platform with AI-powered me
 ### 2.4 Ingredients
 | Feature | Status | iOS File | Django Endpoint | Notes |
 |---------|--------|----------|-----------------|-------|
-| List Ingredients | ⬜ | - | `GET /meals/api/ingredients/` | |
-| Search Ingredients | ⬜ | - | `GET /meals/api/search_ingredients/` | |
-| Create Ingredient | ⬜ | - | `POST /meals/api/chef/ingredients/` | |
-| Update Ingredient | ⬜ | - | `PUT /meals/api/chef/ingredients/{id}/` | |
-| Delete Ingredient | ⬜ | - | `DELETE /meals/api/chef/ingredients/{id}/delete/` | |
+| List Ingredients | ✅ | `IngredientsListView.swift` | `GET /meals/api/ingredients/` | With search |
+| Search Ingredients | ✅ | `IngredientPickerView.swift` | `GET /meals/api/search_ingredients/` | Autocomplete |
+| Create Ingredient | ✅ | `AddIngredientView.swift` | `POST /meals/api/chef/ingredients/` | Sheet form |
+| Update Ingredient | ✅ | `IngredientsListView.swift` | `PUT /meals/api/chef/ingredients/{id}/` | Inline |
+| Delete Ingredient | ✅ | `IngredientsListView.swift` | `DELETE /meals/api/chef/ingredients/{id}/delete/` | Swipe |
 
 **Implementation Plan:**
 ```
-[ ] Create IngredientsListView
-[ ] Add ingredient search with autocomplete
-[ ] Create AddIngredientView
+[x] Create IngredientsListView ✅
+[x] Add ingredient search with autocomplete ✅
+[x] Create AddIngredientView ✅
 [ ] Test: Search → Select → Add to dish
 ```
 
@@ -239,44 +239,44 @@ The Django backend is a sophisticated, full-featured platform with AI-powered me
 ### 2.5 Service Offerings
 | Feature | Status | iOS File | Django Endpoint | Notes |
 |---------|--------|----------|-----------------|-------|
-| List Offerings | ⬜ | - | `GET /services/offerings/` | |
-| Create Offering | ⬜ | - | `POST /services/offerings/` | |
-| Update Offering | ⬜ | - | `PUT /services/offerings/{id}/` | |
-| Delete Offering | ⬜ | - | `DELETE /services/offerings/{id}/delete/` | |
-| Price Tiers | ⬜ | - | `POST /services/offerings/{id}/tiers/` | |
+| List Offerings | ✅ | `ServicesListView.swift` | `GET /services/offerings/` | With filter |
+| Create Offering | ✅ | `AddServiceView.swift` | `POST /services/offerings/` | Full form |
+| Update Offering | ✅ | `EditServiceView.swift` | `PUT /services/offerings/{id}/` | All fields |
+| Delete Offering | ✅ | `ServiceDetailView.swift` | `DELETE /services/offerings/{id}/delete/` | With confirmation |
+| Price Tiers | ✅ | `PriceTierEditor.swift` | `POST /services/offerings/{id}/tiers/` | Add/Edit/Delete |
 
 **Implementation Plan:**
 ```
-[ ] Create ServicesListView
-[ ] Create ServiceDetailView
-[ ] Create AddServiceView with tier pricing
+[x] Create ServicesListView ✅
+[x] Create ServiceDetailView ✅
+[x] Create AddServiceView with tier pricing ✅
 [ ] Test: Create service → Add tiers → Publish
 ```
 
 ---
 
-## Phase 3: Advanced Features
+## Phase 3: Advanced Features ✅
 *Goal: Collaborative planning, prep, and analytics*
 
 ### 3.1 Collaborative Meal Plans
 | Feature | Status | iOS File | Django Endpoint | Notes |
 |---------|--------|----------|-----------------|-------|
-| List Client Plans | ⬜ | - | `GET /chefs/api/me/clients/{id}/plans/` | |
-| Plan Detail | ⬜ | - | `GET /chefs/api/me/plans/{id}/` | |
-| Publish Plan | ⬜ | - | `POST /chefs/api/me/plans/{id}/publish/` | |
-| Add Plan Day | ⬜ | - | `POST /chefs/api/me/plans/{id}/days/` | |
-| Add Plan Item | ⬜ | - | `POST /chefs/api/me/plans/{id}/days/{day_id}/items/` | |
-| View Suggestions | ⬜ | - | `GET /chefs/api/me/plans/{id}/suggestions/` | |
-| Respond to Suggestion | ⬜ | - | `POST /chefs/api/me/suggestions/{id}/respond/` | |
-| AI Generate Meals | ⬜ | - | `POST /chefs/api/me/plans/{id}/generate/` | |
+| List Client Plans | ✅ | `MealPlansListView.swift` | `GET /chefs/api/me/clients/{id}/plans/` | With filter tabs |
+| Plan Detail | ✅ | `MealPlanDetailView.swift` | `GET /chefs/api/me/plans/{id}/` | Full detail view |
+| Publish Plan | ✅ | `MealPlanDetailView.swift` | `POST /chefs/api/me/plans/{id}/publish/` | Status action |
+| Add Plan Day | ✅ | `AddPlanDayView.swift` | `POST /chefs/api/me/plans/{id}/days/` | Sheet form |
+| Add Plan Item | ✅ | `AddMealItemView.swift` | `POST /chefs/api/me/plans/{id}/days/{day_id}/items/` | Meal/Dish picker |
+| View Suggestions | ✅ | `MealPlanDetailView.swift` | `GET /chefs/api/me/plans/{id}/suggestions/` | Suggestions section |
+| Respond to Suggestion | ✅ | `MealPlanDetailView.swift` | `POST /chefs/api/me/suggestions/{id}/respond/` | Accept/Reject actions |
+| AI Generate Meals | ✅ | `GenerateMealsView.swift` | `POST /chefs/api/me/plans/{id}/generate/` | Preferences sheet |
 
 **Implementation Plan:**
 ```
-[ ] Create MealPlansListView
-[ ] Create MealPlanDetailView with calendar
-[ ] Create PlanDayView with meal slots
-[ ] Add AI generation integration
-[ ] Create SuggestionResponseSheet
+[x] Create MealPlansListView ✅
+[x] Create MealPlanDetailView with calendar ✅
+[x] Create PlanDayView with meal slots ✅
+[x] Add AI generation integration ✅
+[x] Create SuggestionResponseSheet ✅
 [ ] Test: Create plan → Generate meals → Client suggests → Respond
 ```
 
@@ -285,19 +285,19 @@ The Django backend is a sophisticated, full-featured platform with AI-powered me
 ### 3.2 Prep Planning
 | Feature | Status | iOS File | Django Endpoint | Notes |
 |---------|--------|----------|-----------------|-------|
-| List Prep Plans | ⬜ | - | `GET /chefs/api/me/prep-plans/` | |
-| Prep Plan Detail | ⬜ | - | `GET /chefs/api/me/prep-plans/{id}/` | |
-| Shopping List | ⬜ | - | `GET /chefs/api/me/prep-plans/{id}/shopping-list/` | |
-| Mark Purchased | ⬜ | - | `POST /chefs/api/me/prep-plans/{id}/mark-purchased/` | |
-| Quick Generate | ⬜ | - | `POST /chefs/api/me/prep-plans/quick-generate/` | |
-| Live Commitments | ⬜ | - | `GET /chefs/api/me/prep-plans/live/commitments/` | |
+| List Prep Plans | ✅ | `PrepPlanningView.swift` | `GET /chefs/api/me/prep-plans/` | List with filters |
+| Prep Plan Detail | ✅ | `PrepPlanDetailView.swift` | `GET /chefs/api/me/prep-plans/{id}/` | Full detail |
+| Shopping List | ✅ | `ShoppingListView.swift` | `GET /chefs/api/me/prep-plans/{id}/shopping-list/` | Interactive list |
+| Mark Purchased | ✅ | `ShoppingListView.swift` | `POST /chefs/api/me/prep-plans/{id}/mark-purchased/` | Toggle UI |
+| Quick Generate | ✅ | `QuickGenerateView.swift` | `POST /chefs/api/me/prep-plans/quick-generate/` | Date picker |
+| Live Commitments | ✅ | `LiveCommitmentsView.swift` | `GET /chefs/api/me/prep-plans/live/commitments/` | Dashboard view |
 
 **Implementation Plan:**
 ```
-[ ] Create PrepPlanningView
-[ ] Create ShoppingListView with checkboxes
-[ ] Add quick generation from orders
-[ ] Create live commitments dashboard
+[x] Create PrepPlanningView ✅
+[x] Create ShoppingListView with checkboxes ✅
+[x] Add quick generation from orders ✅
+[x] Create live commitments dashboard ✅
 [ ] Test: Orders → Generate prep → Shopping list → Mark done
 ```
 
@@ -306,18 +306,18 @@ The Django backend is a sophisticated, full-featured platform with AI-powered me
 ### 3.3 Notifications
 | Feature | Status | iOS File | Django Endpoint | Notes |
 |---------|--------|----------|-----------------|-------|
-| List Notifications | ⬜ | - | `GET /chefs/api/me/notifications/` | |
-| Unread Count | ⬜ | - | `GET /chefs/api/me/notifications/unread-count/` | |
-| Mark Read | ⬜ | - | `POST /chefs/api/me/notifications/{id}/read/` | |
-| Mark All Read | ⬜ | - | `POST /chefs/api/me/notifications/mark-all-read/` | |
-| Dismiss | ⬜ | - | `POST /chefs/api/me/notifications/{id}/dismiss/` | |
-| Push Notifications | ⬜ | - | APNs integration | |
+| List Notifications | ✅ | `NotificationsView.swift` | `GET /chefs/api/me/notifications/` | With type filters |
+| Unread Count | ✅ | `NotificationsView.swift` | `GET /chefs/api/me/notifications/unread-count/` | Badge support |
+| Mark Read | ✅ | `NotificationsView.swift` | `POST /chefs/api/me/notifications/{id}/read/` | Tap action |
+| Mark All Read | ✅ | `NotificationsView.swift` | `POST /chefs/api/me/notifications/mark-all-read/` | Toolbar button |
+| Dismiss | ✅ | `NotificationsView.swift` | `POST /chefs/api/me/notifications/{id}/dismiss/` | Swipe action |
+| Push Notifications | ⬜ | - | APNs integration | Deferred |
 
 **Implementation Plan:**
 ```
-[ ] Create NotificationsView
-[ ] Add notification badge to tab bar
-[ ] Implement push notification handling
+[x] Create NotificationsView ✅
+[x] Add notification badge to tab bar ✅
+[ ] Implement push notification handling (deferred)
 [ ] Add notification preferences in settings
 [ ] Test: Receive notification → Tap → Navigate to source
 ```
@@ -327,18 +327,19 @@ The Django backend is a sophisticated, full-featured platform with AI-powered me
 ### 3.4 Messaging
 | Feature | Status | iOS File | Django Endpoint | Notes |
 |---------|--------|----------|-----------------|-------|
-| List Conversations | ⬜ | - | `GET /messaging/api/conversations/` | |
-| Get Conversation | ⬜ | - | `GET /messaging/api/conversations/{id}/` | |
-| Send Message | ⬜ | - | `POST /messaging/api/conversations/{id}/send/` | |
-| Unread Counts | ⬜ | - | `GET /messaging/api/unread-counts/` | |
-| Mark Read | ⬜ | - | `POST /messaging/api/conversations/{id}/read/` | |
-| WebSocket | ⬜ | - | WebSocket connection | Real-time |
+| List Conversations | ✅ | `ConversationsListView.swift` | `GET /messaging/api/conversations/` | With unread badges |
+| Get Conversation | ✅ | `ChatView.swift` | `GET /messaging/api/conversations/{id}/` | Full messages |
+| Send Message | ✅ | `ChatView.swift` | `POST /messaging/api/conversations/{id}/send/` | With auto-scroll |
+| Unread Counts | ✅ | `ConversationsListView.swift` | `GET /messaging/api/unread-counts/` | Badge display |
+| Mark Read | ✅ | `ChatView.swift` | `POST /messaging/api/conversations/{id}/read/` | On appear |
+| Start Conversation | ✅ | `ChatView.swift` | `POST /messaging/api/start-conversation/` | New chat |
+| WebSocket | ⬜ | - | WebSocket connection | Deferred |
 
 **Implementation Plan:**
 ```
-[ ] Create ConversationsListView
-[ ] Create ChatView with message bubbles
-[ ] Implement WebSocket for real-time
+[x] Create ConversationsListView ✅
+[x] Create ChatView with message bubbles ✅
+[ ] Implement WebSocket for real-time (deferred)
 [ ] Add typing indicators
 [ ] Test: Send message → Receive reply → Real-time updates
 ```
@@ -348,39 +349,42 @@ The Django backend is a sophisticated, full-featured platform with AI-powered me
 ### 3.5 Reviews & Ratings
 | Feature | Status | iOS File | Django Endpoint | Notes |
 |---------|--------|----------|-----------------|-------|
-| View My Reviews | ⬜ | - | `GET /reviews/my_reviews/` | |
-| View Chef Reviews | ⬜ | - | `GET /reviews/chef/{id}/reviews/` | |
-| Reply to Review | ⬜ | - | - | May need API |
+| View My Reviews | ✅ | `ReviewsListView.swift` | `GET /reviews/my_reviews/` | With summary card |
+| Review Summary | ✅ | `ReviewsListView.swift` | `GET /chefs/api/me/reviews/summary/` | Rating breakdown |
+| View Chef Reviews | ✅ | `ReviewsListView.swift` | `GET /reviews/chef/{id}/reviews/` | List view |
+| Reply to Review | ✅ | `ReviewsListView.swift` | `POST /reviews/{id}/respond/` | Reply sheet |
 
 **Implementation Plan:**
 ```
-[ ] Create ReviewsListView
-[ ] Add review display to profile
-[ ] Test: View reviews
+[x] Create ReviewsListView ✅
+[x] Add review summary card ✅
+[x] Create ReviewRowView with reply ✅
+[x] Create ReplyToReviewSheet ✅
+[ ] Test: View reviews → Reply to review
 ```
 
 ---
 
-## Phase 4: Profile & Settings
+## Phase 4: Profile & Settings ✅
 *Goal: Complete profile management and app settings*
 
 ### 4.1 Chef Profile
 | Feature | Status | iOS File | Django Endpoint | Notes |
 |---------|--------|----------|-----------------|-------|
-| View Profile | ⬜ | - | `GET /chefs/api/me/chef/profile/` | |
-| Update Profile | ⬜ | - | `POST /chefs/api/me/chef/profile/update/` | |
-| Photo Gallery | ⬜ | - | `GET /chefs/api/{username}/photos/` | |
-| Upload Photo | ⬜ | - | `POST /chefs/api/me/chef/photos/` | |
-| Delete Photo | ⬜ | - | `DELETE /chefs/api/me/chef/photos/{id}/` | |
-| Set Break Status | ⬜ | - | `POST /chefs/api/me/chef/break/` | |
-| Set Live Status | ⬜ | - | `POST /chefs/api/me/chef/live/` | |
+| View Profile | ✅ | `ChefProfileManagementView.swift` | `GET /chefs/api/me/chef/profile/` | Full profile card |
+| Update Profile | ✅ | `EditChefProfileView.swift` | `POST /chefs/api/me/chef/profile/update/` | All fields |
+| Photo Gallery | ✅ | `PhotosManagementView.swift` | `GET /chefs/api/{username}/photos/` | Grid view |
+| Upload Photo | ✅ | `PhotosManagementView.swift` | `POST /chefs/api/me/chef/photos/` | Image picker |
+| Delete Photo | ✅ | `PhotosManagementView.swift` | `DELETE /chefs/api/me/chef/photos/{id}/` | Swipe action |
+| Set Break Status | ✅ | `SetBreakStatusView.swift` | `POST /chefs/api/me/chef/break/` | With return date |
+| Set Live Status | ✅ | `ChefProfileManagementView.swift` | `POST /chefs/api/me/chef/live/` | Toggle switch |
 
 **Implementation Plan:**
 ```
-[ ] Create ChefProfileView
-[ ] Create EditProfileView
-[ ] Create PhotoGalleryView with upload
-[ ] Add break/live toggle
+[x] Create ChefProfileView ✅
+[x] Create EditProfileView ✅
+[x] Create PhotoGalleryView with upload ✅
+[x] Add break/live toggle ✅
 [ ] Test: Update profile → Upload photo → Toggle status
 ```
 
@@ -389,16 +393,18 @@ The Django backend is a sophisticated, full-featured platform with AI-powered me
 ### 4.2 Service Areas
 | Feature | Status | iOS File | Django Endpoint | Notes |
 |---------|--------|----------|-----------------|-------|
-| View Service Areas | ⬜ | - | `GET /local_chefs/api/chef/service-areas/` | |
-| Add Area | ⬜ | - | `POST /local_chefs/api/chef/service-areas/add/` | |
-| Remove Area | ⬜ | - | `DELETE /local_chefs/api/chef/service-areas/{id}/remove/` | |
-| Add Postal Codes | ⬜ | - | `POST /local_chefs/api/chef/service-areas/postal-codes/add/` | |
+| View Service Areas | ✅ | `ServiceAreasView.swift` | `GET /local_chefs/api/chef/service-areas/` | List view |
+| Add Area | ✅ | `AddServiceAreaView.swift` | `POST /local_chefs/api/chef/service-areas/add/` | Full form |
+| Edit Area | ✅ | `EditServiceAreaView.swift` | `PUT /local_chefs/api/chef/service-areas/{id}/` | All fields |
+| Remove Area | ✅ | `ServiceAreasView.swift` | `DELETE /local_chefs/api/chef/service-areas/{id}/remove/` | Swipe action |
+| Add Postal Codes | ✅ | `EditServiceAreaView.swift` | `POST /local_chefs/api/chef/service-areas/postal-codes/add/` | Multi-select |
 
 **Implementation Plan:**
 ```
-[ ] Create ServiceAreasView with map
-[ ] Create AddAreaSheet with search
-[ ] Test: Add area → Add postal codes → View on map
+[x] Create ServiceAreasView ✅
+[x] Create AddServiceAreaView ✅
+[x] Create EditServiceAreaView ✅
+[ ] Test: Add area → Add postal codes → Edit → Remove
 ```
 
 ---
@@ -406,16 +412,17 @@ The Django backend is a sophisticated, full-featured platform with AI-powered me
 ### 4.3 Verification & Compliance
 | Feature | Status | iOS File | Django Endpoint | Notes |
 |---------|--------|----------|-----------------|-------|
-| View Documents | ⬜ | - | `GET /chefs/api/me/documents/` | |
-| Upload Document | ⬜ | - | Document upload | |
-| Verification Status | ⬜ | - | `GET /chefs/api/me/documents/status/` | |
-| Schedule Meeting | ⬜ | - | `POST /chefs/api/me/verification-meeting/schedule/` | |
+| View Documents | ✅ | `VerificationView.swift` | `GET /chefs/api/me/documents/` | Document list |
+| Upload Document | ✅ | `VerificationView.swift` | `POST /chefs/api/me/documents/` | File picker |
+| Verification Status | ✅ | `VerificationView.swift` | `GET /chefs/api/me/documents/status/` | Status card |
+| Schedule Meeting | ✅ | `ScheduleMeetingView.swift` | `POST /chefs/api/me/verification-meeting/schedule/` | Date picker |
 
 **Implementation Plan:**
 ```
-[ ] Create VerificationView
-[ ] Add document upload with camera
-[ ] Show verification status badges
+[x] Create VerificationView ✅
+[x] Add document upload ✅
+[x] Show verification status badges ✅
+[x] Create ScheduleMeetingView ✅
 [ ] Test: Upload document → Schedule meeting
 ```
 
@@ -440,23 +447,25 @@ The Django backend is a sophisticated, full-featured platform with AI-powered me
 
 ---
 
-## Phase 5: Payments & Commerce
+## Phase 5: Payments & Commerce ✅
 *Goal: Full payment integration*
 
 ### 5.1 Stripe Integration
 | Feature | Status | iOS File | Django Endpoint | Notes |
 |---------|--------|----------|-----------------|-------|
-| Account Status | ⬜ | - | `GET /meals/api/stripe-account-status/` | |
-| Create Account Link | ⬜ | - | `POST /meals/api/stripe-account-link/` | |
-| Process Payment | ⬜ | - | `POST /meals/api/process-chef-meal-payment/{id}/` | |
-| Payment Status | ⬜ | - | `GET /meals/api/order-payment-status/{id}/` | |
+| Account Status | ✅ | `PaymentsView.swift` | `GET /meals/api/stripe-account-status/` | Status card |
+| Create Account Link | ✅ | `PaymentsView.swift` | `POST /meals/api/stripe-account-link/` | Safari redirect |
+| Account Dashboard | ✅ | `PaymentsView.swift` | `POST /meals/api/stripe-dashboard-link/` | Login link |
+| Process Payment | 🟡 | - | `POST /meals/api/process-chef-meal-payment/{id}/` | Via web |
+| Payment Status | 🟡 | - | `GET /meals/api/order-payment-status/{id}/` | Via web |
 
 **Implementation Plan:**
 ```
-[ ] Create PaymentSetupView
-[ ] Add Stripe SDK integration
-[ ] Create payment processing flow
-[ ] Test: Setup account → Process payment → Verify
+[x] Create PaymentsOverviewView ✅
+[x] Add Stripe account status display ✅
+[x] Create account link flow ✅
+[ ] Add Stripe SDK for in-app payments (deferred - uses web)
+[ ] Test: Setup account → Verify status
 ```
 
 ---
@@ -464,16 +473,16 @@ The Django backend is a sophisticated, full-featured platform with AI-powered me
 ### 5.2 Payment Links
 | Feature | Status | iOS File | Django Endpoint | Notes |
 |---------|--------|----------|-----------------|-------|
-| List Payment Links | ⬜ | - | `GET /chefs/api/me/payment-links/` | |
-| Create Link | ⬜ | - | `POST /chefs/api/me/payment-links/` | |
-| Send Link | ⬜ | - | `POST /chefs/api/me/payment-links/{id}/send/` | |
-| Link Stats | ⬜ | - | `GET /chefs/api/me/payment-links/stats/` | |
+| List Payment Links | ✅ | `PaymentLinksView.swift` | `GET /chefs/api/me/payment-links/` | With status filter |
+| Create Link | ✅ | `CreatePaymentLinkView.swift` | `POST /chefs/api/me/payment-links/` | Full form |
+| Send Link | ✅ | `PaymentLinksView.swift` | `POST /chefs/api/me/payment-links/{id}/send/` | Share sheet |
+| Link Stats | ✅ | `PaymentLinksView.swift` | `GET /chefs/api/me/payment-links/stats/` | Summary card |
 
 **Implementation Plan:**
 ```
-[ ] Create PaymentLinksView
-[ ] Create CreatePaymentLinkView
-[ ] Add share sheet for sending links
+[x] Create PaymentLinksView ✅
+[x] Create CreatePaymentLinkView ✅
+[x] Add share sheet for sending links ✅
 [ ] Test: Create link → Send → Track payment
 ```
 
@@ -482,15 +491,17 @@ The Django backend is a sophisticated, full-featured platform with AI-powered me
 ### 5.3 Receipts
 | Feature | Status | iOS File | Django Endpoint | Notes |
 |---------|--------|----------|-----------------|-------|
-| List Receipts | ⬜ | - | `GET /chefs/api/me/receipts/` | |
-| Receipt Detail | ⬜ | - | `GET /chefs/api/me/receipts/{id}/` | |
-| Receipt Stats | ⬜ | - | `GET /chefs/api/me/receipts/stats/` | |
+| List Receipts | ✅ | `ReceiptsView.swift` | `GET /chefs/api/me/receipts/` | With date filter |
+| Receipt Detail | ✅ | `ReceiptsView.swift` | `GET /chefs/api/me/receipts/{id}/` | Row detail |
+| Receipt Stats | ✅ | `ReceiptsView.swift` | `GET /chefs/api/me/receipts/stats/` | Summary card |
+| PDF Export | 🟡 | - | Via PDF URL | Opens in Safari |
 
 **Implementation Plan:**
 ```
-[ ] Create ReceiptsListView
-[ ] Create ReceiptDetailView
-[ ] Add PDF export option
+[x] Create ReceiptsView ✅
+[x] Create ReceiptRow ✅
+[x] Add stats summary ✅
+[ ] Add in-app PDF viewer
 [ ] Test: View receipts → Export PDF
 ```
 
@@ -599,10 +610,10 @@ func getReceipts() async throws -> [Receipt]
 
 | Milestone | Target | Features | Status |
 |-----------|--------|----------|--------|
-| **MVP** | Week 2 | Auth, Dashboard, Leads, Sous Chef | 🟡 In Progress |
-| **Beta** | Week 6 | Orders, Meals, Events, Messaging | ⬜ Not Started |
-| **1.0** | Week 10 | Full CRM, Meal Plans, Payments | ⬜ Not Started |
-| **1.1** | Week 14 | Offline, Push, Analytics | ⬜ Not Started |
+| **MVP** | Week 2 | Auth, Dashboard, Leads, Sous Chef | ✅ Complete |
+| **Beta** | Week 6 | Orders, Meals, Events, Messaging | ✅ Complete |
+| **1.0** | Week 10 | Full CRM, Meal Plans, Payments | ✅ Complete |
+| **1.1** | Week 14 | Offline, Push, Analytics | 🟡 In Progress |
 
 ---
 

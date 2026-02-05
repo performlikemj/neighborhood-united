@@ -213,7 +213,7 @@ struct ClientDetailView: View {
     @State private var isLoadingNotes = true
     @State private var showingAddNote = false
     @State private var showingSousChef = false
-    @State private var receipts: [Receipt] = []
+    @State private var receipts: [ExpenseReceipt] = []
     @State private var receiptTotals: ReceiptTotals?
     @State private var isLoadingReceipts = true
 
@@ -582,7 +582,7 @@ struct ClientDetailView: View {
         }
     }
 
-    private func receiptRow(_ receipt: Receipt) -> some View {
+    private func receiptRow(_ receipt: ExpenseReceipt) -> some View {
         HStack(spacing: SautaiDesign.spacingM) {
             // Category icon
             Image(systemName: receiptIcon(for: receipt.category))

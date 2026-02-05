@@ -394,35 +394,6 @@ class APIClient {
         return try await get("/meals/api/order-payment-status/\(orderId)/")
     }
 
-    // MARK: - Messaging Endpoints
-
-    /// Get all conversations
-    func getConversations() async throws -> [Conversation] {
-        return try await get("/messaging/api/conversations/")
-    }
-
-    /// Get messages for a conversation
-    func getMessages(conversationId: Int) async throws -> [Message] {
-        return try await get("/messaging/api/conversations/\(conversationId)/")
-    }
-
-    /// Send a message
-    func sendMessage(conversationId: Int, content: String) async throws -> Message {
-        let body = ["content": content]
-        return try await post("/messaging/api/conversations/\(conversationId)/send/", body: body)
-    }
-
-    /// Mark conversation as read
-    func markConversationAsRead(conversationId: Int) async throws {
-        let _: EmptyResponse = try await post("/messaging/api/conversations/\(conversationId)/read/", body: [:])
-    }
-
-    /// Start conversation with a chef
-    func startConversationWithChef(chefId: Int, message: String) async throws -> Conversation {
-        let body = ["message": message]
-        return try await post("/messaging/api/conversations/with-chef/\(chefId)/", body: body)
-    }
-
     // MARK: - Chef Order Management Endpoints
 
     /// Get chef's orders with optional status filter
@@ -656,6 +627,343 @@ class APIClient {
     /// Delete price tier
     func deletePriceTier(offeringId: Int, tierId: Int) async throws {
         try await delete("/chefs/api/me/services/\(offeringId)/tiers/\(tierId)/")
+    }
+
+    // MARK: - Collaborative Meal Plan Endpoints
+
+    /// Get meal plans for a client
+    func getClientMealPlans(clientId: Int, page: Int = 1) async throws -> PaginatedResponse<MealPlan> {
+        return try await get("/chefs/api/me/clients/\(clientId)/plans/?page=\(page)")
+    }
+
+    /// Get all meal plans
+    func getMealPlans(status: MealPlanStatus? = nil, page: Int = 1) async throws -> PaginatedResponse<MealPlan> {
+        var path = "/chefs/api/me/plans/?page=\(page)"
+        if let status = status {
+            path += "&status=\(status.rawValue)"
+        }
+        return try await get(path)
+    }
+
+    /// Get meal plan details
+    func getMealPlanDetail(id: Int) async throws -> MealPlan {
+        return try await get("/chefs/api/me/plans/\(id)/")
+    }
+
+    /// Create a meal plan
+    func createMealPlan(data: MealPlanCreateRequest) async throws -> MealPlan {
+        let body = try encodeToDictionary(data)
+        return try await post("/chefs/api/me/plans/", body: body)
+    }
+
+    /// Publish a meal plan
+    func publishMealPlan(id: Int) async throws -> MealPlan {
+        return try await post("/chefs/api/me/plans/\(id)/publish/", body: [:])
+    }
+
+    /// Add a day to meal plan
+    func addMealPlanDay(planId: Int, data: MealPlanDayCreateRequest) async throws -> MealPlanDay {
+        let body = try encodeToDictionary(data)
+        return try await post("/chefs/api/me/plans/\(planId)/days/", body: body)
+    }
+
+    /// Add item to meal plan day
+    func addMealPlanItem(planId: Int, dayId: Int, data: MealPlanItemCreateRequest) async throws -> MealPlanItem {
+        let body = try encodeToDictionary(data)
+        return try await post("/chefs/api/me/plans/\(planId)/days/\(dayId)/items/", body: body)
+    }
+
+    /// Delete meal plan item
+    func deleteMealPlanItem(planId: Int, dayId: Int, itemId: Int) async throws {
+        try await delete("/chefs/api/me/plans/\(planId)/days/\(dayId)/items/\(itemId)/")
+    }
+
+    /// Get meal plan suggestions
+    func getMealPlanSuggestions(planId: Int) async throws -> [MealPlanSuggestion] {
+        return try await get("/chefs/api/me/plans/\(planId)/suggestions/")
+    }
+
+    /// Respond to meal plan suggestion
+    func respondToSuggestion(suggestionId: Int, data: SuggestionResponseRequest) async throws -> MealPlanSuggestion {
+        let body = try encodeToDictionary(data)
+        return try await post("/chefs/api/me/suggestions/\(suggestionId)/respond/", body: body)
+    }
+
+    /// AI generate meals for plan
+    func generateMealPlanMeals(planId: Int, data: MealPlanGenerateRequest) async throws -> MealPlan {
+        let body = try encodeToDictionary(data)
+        return try await post("/chefs/api/me/plans/\(planId)/generate/", body: body)
+    }
+
+    // MARK: - Prep Planning Endpoints
+
+    /// Get prep plans
+    func getPrepPlans(status: PrepPlanStatus? = nil, page: Int = 1) async throws -> PaginatedResponse<PrepPlan> {
+        var path = "/chefs/api/me/prep-plans/?page=\(page)"
+        if let status = status {
+            path += "&status=\(status.rawValue)"
+        }
+        return try await get(path)
+    }
+
+    /// Get prep plan details
+    func getPrepPlanDetail(id: Int) async throws -> PrepPlan {
+        return try await get("/chefs/api/me/prep-plans/\(id)/")
+    }
+
+    /// Get shopping list for prep plan
+    func getShoppingList(prepPlanId: Int) async throws -> ShoppingList {
+        return try await get("/chefs/api/me/prep-plans/\(prepPlanId)/shopping-list/")
+    }
+
+    /// Mark shopping list item as purchased
+    func markItemPurchased(prepPlanId: Int, itemId: Int, purchased: Bool) async throws -> ShoppingListItem {
+        let body: [String: Any] = ["is_purchased": purchased]
+        return try await patch("/chefs/api/me/prep-plans/\(prepPlanId)/shopping-list/\(itemId)/", body: body)
+    }
+
+    /// Mark all items as purchased
+    func markAllPurchased(prepPlanId: Int) async throws {
+        let _: EmptyResponse = try await post("/chefs/api/me/prep-plans/\(prepPlanId)/mark-purchased/", body: [:])
+    }
+
+    /// Quick generate prep plan from orders
+    func quickGeneratePrepPlan(orderIds: [Int]) async throws -> PrepPlan {
+        let body: [String: Any] = ["order_ids": orderIds]
+        return try await post("/chefs/api/me/prep-plans/quick-generate/", body: body)
+    }
+
+    /// Get live commitments
+    func getLiveCommitments() async throws -> [PrepPlanClient] {
+        return try await get("/chefs/api/me/prep-plans/live/commitments/")
+    }
+
+    // MARK: - Notification Endpoints
+
+    /// Get notifications
+    func getNotifications(page: Int = 1) async throws -> PaginatedResponse<AppNotification> {
+        return try await get("/chefs/api/me/notifications/?page=\(page)")
+    }
+
+    /// Get unread notification count
+    func getUnreadNotificationCount() async throws -> NotificationBadge {
+        return try await get("/chefs/api/me/notifications/unread-count/")
+    }
+
+    /// Mark notification as read
+    func markNotificationRead(id: Int) async throws {
+        let _: EmptyResponse = try await post("/chefs/api/me/notifications/\(id)/read/", body: [:])
+    }
+
+    /// Mark all notifications as read
+    func markAllNotificationsRead() async throws {
+        let _: EmptyResponse = try await post("/chefs/api/me/notifications/mark-all-read/", body: [:])
+    }
+
+    /// Dismiss notification
+    func dismissNotification(id: Int) async throws {
+        let _: EmptyResponse = try await post("/chefs/api/me/notifications/\(id)/dismiss/", body: [:])
+    }
+
+    /// Get notification preferences
+    func getNotificationPreferences() async throws -> NotificationPreferences {
+        return try await get("/chefs/api/me/notifications/preferences/")
+    }
+
+    /// Update notification preferences
+    func updateNotificationPreferences(data: NotificationPreferences) async throws -> NotificationPreferences {
+        let body = try encodeToDictionary(data)
+        return try await patch("/chefs/api/me/notifications/preferences/", body: body)
+    }
+
+    // MARK: - Messaging Endpoints
+
+    /// Get conversations
+    func getConversations(page: Int = 1) async throws -> PaginatedResponse<Conversation> {
+        return try await get("/messaging/api/conversations/?page=\(page)")
+    }
+
+    /// Get conversation messages
+    func getConversationMessages(conversationId: Int, page: Int = 1) async throws -> PaginatedResponse<Message> {
+        return try await get("/messaging/api/conversations/\(conversationId)/?page=\(page)")
+    }
+
+    /// Send message
+    func sendMessage(conversationId: Int, content: String) async throws -> Message {
+        let body: [String: Any] = ["content": content]
+        return try await post("/messaging/api/conversations/\(conversationId)/send/", body: body)
+    }
+
+    /// Get unread message counts
+    func getUnreadMessageCounts() async throws -> UnreadCounts {
+        return try await get("/messaging/api/unread-counts/")
+    }
+
+    /// Mark conversation as read
+    func markConversationRead(conversationId: Int) async throws {
+        let _: EmptyResponse = try await post("/messaging/api/conversations/\(conversationId)/read/", body: [:])
+    }
+
+    /// Start conversation with user
+    func startConversation(userId: Int, message: String) async throws -> Conversation {
+        let body: [String: Any] = ["user_id": userId, "message": message]
+        return try await post("/messaging/api/conversations/start/", body: body)
+    }
+
+    // MARK: - Review Endpoints
+
+    /// Get my reviews
+    func getMyReviews(page: Int = 1) async throws -> PaginatedResponse<Review> {
+        return try await get("/reviews/my_reviews/?page=\(page)")
+    }
+
+    /// Get review summary
+    func getReviewSummary() async throws -> ReviewSummary {
+        return try await get("/reviews/my_reviews/summary/")
+    }
+
+    /// Reply to review
+    func replyToReview(reviewId: Int, content: String) async throws -> ReviewResponse {
+        let body: [String: Any] = ["content": content]
+        return try await post("/reviews/\(reviewId)/reply/", body: body)
+    }
+
+    // MARK: - Chef Profile Endpoints
+
+    /// Get chef profile
+    func getChefProfile() async throws -> ChefProfile {
+        return try await get("/chefs/api/me/chef/profile/")
+    }
+
+    /// Update chef profile
+    func updateChefProfile(data: ChefProfileUpdateRequest) async throws -> ChefProfile {
+        let body = try encodeToDictionary(data)
+        return try await post("/chefs/api/me/chef/profile/update/", body: body)
+    }
+
+    /// Get chef photos
+    func getChefPhotos() async throws -> [ChefPhoto] {
+        return try await get("/chefs/api/me/chef/photos/")
+    }
+
+    /// Delete chef photo
+    func deleteChefPhoto(id: Int) async throws {
+        try await delete("/chefs/api/me/chef/photos/\(id)/")
+    }
+
+    /// Set break status
+    func setBreakStatus(onBreak: Bool, returnDate: Date?) async throws -> ChefProfile {
+        var body: [String: Any] = ["on_break": onBreak]
+        if let returnDate = returnDate {
+            let formatter = ISO8601DateFormatter()
+            body["return_date"] = formatter.string(from: returnDate)
+        }
+        return try await post("/chefs/api/me/chef/break/", body: body)
+    }
+
+    /// Set live status
+    func setLiveStatus(isLive: Bool) async throws -> ChefProfile {
+        let body: [String: Any] = ["is_live": isLive]
+        return try await post("/chefs/api/me/chef/live/", body: body)
+    }
+
+    // MARK: - Service Area Endpoints
+
+    /// Get service areas
+    func getServiceAreas() async throws -> [ServiceArea] {
+        return try await get("/local_chefs/api/chef/service-areas/")
+    }
+
+    /// Add service area
+    func addServiceArea(postalCode: String, radius: Int?) async throws -> ServiceArea {
+        var body: [String: Any] = ["postal_code": postalCode]
+        if let radius = radius {
+            body["radius"] = radius
+        }
+        return try await post("/local_chefs/api/chef/service-areas/add/", body: body)
+    }
+
+    /// Remove service area
+    func removeServiceArea(id: Int) async throws {
+        try await delete("/local_chefs/api/chef/service-areas/\(id)/remove/")
+    }
+
+    /// Add postal codes to service area
+    func addPostalCodes(areaId: Int, postalCodes: [String]) async throws -> ServiceArea {
+        let body: [String: Any] = ["postal_codes": postalCodes]
+        return try await post("/local_chefs/api/chef/service-areas/\(areaId)/postal-codes/add/", body: body)
+    }
+
+    // MARK: - Verification Endpoints
+
+    /// Get verification documents
+    func getVerificationDocuments() async throws -> [VerificationDocument] {
+        return try await get("/chefs/api/me/documents/")
+    }
+
+    /// Get verification status
+    func getVerificationStatus() async throws -> VerificationStatus {
+        return try await get("/chefs/api/me/documents/status/")
+    }
+
+    /// Schedule verification meeting
+    func scheduleVerificationMeeting(date: Date, notes: String?) async throws -> VerificationMeeting {
+        var body: [String: Any] = [:]
+        let formatter = ISO8601DateFormatter()
+        body["date"] = formatter.string(from: date)
+        if let notes = notes {
+            body["notes"] = notes
+        }
+        return try await post("/chefs/api/me/verification-meeting/schedule/", body: body)
+    }
+
+    // MARK: - Payment Endpoints
+
+    /// Get Stripe account status
+    func getStripeAccountStatus() async throws -> StripeAccountStatus {
+        return try await get("/meals/api/stripe-account-status/")
+    }
+
+    /// Create Stripe account link
+    func createStripeAccountLink() async throws -> StripeAccountLink {
+        return try await post("/meals/api/stripe-account-link/", body: [:])
+    }
+
+    /// Get payment links
+    func getPaymentLinks(page: Int = 1) async throws -> PaginatedResponse<PaymentLink> {
+        return try await get("/chefs/api/me/payment-links/?page=\(page)")
+    }
+
+    /// Create payment link
+    func createPaymentLink(data: PaymentLinkCreateRequest) async throws -> PaymentLink {
+        let body = try encodeToDictionary(data)
+        return try await post("/chefs/api/me/payment-links/", body: body)
+    }
+
+    /// Send payment link
+    func sendPaymentLink(id: Int, method: String) async throws {
+        let body: [String: Any] = ["method": method]
+        let _: EmptyResponse = try await post("/chefs/api/me/payment-links/\(id)/send/", body: body)
+    }
+
+    /// Get payment link stats
+    func getPaymentLinkStats() async throws -> PaymentLinkStats {
+        return try await get("/chefs/api/me/payment-links/stats/")
+    }
+
+    /// Get receipts
+    func getReceipts(page: Int = 1) async throws -> PaginatedResponse<Receipt> {
+        return try await get("/chefs/api/me/receipts/?page=\(page)")
+    }
+
+    /// Get receipt details
+    func getReceiptDetail(id: Int) async throws -> Receipt {
+        return try await get("/chefs/api/me/receipts/\(id)/")
+    }
+
+    /// Get receipt stats
+    func getReceiptStats() async throws -> ReceiptStats {
+        return try await get("/chefs/api/me/receipts/stats/")
     }
 
     // MARK: - Generic Request Methods

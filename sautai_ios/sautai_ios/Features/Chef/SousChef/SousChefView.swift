@@ -335,14 +335,22 @@ struct MessageBubbleView: View {
                             TypingIndicator()
                         }
                     } else {
-                        // Render Markdown with proper formatting
-                        if let attributedString = try? AttributedString(markdown: message.content) {
-                            Text(attributedString)
+                        // Render HTML content from backend (converted from markdown)
+                        // Falls back to markdown parsing, then plain text
+                        if let htmlAttributed = message.content.htmlToAttributedString(
+                            font: SautaiFont.body,
+                            textColor: message.role.isUser ? .white : .sautai.slateTile
+                        ) {
+                            Text(htmlAttributed)
+                                .multilineTextAlignment(message.role.isUser ? .trailing : .leading)
+                        } else if let markdownAttributed = try? AttributedString(markdown: message.content) {
+                            // Fallback: try markdown parsing (for welcome message and legacy content)
+                            Text(markdownAttributed)
                                 .font(SautaiFont.body)
                                 .foregroundColor(message.role.isUser ? .white : .sautai.slateTile)
                                 .multilineTextAlignment(message.role.isUser ? .trailing : .leading)
                         } else {
-                            // Fallback to plain text
+                            // Final fallback: plain text
                             Text(message.content)
                                 .font(SautaiFont.body)
                                 .foregroundColor(message.role.isUser ? .white : .sautai.slateTile)

@@ -106,7 +106,8 @@ struct ConversationsListView: View {
     private func loadConversations() async {
         isLoading = true
         do {
-            conversations = try await APIClient.shared.getConversations()
+            let response = try await APIClient.shared.getConversations()
+            conversations = response.results
         } catch {
             self.error = error
         }

@@ -162,38 +162,9 @@ struct ClientNote: Codable, Identifiable {
     }
 }
 
-// MARK: - Chef Profile
+// MARK: - Expense Receipt (Client expense tracking)
 
-struct ChefProfile: Codable, Identifiable {
-    let id: Int
-    let userId: Int
-    let username: String?
-    let displayName: String?
-    let bio: String?
-    let specialties: [String]?
-    let cuisines: [String]?
-    let yearsExperience: Int?
-    let profileImageUrl: String?
-    let coverImageUrl: String?
-    let rating: Double?
-    let reviewCount: Int?
-    let isVerified: Bool
-    let isLive: Bool
-    let onBreak: Bool
-    let serviceAreas: [ServiceArea]?
-}
-
-// MARK: - Service Area
-
-struct ServiceArea: Codable, Identifiable {
-    let id: Int
-    let name: String
-    let postalCodes: [String]?
-}
-
-// MARK: - Receipt
-
-struct Receipt: Codable, Identifiable {
+struct ExpenseReceipt: Codable, Identifiable {
     let id: Int
     let thumbnailUrl: String?
     let amount: String
@@ -225,14 +196,14 @@ struct Receipt: Codable, Identifiable {
 // MARK: - Client Receipts Response
 
 struct ClientReceiptsResponse: Codable {
-    let results: [Receipt]?
+    let results: [ExpenseReceipt]?
     let totals: ReceiptTotals
     let count: Int?
     let next: String?
     let previous: String?
 
     // Handle both paginated and non-paginated responses
-    var receipts: [Receipt] {
+    var receipts: [ExpenseReceipt] {
         results ?? []
     }
 }

@@ -25,6 +25,21 @@ class Chef(models.Model):
     insured = models.BooleanField(default=False)
     insurance_expiry = models.DateField(blank=True, null=True)
     food_handlers_cert = models.BooleanField(default=False)
+    food_handlers_cert_number = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="Food handler certificate number"
+    )
+    food_handlers_cert_expiry = models.DateField(
+        blank=True,
+        null=True,
+        help_text="Food handler certificate expiration date"
+    )
+    food_handlers_cert_verified_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text="When the food handler certificate was verified"
+    )
     serving_postalcodes = models.ManyToManyField(
         PostalCode,
         through=ChefPostalCode,

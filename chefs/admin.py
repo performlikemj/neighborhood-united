@@ -128,7 +128,15 @@ class ChefRequestAdmin(admin.ModelAdmin):
                     user_role.current_role = 'chef'
                     user_role.save()
                     
-                    messages.success(request, f"Successfully approved chef request for {obj.user.username}.")
+                    # Send approval notification email
+                    from .emails import send_chef_approved_email
+                    email_sent = send_chef_approved_email(chef)
+                    
+                    if email_sent:
+                        messages.success(request, f"Successfully approved chef request for {obj.user.username}. Approval email sent!")
+                    else:
+                        messages.success(request, f"Successfully approved chef request for {obj.user.username}.")
+                        messages.warning(request, f"Could not send approval email to {obj.user.username}. Check their email address.")
                     
             except Exception as e:
                 messages.error(request, f"Error approving request for {obj.user.username}: {str(e)}")
@@ -186,13 +194,17 @@ class ChefRequestAdmin(admin.ModelAdmin):
                         user_role.current_role = 'chef'
                         user_role.save()
                         
+                        # Send approval notification email
+                        from .emails import send_chef_approved_email
+                        send_chef_approved_email(chef)
+                        
                         success_count += 1
             except Exception as e:
                 error_count += 1
                 messages.error(request, f"Error approving request for {chef_request.user.username}: {str(e)}")
         
         if success_count > 0:
-            messages.success(request, f"Successfully approved {success_count} chef request(s).")
+            messages.success(request, f"Successfully approved {success_count} chef request(s). Approval emails sent!")
         if error_count > 0:
             messages.warning(request, f"Failed to approve {error_count} chef request(s).")
 

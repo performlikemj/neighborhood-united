@@ -17,8 +17,12 @@ from .settings import *  # noqa
 # Override database to use SQLite
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': ':memory:',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'test_db',
+        'USER': 'test_user',
+        'PASSWORD': 'test_password',
+        'HOST': '127.0.0.1',
+        'PORT': '5433',
     }
 }
 

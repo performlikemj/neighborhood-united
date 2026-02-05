@@ -66,6 +66,10 @@ class ChefProactiveSettings(models.Model):
         default=True,
         help_text="Celebrate client milestones (e.g., 10th order)"
     )
+    notify_cert_expiry = models.BooleanField(
+        default=True,
+        help_text="Notify about expiring certifications (food handler, insurance)"
+    )
 
     # Lead days for birthday/anniversary notifications
     birthday_lead_days = models.PositiveSmallIntegerField(
@@ -432,6 +436,7 @@ class ChefNotification(models.Model):
     TYPE_MILESTONE = 'milestone'
     TYPE_TIP = 'tip'
     TYPE_SYSTEM = 'system'
+    TYPE_CERT_EXPIRY = 'cert_expiry'
 
     NOTIFICATION_TYPES = [
         (TYPE_WELCOME, 'Welcome'),
@@ -443,6 +448,7 @@ class ChefNotification(models.Model):
         (TYPE_MILESTONE, 'Client milestone'),
         (TYPE_TIP, 'Contextual tip'),
         (TYPE_SYSTEM, 'System notification'),
+        (TYPE_CERT_EXPIRY, 'Certification expiry'),
     ]
 
     notification_type = models.CharField(

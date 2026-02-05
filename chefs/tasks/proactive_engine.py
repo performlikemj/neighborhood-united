@@ -141,6 +141,9 @@ def generate_insights_for_chef(settings) -> int:
     if settings.notify_seasonal:
         notifications.extend(check_seasonal(settings))
     
+    if settings.notify_cert_expiry:
+        notifications.extend(check_certification_expiry(settings))
+    
     return len(notifications)
 
 
@@ -503,6 +506,111 @@ def check_seasonal(settings) -> List:
         if notif.status == ChefNotification.STATUS_PENDING:
             _auto_send_if_enabled(notif, settings)
             notifications.append(notif)
+    
+    return notifications
+
+
+def check_certification_expiry(settings) -> List:
+    """Check for expiring certifications (food handler, insurance)."""
+    from chefs.models import ChefNotification
+    
+    notifications = []
+    chef = settings.chef
+    today = timezone.now().date()
+    
+    # Check thresholds: 30 days and 7 days before expiry
+    thresholds = [
+        (30, "expires in 30 days", "📋"),
+        (7, "expires in 7 days", "⚠️"),
+        (0, "has expired", "🚨"),
+    ]
+    
+    # Check food handler certificate expiry
+    if chef.food_handlers_cert and chef.food_handlers_cert_expiry:
+        days_until = (chef.food_handlers_cert_expiry - today).days
+        
+        for threshold_days, message_suffix, emoji in thresholds:
+            if days_until <= threshold_days:
+                # Determine urgency level
+                if days_until <= 0:
+                    title = f"{emoji} Your food handler certificate has expired!"
+                    message = (
+                        f"Your food handler certificate expired on {chef.food_handlers_cert_expiry.strftime('%B %d, %Y')}. "
+                        "Please renew it to stay compliant and keep your profile active."
+                    )
+                    urgency = "expired"
+                elif days_until <= 7:
+                    title = f"{emoji} Food handler cert expires in {days_until} days!"
+                    message = (
+                        f"Your food handler certificate expires on {chef.food_handlers_cert_expiry.strftime('%B %d, %Y')}. "
+                        "Time to start the renewal process!"
+                    )
+                    urgency = "urgent"
+                else:
+                    title = f"{emoji} Food handler cert expires in {days_until} days"
+                    message = (
+                        f"Heads up! Your food handler certificate expires on {chef.food_handlers_cert_expiry.strftime('%B %d, %Y')}. "
+                        "Consider starting the renewal process soon."
+                    )
+                    urgency = "warning"
+                
+                dedup_key = f"cert_food_handler_{chef.id}_{urgency}_{chef.food_handlers_cert_expiry.isoformat()}"
+                
+                notif = ChefNotification.create_notification(
+                    chef=chef,
+                    notification_type=ChefNotification.TYPE_CERT_EXPIRY,
+                    title=title,
+                    message=message,
+                    dedup_key=dedup_key,
+                    action_context={'cert_type': 'food_handler', 'urgency': urgency}
+                )
+                if notif.status == ChefNotification.STATUS_PENDING:
+                    _auto_send_if_enabled(notif, settings)
+                    notifications.append(notif)
+                break  # Only send the most urgent notification
+    
+    # Check insurance expiry
+    if chef.insured and chef.insurance_expiry:
+        days_until = (chef.insurance_expiry - today).days
+        
+        for threshold_days, message_suffix, emoji in thresholds:
+            if days_until <= threshold_days:
+                if days_until <= 0:
+                    title = f"{emoji} Your insurance has expired!"
+                    message = (
+                        f"Your insurance expired on {chef.insurance_expiry.strftime('%B %d, %Y')}. "
+                        "Please renew it to maintain coverage and stay compliant."
+                    )
+                    urgency = "expired"
+                elif days_until <= 7:
+                    title = f"{emoji} Insurance expires in {days_until} days!"
+                    message = (
+                        f"Your insurance expires on {chef.insurance_expiry.strftime('%B %d, %Y')}. "
+                        "Time to contact your provider for renewal!"
+                    )
+                    urgency = "urgent"
+                else:
+                    title = f"{emoji} Insurance expires in {days_until} days"
+                    message = (
+                        f"Heads up! Your insurance expires on {chef.insurance_expiry.strftime('%B %d, %Y')}. "
+                        "Consider reaching out to your provider to discuss renewal options."
+                    )
+                    urgency = "warning"
+                
+                dedup_key = f"cert_insurance_{chef.id}_{urgency}_{chef.insurance_expiry.isoformat()}"
+                
+                notif = ChefNotification.create_notification(
+                    chef=chef,
+                    notification_type=ChefNotification.TYPE_CERT_EXPIRY,
+                    title=title,
+                    message=message,
+                    dedup_key=dedup_key,
+                    action_context={'cert_type': 'insurance', 'urgency': urgency}
+                )
+                if notif.status == ChefNotification.STATUS_PENDING:
+                    _auto_send_if_enabled(notif, settings)
+                    notifications.append(notif)
+                break  # Only send the most urgent notification
     
     return notifications
 

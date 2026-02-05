@@ -15,8 +15,9 @@ class Migration(migrations.Migration):
 
     operations = [
         # First, remove all data since we're in development and don't need it
+        # Use DELETE instead of TRUNCATE for SQLite compatibility
         migrations.RunSQL(
-            sql="TRUNCATE TABLE meals_mealallergensafety",
+            sql="DELETE FROM meals_mealallergensafety",
             reverse_sql=migrations.RunSQL.noop,
         ),
         migrations.AlterModelOptions(

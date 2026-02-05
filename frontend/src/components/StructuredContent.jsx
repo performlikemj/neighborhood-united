@@ -10,6 +10,7 @@
  */
 
 import { useMemo, useState, useEffect, useRef } from 'react'
+import DOMPurify from 'dompurify'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
@@ -140,6 +141,30 @@ function TextBlock({ content }) {
         {processedContent}
       </ReactMarkdown>
     </div>
+  )
+}
+
+/**
+ * Render an HTML block with sanitization.
+ * Used for pre-converted HTML from the backend (markdown -> HTML conversion).
+ */
+function HtmlBlock({ content }) {
+  if (!content) return null
+
+  // Sanitize HTML to prevent XSS attacks
+  const sanitized = DOMPurify.sanitize(content, {
+    ALLOWED_TAGS: [
+      'p', 'br', 'strong', 'em', 'a', 'ul', 'ol', 'li',
+      'code', 'pre', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr'
+    ],
+    ALLOWED_ATTR: ['href', 'title', 'target', 'rel', 'class']
+  })
+
+  return (
+    <div
+      className="html-content"
+      dangerouslySetInnerHTML={{ __html: sanitized }}
+    />
   )
 }
 
@@ -550,7 +575,11 @@ export default function StructuredContent({ content, className = '', onAction })
                 onAction={onAction}
               />
             )
-          
+
+          case 'html':
+            // Handle HTML blocks (pre-converted from markdown by backend)
+            return <HtmlBlock key={index} content={block.content} />
+
           case 'text':
           default:
             // For unknown types, try to extract content from various possible fields
@@ -770,7 +799,123 @@ export default function StructuredContent({ content, className = '', onAction })
 
         .markdown-content > *:first-child { margin-top: 0 !important; }
         .markdown-content > *:last-child { margin-bottom: 0 !important; }
-        
+
+        /* HTML Content (pre-converted from markdown by backend) */
+        .html-content {
+          display: block;
+          line-height: 1.6;
+          color: var(--text);
+        }
+
+        .html-content strong { font-weight: 700; color: var(--text); }
+        .html-content em { font-style: italic; }
+
+        .html-content a {
+          color: var(--primary, #5cb85c);
+          text-decoration: none;
+        }
+
+        .html-content a:hover {
+          text-decoration: underline;
+        }
+
+        .html-content code {
+          background: var(--surface-2, #f3f4f6);
+          border: 1px solid var(--border, #e5e7eb);
+          padding: 0.15em 0.4em;
+          border-radius: 4px;
+          font-size: 0.85em;
+          font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+        }
+
+        .html-content pre {
+          background: var(--surface-2, #f3f4f6);
+          border: 1px solid var(--border, #e5e7eb);
+          border-radius: 6px;
+          padding: 0.75em 1em;
+          margin: 0.75em 0;
+          overflow-x: auto;
+        }
+
+        .html-content pre code {
+          background: transparent;
+          border: none;
+          padding: 0;
+        }
+
+        .html-content ul,
+        .html-content ol {
+          display: block;
+          margin: 0.75em 0;
+          padding-left: 1.5em;
+          color: var(--text);
+        }
+
+        .html-content li {
+          display: list-item;
+          margin: 0.35em 0;
+          line-height: 1.5;
+          color: var(--text);
+        }
+
+        .html-content ul { list-style-type: disc; }
+        .html-content ol { list-style-type: decimal; }
+
+        /* Table styles - use !important to override any inherited flex/block display */
+        .html-content table {
+          display: table !important;
+          border-collapse: collapse !important;
+          border-spacing: 0 !important;
+          margin: 0.75em 0;
+          font-size: 0.85em;
+          width: 100%;
+          table-layout: auto;
+        }
+
+        .html-content thead {
+          display: table-header-group !important;
+        }
+
+        .html-content tbody {
+          display: table-row-group !important;
+        }
+
+        .html-content tr {
+          display: table-row !important;
+        }
+
+        .html-content th {
+          display: table-cell !important;
+          background: var(--surface-2, #f3f4f6);
+          border: 1px solid var(--border, #e5e7eb);
+          padding: 0.5em 0.75em;
+          color: var(--text);
+          font-weight: 600;
+          text-align: left;
+          vertical-align: top;
+        }
+
+        .html-content td {
+          display: table-cell !important;
+          border: 1px solid var(--border, #e5e7eb);
+          padding: 0.5em 0.75em;
+          color: var(--text);
+          vertical-align: top;
+        }
+
+        .html-content tbody tr:nth-child(even) {
+          background: rgba(128, 128, 128, 0.05);
+        }
+
+        .html-content hr {
+          border: none;
+          border-top: 1px solid var(--border, #e5e7eb);
+          margin: 1em 0;
+        }
+
+        .html-content > *:first-child { margin-top: 0 !important; }
+        .html-content > *:last-child { margin-bottom: 0 !important; }
+
         /* Action Block Styles */
         .action-block {
           margin: 0.75em 0;

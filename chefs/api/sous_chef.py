@@ -377,10 +377,10 @@ def sous_chef_new_conversation(request):
 def sous_chef_thread_history(request, family_type, family_id):
     """
     GET /api/chefs/me/sous-chef/history/{family_type}/{family_id}/
-    
+
     Get conversation history for a specific family or general mode.
     Use family_type="general" and family_id=0 for general assistant mode.
-    
+
     Response:
     {
         "status": "success",
@@ -392,7 +392,7 @@ def sous_chef_thread_history(request, family_type, family_id):
     chef, error_response = _get_chef_or_403(request)
     if error_response:
         return error_response
-    
+
     # Handle general mode (no family)
     if family_type == 'general' and str(family_id) == '0':
         actual_family_id = None
@@ -400,36 +400,75 @@ def sous_chef_thread_history(request, family_type, family_id):
     else:
         if family_type not in ('customer', 'lead'):
             return Response({"error": "Invalid family_type"}, status=400)
-        
+
         try:
             actual_family_id = int(family_id)
         except (ValueError, TypeError):
             return Response({"error": "Invalid family_id"}, status=400)
         actual_family_type = family_type
-    
+
     try:
         from chefs.services.sous_chef import get_sous_chef_service
-        
+        from chefs.services.sous_chef.html_converter import markdown_to_html
+
         service = get_sous_chef_service(
             chef_id=chef.id,
             channel="web",
             family_id=actual_family_id,
             family_type=actual_family_type,
         )
-        
+
         history = service.get_history()
         thread = service.thread_manager.get_or_create_thread()
-        
+
+        # Convert assistant messages from markdown to HTML for consistent rendering
+        # Old messages were stored as markdown before HTML conversion was added
+        converted_history = []
+        for msg in history:
+            if msg.get('role') == 'assistant':
+                content = msg.get('content', '')
+                # Check if content is already JSON (structured response)
+                try:
+                    parsed = json.loads(content)
+                    if isinstance(parsed, dict) and 'blocks' in parsed:
+                        # Already structured, but convert any text blocks to html blocks
+                        blocks = parsed.get('blocks', [])
+                        converted_blocks = []
+                        for block in blocks:
+                            if block.get('type') == 'text':
+                                # Convert text content to HTML
+                                html_content = markdown_to_html(block.get('content', ''))
+                                converted_blocks.append({'type': 'html', 'content': html_content})
+                            else:
+                                converted_blocks.append(block)
+                        converted_history.append({
+                            'role': 'assistant',
+                            'content': json.dumps({'blocks': converted_blocks})
+                        })
+                        continue
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+                # Plain markdown content - convert to HTML blocks
+                html_content = markdown_to_html(content)
+                structured = {'blocks': [{'type': 'html', 'content': html_content}]}
+                converted_history.append({
+                    'role': 'assistant',
+                    'content': json.dumps(structured)
+                })
+            else:
+                converted_history.append(msg)
+
         # Get family name or "General Assistant" for no-family mode
         family_name = getattr(thread, 'family_name', None)
         if not family_name and actual_family_id is None:
             family_name = "General Assistant"
-        
+
         return Response({
             "status": "success",
             "thread_id": thread.id,
             "family_name": family_name,
-            "messages": history
+            "messages": converted_history
         })
         
     except Exception as e:

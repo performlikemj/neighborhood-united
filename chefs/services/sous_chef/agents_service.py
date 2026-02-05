@@ -11,6 +11,7 @@ import re
 from typing import Dict, Any, Optional, Generator
 
 from .agents_factory import AgentsSousChefFactory
+from .html_converter import markdown_to_html
 from .thread_manager import ThreadManager
 from .tools.agents_tools import ToolContext
 
@@ -230,12 +231,12 @@ class AgentsSousChefService:
             logger.info(f"[_send_structured_web] Agent response: {agent_response[:500]}...")
             logger.info(f"[_send_structured_web] Captured actions: {hooks.captured_actions}")
 
-            # Convert to structured blocks, including captured actions
-            structured_content = self._convert_to_blocks(
+            # Convert to structured blocks with HTML, including captured actions
+            structured_content = self._convert_to_blocks_html(
                 agent_response,
                 actions=hooks.captured_actions
             )
-            logger.info(f"[_send_structured_web] Structured content: {structured_content}")
+            logger.info(f"[_send_structured_web] Structured HTML content: {structured_content}")
 
             # Save to thread
             self.thread_manager.save_turn(message, agent_response)
@@ -253,7 +254,7 @@ class AgentsSousChefService:
                 "status": "success",
                 "content": {
                     "blocks": [
-                        {"type": "text", "content": "I ran into an issue. Could you try again?"}
+                        {"type": "html", "content": "I ran into an issue. Could you try again?"}
                     ]
                 },
                 "thread_id": getattr(self.thread_manager, 'thread_id', None),
@@ -365,7 +366,63 @@ class AgentsSousChefService:
             blocks.append({"type": "text", "content": ""})
 
         return {"blocks": blocks}
-    
+
+    def _convert_to_blocks_html(self, text: str, actions: list = None) -> Dict[str, Any]:
+        """
+        Convert text response to structured blocks with HTML content.
+
+        Similar to _convert_to_blocks but converts markdown to HTML for richer
+        rendering on web and mobile clients.
+
+        Args:
+            text: The agent's text response (markdown)
+            actions: List of action dicts captured from tool results via RunHooks
+
+        Returns:
+            Dict with blocks array containing html and action blocks
+        """
+        normalized = self._normalize_markdown(text)
+        blocks = []
+
+        # Clean up text (remove any JSON artifacts that might be in the response)
+        remaining_text = normalized
+        remaining_text = re.sub(r'Executing navigation[…\.]*\s*', '', remaining_text)
+        remaining_text = re.sub(r'\s*```json\s*```\s*', '', remaining_text)
+        # Remove "json { ... }" patterns (tool result echoes)
+        remaining_text = re.sub(r'\s*json\s*\{[^}]*\}\s*', ' ', remaining_text)
+        # Remove standalone JSON objects with tool-result keys
+        remaining_text = re.sub(
+            r'\s*\{\s*"(?:tab_name|action_type|status|render_as_action)"[^}]*\}\s*',
+            ' ',
+            remaining_text
+        )
+        remaining_text = remaining_text.strip()
+
+        # Add HTML block if there's content
+        if remaining_text:
+            html_content = markdown_to_html(remaining_text)
+            blocks.append({"type": "html", "content": html_content})
+
+        # Add action blocks from captured tool results (via RunHooks)
+        for action in (actions or []):
+            blocks.append({
+                "type": "action",
+                "action_type": action.get("action_type"),
+                "label": action.get("label", f"Go to {action.get('tab', 'dashboard')}"),
+                "payload": {
+                    "tab": action.get("tab"),
+                    "form_type": action.get("form_type"),
+                    "values": action.get("values"),
+                },
+                "reason": action.get("reason", ""),
+                "auto_execute": action.get("auto_execute", False),
+            })
+
+        if not blocks:
+            blocks.append({"type": "html", "content": ""})
+
+        return {"blocks": blocks}
+
     async def send_message_async(self, message: str) -> Dict[str, Any]:
         """
         Send a message and get a response (asynchronous).
@@ -439,33 +496,38 @@ class AgentsSousChefService:
                 logger.info(f"[stream_message] Agent response: {response[:500]}...")
                 logger.info(f"[stream_message] Captured actions: {hooks.captured_actions}")
 
-                # For iOS/Android clients, return plain markdown text (no JSON blocks)
+                # Convert markdown to HTML for all clients
+                normalized = self._normalize_markdown(response)
+                html_content = markdown_to_html(normalized)
+
+                # For iOS/Android clients, return HTML directly (no JSON wrapper)
                 if self.client_type in ("ios", "android"):
-                    # Normalize and return plain text
-                    plain_text = self._normalize_markdown(response)
-                    logger.info(f"[stream_message] Sending plain text for {self.client_type} client")
-                    yield {"type": "text", "content": plain_text}
+                    logger.info(f"[stream_message] Sending HTML for {self.client_type} client")
+                    yield {"type": "text", "content": html_content}
                 else:
-                    # For web, convert response to structured blocks with captured actions
-                    structured = self._convert_to_blocks(response, actions=hooks.captured_actions)
-                    logger.info(f"[stream_message] Structured content: {structured}")
+                    # For web, convert response to structured blocks with HTML content
+                    structured = self._convert_to_blocks_html(response, actions=hooks.captured_actions)
+                    logger.info(f"[stream_message] Structured HTML content: {structured}")
                     yield {"type": "text", "content": json_module.dumps(structured)}
 
                 self.thread_manager.save_turn(message, response)
                 yield {"type": "done", "thread_id": thread.id}
             else:
-                # Fallback to send_structured_message which handles hooks
+                # Fallback to send_message and convert to HTML
                 import json as json_module
 
-                # For iOS/Android clients, use send_message (plain text)
+                result = self.send_message(message)
+                raw_text = result.get("message", "")
+                normalized = self._normalize_markdown(raw_text)
+                html_content = markdown_to_html(normalized)
+
+                # For iOS/Android clients, return HTML directly
                 if self.client_type in ("ios", "android"):
-                    result = self.send_message(message)
-                    plain_text = result.get("message", "")
-                    yield {"type": "text", "content": plain_text}
+                    yield {"type": "text", "content": html_content}
                     yield {"type": "done", "thread_id": result.get("thread_id")}
                 else:
-                    result = self.send_structured_message(message)
-                    structured = result.get("content", {"blocks": []})
+                    # For web, wrap in structured blocks format
+                    structured = {"blocks": [{"type": "html", "content": html_content}]}
                     yield {"type": "text", "content": json_module.dumps(structured)}
                     yield {"type": "done", "thread_id": result.get("thread_id")}
                 

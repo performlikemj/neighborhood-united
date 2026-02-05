@@ -23,6 +23,72 @@ struct TelegramStatus: Codable {
     let notificationsEnabled: Bool
 }
 
+/// Extended Telegram status with notification settings
+struct TelegramFullStatus: Codable {
+    let linked: Bool
+    let telegramUsername: String?
+    let linkedAt: Date?
+    let settings: TelegramSettings?
+}
+
+/// Telegram notification settings
+struct TelegramSettings: Codable {
+    var notifyNewOrders: Bool
+    var notifyOrderUpdates: Bool
+    var notifyScheduleReminders: Bool
+    var notifyCustomerMessages: Bool
+    var quietHoursStart: String?  // "HH:mm" format
+    var quietHoursEnd: String?
+    var quietHoursEnabled: Bool
+
+    init(
+        notifyNewOrders: Bool = true,
+        notifyOrderUpdates: Bool = true,
+        notifyScheduleReminders: Bool = true,
+        notifyCustomerMessages: Bool = true,
+        quietHoursStart: String? = nil,
+        quietHoursEnd: String? = nil,
+        quietHoursEnabled: Bool = false
+    ) {
+        self.notifyNewOrders = notifyNewOrders
+        self.notifyOrderUpdates = notifyOrderUpdates
+        self.notifyScheduleReminders = notifyScheduleReminders
+        self.notifyCustomerMessages = notifyCustomerMessages
+        self.quietHoursStart = quietHoursStart
+        self.quietHoursEnd = quietHoursEnd
+        self.quietHoursEnabled = quietHoursEnabled
+    }
+}
+
+/// Workspace settings for Sous Chef AI customization
+struct WorkspaceSettings: Codable {
+    var soulPrompt: String?
+    var businessRules: String?
+    var includeAnalytics: Bool?
+    var includeSeasonal: Bool?
+    var autoMemorySave: Bool?
+    var chefNickname: String?
+    var sousChefName: String?
+
+    init(
+        soulPrompt: String? = nil,
+        businessRules: String? = nil,
+        includeAnalytics: Bool? = true,
+        includeSeasonal: Bool? = true,
+        autoMemorySave: Bool? = true,
+        chefNickname: String? = nil,
+        sousChefName: String? = nil
+    ) {
+        self.soulPrompt = soulPrompt
+        self.businessRules = businessRules
+        self.includeAnalytics = includeAnalytics
+        self.includeSeasonal = includeSeasonal
+        self.autoMemorySave = autoMemorySave
+        self.chefNickname = chefNickname
+        self.sousChefName = sousChefName
+    }
+}
+
 // MARK: - Stripe / Payments
 
 struct PaymentIntentResponse: Codable {

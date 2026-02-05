@@ -289,6 +289,30 @@ class APIClient {
         return try await get("/chefs/api/telegram/status/")
     }
 
+    /// Get full Telegram status with settings
+    func getTelegramFullStatus() async throws -> TelegramFullStatus {
+        return try await get("/chefs/api/telegram/full-status/")
+    }
+
+    /// Update Telegram notification settings
+    func updateTelegramSettings(data: TelegramSettings) async throws -> TelegramSettings {
+        let body = try encodeToDictionary(data)
+        return try await patch("/chefs/api/telegram/settings/", body: body)
+    }
+
+    // MARK: - Workspace Settings
+
+    /// Get workspace settings for Sous Chef
+    func getWorkspaceSettings() async throws -> WorkspaceSettings {
+        return try await get("/chefs/api/me/workspace/settings/")
+    }
+
+    /// Update workspace settings
+    func updateWorkspaceSettings(data: WorkspaceSettings) async throws -> WorkspaceSettings {
+        let body = try encodeToDictionary(data)
+        return try await patch("/chefs/api/me/workspace/settings/", body: body)
+    }
+
     // MARK: - Sous Chef AI Endpoints
 
     /// Start new conversation

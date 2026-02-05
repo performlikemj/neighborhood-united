@@ -3,6 +3,7 @@
 //  sautai_ios
 //
 //  Real-time chat interface between customer and chef.
+//  Uses WebSocket for real-time message delivery and typing indicators.
 //
 
 import SwiftUI
@@ -10,16 +11,29 @@ import SwiftUI
 struct ChatView: View {
     let conversation: Conversation
 
+    @StateObject private var webSocket = WebSocketClient.shared
     @State private var messages: [Message] = []
     @State private var inputText = ""
     @State private var isLoading = true
     @State private var isSending = false
+    @State private var otherUserTyping = false
+    @State private var typingDebounceTask: Task<Void, Never>?
     @FocusState private var isInputFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
+            // Connection status (if not connected)
+            if !webSocket.connectionState.isConnected && webSocket.connectionState != .disconnected {
+                connectionStatusBar
+            }
+
             // Messages
             messagesView
+
+            // Typing indicator
+            if otherUserTyping {
+                typingIndicatorView
+            }
 
             // Input
             inputView
@@ -45,7 +59,43 @@ struct ChatView: View {
         .task {
             await loadMessages()
             await markAsRead()
+            await connectWebSocket()
         }
+        .onDisappear {
+            webSocket.disconnect()
+        }
+    }
+
+    // MARK: - Connection Status Bar
+
+    private var connectionStatusBar: some View {
+        HStack(spacing: SautaiDesign.spacingS) {
+            ProgressView()
+                .scaleEffect(0.8)
+
+            Text(webSocket.connectionState.description)
+                .font(SautaiFont.caption)
+                .foregroundColor(.sautai.slateTile)
+        }
+        .padding(.vertical, SautaiDesign.spacingXS)
+        .frame(maxWidth: .infinity)
+        .background(Color.sautai.warning.opacity(0.2))
+    }
+
+    // MARK: - Typing Indicator
+
+    private var typingIndicatorView: some View {
+        HStack {
+            Text("\(conversation.otherUserName) is typing...")
+                .font(SautaiFont.caption)
+                .foregroundColor(.sautai.slateTile.opacity(0.7))
+                .italic()
+
+            TypingDotsAnimation()
+        }
+        .padding(.horizontal, SautaiDesign.spacing)
+        .padding(.vertical, SautaiDesign.spacingXS)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Messages View
@@ -91,6 +141,9 @@ struct ChatView: View {
                     .background(Color.white)
                     .cornerRadius(SautaiDesign.cornerRadius)
                     .focused($isInputFocused)
+                    .onChange(of: inputText) { _, newValue in
+                        handleTypingChange(newValue)
+                    }
 
                 // Send button
                 Button {
@@ -133,12 +186,52 @@ struct ChatView: View {
         try? await APIClient.shared.markConversationRead(conversationId: conversation.id)
     }
 
+    private func connectWebSocket() async {
+        // Set up callbacks before connecting
+        webSocket.onMessage = { [self] message in
+            // Only add if not from current user (we already added optimistically)
+            if message.isFromCurrentUser != true {
+                // Check if message already exists (avoid duplicates)
+                if !messages.contains(where: { $0.id == message.id }) {
+                    withAnimation {
+                        messages.append(message)
+                    }
+                }
+            }
+        }
+
+        webSocket.onTypingIndicator = { userId, isTyping in
+            // Only show typing if it's the other user
+            if userId == conversation.otherUserId {
+                withAnimation {
+                    otherUserTyping = isTyping
+                }
+            }
+        }
+
+        webSocket.onMessagesRead = { _ in
+            // Could update read receipts UI here if needed
+        }
+
+        webSocket.onError = { error in
+            #if DEBUG
+            print("WebSocket error in ChatView: \(error.localizedDescription)")
+            #endif
+        }
+
+        // Connect to the conversation
+        await webSocket.connect(conversationId: conversation.id)
+    }
+
     private func sendMessage() async {
         guard canSend else { return }
 
         let content = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         inputText = ""
         isSending = true
+
+        // Stop typing indicator
+        try? await webSocket.sendTyping(false)
 
         // Optimistically add message
         let tempMessage = Message(
@@ -153,6 +246,22 @@ struct ChatView: View {
         )
         messages.append(tempMessage)
 
+        // Try WebSocket first, fall back to HTTP
+        if webSocket.connectionState.isConnected {
+            do {
+                try await webSocket.sendMessage(content)
+                // Message will be confirmed via WebSocket callback
+                // For now, just mark as sent
+                isSending = false
+                return
+            } catch {
+                #if DEBUG
+                print("WebSocket send failed, falling back to HTTP: \(error)")
+                #endif
+            }
+        }
+
+        // HTTP fallback
         do {
             let sentMessage = try await APIClient.shared.sendMessage(
                 conversationId: conversation.id,
@@ -168,6 +277,49 @@ struct ChatView: View {
         }
 
         isSending = false
+    }
+
+    private func handleTypingChange(_ newValue: String) {
+        // Debounce typing indicator
+        typingDebounceTask?.cancel()
+        typingDebounceTask = Task {
+            // Send typing indicator if text is not empty
+            let isTyping = !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+            if webSocket.connectionState.isConnected {
+                try? await webSocket.sendTyping(isTyping)
+            }
+
+            // Auto-stop typing after 3 seconds of no changes
+            if isTyping {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                if !Task.isCancelled && webSocket.connectionState.isConnected {
+                    try? await webSocket.sendTyping(false)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Typing Dots Animation
+
+struct TypingDotsAnimation: View {
+    @State private var animationOffset = 0
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(0..<3) { index in
+                Circle()
+                    .fill(Color.sautai.slateTile.opacity(0.5))
+                    .frame(width: 6, height: 6)
+                    .offset(y: animationOffset == index ? -3 : 0)
+            }
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.4).repeatForever()) {
+                animationOffset = (animationOffset + 1) % 3
+            }
+        }
     }
 }
 

@@ -105,6 +105,51 @@ struct SettingsView: View {
                     } header: {
                         Text("Chef Tools")
                     }
+
+                    // Integrations Section (chef-only)
+                    Section {
+                        NavigationLink {
+                            TelegramLinkingView()
+                        } label: {
+                            HStack {
+                                Image(systemName: "paperplane.fill")
+                                    .foregroundColor(Color(red: 0.0, green: 0.54, blue: 0.89)) // Telegram blue
+                                    .frame(width: 28)
+
+                                Text("Telegram")
+                                    .font(SautaiFont.body)
+                                    .foregroundColor(.sautai.slateTile)
+
+                                Spacer()
+
+                                Text("Notifications")
+                                    .font(SautaiFont.caption)
+                                    .foregroundColor(.sautai.slateTile.opacity(0.5))
+                            }
+                        }
+
+                        NavigationLink {
+                            WorkspaceSettingsView()
+                        } label: {
+                            HStack {
+                                Image(systemName: "gearshape.2.fill")
+                                    .foregroundColor(.sautai.herbGreen)
+                                    .frame(width: 28)
+
+                                Text("Sous Chef Settings")
+                                    .font(SautaiFont.body)
+                                    .foregroundColor(.sautai.slateTile)
+
+                                Spacer()
+
+                                Text("AI Customization")
+                                    .font(SautaiFont.caption)
+                                    .foregroundColor(.sautai.slateTile.opacity(0.5))
+                            }
+                        }
+                    } header: {
+                        Text("Integrations")
+                    }
                 }
 
                 // Preferences Section

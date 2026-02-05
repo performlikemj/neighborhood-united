@@ -19,6 +19,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useWorkspace, useUpdateWorkspace, useResetWorkspace } from '../hooks/useWorkspace'
 import { PERSONALITY_PRESETS, detectPreset } from '../lib/personalityPresets'
 import { CHEF_SPECIALTIES } from '../lib/chefSpecialties'
+import ProactiveSettingsPanel from './ProactiveSettingsPanel'
 import TelegramSettings from './telegram/TelegramSettings'
 
 const MAX_SOUL_PROMPT_LENGTH = 2000
@@ -463,7 +464,10 @@ export default function WorkspaceSettings({ isOpen, onClose }) {
 
               {/* Notifications Tab */}
               {activeTab === 'notifications' && (
-                <TelegramSettings />
+                <>
+                  <ProactiveSettingsPanel />
+                  <TelegramSettings />
+                </>
               )}
             </>
           )}

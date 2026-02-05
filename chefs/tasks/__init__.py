@@ -4,7 +4,8 @@ Celery tasks for the chefs app.
 
 This package re-exports tasks from both:
 - Legacy tasks (from chefs/tasks.py in parent directory)
-- New telegram tasks
+- Telegram tasks
+- Proactive engine tasks
 
 This hybrid setup allows gradual migration of tasks to the package structure
 while maintaining backward compatibility.
@@ -35,8 +36,19 @@ else:
 # Export telegram tasks
 from .telegram_tasks import process_telegram_update
 
+# Export proactive engine tasks
+from .proactive_engine import (
+    run_proactive_check,
+    send_welcome_notification,
+)
+
 __all__ = [
+    # Telegram
     'process_telegram_update',
+    # Proactive engine
+    'run_proactive_check',
+    'send_welcome_notification',
+    # Legacy
     'notify_waitlist_subscribers_for_chef',
     'notify_area_waitlist_users',
 ]

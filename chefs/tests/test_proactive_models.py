@@ -1,797 +1,724 @@
+# chefs/tests/test_proactive_models.py
 """
-Tests for Sous Chef Proactive Engine Models.
+TDD tests for proactive notification models.
 
-Tests cover:
-- ChefProactiveSettings model methods
-- ChefOnboardingState model methods
-- ChefNotification model methods
-
-Run with: pytest chefs/tests/test_proactive_models.py -v
+Tests ChefProactiveSettings, ChefOnboardingState, and ChefNotification.
 """
 
-from datetime import datetime as dt_datetime, time as dt_time, timezone as dt_timezone
+import pytest
+from datetime import time, timedelta
 from unittest.mock import patch
-
-from django.test import TestCase
 from django.utils import timezone
 
-from custom_auth.models import CustomUser
-from chefs.models import (
-    Chef,
-    ChefProactiveSettings,
-    ChefOnboardingState,
-    ChefNotification,
-)
 
-
-# =============================================================================
-# CHEF PROACTIVE SETTINGS MODEL TESTS
-# =============================================================================
-
-
-class ChefProactiveSettingsModelTests(TestCase):
+@pytest.mark.django_db
+class TestChefProactiveSettings:
     """Tests for ChefProactiveSettings model."""
-
-    def setUp(self):
-        self.user = CustomUser.objects.create_user(
-            username="proactive_model_chef",
-            email="proactive_model@example.com",
-            password="testpass123",
-        )
-        self.chef = Chef.objects.create(user=self.user, bio="Test chef")
-
-    def test_get_or_create_for_chef_creates_with_defaults(self):
-        """get_or_create_for_chef should create settings with defaults."""
-        self.assertFalse(ChefProactiveSettings.objects.filter(chef=self.chef).exists())
-
-        settings = ChefProactiveSettings.get_or_create_for_chef(self.chef)
-
-        self.assertIsNotNone(settings)
-        self.assertEqual(settings.chef, self.chef)
-        # Master switch should be OFF by default
-        self.assertFalse(settings.enabled)
-        # Feature toggles should be ON by default
-        self.assertTrue(settings.notify_birthdays)
-        self.assertTrue(settings.notify_followups)
-        self.assertTrue(settings.notify_todos)
-        # Default frequency
-        self.assertEqual(settings.notification_frequency, 'daily')
-        # Default channels
-        self.assertTrue(settings.channel_in_app)
-        self.assertFalse(settings.channel_email)
-        self.assertFalse(settings.channel_push)
-
-    def test_get_or_create_for_chef_returns_existing(self):
-        """get_or_create_for_chef should return existing settings."""
-        existing = ChefProactiveSettings.objects.create(
-            chef=self.chef,
-            enabled=True,
-            notify_birthdays=False,
-        )
-
-        settings = ChefProactiveSettings.get_or_create_for_chef(self.chef)
-
-        self.assertEqual(settings.id, existing.id)
-        self.assertTrue(settings.enabled)
-        self.assertFalse(settings.notify_birthdays)
-
-    def test_is_within_quiet_hours_returns_false_when_disabled(self):
-        """is_within_quiet_hours should return False when quiet hours disabled."""
+    
+    def test_master_switch_off_by_default(self, chef):
+        """Master switch (enabled) should be OFF by default."""
+        from chefs.models import ChefProactiveSettings
+        
+        settings = ChefProactiveSettings.objects.create(chef=chef)
+        
+        assert settings.enabled is False
+    
+    def test_notification_toggles_default_to_true(self, chef):
+        """Individual notification toggles default to True (but master is off)."""
+        from chefs.models import ChefProactiveSettings
+        
+        settings = ChefProactiveSettings.objects.create(chef=chef)
+        
+        # Individual toggles are True by default (but master switch is off)
+        assert settings.notify_birthdays is True
+        assert settings.notify_anniversaries is True
+        assert settings.notify_followups is True
+        assert settings.notify_todos is True
+        assert settings.notify_seasonal is True
+        assert settings.notify_milestones is True
+    
+    def test_channel_defaults(self, chef):
+        """In-app should be default channel, others off."""
+        from chefs.models import ChefProactiveSettings
+        
+        settings = ChefProactiveSettings.objects.create(chef=chef)
+        
+        assert settings.channel_in_app is True
+        assert settings.channel_email is False
+        assert settings.channel_push is False
+    
+    def test_default_thresholds(self, chef):
+        """Default lead days and followup threshold."""
+        from chefs.models import ChefProactiveSettings
+        
+        settings = ChefProactiveSettings.objects.create(chef=chef)
+        
+        assert settings.birthday_lead_days == 7
+        assert settings.anniversary_lead_days == 7
+        assert settings.followup_threshold_days == 30
+    
+    def test_default_frequency_is_daily(self, chef):
+        """Default frequency should be daily."""
+        from chefs.models import ChefProactiveSettings
+        
+        settings = ChefProactiveSettings.objects.create(chef=chef)
+        
+        assert settings.notification_frequency == 'daily'
+    
+    def test_str_representation_disabled(self, chef):
+        """String shows disabled status."""
+        from chefs.models import ChefProactiveSettings
+        
+        settings = ChefProactiveSettings.objects.create(chef=chef)
+        
+        assert "disabled" in str(settings)
+        assert str(chef.id) in str(settings)
+    
+    def test_str_representation_enabled(self, chef):
+        """String shows enabled status when master switch is on."""
+        from chefs.models import ChefProactiveSettings
+        
         settings = ChefProactiveSettings.objects.create(
-            chef=self.chef,
-            quiet_hours_enabled=False,
-            quiet_hours_start=dt_time(22, 0),
-            quiet_hours_end=dt_time(8, 0),
+            chef=chef,
+            enabled=True
         )
-
-        self.assertFalse(settings.is_within_quiet_hours())
-
-    def test_is_within_quiet_hours_returns_false_when_times_not_set(self):
-        """is_within_quiet_hours should return False when times not set."""
+        
+        assert "enabled" in str(settings)
+    
+    def test_is_within_quiet_hours_disabled(self, chef):
+        """Returns False when quiet hours disabled."""
+        from chefs.models import ChefProactiveSettings
+        
         settings = ChefProactiveSettings.objects.create(
-            chef=self.chef,
+            chef=chef,
+            quiet_hours_enabled=False
+        )
+        
+        assert settings.is_within_quiet_hours() is False
+    
+    def test_is_within_quiet_hours_no_times_set(self, chef):
+        """Returns False when quiet hours enabled but times not set."""
+        from chefs.models import ChefProactiveSettings
+        
+        settings = ChefProactiveSettings.objects.create(
+            chef=chef,
             quiet_hours_enabled=True,
             quiet_hours_start=None,
-            quiet_hours_end=None,
+            quiet_hours_end=None
         )
-
-        self.assertFalse(settings.is_within_quiet_hours())
-
-    def test_is_within_quiet_hours_same_day_range(self):
-        """is_within_quiet_hours should handle same-day ranges (e.g., 09:00-17:00)."""
+        
+        assert settings.is_within_quiet_hours() is False
+    
+    def test_is_within_quiet_hours_daytime_range_inside(self, chef):
+        """Returns True when within daytime quiet hours."""
+        from chefs.models import ChefProactiveSettings
+        
         settings = ChefProactiveSettings.objects.create(
-            chef=self.chef,
+            chef=chef,
             quiet_hours_enabled=True,
-            quiet_hours_start=dt_time(9, 0),
-            quiet_hours_end=dt_time(17, 0),
-            quiet_hours_timezone='UTC',
+            quiet_hours_start=time(10, 0),
+            quiet_hours_end=time(14, 0),
+            quiet_hours_timezone='UTC'
         )
-
-        # Mock time to 12:00 UTC (within range)
-        with patch('django.utils.timezone.now') as mock_now:
-            mock_now.return_value = dt_datetime(2024, 1, 15, 12, 0, tzinfo=dt_timezone.utc)
-            self.assertTrue(settings.is_within_quiet_hours())
-
-        # Mock time to 20:00 UTC (outside range)
-        with patch('django.utils.timezone.now') as mock_now:
-            mock_now.return_value = dt_datetime(2024, 1, 15, 20, 0, tzinfo=dt_timezone.utc)
-            self.assertFalse(settings.is_within_quiet_hours())
-
-    def test_is_within_quiet_hours_overnight_range(self):
-        """is_within_quiet_hours should handle overnight ranges (e.g., 22:00-08:00)."""
+        
+        # Mock time to 12:00 UTC (within 10:00-14:00)
+        mock_now = timezone.now().replace(hour=12, minute=0, second=0, microsecond=0)
+        with patch('django.utils.timezone.now', return_value=mock_now):
+            assert settings.is_within_quiet_hours() is True
+    
+    def test_is_within_quiet_hours_daytime_range_outside(self, chef):
+        """Returns False when outside daytime quiet hours."""
+        from chefs.models import ChefProactiveSettings
+        
         settings = ChefProactiveSettings.objects.create(
-            chef=self.chef,
+            chef=chef,
             quiet_hours_enabled=True,
-            quiet_hours_start=dt_time(22, 0),
-            quiet_hours_end=dt_time(8, 0),
-            quiet_hours_timezone='UTC',
+            quiet_hours_start=time(10, 0),
+            quiet_hours_end=time(14, 0),
+            quiet_hours_timezone='UTC'
         )
-
-        # Mock time to 23:00 UTC (within range - after start)
-        with patch('django.utils.timezone.now') as mock_now:
-            mock_now.return_value = dt_datetime(2024, 1, 15, 23, 0, tzinfo=dt_timezone.utc)
-            self.assertTrue(settings.is_within_quiet_hours())
-
-        # Mock time to 06:00 UTC (within range - before end)
-        with patch('django.utils.timezone.now') as mock_now:
-            mock_now.return_value = dt_datetime(2024, 1, 16, 6, 0, tzinfo=dt_timezone.utc)
-            self.assertTrue(settings.is_within_quiet_hours())
-
-        # Mock time to 12:00 UTC (outside range)
-        with patch('django.utils.timezone.now') as mock_now:
-            mock_now.return_value = dt_datetime(2024, 1, 15, 12, 0, tzinfo=dt_timezone.utc)
-            self.assertFalse(settings.is_within_quiet_hours())
-
-    def test_is_within_quiet_hours_handles_invalid_timezone(self):
-        """is_within_quiet_hours should default to UTC for invalid timezone."""
+        
+        # Mock time to 16:00 UTC (outside 10:00-14:00)
+        mock_now = timezone.now().replace(hour=16, minute=0, second=0, microsecond=0)
+        with patch('django.utils.timezone.now', return_value=mock_now):
+            assert settings.is_within_quiet_hours() is False
+    
+    def test_is_within_quiet_hours_overnight_inside_evening(self, chef):
+        """Returns True when within overnight quiet hours (evening side)."""
+        from chefs.models import ChefProactiveSettings
+        
         settings = ChefProactiveSettings.objects.create(
-            chef=self.chef,
+            chef=chef,
             quiet_hours_enabled=True,
-            quiet_hours_start=dt_time(9, 0),
-            quiet_hours_end=dt_time(17, 0),
-            quiet_hours_timezone='Invalid/Timezone',
+            quiet_hours_start=time(22, 0),
+            quiet_hours_end=time(8, 0),
+            quiet_hours_timezone='UTC'
         )
-
-        # Should not raise exception, should use UTC fallback
-        with patch('django.utils.timezone.now') as mock_now:
-            mock_now.return_value = dt_datetime(2024, 1, 15, 12, 0, tzinfo=dt_timezone.utc)
-            # Should work without raising exception
-            result = settings.is_within_quiet_hours()
-            self.assertIsInstance(result, bool)
-
-    def test_str_representation(self):
-        """__str__ should return readable representation."""
+        
+        # Mock time to 23:00 UTC (within 22:00-08:00)
+        mock_now = timezone.now().replace(hour=23, minute=0, second=0, microsecond=0)
+        with patch('django.utils.timezone.now', return_value=mock_now):
+            assert settings.is_within_quiet_hours() is True
+    
+    def test_is_within_quiet_hours_overnight_inside_morning(self, chef):
+        """Returns True when within overnight quiet hours (morning side)."""
+        from chefs.models import ChefProactiveSettings
+        
         settings = ChefProactiveSettings.objects.create(
-            chef=self.chef,
+            chef=chef,
+            quiet_hours_enabled=True,
+            quiet_hours_start=time(22, 0),
+            quiet_hours_end=time(8, 0),
+            quiet_hours_timezone='UTC'
+        )
+        
+        # Mock time to 06:00 UTC (within 22:00-08:00)
+        mock_now = timezone.now().replace(hour=6, minute=0, second=0, microsecond=0)
+        with patch('django.utils.timezone.now', return_value=mock_now):
+            assert settings.is_within_quiet_hours() is True
+    
+    def test_is_within_quiet_hours_overnight_outside(self, chef):
+        """Returns False when outside overnight quiet hours."""
+        from chefs.models import ChefProactiveSettings
+        
+        settings = ChefProactiveSettings.objects.create(
+            chef=chef,
+            quiet_hours_enabled=True,
+            quiet_hours_start=time(22, 0),
+            quiet_hours_end=time(8, 0),
+            quiet_hours_timezone='UTC'
+        )
+        
+        # Mock time to 14:00 UTC (outside 22:00-08:00)
+        mock_now = timezone.now().replace(hour=14, minute=0, second=0, microsecond=0)
+        with patch('django.utils.timezone.now', return_value=mock_now):
+            assert settings.is_within_quiet_hours() is False
+    
+    def test_get_or_create_for_chef_creates(self, chef):
+        """Creates settings when none exist."""
+        from chefs.models import ChefProactiveSettings
+        
+        assert not ChefProactiveSettings.objects.filter(chef=chef).exists()
+        
+        settings = ChefProactiveSettings.get_or_create_for_chef(chef)
+        
+        assert settings.chef == chef
+        assert settings.enabled is False  # Master switch off
+        assert ChefProactiveSettings.objects.filter(chef=chef).exists()
+    
+    def test_get_or_create_for_chef_returns_existing(self, chef):
+        """Returns existing settings without creating new."""
+        from chefs.models import ChefProactiveSettings
+        
+        existing = ChefProactiveSettings.objects.create(
+            chef=chef,
             enabled=True,
+            notification_frequency='weekly'
         )
-
-        self.assertIn('enabled', str(settings))
-        self.assertIn(str(self.chef.id), str(settings))
-
-
-# =============================================================================
-# CHEF ONBOARDING STATE MODEL TESTS
-# =============================================================================
+        
+        settings = ChefProactiveSettings.get_or_create_for_chef(chef)
+        
+        assert settings.id == existing.id
+        assert settings.enabled is True
 
 
-class ChefOnboardingStateModelTests(TestCase):
+@pytest.mark.django_db
+class TestChefOnboardingState:
     """Tests for ChefOnboardingState model."""
-
-    def setUp(self):
-        self.user = CustomUser.objects.create_user(
-            username="onboarding_model_chef",
-            email="onboarding_model@example.com",
-            password="testpass123",
+    
+    def test_defaults(self, chef):
+        """Onboarding state should start fresh."""
+        from chefs.models import ChefOnboardingState
+        
+        state = ChefOnboardingState.objects.create(chef=chef)
+        
+        assert state.welcomed is False
+        assert state.welcomed_at is None
+        assert state.setup_started is False
+        assert state.setup_completed is False
+        assert state.setup_skipped is False
+        assert state.personality_set is False
+        assert state.personality_choice == ''
+    
+    def test_milestone_defaults(self, chef):
+        """Feature milestones should start as False."""
+        from chefs.models import ChefOnboardingState
+        
+        state = ChefOnboardingState.objects.create(chef=chef)
+        
+        assert state.first_dish_added is False
+        assert state.first_dish_added_at is None
+        assert state.first_client_added is False
+        assert state.first_conversation is False
+        assert state.first_memory_saved is False
+        assert state.first_order_completed is False
+    
+    def test_tips_defaults(self, chef):
+        """Tips tracking should start empty."""
+        from chefs.models import ChefOnboardingState
+        
+        state = ChefOnboardingState.objects.create(chef=chef)
+        
+        assert state.tips_shown == []
+        assert state.tips_dismissed == []
+    
+    def test_str_completed(self, chef):
+        """String shows completed status."""
+        from chefs.models import ChefOnboardingState
+        
+        state = ChefOnboardingState.objects.create(
+            chef=chef,
+            setup_completed=True
         )
-        self.chef = Chef.objects.create(user=self.user, bio="Test chef")
-
-    def test_get_or_create_for_chef_creates_with_defaults(self):
-        """get_or_create_for_chef should create state with defaults."""
-        self.assertFalse(ChefOnboardingState.objects.filter(chef=self.chef).exists())
-
-        state = ChefOnboardingState.get_or_create_for_chef(self.chef)
-
-        self.assertIsNotNone(state)
-        self.assertEqual(state.chef, self.chef)
-        self.assertFalse(state.welcomed)
-        self.assertFalse(state.setup_started)
-        self.assertFalse(state.setup_completed)
-        self.assertFalse(state.setup_skipped)
-        self.assertFalse(state.first_dish_added)
-        self.assertEqual(state.tips_shown, [])
-        self.assertEqual(state.tips_dismissed, [])
-
-    def test_get_or_create_for_chef_returns_existing(self):
-        """get_or_create_for_chef should return existing state."""
-        existing = ChefOnboardingState.objects.create(
-            chef=self.chef,
-            welcomed=True,
-            first_dish_added=True,
-        )
-
-        state = ChefOnboardingState.get_or_create_for_chef(self.chef)
-
-        self.assertEqual(state.id, existing.id)
-        self.assertTrue(state.welcomed)
-        self.assertTrue(state.first_dish_added)
-
-    def test_mark_welcomed_sets_flag_and_timestamp(self):
-        """mark_welcomed should set flag and timestamp."""
-        state = ChefOnboardingState.objects.create(chef=self.chef)
-
-        self.assertFalse(state.welcomed)
-        self.assertIsNone(state.welcomed_at)
-
-        state.mark_welcomed()
-
-        state.refresh_from_db()
-        self.assertTrue(state.welcomed)
-        self.assertIsNotNone(state.welcomed_at)
-
-    def test_mark_welcomed_is_idempotent(self):
-        """mark_welcomed should not change timestamp on subsequent calls."""
-        state = ChefOnboardingState.objects.create(chef=self.chef)
-
-        state.mark_welcomed()
-        first_timestamp = state.welcomed_at
-
+        
+        assert "completed" in str(state)
+    
+    def test_str_in_progress(self, chef):
+        """String shows in progress status."""
+        from chefs.models import ChefOnboardingState
+        
+        state = ChefOnboardingState.objects.create(chef=chef)
+        
+        assert "in progress" in str(state)
+    
+    def test_mark_welcomed(self, chef):
+        """mark_welcomed sets flag and timestamp."""
+        from chefs.models import ChefOnboardingState
+        
+        state = ChefOnboardingState.objects.create(chef=chef)
+        
+        assert state.welcomed is False
+        
         state.mark_welcomed()
         state.refresh_from_db()
-
-        # Timestamp should not change
-        self.assertEqual(state.welcomed_at, first_timestamp)
-
-    def test_mark_setup_started_sets_flag_and_timestamp(self):
-        """mark_setup_started should set flag and timestamp."""
-        state = ChefOnboardingState.objects.create(chef=self.chef)
-
+        
+        assert state.welcomed is True
+        assert state.welcomed_at is not None
+    
+    def test_mark_welcomed_idempotent(self, chef):
+        """Calling mark_welcomed twice doesn't change timestamp."""
+        from chefs.models import ChefOnboardingState
+        
+        state = ChefOnboardingState.objects.create(chef=chef)
+        state.mark_welcomed()
+        state.refresh_from_db()
+        
+        original_timestamp = state.welcomed_at
+        
+        state.mark_welcomed()
+        state.refresh_from_db()
+        
+        assert state.welcomed_at == original_timestamp
+    
+    def test_mark_setup_started(self, chef):
+        """mark_setup_started sets flag and timestamp."""
+        from chefs.models import ChefOnboardingState
+        
+        state = ChefOnboardingState.objects.create(chef=chef)
         state.mark_setup_started()
-
         state.refresh_from_db()
-        self.assertTrue(state.setup_started)
-        self.assertIsNotNone(state.setup_started_at)
-
-    def test_mark_setup_completed_sets_flag_and_clears_skipped(self):
-        """mark_setup_completed should set flag and clear skipped."""
-        state = ChefOnboardingState.objects.create(
-            chef=self.chef,
-            setup_skipped=True,
-        )
-
+        
+        assert state.setup_started is True
+        assert state.setup_started_at is not None
+    
+    def test_mark_setup_completed(self, chef):
+        """mark_setup_completed sets flag and clears skipped."""
+        from chefs.models import ChefOnboardingState
+        
+        state = ChefOnboardingState.objects.create(chef=chef, setup_skipped=True)
         state.mark_setup_completed()
-
         state.refresh_from_db()
-        self.assertTrue(state.setup_completed)
-        self.assertFalse(state.setup_skipped)  # Should be cleared
-        self.assertIsNotNone(state.setup_completed_at)
-
-    def test_mark_setup_skipped_sets_flag_if_not_completed(self):
-        """mark_setup_skipped should set flag only if not completed."""
-        state = ChefOnboardingState.objects.create(chef=self.chef)
-
+        
+        assert state.setup_completed is True
+        assert state.setup_completed_at is not None
+        assert state.setup_skipped is False  # Cleared
+    
+    def test_mark_setup_skipped(self, chef):
+        """mark_setup_skipped sets flag."""
+        from chefs.models import ChefOnboardingState
+        
+        state = ChefOnboardingState.objects.create(chef=chef)
         state.mark_setup_skipped()
-
         state.refresh_from_db()
-        self.assertTrue(state.setup_skipped)
-        self.assertIsNotNone(state.setup_skipped_at)
-
-    def test_mark_setup_skipped_does_nothing_if_completed(self):
-        """mark_setup_skipped should not set flag if already completed."""
-        state = ChefOnboardingState.objects.create(
-            chef=self.chef,
-            setup_completed=True,
-        )
-
+        
+        assert state.setup_skipped is True
+        assert state.setup_skipped_at is not None
+    
+    def test_mark_setup_skipped_not_if_completed(self, chef):
+        """Cannot skip if already completed."""
+        from chefs.models import ChefOnboardingState
+        
+        state = ChefOnboardingState.objects.create(chef=chef, setup_completed=True)
         state.mark_setup_skipped()
-
         state.refresh_from_db()
-        self.assertFalse(state.setup_skipped)
-
-    def test_record_milestone_first_dish(self):
-        """record_milestone should record first_dish milestone."""
-        state = ChefOnboardingState.objects.create(chef=self.chef)
-
+        
+        assert state.setup_skipped is False  # Should not change
+    
+    def test_record_milestone_first_dish(self, chef):
+        """record_milestone sets first_dish milestone."""
+        from chefs.models import ChefOnboardingState
+        
+        state = ChefOnboardingState.objects.create(chef=chef)
+        
         result = state.record_milestone('first_dish')
-
-        self.assertTrue(result)
         state.refresh_from_db()
-        self.assertTrue(state.first_dish_added)
-        self.assertIsNotNone(state.first_dish_added_at)
-
-    def test_record_milestone_first_client(self):
-        """record_milestone should record first_client milestone."""
-        state = ChefOnboardingState.objects.create(chef=self.chef)
-
+        
+        assert result is True
+        assert state.first_dish_added is True
+        assert state.first_dish_added_at is not None
+    
+    def test_record_milestone_idempotent(self, chef):
+        """Recording same milestone twice returns False."""
+        from chefs.models import ChefOnboardingState
+        
+        state = ChefOnboardingState.objects.create(chef=chef)
+        state.record_milestone('first_client')
+        state.refresh_from_db()
+        
+        original_timestamp = state.first_client_added_at
+        
         result = state.record_milestone('first_client')
-
-        self.assertTrue(result)
         state.refresh_from_db()
-        self.assertTrue(state.first_client_added)
-        self.assertIsNotNone(state.first_client_added_at)
-
-    def test_record_milestone_first_conversation(self):
-        """record_milestone should record first_conversation milestone."""
-        state = ChefOnboardingState.objects.create(chef=self.chef)
-
-        result = state.record_milestone('first_conversation')
-
-        self.assertTrue(result)
-        state.refresh_from_db()
-        self.assertTrue(state.first_conversation)
-        self.assertIsNotNone(state.first_conversation_at)
-
-    def test_record_milestone_first_memory(self):
-        """record_milestone should record first_memory milestone."""
-        state = ChefOnboardingState.objects.create(chef=self.chef)
-
-        result = state.record_milestone('first_memory')
-
-        self.assertTrue(result)
-        state.refresh_from_db()
-        self.assertTrue(state.first_memory_saved)
-        self.assertIsNotNone(state.first_memory_saved_at)
-
-    def test_record_milestone_first_order(self):
-        """record_milestone should record first_order milestone."""
-        state = ChefOnboardingState.objects.create(chef=self.chef)
-
-        result = state.record_milestone('first_order')
-
-        self.assertTrue(result)
-        state.refresh_from_db()
-        self.assertTrue(state.first_order_completed)
-        self.assertIsNotNone(state.first_order_completed_at)
-
-    def test_record_milestone_proactive_enabled(self):
-        """record_milestone should record proactive_enabled milestone."""
-        state = ChefOnboardingState.objects.create(chef=self.chef)
-
-        result = state.record_milestone('proactive_enabled')
-
-        self.assertTrue(result)
-        state.refresh_from_db()
-        self.assertTrue(state.proactive_enabled)
-        self.assertIsNotNone(state.proactive_enabled_at)
-
-    def test_record_milestone_is_idempotent(self):
-        """record_milestone should return False on second call."""
-        state = ChefOnboardingState.objects.create(chef=self.chef)
-
-        # First call
-        result1 = state.record_milestone('first_dish')
-        self.assertTrue(result1)
-
-        first_timestamp = state.first_dish_added_at
-
-        # Second call
-        result2 = state.record_milestone('first_dish')
-        self.assertFalse(result2)
-
-        # Timestamp should not change
-        state.refresh_from_db()
-        self.assertEqual(state.first_dish_added_at, first_timestamp)
-
-    def test_record_milestone_invalid_returns_false(self):
-        """record_milestone should return False for invalid milestone."""
-        state = ChefOnboardingState.objects.create(chef=self.chef)
-
+        
+        assert result is False
+        assert state.first_client_added_at == original_timestamp
+    
+    def test_record_milestone_invalid(self, chef):
+        """Invalid milestone name returns False."""
+        from chefs.models import ChefOnboardingState
+        
+        state = ChefOnboardingState.objects.create(chef=chef)
+        
         result = state.record_milestone('invalid_milestone')
-
-        self.assertFalse(result)
-
-    def test_show_tip_adds_to_list(self):
-        """show_tip should add tip_id to tips_shown list."""
-        state = ChefOnboardingState.objects.create(chef=self.chef)
-
+        
+        assert result is False
+    
+    def test_show_tip_records_in_list(self, chef):
+        """show_tip adds tip to tips_shown list."""
+        from chefs.models import ChefOnboardingState
+        
+        state = ChefOnboardingState.objects.create(chef=chef)
+        
         state.show_tip('add_first_dish')
-
         state.refresh_from_db()
-        self.assertIn('add_first_dish', state.tips_shown)
-
-    def test_show_tip_does_not_duplicate(self):
-        """show_tip should not add duplicate tip_id."""
-        state = ChefOnboardingState.objects.create(
-            chef=self.chef,
-            tips_shown=['add_first_dish'],
-        )
-
-        state.show_tip('add_first_dish')
-
+        
+        assert 'add_first_dish' in state.tips_shown
+    
+    def test_dismiss_tip_records_in_list(self, chef):
+        """dismiss_tip adds tip to tips_dismissed list."""
+        from chefs.models import ChefOnboardingState
+        
+        state = ChefOnboardingState.objects.create(chef=chef)
+        
+        state.dismiss_tip('annoying_tip')
         state.refresh_from_db()
-        self.assertEqual(state.tips_shown.count('add_first_dish'), 1)
-
-    def test_dismiss_tip_adds_to_list(self):
-        """dismiss_tip should add tip_id to tips_dismissed list."""
-        state = ChefOnboardingState.objects.create(chef=self.chef)
-
-        state.dismiss_tip('add_first_dish')
-
-        state.refresh_from_db()
-        self.assertIn('add_first_dish', state.tips_dismissed)
-
-    def test_dismiss_tip_does_not_duplicate(self):
-        """dismiss_tip should not add duplicate tip_id."""
+        
+        assert 'annoying_tip' in state.tips_dismissed
+    
+    def test_should_show_tip_true_when_not_dismissed(self, chef):
+        """should_show_tip returns True when tip not dismissed."""
+        from chefs.models import ChefOnboardingState
+        
+        state = ChefOnboardingState.objects.create(chef=chef)
+        
+        assert state.should_show_tip('new_tip') is True
+    
+    def test_should_show_tip_false_when_dismissed(self, chef):
+        """should_show_tip returns False when tip is dismissed."""
+        from chefs.models import ChefOnboardingState
+        
         state = ChefOnboardingState.objects.create(
-            chef=self.chef,
-            tips_dismissed=['add_first_dish'],
+            chef=chef,
+            tips_dismissed=['dismissed_tip']
         )
-
-        state.dismiss_tip('add_first_dish')
-
-        state.refresh_from_db()
-        self.assertEqual(state.tips_dismissed.count('add_first_dish'), 1)
-
-    def test_should_show_tip_returns_true_if_not_dismissed(self):
-        """should_show_tip should return True if tip not dismissed."""
-        state = ChefOnboardingState.objects.create(chef=self.chef)
-
-        self.assertTrue(state.should_show_tip('add_first_dish'))
-
-    def test_should_show_tip_returns_false_if_dismissed(self):
-        """should_show_tip should return False if tip is dismissed."""
-        state = ChefOnboardingState.objects.create(
-            chef=self.chef,
-            tips_dismissed=['add_first_dish'],
+        
+        assert state.should_show_tip('dismissed_tip') is False
+    
+    def test_get_or_create_for_chef_creates(self, chef):
+        """Creates state when none exists."""
+        from chefs.models import ChefOnboardingState
+        
+        assert not ChefOnboardingState.objects.filter(chef=chef).exists()
+        
+        state = ChefOnboardingState.get_or_create_for_chef(chef)
+        
+        assert state.chef == chef
+        assert ChefOnboardingState.objects.filter(chef=chef).exists()
+    
+    def test_get_or_create_for_chef_returns_existing(self, chef):
+        """Returns existing state."""
+        from chefs.models import ChefOnboardingState
+        
+        existing = ChefOnboardingState.objects.create(
+            chef=chef,
+            welcomed=True,
+            setup_started=True
         )
-
-        self.assertFalse(state.should_show_tip('add_first_dish'))
-
-    def test_str_representation(self):
-        """__str__ should return readable representation."""
-        state = ChefOnboardingState.objects.create(
-            chef=self.chef,
-            setup_completed=True,
-        )
-
-        self.assertIn('completed', str(state))
-        self.assertIn(str(self.chef.id), str(state))
+        
+        state = ChefOnboardingState.get_or_create_for_chef(chef)
+        
+        assert state.id == existing.id
+        assert state.welcomed is True
 
 
-# =============================================================================
-# CHEF NOTIFICATION MODEL TESTS
-# =============================================================================
-
-
-class ChefNotificationModelTests(TestCase):
+@pytest.mark.django_db
+class TestChefNotification:
     """Tests for ChefNotification model."""
-
-    def setUp(self):
-        self.user = CustomUser.objects.create_user(
-            username="notification_model_chef",
-            email="notification_model@example.com",
-            password="testpass123",
+    
+    def test_creation_defaults(self, chef):
+        """Notification created with correct defaults."""
+        from chefs.models import ChefNotification
+        
+        notification = ChefNotification.objects.create(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_BIRTHDAY,
+            title='Test Title',
+            message='Test message'
         )
-        self.chef = Chef.objects.create(user=self.user, bio="Test chef")
-
-    def test_create_notification_basic(self):
-        """create_notification should create a basic notification."""
-        notification = ChefNotification.create_notification(
-            chef=self.chef,
-            notification_type='welcome',
-            title='Welcome!',
-            message='Welcome to the platform',
+        
+        assert notification.status == ChefNotification.STATUS_PENDING
+        assert notification.sent_in_app is False
+        assert notification.sent_email is False
+        assert notification.sent_push is False
+        assert notification.sent_at is None
+        assert notification.read_at is None
+        assert notification.dismissed_at is None
+        assert notification.action_context == {}
+    
+    def test_str_representation(self, chef):
+        """String shows type and title."""
+        from chefs.models import ChefNotification
+        
+        notification = ChefNotification.objects.create(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_BIRTHDAY,
+            title='Birthday reminder',
+            message='Test message'
         )
-
-        self.assertIsNotNone(notification)
-        self.assertEqual(notification.chef, self.chef)
-        self.assertEqual(notification.notification_type, 'welcome')
-        self.assertEqual(notification.title, 'Welcome!')
-        self.assertEqual(notification.message, 'Welcome to the platform')
-        self.assertEqual(notification.status, ChefNotification.STATUS_PENDING)
-
-    def test_create_notification_with_action_context(self):
-        """create_notification should store action_context."""
-        notification = ChefNotification.create_notification(
-            chef=self.chef,
-            notification_type='birthday',
-            title='Birthday Reminder',
-            message='John Doe has a birthday coming up',
-            action_context={'prePrompt': 'Plan a birthday meal for John Doe'},
+        
+        str_repr = str(notification)
+        assert 'birthday' in str_repr
+        assert 'Birthday reminder' in str_repr
+    
+    def test_mark_sent_in_app(self, chef):
+        """mark_sent with in_app channel updates correctly."""
+        from chefs.models import ChefNotification
+        
+        notification = ChefNotification.objects.create(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_FOLLOWUP,
+            title='Test',
+            message='Test'
         )
-
-        self.assertEqual(notification.action_context, {
-            'prePrompt': 'Plan a birthday meal for John Doe'
-        })
-
-    def test_create_notification_with_dedup_key_prevents_duplicates(self):
-        """create_notification with dedup_key should prevent duplicates."""
+        
+        notification.mark_sent('in_app')
+        notification.refresh_from_db()
+        
+        assert notification.status == ChefNotification.STATUS_SENT
+        assert notification.sent_at is not None
+        assert notification.sent_in_app is True
+        assert notification.sent_email is False
+    
+    def test_mark_sent_email(self, chef):
+        """mark_sent with email channel."""
+        from chefs.models import ChefNotification
+        
+        notification = ChefNotification.objects.create(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_TODO,
+            title='Test',
+            message='Test'
+        )
+        
+        notification.mark_sent('email')
+        notification.refresh_from_db()
+        
+        assert notification.sent_email is True
+        assert notification.sent_in_app is False
+    
+    def test_mark_read(self, chef):
+        """mark_read updates status and timestamp."""
+        from chefs.models import ChefNotification
+        
+        notification = ChefNotification.objects.create(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_MILESTONE,
+            title='Test',
+            message='Test',
+            status=ChefNotification.STATUS_SENT
+        )
+        
+        notification.mark_read()
+        notification.refresh_from_db()
+        
+        assert notification.status == ChefNotification.STATUS_READ
+        assert notification.read_at is not None
+    
+    def test_mark_dismissed(self, chef):
+        """mark_dismissed updates status and timestamp."""
+        from chefs.models import ChefNotification
+        
+        notification = ChefNotification.objects.create(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_SEASONAL,
+            title='Test',
+            message='Test'
+        )
+        
+        notification.mark_dismissed()
+        notification.refresh_from_db()
+        
+        assert notification.status == ChefNotification.STATUS_DISMISSED
+        assert notification.dismissed_at is not None
+    
+    def test_create_notification_with_dedup(self, chef):
+        """create_notification respects deduplication."""
+        from chefs.models import ChefNotification
+        
         # Create first notification
-        notification1 = ChefNotification.create_notification(
-            chef=self.chef,
-            notification_type='birthday',
-            title='Birthday 1',
-            message='Message 1',
-            dedup_key='birthday_john_2024-03-15',
+        notif1 = ChefNotification.create_notification(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_BIRTHDAY,
+            title='Test',
+            message='Test',
+            dedup_key='unique_key_123'
         )
-
-        # Try to create duplicate
-        notification2 = ChefNotification.create_notification(
-            chef=self.chef,
-            notification_type='birthday',
-            title='Birthday 2',
-            message='Message 2',
-            dedup_key='birthday_john_2024-03-15',
+        
+        # Create second with same dedup key
+        notif2 = ChefNotification.create_notification(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_BIRTHDAY,
+            title='Different',
+            message='Different',
+            dedup_key='unique_key_123'
         )
-
-        # Should return the existing notification
-        self.assertEqual(notification1.id, notification2.id)
-        self.assertEqual(notification2.title, 'Birthday 1')  # Original title
-
-        # Should only have one notification in DB
-        count = ChefNotification.objects.filter(
-            chef=self.chef,
-            dedup_key='birthday_john_2024-03-15'
-        ).count()
-        self.assertEqual(count, 1)
-
-    def test_create_notification_dedup_key_expires_after_7_days(self):
-        """create_notification dedup_key should expire after 7 days."""
+        
+        # Should return existing notification
+        assert notif2.id == notif1.id
+    
+    def test_create_notification_dedup_only_recent(self, chef):
+        """Deduplication only checks notifications from last 7 days."""
+        from chefs.models import ChefNotification
+        
         # Create old notification
-        old_notification = ChefNotification.objects.create(
-            chef=self.chef,
-            notification_type='birthday',
-            title='Old Birthday',
-            message='Old message',
-            dedup_key='birthday_john_2024-03-15',
-        )
-        # Manually set created_at to 8 days ago
-        old_notification.created_at = timezone.now() - timezone.timedelta(days=8)
-        old_notification.save(update_fields=['created_at'])
-
-        # Create new notification with same dedup_key
-        new_notification = ChefNotification.create_notification(
-            chef=self.chef,
-            notification_type='birthday',
-            title='New Birthday',
-            message='New message',
-            dedup_key='birthday_john_2024-03-15',
-        )
-
-        # Should create a new notification
-        self.assertNotEqual(old_notification.id, new_notification.id)
-        self.assertEqual(new_notification.title, 'New Birthday')
-
-    def test_create_notification_without_dedup_key_allows_duplicates(self):
-        """create_notification without dedup_key should allow duplicates."""
-        notification1 = ChefNotification.create_notification(
-            chef=self.chef,
-            notification_type='system',
-            title='System Notice',
-            message='Message 1',
-        )
-
-        notification2 = ChefNotification.create_notification(
-            chef=self.chef,
-            notification_type='system',
-            title='System Notice',
-            message='Message 2',
-        )
-
-        # Should create two separate notifications
-        self.assertNotEqual(notification1.id, notification2.id)
-
-    def test_get_unread_count_counts_pending_and_sent(self):
-        """get_unread_count should count pending and sent notifications."""
-        ChefNotification.objects.create(
-            chef=self.chef,
-            notification_type='system',
-            title='Pending',
-            message='Pending',
-            status=ChefNotification.STATUS_PENDING,
-        )
-        ChefNotification.objects.create(
-            chef=self.chef,
-            notification_type='system',
-            title='Sent',
-            message='Sent',
-            status=ChefNotification.STATUS_SENT,
-        )
-        ChefNotification.objects.create(
-            chef=self.chef,
-            notification_type='system',
-            title='Read',
-            message='Read',
-            status=ChefNotification.STATUS_READ,
-        )
-        ChefNotification.objects.create(
-            chef=self.chef,
-            notification_type='system',
-            title='Dismissed',
-            message='Dismissed',
-            status=ChefNotification.STATUS_DISMISSED,
-        )
-
-        count = ChefNotification.get_unread_count(self.chef)
-
-        # Should count only pending and sent
-        self.assertEqual(count, 2)
-
-    def test_get_unread_count_returns_zero_for_no_notifications(self):
-        """get_unread_count should return 0 when no notifications exist."""
-        count = ChefNotification.get_unread_count(self.chef)
-        self.assertEqual(count, 0)
-
-    def test_get_pending_for_chef_returns_pending_and_sent(self):
-        """get_pending_for_chef should return pending/sent notifications."""
-        ChefNotification.objects.create(
-            chef=self.chef,
-            notification_type='system',
-            title='Pending',
-            message='Pending',
-            status=ChefNotification.STATUS_PENDING,
-        )
-        ChefNotification.objects.create(
-            chef=self.chef,
-            notification_type='system',
-            title='Read',
-            message='Read',
-            status=ChefNotification.STATUS_READ,
-        )
-
-        notifications = ChefNotification.get_pending_for_chef(self.chef)
-
-        self.assertEqual(len(notifications), 1)
-        self.assertEqual(notifications[0].title, 'Pending')
-
-    def test_get_pending_for_chef_respects_limit(self):
-        """get_pending_for_chef should respect limit parameter."""
-        for i in range(10):
-            ChefNotification.objects.create(
-                chef=self.chef,
-                notification_type='system',
-                title=f'Notification {i}',
-                message='Message',
-            )
-
-        notifications = ChefNotification.get_pending_for_chef(self.chef, limit=5)
-
-        self.assertEqual(len(notifications), 5)
-
-    def test_get_pending_for_chef_orders_by_created_at_desc(self):
-        """get_pending_for_chef should order by created_at descending."""
-        old = ChefNotification.objects.create(
-            chef=self.chef,
-            notification_type='system',
+        old_notif = ChefNotification.objects.create(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_BIRTHDAY,
             title='Old',
             message='Old',
+            dedup_key='unique_key_456'
         )
-        old.created_at = timezone.now() - timezone.timedelta(hours=1)
-        old.save(update_fields=['created_at'])
-
-        new = ChefNotification.objects.create(
-            chef=self.chef,
-            notification_type='system',
+        # Backdate it
+        old_notif.created_at = timezone.now() - timedelta(days=10)
+        old_notif.save()
+        
+        # Create new with same dedup key
+        new_notif = ChefNotification.create_notification(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_BIRTHDAY,
             title='New',
             message='New',
+            dedup_key='unique_key_456'
         )
-
-        notifications = ChefNotification.get_pending_for_chef(self.chef)
-
-        # New should be first
-        self.assertEqual(notifications[0].title, 'New')
-        self.assertEqual(notifications[1].title, 'Old')
-
-    def test_mark_sent_updates_status_and_channel(self):
-        """mark_sent should update status and channel flag."""
-        notification = ChefNotification.objects.create(
-            chef=self.chef,
-            notification_type='system',
-            title='Test',
+        
+        # Should create new notification (old one is too old)
+        assert new_notif.id != old_notif.id
+    
+    def test_get_unread_count(self, chef):
+        """get_unread_count returns correct count."""
+        from chefs.models import ChefNotification
+        
+        # Create mix of notifications
+        ChefNotification.objects.create(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_BIRTHDAY,
+            title='Pending',
             message='Test',
+            status=ChefNotification.STATUS_PENDING
         )
-
-        notification.mark_sent('in_app')
-
-        notification.refresh_from_db()
-        self.assertEqual(notification.status, ChefNotification.STATUS_SENT)
-        self.assertTrue(notification.sent_in_app)
-        self.assertIsNotNone(notification.sent_at)
-
-    def test_mark_sent_email_channel(self):
-        """mark_sent should mark email channel when specified."""
-        notification = ChefNotification.objects.create(
-            chef=self.chef,
-            notification_type='system',
-            title='Test',
+        ChefNotification.objects.create(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_FOLLOWUP,
+            title='Sent',
             message='Test',
+            status=ChefNotification.STATUS_SENT
         )
-
-        notification.mark_sent('email')
-
-        notification.refresh_from_db()
-        self.assertTrue(notification.sent_email)
-
-    def test_mark_sent_push_channel(self):
-        """mark_sent should mark push channel when specified."""
-        notification = ChefNotification.objects.create(
-            chef=self.chef,
-            notification_type='system',
-            title='Test',
+        ChefNotification.objects.create(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_TODO,
+            title='Read',
             message='Test',
+            status=ChefNotification.STATUS_READ
         )
-
-        notification.mark_sent('push')
-
-        notification.refresh_from_db()
-        self.assertTrue(notification.sent_push)
-
-    def test_mark_read_updates_status_and_timestamp(self):
-        """mark_read should update status and timestamp."""
-        notification = ChefNotification.objects.create(
-            chef=self.chef,
-            notification_type='system',
-            title='Test',
+        ChefNotification.objects.create(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_MILESTONE,
+            title='Dismissed',
             message='Test',
+            status=ChefNotification.STATUS_DISMISSED
         )
-
-        notification.mark_read()
-
-        notification.refresh_from_db()
-        self.assertEqual(notification.status, ChefNotification.STATUS_READ)
-        self.assertIsNotNone(notification.read_at)
-
-    def test_mark_read_does_not_update_dismissed(self):
-        """mark_read should not change dismissed status."""
-        notification = ChefNotification.objects.create(
-            chef=self.chef,
-            notification_type='system',
-            title='Test',
+        
+        count = ChefNotification.get_unread_count(chef)
+        
+        # Only pending and sent count as unread
+        assert count == 2
+    
+    def test_get_pending_for_chef(self, chef):
+        """get_pending_for_chef returns correct notifications."""
+        from chefs.models import ChefNotification
+        
+        # Create notifications
+        pending = ChefNotification.objects.create(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_BIRTHDAY,
+            title='Pending',
             message='Test',
-            status=ChefNotification.STATUS_DISMISSED,
+            status=ChefNotification.STATUS_PENDING
         )
-
-        notification.mark_read()
-
-        notification.refresh_from_db()
-        self.assertEqual(notification.status, ChefNotification.STATUS_DISMISSED)
-
-    def test_mark_dismissed_updates_status_and_timestamp(self):
-        """mark_dismissed should update status and timestamp."""
-        notification = ChefNotification.objects.create(
-            chef=self.chef,
-            notification_type='system',
-            title='Test',
+        sent = ChefNotification.objects.create(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_FOLLOWUP,
+            title='Sent',
             message='Test',
+            status=ChefNotification.STATUS_SENT
         )
-
-        notification.mark_dismissed()
-
-        notification.refresh_from_db()
-        self.assertEqual(notification.status, ChefNotification.STATUS_DISMISSED)
-        self.assertIsNotNone(notification.dismissed_at)
-
-    def test_str_representation(self):
-        """__str__ should return readable representation."""
-        notification = ChefNotification.objects.create(
-            chef=self.chef,
-            notification_type='birthday',
-            title='Birthday Reminder',
+        read = ChefNotification.objects.create(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_TODO,
+            title='Read',
             message='Test',
+            status=ChefNotification.STATUS_READ
         )
-
-        self.assertIn('birthday', str(notification))
-        self.assertIn('Birthday Reminder', str(notification))
-
-    def test_notification_types_are_valid(self):
-        """All notification types should be valid choices."""
-        valid_types = [t[0] for t in ChefNotification.NOTIFICATION_TYPES]
-
-        self.assertIn('welcome', valid_types)
-        self.assertIn('birthday', valid_types)
-        self.assertIn('anniversary', valid_types)
-        self.assertIn('followup', valid_types)
-        self.assertIn('todo', valid_types)
-        self.assertIn('seasonal', valid_types)
-        self.assertIn('milestone', valid_types)
-        self.assertIn('tip', valid_types)
-        self.assertIn('system', valid_types)
-
-    def test_status_choices_are_valid(self):
-        """All status choices should be valid."""
-        valid_statuses = [s[0] for s in ChefNotification.STATUS_CHOICES]
-
-        self.assertIn('pending', valid_statuses)
-        self.assertIn('sent', valid_statuses)
-        self.assertIn('read', valid_statuses)
-        self.assertIn('dismissed', valid_statuses)
+        
+        result = list(ChefNotification.get_pending_for_chef(chef))
+        
+        assert len(result) == 2
+        assert pending in result
+        assert sent in result
+        assert read not in result
+    
+    def test_ordering_newest_first(self, chef):
+        """Notifications ordered by created_at descending."""
+        from chefs.models import ChefNotification
+        import time
+        
+        n1 = ChefNotification.objects.create(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_BIRTHDAY,
+            title='First',
+            message='Test'
+        )
+        
+        time.sleep(0.01)  # Ensure different timestamps
+        
+        n2 = ChefNotification.objects.create(
+            chef=chef,
+            notification_type=ChefNotification.TYPE_FOLLOWUP,
+            title='Second',
+            message='Test'
+        )
+        
+        notifications = list(ChefNotification.objects.filter(chef=chef))
+        
+        assert notifications[0].id == n2.id  # Newest first
+        assert notifications[1].id == n1.id

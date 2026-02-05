@@ -248,13 +248,13 @@ class LeadHouseholdMemberInputSerializer(serializers.Serializer):
 class LeadListSerializer(serializers.ModelSerializer):
     """
     Lead list item for GET /api/chefs/me/leads/
-    
+
     Includes household size for quick overview.
     """
     full_name = serializers.SerializerMethodField()
     days_since_interaction = serializers.SerializerMethodField()
     household_member_count = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = Lead
         fields = [
@@ -262,6 +262,7 @@ class LeadListSerializer(serializers.ModelSerializer):
             'company', 'status', 'source', 'is_priority', 'budget_cents',
             'household_size', 'household_member_count',
             'dietary_preferences', 'allergies',
+            'birthday_month', 'birthday_day', 'anniversary',
             'last_interaction_at', 'days_since_interaction', 'created_at'
         ]
     
@@ -282,13 +283,13 @@ class LeadListSerializer(serializers.ModelSerializer):
 class LeadDetailSerializer(serializers.ModelSerializer):
     """
     Lead detail for GET /api/chefs/me/leads/{id}/
-    
+
     Full contact profile including household members and dietary info.
     """
     full_name = serializers.SerializerMethodField()
     interactions = ClientNoteSerializer(many=True, read_only=True, source='interactions.all')
     household_members = LeadHouseholdMemberSerializer(many=True, read_only=True)
-    
+
     class Meta:
         model = Lead
         fields = [
@@ -296,6 +297,7 @@ class LeadDetailSerializer(serializers.ModelSerializer):
             'company', 'status', 'source', 'is_priority', 'budget_cents',
             'notes', 'household_size',
             'dietary_preferences', 'allergies', 'custom_allergies',
+            'birthday_month', 'birthday_day', 'anniversary',
             'household_members', 'interactions',
             'last_interaction_at', 'created_at', 'updated_at',
         ]
@@ -307,14 +309,16 @@ class LeadDetailSerializer(serializers.ModelSerializer):
 class LeadUpdateSerializer(serializers.ModelSerializer):
     """
     Lead update for PATCH /api/chefs/me/leads/{id}/
-    
-    Allows updating status, priority, notes, dietary info, and household size.
+
+    Allows updating contact info, status, priority, notes, dietary info, household size, and special dates.
     """
     class Meta:
         model = Lead
         fields = [
+            'first_name', 'last_name', 'email', 'phone',
             'status', 'is_priority', 'notes', 'budget_cents',
-            'household_size', 'dietary_preferences', 'allergies', 'custom_allergies'
+            'household_size', 'dietary_preferences', 'allergies', 'custom_allergies',
+            'birthday_month', 'birthday_day', 'anniversary',
         ]
 
 
@@ -323,13 +327,14 @@ class LeadCreateSerializer(serializers.ModelSerializer):
     Input serializer for creating a new Lead (contact).
     """
     household_members = LeadHouseholdMemberInputSerializer(many=True, required=False)
-    
+
     class Meta:
         model = Lead
         fields = [
             'first_name', 'last_name', 'email', 'phone', 'company',
             'status', 'source', 'notes', 'budget_cents', 'is_priority',
             'household_size', 'dietary_preferences', 'allergies', 'custom_allergies',
+            'birthday_month', 'birthday_day', 'anniversary',
             'household_members'
         ]
     

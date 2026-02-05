@@ -225,6 +225,10 @@ def _create_lead(request, chef):
             dietary_preferences=data.get('dietary_preferences', []),
             allergies=data.get('allergies', []),
             custom_allergies=data.get('custom_allergies', []),
+            # Special dates for proactive notifications
+            birthday_month=data.get('birthday_month'),
+            birthday_day=data.get('birthday_day'),
+            anniversary=data.get('anniversary'),
         )
         
         # Create household members

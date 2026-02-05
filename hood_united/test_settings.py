@@ -1,27 +1,24 @@
 # hood_united/test_settings.py
 """
-Test-specific settings using SQLite for fast, isolated tests.
+Test settings using SQLite for local testing without PostgreSQL.
 """
-
 import os
 
-# Set required environment variables before importing settings
+# Set required env vars before importing settings
 os.environ.setdefault('REDIS_URL', 'redis://localhost:6379/0')
+os.environ.setdefault('TEST_MODE', 'True')
+os.environ.setdefault('DEBUG', 'True')
+os.environ.setdefault('SECRET_KEY', 'test-secret-key-for-testing')
+os.environ.setdefault('OPENAI_API_KEY', 'test-key')
+os.environ.setdefault('ALLOWED_HOSTS', '*')
 
-from hood_united.settings import *  # noqa: F401, F403
+from .settings import *  # noqa
 
-# Override database to use SQLite in memory
+# Override database to use SQLite
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': ':memory:',
-    }
-}
-
-# Use a simple cache backend for tests
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
     }
 }
 
@@ -34,20 +31,12 @@ PASSWORD_HASHERS = [
     'django.contrib.auth.hashers.MD5PasswordHasher',
 ]
 
-# Telegram integration settings for tests
-TELEGRAM_BOT_TOKEN = 'test-bot-token-12345'
-TELEGRAM_BOT_USERNAME = 'TestSautaiBot'
-TELEGRAM_WEBHOOK_SECRET = 'test-secret-token-12345'
-
-# Disable SSL redirect for tests
-SECURE_SSL_REDIRECT = False
-DEBUG = True
-
-# Disable migrations for tests (SQLite incompatibility with PostgreSQL-specific migrations)
+# Disable migrations for faster test setup (use --run-syncdb)
 class DisableMigrations:
     def __contains__(self, item):
         return True
     def __getitem__(self, item):
         return None
 
-MIGRATION_MODULES = DisableMigrations()
+# Uncomment to skip migrations entirely (faster but may miss migration bugs):
+# MIGRATION_MODULES = DisableMigrations()

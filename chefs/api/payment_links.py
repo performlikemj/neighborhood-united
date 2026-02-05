@@ -223,6 +223,14 @@ def _create_payment_link(request, chef):
         
         # Validate required fields
         amount_cents = data.get('amount_cents')
+        if amount_cents is not None:
+            try:
+                amount_cents = int(amount_cents)
+            except (ValueError, TypeError):
+                return Response(
+                    {"error": "amount_cents must be a valid number."},
+                    status=400
+                )
         currency = data.get('currency', 'usd').lower()
         # Minimum amount varies by currency - Stripe requires 50 cents for most currencies
         min_amount = 1 if currency in ZERO_DECIMAL_CURRENCIES else 50

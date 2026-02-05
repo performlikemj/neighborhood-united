@@ -154,6 +154,70 @@ export default function ClientDetail({
             />
           </div>
 
+          {/* Special Dates Section */}
+          <div style={{ marginTop: '1.25rem', padding: '1rem', background: 'var(--surface-2)', borderRadius: '8px' }}>
+            <h4 style={{ margin: '0 0 0.75rem 0', fontSize: '0.95rem', fontWeight: 600 }}>
+              🎉 Special Dates
+            </h4>
+
+            <div style={{ marginBottom: '0.75rem' }}>
+              <label className="cc-form-label">🎂 Birthday</label>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <select
+                  className="cc-form-input"
+                  value={editForm.birthday_month || ''}
+                  onChange={e => onSetEditForm(f => ({
+                    ...f,
+                    birthday_month: e.target.value ? parseInt(e.target.value, 10) : null
+                  }))}
+                  style={{ flex: 1 }}
+                >
+                  <option value="">Month</option>
+                  <option value="1">January</option>
+                  <option value="2">February</option>
+                  <option value="3">March</option>
+                  <option value="4">April</option>
+                  <option value="5">May</option>
+                  <option value="6">June</option>
+                  <option value="7">July</option>
+                  <option value="8">August</option>
+                  <option value="9">September</option>
+                  <option value="10">October</option>
+                  <option value="11">November</option>
+                  <option value="12">December</option>
+                </select>
+                <select
+                  className="cc-form-input"
+                  value={editForm.birthday_day || ''}
+                  onChange={e => onSetEditForm(f => ({
+                    ...f,
+                    birthday_day: e.target.value ? parseInt(e.target.value, 10) : null
+                  }))}
+                  style={{ flex: 1 }}
+                >
+                  <option value="">Day</option>
+                  {Array.from({ length: 31 }, (_, i) => i + 1).map(day => (
+                    <option key={day} value={day}>{day}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="cc-form-label">💍 Anniversary</label>
+              <input
+                type="date"
+                className="cc-form-input"
+                value={editForm.anniversary || ''}
+                onChange={e => onSetEditForm(f => ({ ...f, anniversary: e.target.value || null }))}
+              />
+            </div>
+
+            <p style={{ margin: '0.75rem 0 0 0', fontSize: '0.8rem', color: 'var(--muted)' }}>
+              ℹ️ Enable birthday/anniversary notifications in Workspace Settings to get reminders.
+            </p>
+          </div>
+
           <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
             <button type="submit" className="cc-btn cc-btn-primary" disabled={saving}>
               {saving ? 'Saving...' : 'Save Changes'}
@@ -312,6 +376,31 @@ export default function ClientDetail({
           <DietaryChips items={client.allergies} type="allergy" />
         </div>
       </div>
+
+      {/* Special Dates */}
+      {(client.birthday_month || client.anniversary) && (
+        <div className="cc-section">
+          <h4 className="cc-section-title">🎉 Special Dates</h4>
+          <div className="cc-info-box">
+            {client.birthday_month && (
+              <div className="cc-info-row">
+                <span className="cc-info-icon">🎂</span>
+                <span>
+                  Birthday: {new Date(2000, client.birthday_month - 1, client.birthday_day || 1).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}
+                </span>
+              </div>
+            )}
+            {client.anniversary && (
+              <div className="cc-info-row">
+                <span className="cc-info-icon">💍</span>
+                <span>
+                  Anniversary: {new Date(client.anniversary + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Household Members */}
       <HouseholdSection

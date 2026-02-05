@@ -147,23 +147,34 @@ def generate_insights_for_chef(settings) -> int:
 def check_special_occasions(settings) -> List:
     """Check for upcoming birthdays and anniversaries."""
     from chefs.models import ClientContext, ChefNotification
-    
+    from crm.models import Lead
+
     notifications = []
     chef = settings.chef
-    
-    # Get all client contexts with special occasions
-    contexts = ClientContext.objects.filter(chef=chef).exclude(special_occasions=[])
-    
     today = timezone.now().date()
-    
+
+    # =========================================================================
+    # Part 1: Check Lead model's birthday_month/day and anniversary fields
+    # =========================================================================
+    if settings.notify_birthdays:
+        notifications.extend(_check_lead_birthdays(chef, settings, today))
+
+    if settings.notify_anniversaries:
+        notifications.extend(_check_lead_anniversaries(chef, settings, today))
+
+    # =========================================================================
+    # Part 2: Check ClientContext.special_occasions (legacy JSON array)
+    # =========================================================================
+    contexts = ClientContext.objects.filter(chef=chef).exclude(special_occasions=[])
+
     for context in contexts:
         for occasion in context.special_occasions:
             occasion_name = occasion.get('name', 'Special Date')
             occasion_date_str = occasion.get('date', '')
-            
+
             if not occasion_date_str:
                 continue
-            
+
             try:
                 # Parse date (expecting YYYY-MM-DD or MM-DD)
                 if len(occasion_date_str) == 10:  # YYYY-MM-DD
@@ -172,35 +183,35 @@ def check_special_occasions(settings) -> List:
                     month, day = int(occasion_date_str[:2]), int(occasion_date_str[3:5])
                 else:
                     continue
-                
+
                 # Check if occasion is coming up this year
                 try:
                     occasion_this_year = today.replace(month=month, day=day)
                 except ValueError:
                     continue
-                
+
                 # If already passed this year, check next year
                 if occasion_this_year < today:
                     try:
                         occasion_this_year = occasion_this_year.replace(year=today.year + 1)
                     except ValueError:
                         continue
-                
+
                 # Determine lead days based on occasion type
                 is_birthday = 'birthday' in occasion_name.lower()
                 lead_days = settings.birthday_lead_days if is_birthday else settings.anniversary_lead_days
                 check_until = today + timedelta(days=lead_days)
-                
+
                 # Check if within lead days
                 if today <= occasion_this_year <= check_until:
                     days_until = (occasion_this_year - today).days
                     client_name = context.get_client_name()
-                    
+
                     notification_type = ChefNotification.TYPE_BIRTHDAY if is_birthday else ChefNotification.TYPE_ANNIVERSARY
-                    
+
                     # Use deduplication
                     dedup_key = f"{notification_type}_{context.id}_{occasion_this_year.isoformat()}"
-                    
+
                     if is_birthday and settings.notify_birthdays:
                         notif = ChefNotification.create_notification(
                             chef=chef,
@@ -214,7 +225,7 @@ def check_special_occasions(settings) -> List:
                         if notif.status == ChefNotification.STATUS_PENDING:
                             _auto_send_if_enabled(notif, settings)
                             notifications.append(notif)
-                    
+
                     elif not is_birthday and settings.notify_anniversaries:
                         notif = ChefNotification.create_notification(
                             chef=chef,
@@ -228,11 +239,119 @@ def check_special_occasions(settings) -> List:
                         if notif.status == ChefNotification.STATUS_PENDING:
                             _auto_send_if_enabled(notif, settings)
                             notifications.append(notif)
-            
+
             except (ValueError, TypeError) as e:
                 logger.debug(f"Could not parse occasion date: {occasion_date_str} - {e}")
                 continue
-    
+
+    return notifications
+
+
+def _check_lead_birthdays(chef, settings, today) -> List:
+    """Check for upcoming birthdays from Lead.birthday_month/day fields."""
+    from chefs.models import ChefNotification
+    from crm.models import Lead
+
+    notifications = []
+    lead_days = settings.birthday_lead_days
+
+    # Get all leads owned by this chef with birthday info
+    leads = Lead.objects.filter(
+        owner=chef.user,
+        is_deleted=False,
+        birthday_month__isnull=False,
+        birthday_day__isnull=False
+    )
+
+    for lead in leads:
+        try:
+            # Build this year's birthday date
+            birthday_this_year = today.replace(month=lead.birthday_month, day=lead.birthday_day)
+        except ValueError:
+            # Invalid date (e.g., Feb 30)
+            continue
+
+        # If already passed this year, check next year
+        if birthday_this_year < today:
+            try:
+                birthday_this_year = birthday_this_year.replace(year=today.year + 1)
+            except ValueError:
+                continue
+
+        check_until = today + timedelta(days=lead_days)
+
+        if today <= birthday_this_year <= check_until:
+            days_until = (birthday_this_year - today).days
+            client_name = f"{lead.first_name} {lead.last_name}".strip() or "Client"
+
+            dedup_key = f"birthday_lead_{lead.id}_{birthday_this_year.isoformat()}"
+
+            notif = ChefNotification.create_notification(
+                chef=chef,
+                notification_type=ChefNotification.TYPE_BIRTHDAY,
+                title=f"🎂 {client_name}'s birthday in {days_until} days",
+                message=f"{client_name}'s birthday is coming up on {birthday_this_year.strftime('%B %d')}. Consider reaching out!",
+                related_lead=lead,
+                dedup_key=dedup_key,
+            )
+            if notif.status == ChefNotification.STATUS_PENDING:
+                _auto_send_if_enabled(notif, settings)
+                notifications.append(notif)
+
+    return notifications
+
+
+def _check_lead_anniversaries(chef, settings, today) -> List:
+    """Check for upcoming anniversaries from Lead.anniversary field."""
+    from chefs.models import ChefNotification
+    from crm.models import Lead
+
+    notifications = []
+    lead_days = settings.anniversary_lead_days
+
+    # Get all leads owned by this chef with anniversary info
+    leads = Lead.objects.filter(
+        owner=chef.user,
+        is_deleted=False,
+        anniversary__isnull=False
+    )
+
+    for lead in leads:
+        anniversary = lead.anniversary
+
+        try:
+            # Build this year's anniversary date
+            anniversary_this_year = today.replace(month=anniversary.month, day=anniversary.day)
+        except ValueError:
+            continue
+
+        # If already passed this year, check next year
+        if anniversary_this_year < today:
+            try:
+                anniversary_this_year = anniversary_this_year.replace(year=today.year + 1)
+            except ValueError:
+                continue
+
+        check_until = today + timedelta(days=lead_days)
+
+        if today <= anniversary_this_year <= check_until:
+            days_until = (anniversary_this_year - today).days
+            client_name = f"{lead.first_name} {lead.last_name}".strip() or "Client"
+
+            dedup_key = f"anniversary_lead_{lead.id}_{anniversary_this_year.isoformat()}"
+
+            notif = ChefNotification.create_notification(
+                chef=chef,
+                notification_type=ChefNotification.TYPE_ANNIVERSARY,
+                title=f"💍 {client_name}'s anniversary in {days_until} days",
+                message=f"{client_name}'s anniversary is on {anniversary_this_year.strftime('%B %d')}. A great opportunity to do something special!",
+                related_lead=lead,
+                dedup_key=dedup_key,
+            )
+            if notif.status == ChefNotification.STATUS_PENDING:
+                _auto_send_if_enabled(notif, settings)
+                notifications.append(notif)
+
     return notifications
 
 

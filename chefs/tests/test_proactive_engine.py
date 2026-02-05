@@ -255,6 +255,185 @@ class TestCheckSpecialOccasions:
 
 
 @pytest.mark.django_db
+class TestCheckLeadBirthdays:
+    """Tests for birthday notifications from Lead.birthday_month/day fields."""
+
+    def test_creates_notification_for_upcoming_lead_birthday(self, chef, proactive_settings):
+        """Creates notification when lead has birthday within lead days."""
+        from chefs.tasks.proactive_engine import check_special_occasions
+        from crm.models import Lead
+
+        proactive_settings.notify_birthdays = True
+        proactive_settings.birthday_lead_days = 7
+        proactive_settings.save()
+
+        # Create lead with birthday 3 days from now
+        upcoming = timezone.now().date() + timedelta(days=3)
+        Lead.objects.create(
+            owner=chef.user,
+            first_name="Test",
+            last_name="Client",
+            birthday_month=upcoming.month,
+            birthday_day=upcoming.day,
+        )
+
+        notifications = check_special_occasions(proactive_settings)
+
+        assert len(notifications) == 1
+        assert 'birthday' in notifications[0].title.lower()
+        assert '3 days' in notifications[0].title
+
+    def test_ignores_lead_birthday_beyond_lead_days(self, chef, proactive_settings):
+        """Doesn't notify for lead birthday beyond lead days threshold."""
+        from chefs.tasks.proactive_engine import check_special_occasions
+        from crm.models import Lead
+
+        proactive_settings.notify_birthdays = True
+        proactive_settings.birthday_lead_days = 7
+        proactive_settings.save()
+
+        # Create lead with birthday 14 days from now
+        future = timezone.now().date() + timedelta(days=14)
+        Lead.objects.create(
+            owner=chef.user,
+            first_name="Test",
+            last_name="Client",
+            birthday_month=future.month,
+            birthday_day=future.day,
+        )
+
+        notifications = check_special_occasions(proactive_settings)
+
+        assert len(notifications) == 0
+
+    def test_handles_lead_birthday_next_year(self, chef, proactive_settings):
+        """Handles birthday that already passed this year (checks next year)."""
+        from chefs.tasks.proactive_engine import check_special_occasions
+        from crm.models import Lead
+
+        proactive_settings.notify_birthdays = True
+        proactive_settings.birthday_lead_days = 7
+        proactive_settings.save()
+
+        # Create lead with birthday yesterday (should check next year)
+        yesterday = timezone.now().date() - timedelta(days=1)
+        Lead.objects.create(
+            owner=chef.user,
+            first_name="Test",
+            last_name="Client",
+            birthday_month=yesterday.month,
+            birthday_day=yesterday.day,
+        )
+
+        notifications = check_special_occasions(proactive_settings)
+
+        # Should NOT trigger (next year's date is ~364 days away)
+        assert len(notifications) == 0
+
+    def test_deduplication_for_lead_birthdays(self, chef, proactive_settings):
+        """Doesn't create duplicate notifications for same lead birthday."""
+        from chefs.tasks.proactive_engine import check_special_occasions
+        from crm.models import Lead
+
+        proactive_settings.notify_birthdays = True
+        proactive_settings.birthday_lead_days = 7
+        proactive_settings.save()
+
+        upcoming = timezone.now().date() + timedelta(days=3)
+        Lead.objects.create(
+            owner=chef.user,
+            first_name="Test",
+            last_name="Client",
+            birthday_month=upcoming.month,
+            birthday_day=upcoming.day,
+        )
+
+        # First call creates notification
+        notifications1 = check_special_occasions(proactive_settings)
+        assert len(notifications1) == 1
+
+        # Second call should not create duplicate
+        notifications2 = check_special_occasions(proactive_settings)
+        assert len(notifications2) == 0
+
+
+@pytest.mark.django_db
+class TestCheckLeadAnniversaries:
+    """Tests for anniversary notifications from Lead.anniversary field."""
+
+    def test_creates_notification_for_upcoming_lead_anniversary(self, chef, proactive_settings):
+        """Creates notification when lead has anniversary within lead days."""
+        from chefs.tasks.proactive_engine import check_special_occasions
+        from crm.models import Lead
+
+        proactive_settings.notify_anniversaries = True
+        proactive_settings.anniversary_lead_days = 7
+        proactive_settings.save()
+
+        # Create lead with anniversary 5 days from now
+        upcoming = timezone.now().date() + timedelta(days=5)
+        Lead.objects.create(
+            owner=chef.user,
+            first_name="Test",
+            last_name="Client",
+            anniversary=upcoming,
+        )
+
+        notifications = check_special_occasions(proactive_settings)
+
+        assert len(notifications) == 1
+        assert 'anniversary' in notifications[0].title.lower()
+        assert '5 days' in notifications[0].title
+
+    def test_ignores_lead_anniversary_beyond_lead_days(self, chef, proactive_settings):
+        """Doesn't notify for lead anniversary beyond lead days threshold."""
+        from chefs.tasks.proactive_engine import check_special_occasions
+        from crm.models import Lead
+
+        proactive_settings.notify_anniversaries = True
+        proactive_settings.anniversary_lead_days = 7
+        proactive_settings.save()
+
+        # Create lead with anniversary 20 days from now
+        future = timezone.now().date() + timedelta(days=20)
+        Lead.objects.create(
+            owner=chef.user,
+            first_name="Test",
+            last_name="Client",
+            anniversary=future,
+        )
+
+        notifications = check_special_occasions(proactive_settings)
+
+        assert len(notifications) == 0
+
+    def test_lead_anniversary_checks_next_year_occurrence(self, chef, proactive_settings):
+        """Anniversary from previous year still triggers for this year's occurrence."""
+        from chefs.tasks.proactive_engine import check_special_occasions
+        from crm.models import Lead
+
+        proactive_settings.notify_anniversaries = True
+        proactive_settings.anniversary_lead_days = 7
+        proactive_settings.save()
+
+        # Create lead with anniversary date 3 days from now, but set year to last year
+        upcoming = timezone.now().date() + timedelta(days=3)
+        anniversary_date = date(year=2020, month=upcoming.month, day=upcoming.day)
+
+        Lead.objects.create(
+            owner=chef.user,
+            first_name="Test",
+            last_name="Client",
+            anniversary=anniversary_date,
+        )
+
+        notifications = check_special_occasions(proactive_settings)
+
+        assert len(notifications) == 1
+        assert 'anniversary' in notifications[0].title.lower()
+
+
+@pytest.mark.django_db
 class TestCheckFollowups:
     """Tests for check_followups."""
     

@@ -2,6 +2,7 @@ import secrets
 from datetime import timedelta
 
 from django.conf import settings
+from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
 from django.contrib.postgres.fields import ArrayField
 from django.utils import timezone
@@ -146,6 +147,25 @@ class Lead(models.Model):
         null=True,
         blank=True,
         help_text="When the email was verified"
+    )
+
+    # Special dates for proactive notifications
+    birthday_month = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1), MaxValueValidator(12)],
+        help_text="Birth month (1-12)"
+    )
+    birthday_day = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1), MaxValueValidator(31)],
+        help_text="Birth day (1-31)"
+    )
+    anniversary = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Anniversary date (for annual reminders)"
     )
 
     objects = LeadQuerySet.as_manager()

@@ -38,7 +38,10 @@ const INITIAL_FORM = {
   phone: '',
   notes: '',
   dietary_preferences: [],
-  allergies: []
+  allergies: [],
+  birthday_month: null,
+  birthday_day: null,
+  anniversary: null
 }
 
 const INITIAL_MEMBER = {
@@ -201,7 +204,10 @@ export default function ChefAllClients({ onNavigateToPrep }) {
         phone: editForm.phone.trim(),
         notes: editForm.notes.trim(),
         dietary_preferences: editForm.dietary_preferences,
-        allergies: editForm.allergies
+        allergies: editForm.allergies,
+        birthday_month: editForm.birthday_month,
+        birthday_day: editForm.birthday_day,
+        anniversary: editForm.anniversary
       })
       setEditMode(false)
       await loadClients()
@@ -324,7 +330,10 @@ export default function ChefAllClients({ onNavigateToPrep }) {
       phone: selected.phone || '',
       notes: selected.notes || '',
       dietary_preferences: selected.dietary_preferences || [],
-      allergies: selected.allergies || []
+      allergies: selected.allergies || [],
+      birthday_month: selected.birthday_month || null,
+      birthday_day: selected.birthday_day || null,
+      anniversary: selected.anniversary || null
     })
     setEditMode(true)
   }

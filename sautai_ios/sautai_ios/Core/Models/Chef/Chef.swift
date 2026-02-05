@@ -14,6 +14,8 @@ struct ChefDashboard: Codable {
     let clients: ClientStats
     let orders: OrderStats
     let topServices: [TopService]
+    let recentOrders: [Order]?
+    let upcomingEvents: [ChefMealEvent]?
 }
 
 // MARK: - Revenue Stats (matches Django RevenueStatsSerializer)
@@ -144,6 +146,22 @@ struct Client: Codable, Identifiable {
     }
 }
 
+// MARK: - Client Note
+
+struct ClientNote: Codable, Identifiable {
+    let id: Int
+    let content: String
+    let authorName: String?
+    let createdAt: Date?
+
+    init(id: Int, content: String, authorName: String? = nil, createdAt: Date? = nil) {
+        self.id = id
+        self.content = content
+        self.authorName = authorName
+        self.createdAt = createdAt
+    }
+}
+
 // MARK: - Chef Profile
 
 struct ChefProfile: Codable, Identifiable {
@@ -171,4 +189,69 @@ struct ServiceArea: Codable, Identifiable {
     let id: Int
     let name: String
     let postalCodes: [String]?
+}
+
+// MARK: - Receipt
+
+struct Receipt: Codable, Identifiable {
+    let id: Int
+    let thumbnailUrl: String?
+    let amount: String
+    let currency: String?
+    let category: String?
+    let categoryDisplay: String?
+    let merchantName: String?
+    let purchaseDate: Date?
+    let status: String?
+    let statusDisplay: String?
+    let createdAt: Date?
+
+    var displayAmount: String {
+        let symbol = currency == "USD" ? "$" : currency ?? "$"
+        return "\(symbol)\(amount)"
+    }
+
+    var statusColor: String {
+        switch status {
+        case "uploaded": return "pending"
+        case "reviewed": return "info"
+        case "reimbursed": return "success"
+        case "rejected": return "danger"
+        default: return "default"
+        }
+    }
+}
+
+// MARK: - Client Receipts Response
+
+struct ClientReceiptsResponse: Codable {
+    let results: [Receipt]?
+    let totals: ReceiptTotals
+    let count: Int?
+    let next: String?
+    let previous: String?
+
+    // Handle both paginated and non-paginated responses
+    var receipts: [Receipt] {
+        results ?? []
+    }
+}
+
+struct ReceiptTotals: Codable {
+    let totalAmount: Double
+    let totalCount: Int
+    let reimbursedAmount: Double
+    let pendingAmount: Double
+
+    var totalDisplay: String {
+        String(format: "$%.2f", totalAmount)
+    }
+
+    var reimbursedDisplay: String {
+        String(format: "$%.2f", reimbursedAmount)
+    }
+
+    var pendingDisplay: String {
+        String(format: "$%.2f", pendingAmount)
+    }
 }

@@ -39,10 +39,36 @@ struct RegisterView: View {
 
                     // Form
                     VStack(spacing: SautaiDesign.spacing) {
-                        formField(title: "Email", text: $email, placeholder: "your@email.com", keyboardType: .emailAddress)
-                        formField(title: "Username", text: $username, placeholder: "Choose a username")
+                        // Email field with validation
+                        VStack(alignment: .leading, spacing: SautaiDesign.spacingXS) {
+                            formField(title: "Email", text: $email, placeholder: "your@email.com", keyboardType: .emailAddress)
+                            if !email.isEmpty && !isValidEmail {
+                                Text("Please enter a valid email address")
+                                    .font(SautaiFont.caption2)
+                                    .foregroundColor(.sautai.danger)
+                            }
+                        }
+
+                        // Username field with validation
+                        VStack(alignment: .leading, spacing: SautaiDesign.spacingXS) {
+                            formField(title: "Username", text: $username, placeholder: "Choose a username")
+                            if !username.isEmpty && !isValidUsername {
+                                Text("Username must be 3+ characters (letters, numbers, underscore)")
+                                    .font(SautaiFont.caption2)
+                                    .foregroundColor(.sautai.danger)
+                            }
+                        }
+
                         formField(title: "Phone (optional)", text: $phoneNumber, placeholder: "+1 (555) 123-4567", keyboardType: .phonePad)
                         passwordFields
+                    }
+
+                    // Error from API
+                    if let error = authManager.error {
+                        Text(error.localizedDescription)
+                            .font(SautaiFont.caption)
+                            .foregroundColor(.sautai.danger)
+                            .multilineTextAlignment(.center)
                     }
 
                     // Terms
@@ -133,6 +159,26 @@ struct RegisterView: View {
                     RoundedRectangle(cornerRadius: SautaiDesign.cornerRadius)
                         .stroke(Color.sautai.lightBorder, lineWidth: 1)
                 )
+
+                // Password strength indicator
+                if !password.isEmpty {
+                    HStack(spacing: SautaiDesign.spacingXS) {
+                        ForEach(0..<3, id: \.self) { index in
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(strengthBarColor(for: index))
+                                .frame(height: 4)
+                        }
+                        Text(passwordStrength.label)
+                            .font(SautaiFont.caption2)
+                            .foregroundColor(passwordStrength.color)
+                    }
+
+                    if password.count < 8 {
+                        Text("Password must be at least 8 characters")
+                            .font(SautaiFont.caption2)
+                            .foregroundColor(.sautai.danger)
+                    }
+                }
             }
 
             VStack(alignment: .leading, spacing: SautaiDesign.spacingXS) {
@@ -155,6 +201,17 @@ struct RegisterView: View {
                         .foregroundColor(.sautai.danger)
                 }
             }
+        }
+    }
+
+    private func strengthBarColor(for index: Int) -> Color {
+        switch passwordStrength {
+        case .weak:
+            return index == 0 ? .sautai.danger : Color.sautai.lightBorder
+        case .medium:
+            return index < 2 ? .sautai.warning : Color.sautai.lightBorder
+        case .strong:
+            return .sautai.success
         }
     }
 
@@ -235,13 +292,60 @@ struct RegisterView: View {
         password == confirmPassword || confirmPassword.isEmpty
     }
 
+    private var isValidEmail: Bool {
+        let emailRegex = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/
+        return email.wholeMatch(of: emailRegex) != nil
+    }
+
+    private var isValidUsername: Bool {
+        username.count >= 3 && username.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
+    }
+
+    private var passwordStrength: PasswordStrength {
+        if password.count < 8 { return .weak }
+        var score = 0
+        if password.contains(where: { $0.isLowercase }) { score += 1 }
+        if password.contains(where: { $0.isUppercase }) { score += 1 }
+        if password.contains(where: { $0.isNumber }) { score += 1 }
+        if password.contains(where: { "!@#$%^&*()_+-=[]{}|;:,.<>?".contains($0) }) { score += 1 }
+        if password.count >= 12 { score += 1 }
+
+        switch score {
+        case 0...2: return .weak
+        case 3: return .medium
+        default: return .strong
+        }
+    }
+
     private var isFormValid: Bool {
-        !email.isEmpty &&
-        !username.isEmpty &&
+        isValidEmail &&
+        isValidUsername &&
         !password.isEmpty &&
         password == confirmPassword &&
         password.count >= 8 &&
         agreeToTerms
+    }
+}
+
+// MARK: - Password Strength
+
+enum PasswordStrength {
+    case weak, medium, strong
+
+    var color: Color {
+        switch self {
+        case .weak: return .sautai.danger
+        case .medium: return .sautai.warning
+        case .strong: return .sautai.success
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .weak: return "Weak"
+        case .medium: return "Medium"
+        case .strong: return "Strong"
+        }
     }
 }
 

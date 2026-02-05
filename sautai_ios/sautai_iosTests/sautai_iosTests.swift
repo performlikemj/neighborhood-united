@@ -5,6 +5,7 @@
 //  Created by Michael Jones on 2/4/26.
 //
 
+import Foundation
 import Testing
 @testable import sautai_ios
 
@@ -56,48 +57,44 @@ struct sautai_iosTests {
     }
     
     // MARK: - Revenue Stats Tests
-    
+
     @Suite("Revenue Statistics Tests")
     struct RevenueStatsTests {
-        
-        @Test("Revenue string converts to decimal correctly")
-        func revenueConversion() {
+
+        @Test("Revenue decimal values are correct")
+        func revenueValues() {
             let revenue = RevenueStats(
-                today: "125.50",
-                thisWeek: "850.75",
-                thisMonth: "3200.00"
+                today: Decimal(string: "125.50") ?? 0,
+                thisWeek: Decimal(string: "850.75") ?? 0,
+                thisMonth: Decimal(string: "3200.00") ?? 0
             )
-            
-            #expect(revenue.todayDecimal == Decimal(string: "125.50"))
-            #expect(revenue.thisWeekDecimal == Decimal(string: "850.75"))
-            #expect(revenue.thisMonthDecimal == Decimal(string: "3200.00"))
+
+            #expect(revenue.today == Decimal(string: "125.50"))
+            #expect(revenue.thisWeek == Decimal(string: "850.75"))
+            #expect(revenue.thisMonth == Decimal(string: "3200.00"))
         }
-        
-        @Test("Invalid revenue strings default to zero")
-        func invalidRevenueHandling() {
-            let revenue = RevenueStats(
-                today: "invalid",
-                thisWeek: "",
-                thisMonth: "not-a-number"
-            )
-            
-            #expect(revenue.todayDecimal == 0)
-            #expect(revenue.thisWeekDecimal == 0)
-            #expect(revenue.thisMonthDecimal == 0)
+
+        @Test("Zero revenue defaults work correctly")
+        func zeroRevenueHandling() {
+            let revenue = RevenueStats()
+
+            #expect(revenue.today == 0)
+            #expect(revenue.thisWeek == 0)
+            #expect(revenue.thisMonth == 0)
         }
     }
     
     // MARK: - Date Formatting Tests
-    
+
     @Suite("Date Formatting Tests")
     struct DateFormattingTests {
-        
+
         @Test("Greeting changes based on time of day")
         func greetingText() {
             let calendar = Calendar.current
             let now = Date()
             let hour = calendar.component(.hour, from: now)
-            
+
             let expectedGreeting: String
             if hour < 12 {
                 expectedGreeting = "Good morning"
@@ -106,10 +103,60 @@ struct sautai_iosTests {
             } else {
                 expectedGreeting = "Good evening"
             }
-            
+
             // This test would need access to the view's greeting logic
             // For now, we verify the logic works
             #expect(expectedGreeting.count > 0)
+        }
+    }
+
+    // MARK: - Auth Error Tests
+
+    @Suite("Auth Error Tests")
+    struct AuthErrorTests {
+
+        @Test("Auth errors have proper descriptions")
+        func authErrorDescriptions() {
+            let sessionExpired = AuthError.sessionExpired
+            let noToken = AuthError.noAccessToken
+            let serverUnreachable = AuthError.serverUnreachable
+
+            #expect(sessionExpired.errorDescription?.contains("expired") == true)
+            #expect(noToken.errorDescription?.contains("token") == true)
+            #expect(serverUnreachable.errorDescription?.contains("connect") == true)
+        }
+
+        @Test("API errors wrap correctly")
+        func apiErrorWrapping() {
+            let apiError = APIError.forbidden
+            let authError = AuthError.apiError(apiError)
+
+            #expect(authError.errorDescription?.contains("permission") == true)
+        }
+    }
+
+    // MARK: - API Error Tests
+
+    @Suite("API Error Tests")
+    struct APIErrorTests {
+
+        @Test("API errors have proper descriptions")
+        func apiErrorDescriptions() {
+            let forbidden = APIError.forbidden
+            let notFound = APIError.notFound
+            let rateLimited = APIError.rateLimited
+            let serverError = APIError.serverError(500)
+
+            #expect(forbidden.errorDescription?.contains("permission") == true)
+            #expect(notFound.errorDescription?.contains("not found") == true)
+            #expect(rateLimited.errorDescription?.contains("many requests") == true)
+            #expect(serverError.errorDescription?.contains("500") == true)
+        }
+
+        @Test("Bad request error includes message")
+        func badRequestMessage() {
+            let error = APIError.badRequest("Email already exists")
+            #expect(error.errorDescription == "Email already exists")
         }
     }
 }

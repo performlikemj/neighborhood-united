@@ -181,6 +181,19 @@ struct SousChefView: View {
     }
 
     private func startNewConversation() {
+        // Call API to start new conversation on server
+        Task {
+            do {
+                _ = try await APIClient.shared.startSousChefConversation()
+            } catch {
+                #if DEBUG
+                print("⚠️ Failed to start new conversation on server: \(error.localizedDescription)")
+                #endif
+                // Continue with local reset even if API fails
+            }
+        }
+
+        // Clear local state
         messages.removeAll()
         currentStreamingMessage = nil
         isStreaming = false

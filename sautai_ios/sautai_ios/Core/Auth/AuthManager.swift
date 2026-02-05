@@ -130,7 +130,26 @@ class AuthManager: ObservableObject {
     }
 
     /// Logout and clear all tokens
-    func logout() {
+    /// Calls the backend to blacklist the refresh token, then clears local state
+    func logout() async {
+        // Try to blacklist the token on the server
+        if let refreshToken = try? keychainService.load(forKey: TokenKey.refresh) {
+            do {
+                try await apiClient.logout(refreshToken: refreshToken)
+            } catch {
+                // Log but don't block logout if API call fails
+                #if DEBUG
+                print("⚠️ Logout API call failed: \(error.localizedDescription)")
+                #endif
+            }
+        }
+
+        // Clear local state regardless of API result
+        clearLocalSession()
+    }
+
+    /// Clear local session without calling API (for forced logout scenarios)
+    func clearLocalSession() {
         accessToken = nil
         try? keychainService.delete(forKey: TokenKey.access)
         try? keychainService.delete(forKey: TokenKey.refresh)
@@ -174,8 +193,8 @@ class AuthManager: ObservableObject {
             try keychainService.save(response.access, forKey: TokenKey.access)
 
         } catch {
-            // Refresh failed - force logout
-            logout()
+            // Refresh failed - force logout (clear local only, token already invalid)
+            clearLocalSession()
             throw AuthError.sessionExpired
         }
     }
@@ -218,7 +237,7 @@ class AuthManager: ObservableObject {
             isAuthenticated = true
         } catch {
             // Session restoration failed - clear tokens
-            logout()
+            clearLocalSession()
         }
     }
 

@@ -63,6 +63,16 @@ struct ChefDashboardView: View {
                 topServicesSection(dashboard.topServices)
             }
 
+            // Recent Orders
+            if let recentOrders = dashboard.recentOrders, !recentOrders.isEmpty {
+                recentOrdersSection(recentOrders)
+            }
+
+            // Upcoming Events
+            if let upcomingEvents = dashboard.upcomingEvents, !upcomingEvents.isEmpty {
+                upcomingEventsSection(upcomingEvents)
+            }
+
             // Quick Actions
             quickActionsSection
         }
@@ -224,6 +234,60 @@ struct ChefDashboardView: View {
         }
     }
 
+    // MARK: - Recent Orders Section
+
+    private func recentOrdersSection(_ orders: [Order]) -> some View {
+        VStack(alignment: .leading, spacing: SautaiDesign.spacingM) {
+            HStack {
+                Text("Recent Orders")
+                    .font(SautaiFont.headline)
+                    .foregroundColor(.sautai.slateTile)
+
+                Spacer()
+
+                NavigationLink("See All") {
+                    // TODO: OrdersListView
+                    Text("Orders List")
+                }
+                .font(SautaiFont.caption)
+                .foregroundColor(.sautai.earthenClay)
+            }
+
+            VStack(spacing: SautaiDesign.spacingS) {
+                ForEach(orders.prefix(3)) { order in
+                    OrderRowView(order: order)
+                }
+            }
+        }
+    }
+
+    // MARK: - Upcoming Events Section
+
+    private func upcomingEventsSection(_ events: [ChefMealEvent]) -> some View {
+        VStack(alignment: .leading, spacing: SautaiDesign.spacingM) {
+            HStack {
+                Text("Upcoming Events")
+                    .font(SautaiFont.headline)
+                    .foregroundColor(.sautai.slateTile)
+
+                Spacer()
+
+                NavigationLink("See All") {
+                    // TODO: EventsListView
+                    Text("Events List")
+                }
+                .font(SautaiFont.caption)
+                .foregroundColor(.sautai.earthenClay)
+            }
+
+            VStack(spacing: SautaiDesign.spacingS) {
+                ForEach(events.prefix(3)) { event in
+                    EventRowView(event: event)
+                }
+            }
+        }
+    }
+
     // MARK: - Quick Actions Section
 
     private var quickActionsSection: some View {
@@ -325,6 +389,139 @@ struct ChefDashboardView: View {
         }
 
         isLoading = false
+    }
+}
+
+// MARK: - Order Row View
+
+struct OrderRowView: View {
+    let order: Order
+
+    var body: some View {
+        HStack(spacing: SautaiDesign.spacingM) {
+            // Status Icon
+            Image(systemName: order.status.icon)
+                .font(.system(size: 20))
+                .foregroundColor(statusColor)
+                .frame(width: 32, height: 32)
+
+            // Order Details
+            VStack(alignment: .leading, spacing: SautaiDesign.spacingXS) {
+                Text(order.customerName ?? "Order #\(order.id)")
+                    .font(SautaiFont.body)
+                    .foregroundColor(.sautai.slateTile)
+
+                HStack(spacing: SautaiDesign.spacingS) {
+                    Text(order.status.displayName)
+                        .font(SautaiFont.caption)
+                        .foregroundColor(statusColor)
+
+                    if let date = order.deliveryDate {
+                        Text("•")
+                            .foregroundColor(.sautai.slateTile.opacity(0.5))
+                        Text(formatDate(date))
+                            .font(SautaiFont.caption)
+                            .foregroundColor(.sautai.slateTile.opacity(0.7))
+                    }
+                }
+            }
+
+            Spacer()
+
+            // Amount
+            Text(order.displayTotal)
+                .font(SautaiFont.money)
+                .foregroundColor(.sautai.slateTile)
+        }
+        .padding(SautaiDesign.spacing)
+        .background(Color.white)
+        .cornerRadius(SautaiDesign.cornerRadiusS)
+        .sautaiShadow(SautaiDesign.shadowSubtle)
+    }
+
+    private var statusColor: Color {
+        switch order.status {
+        case .pending: return .sautai.warning
+        case .confirmed, .preparing: return .sautai.info
+        case .ready, .delivered, .completed: return .sautai.success
+        case .cancelled: return .sautai.danger
+        }
+    }
+
+    private func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d"
+        return formatter.string(from: date)
+    }
+}
+
+// MARK: - Event Row View
+
+struct EventRowView: View {
+    let event: ChefMealEvent
+
+    var body: some View {
+        HStack(spacing: SautaiDesign.spacingM) {
+            // Calendar Icon
+            VStack(spacing: 2) {
+                Text(monthString)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.sautai.earthenClay)
+                Text(dayString)
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(.sautai.slateTile)
+            }
+            .frame(width: 40, height: 40)
+            .background(Color.sautai.earthenClay.opacity(0.1))
+            .cornerRadius(SautaiDesign.cornerRadiusS)
+
+            // Event Details
+            VStack(alignment: .leading, spacing: SautaiDesign.spacingXS) {
+                Text(event.title)
+                    .font(SautaiFont.body)
+                    .foregroundColor(.sautai.slateTile)
+                    .lineLimit(1)
+
+                HStack(spacing: SautaiDesign.spacingS) {
+                    if let time = event.eventTime {
+                        Text(time)
+                            .font(SautaiFont.caption)
+                            .foregroundColor(.sautai.slateTile.opacity(0.7))
+                    }
+
+                    if let available = event.availableServings {
+                        Text("•")
+                            .foregroundColor(.sautai.slateTile.opacity(0.5))
+                        Text("\(available) spots left")
+                            .font(SautaiFont.caption)
+                            .foregroundColor(available <= 3 ? .sautai.warning : .sautai.slateTile.opacity(0.7))
+                    }
+                }
+            }
+
+            Spacer()
+
+            // Price
+            Text(event.displayPrice)
+                .font(SautaiFont.caption)
+                .foregroundColor(.sautai.herbGreen)
+        }
+        .padding(SautaiDesign.spacing)
+        .background(Color.white)
+        .cornerRadius(SautaiDesign.cornerRadiusS)
+        .sautaiShadow(SautaiDesign.shadowSubtle)
+    }
+
+    private var monthString: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM"
+        return formatter.string(from: event.eventDate).uppercased()
+    }
+
+    private var dayString: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "d"
+        return formatter.string(from: event.eventDate)
     }
 }
 

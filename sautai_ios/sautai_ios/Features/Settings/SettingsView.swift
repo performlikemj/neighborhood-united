@@ -10,6 +10,8 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var authManager: AuthManager
     @State private var showLogoutConfirmation = false
+    @State private var showChangePassword = false
+    @State private var showDeleteAccount = false
 
     var body: some View {
         NavigationStack {
@@ -17,6 +19,46 @@ struct SettingsView: View {
                 // Profile Section
                 Section {
                     profileRow
+
+                    Button {
+                        showChangePassword = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "key.fill")
+                                .foregroundColor(.sautai.earthenClay)
+                                .frame(width: 28)
+
+                            Text("Change Password")
+                                .font(SautaiFont.body)
+                                .foregroundColor(.sautai.slateTile)
+
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.sautai.slateTile.opacity(0.3))
+                        }
+                    }
+
+                    Button {
+                        showDeleteAccount = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "trash.fill")
+                                .foregroundColor(.sautai.danger)
+                                .frame(width: 28)
+
+                            Text("Delete Account")
+                                .font(SautaiFont.body)
+                                .foregroundColor(.sautai.danger)
+
+                            Spacer()
+
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.sautai.slateTile.opacity(0.3))
+                        }
+                    }
                 } header: {
                     Text("Account")
                 }
@@ -82,11 +124,20 @@ struct SettingsView: View {
                 titleVisibility: .visible
             ) {
                 Button("Sign Out", role: .destructive) {
-                    authManager.logout()
+                    Task {
+                        await authManager.logout()
+                    }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Are you sure you want to sign out?")
+            }
+            .sheet(isPresented: $showChangePassword) {
+                ChangePasswordView()
+            }
+            .sheet(isPresented: $showDeleteAccount) {
+                DeleteAccountView()
+                    .environmentObject(authManager)
             }
         }
     }

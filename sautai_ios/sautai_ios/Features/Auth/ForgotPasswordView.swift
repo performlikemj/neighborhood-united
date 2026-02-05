@@ -114,14 +114,26 @@ struct ForgotPasswordView: View {
         isLoading = true
         errorMessage = nil
 
-        // TODO: Implement API call
         Task {
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            await MainActor.run {
-                isLoading = false
-                showSuccess = true
+            do {
+                try await APIClient.shared.requestPasswordReset(email: email)
+                await MainActor.run {
+                    isLoading = false
+                    showSuccess = true
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                    // Always show success to prevent email enumeration
+                    showSuccess = true
+                }
             }
         }
+    }
+
+    private var isValidEmail: Bool {
+        let emailRegex = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/
+        return email.wholeMatch(of: emailRegex) != nil
     }
 }
 

@@ -94,6 +94,12 @@ class APIClient {
         let _: EmptyResponse = try await post("/auth/api/switch_role/", body: body)
     }
 
+    /// Logout and blacklist refresh token
+    func logout(refreshToken: String) async throws {
+        let body = ["refresh": refreshToken]
+        let _: EmptyResponse = try await post("/auth/api/logout/", body: body, authenticated: true)
+    }
+
     /// Request password reset
     func requestPasswordReset(email: String) async throws {
         let body = ["email": email]
@@ -104,6 +110,18 @@ class APIClient {
     func resetPassword(token: String, newPassword: String) async throws {
         let body = ["token": token, "new_password": newPassword]
         let _: EmptyResponse = try await post("/auth/api/reset_password/", body: body, authenticated: false)
+    }
+
+    /// Change password (authenticated user)
+    func changePassword(currentPassword: String, newPassword: String) async throws {
+        let body = ["current_password": currentPassword, "new_password": newPassword]
+        let _: EmptyResponse = try await post("/auth/api/change_password/", body: body)
+    }
+
+    /// Delete account (requires password confirmation)
+    func deleteAccount(password: String) async throws {
+        let body = ["password": password]
+        let _: EmptyResponse = try await post("/auth/api/delete_account/", body: body)
     }
 
     /// Resend activation email
@@ -132,6 +150,28 @@ class APIClient {
     /// Get client details
     func getClient(id: Int) async throws -> Client {
         return try await get("/chefs/api/me/clients/\(id)/")
+    }
+
+    /// Get client notes
+    func getClientNotes(clientId: Int) async throws -> [ClientNote] {
+        return try await get("/chefs/api/me/clients/\(clientId)/notes/")
+    }
+
+    /// Add client note
+    func addClientNote(clientId: Int, content: String) async throws -> ClientNote {
+        let body = ["content": content]
+        return try await post("/chefs/api/me/clients/\(clientId)/notes/", body: body)
+    }
+
+    /// Get client receipts
+    func getClientReceipts(clientId: Int) async throws -> ClientReceiptsResponse {
+        return try await get("/chefs/api/me/clients/\(clientId)/receipts/")
+    }
+
+    /// Update client notes (bulk update)
+    func updateClientNotes(clientId: Int, notes: String) async throws {
+        let body = ["notes": notes]
+        let _: EmptyResponse = try await put("/chefs/api/me/clients/\(clientId)/notes/", body: body)
     }
 
     /// Get upcoming orders
@@ -174,6 +214,11 @@ class APIClient {
     /// Get lead interactions
     func getLeadInteractions(leadId: Int) async throws -> [LeadInteraction] {
         return try await get("/chefs/api/me/leads/\(leadId)/interactions/")
+    }
+
+    /// Get lead household members
+    func getLeadHousehold(leadId: Int) async throws -> [LeadHouseholdMember] {
+        return try await get("/chefs/api/me/leads/\(leadId)/household/")
     }
 
     /// Add lead interaction

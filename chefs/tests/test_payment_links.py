@@ -1095,12 +1095,13 @@ class EmailVerificationAPITestCase(APITestCase):
 
 class PaymentLinkWebhookTestCase(TransactionTestCase):
     """Test Stripe webhook handling for payment links."""
+    reset_sequences = True
 
     def setUp(self):
         """Set up test data."""
         self.user = CustomUser.objects.create_user(
-            username='testchef',
-            email='chef@test.com',
+            username='webhook_testchef',
+            email='webhook_chef@test.com',
             password='testpass123'
         )
         self.chef = Chef.objects.create(user=self.user)
@@ -1384,12 +1385,13 @@ class StripeIntegrationTestCase(TestCase):
 
 class ConcurrencyTestCase(TransactionTestCase):
     """Test concurrent access scenarios."""
+    reset_sequences = True
 
     def setUp(self):
         """Set up test data."""
         self.user = CustomUser.objects.create_user(
-            username='testchef',
-            email='chef@test.com',
+            username='concurrency_testchef',
+            email='concurrency_chef@test.com',
             password='testpass123'
         )
         self.chef = Chef.objects.create(user=self.user)

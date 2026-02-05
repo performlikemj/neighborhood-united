@@ -79,21 +79,21 @@ struct ChefTabView: View {
                 }
                 .tag(0)
 
-            ClientsListView()
+            OrdersListView()
                 .tabItem {
-                    Label("Clients", systemImage: "person.2.fill")
+                    Label("Orders", systemImage: "bag.fill")
                 }
                 .tag(1)
 
-            LeadsListView()
+            KitchenView()
                 .tabItem {
-                    Label("Leads", systemImage: "person.badge.plus")
+                    Label("Kitchen", systemImage: "fork.knife")
                 }
                 .tag(2)
 
-            SousChefView()
+            ClientsListView()
                 .tabItem {
-                    Label("Sous Chef", systemImage: "bubble.left.and.bubble.right.fill")
+                    Label("Clients", systemImage: "person.2.fill")
                 }
                 .tag(3)
 

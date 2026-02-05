@@ -423,6 +423,241 @@ class APIClient {
         return try await post("/messaging/api/conversations/with-chef/\(chefId)/", body: body)
     }
 
+    // MARK: - Chef Order Management Endpoints
+
+    /// Get chef's orders with optional status filter
+    func getChefOrders(status: String? = nil, page: Int = 1) async throws -> PaginatedResponse<Order> {
+        var path = "/chefs/api/me/orders/?page=\(page)"
+        if let status = status {
+            path += "&status=\(status)"
+        }
+        return try await get(path)
+    }
+
+    /// Get order details
+    func getChefOrderDetail(id: Int) async throws -> Order {
+        return try await get("/chefs/api/me/orders/\(id)/")
+    }
+
+    /// Confirm an order
+    func confirmOrder(id: Int) async throws -> Order {
+        return try await post("/chefs/api/me/orders/\(id)/confirm/", body: [:])
+    }
+
+    /// Cancel an order
+    func cancelOrder(id: Int, reason: String?) async throws -> Order {
+        var body: [String: Any] = [:]
+        if let reason = reason {
+            body["reason"] = reason
+        }
+        return try await post("/chefs/api/me/orders/\(id)/cancel/", body: body)
+    }
+
+    /// Adjust order quantity
+    func adjustOrderQuantity(id: Int, quantity: Int) async throws -> Order {
+        let body: [String: Any] = ["quantity": quantity]
+        return try await patch("/chefs/api/me/orders/\(id)/", body: body)
+    }
+
+    /// Get calendar items for date range
+    func getChefCalendar(startDate: Date, endDate: Date) async throws -> [OrderCalendarItem] {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate]
+        let start = formatter.string(from: startDate)
+        let end = formatter.string(from: endDate)
+        return try await get("/chefs/api/me/calendar/?start_date=\(start)&end_date=\(end)")
+    }
+
+    // MARK: - Chef Meal Events Endpoints
+
+    /// Get chef's meal events
+    func getMealEvents(page: Int = 1) async throws -> PaginatedResponse<ChefMealEvent> {
+        return try await get("/chefs/api/me/meal-events/?page=\(page)")
+    }
+
+    /// Get meal event details
+    func getMealEventDetail(id: Int) async throws -> ChefMealEvent {
+        return try await get("/chefs/api/me/meal-events/\(id)/")
+    }
+
+    /// Create a meal event
+    func createMealEvent(data: MealEventCreateRequest) async throws -> ChefMealEvent {
+        let body = try encodeToDictionary(data)
+        return try await post("/chefs/api/me/meal-events/", body: body)
+    }
+
+    /// Update a meal event
+    func updateMealEvent(id: Int, data: MealEventUpdateRequest) async throws -> ChefMealEvent {
+        let body = try encodeToDictionary(data)
+        return try await patch("/chefs/api/me/meal-events/\(id)/", body: body)
+    }
+
+    /// Cancel a meal event
+    func cancelMealEvent(id: Int) async throws {
+        let _: EmptyResponse = try await post("/chefs/api/me/meal-events/\(id)/cancel/", body: [:])
+    }
+
+    /// Duplicate a meal event
+    func duplicateMealEvent(id: Int, newDate: Date?) async throws -> ChefMealEvent {
+        var body: [String: Any] = [:]
+        if let date = newDate {
+            let formatter = ISO8601DateFormatter()
+            body["event_date"] = formatter.string(from: date)
+        }
+        return try await post("/chefs/api/me/meal-events/\(id)/duplicate/", body: body)
+    }
+
+    /// Get orders for a meal event
+    func getMealEventOrders(eventId: Int) async throws -> [ChefMealOrder] {
+        return try await get("/chefs/api/me/meal-events/\(eventId)/orders/")
+    }
+
+    // MARK: - Chef Meals Endpoints
+
+    /// Get chef's meals
+    func getChefMeals(page: Int = 1) async throws -> PaginatedResponse<Meal> {
+        return try await get("/chefs/api/me/meals/?page=\(page)")
+    }
+
+    /// Get meal details
+    func getMealDetail(id: Int) async throws -> Meal {
+        return try await get("/chefs/api/me/meals/\(id)/")
+    }
+
+    /// Create a meal
+    func createMeal(data: MealCreateRequest) async throws -> Meal {
+        let body = try encodeToDictionary(data)
+        return try await post("/chefs/api/me/meals/", body: body)
+    }
+
+    /// Update a meal
+    func updateMeal(id: Int, data: MealCreateRequest) async throws -> Meal {
+        let body = try encodeToDictionary(data)
+        return try await patch("/chefs/api/me/meals/\(id)/", body: body)
+    }
+
+    /// Delete a meal
+    func deleteMeal(id: Int) async throws {
+        try await delete("/chefs/api/me/meals/\(id)/")
+    }
+
+    // MARK: - Chef Dishes Endpoints
+
+    /// Get chef's dishes
+    func getDishes(page: Int = 1) async throws -> PaginatedResponse<Dish> {
+        return try await get("/chefs/api/me/dishes/?page=\(page)")
+    }
+
+    /// Get dish details
+    func getDishDetail(id: Int) async throws -> Dish {
+        return try await get("/chefs/api/me/dishes/\(id)/")
+    }
+
+    /// Create a dish
+    func createDish(data: DishCreateRequest) async throws -> Dish {
+        let body = try encodeToDictionary(data)
+        return try await post("/chefs/api/me/dishes/", body: body)
+    }
+
+    /// Update a dish
+    func updateDish(id: Int, data: DishCreateRequest) async throws -> Dish {
+        let body = try encodeToDictionary(data)
+        return try await patch("/chefs/api/me/dishes/\(id)/", body: body)
+    }
+
+    /// Delete a dish
+    func deleteDish(id: Int) async throws {
+        try await delete("/chefs/api/me/dishes/\(id)/")
+    }
+
+    // MARK: - Chef Ingredients Endpoints
+
+    /// Get chef's ingredients
+    func getIngredients(page: Int = 1) async throws -> PaginatedResponse<Ingredient> {
+        return try await get("/chefs/api/me/ingredients/?page=\(page)")
+    }
+
+    /// Search ingredients
+    func searchIngredients(query: String) async throws -> [Ingredient] {
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        return try await get("/chefs/api/me/ingredients/search/?q=\(encoded)")
+    }
+
+    /// Create an ingredient
+    func createIngredient(name: String, category: String?, unit: String?) async throws -> Ingredient {
+        var body: [String: Any] = ["name": name]
+        if let category = category {
+            body["category"] = category
+        }
+        if let unit = unit {
+            body["unit"] = unit
+        }
+        return try await post("/chefs/api/me/ingredients/", body: body)
+    }
+
+    /// Update an ingredient
+    func updateIngredient(id: Int, name: String, category: String?, unit: String?) async throws -> Ingredient {
+        var body: [String: Any] = ["name": name]
+        if let category = category {
+            body["category"] = category
+        }
+        if let unit = unit {
+            body["unit"] = unit
+        }
+        return try await patch("/chefs/api/me/ingredients/\(id)/", body: body)
+    }
+
+    /// Delete an ingredient
+    func deleteIngredient(id: Int) async throws {
+        try await delete("/chefs/api/me/ingredients/\(id)/")
+    }
+
+    // MARK: - Chef Service Offerings Endpoints
+
+    /// Get chef's service offerings
+    func getServiceOfferings(page: Int = 1) async throws -> PaginatedResponse<ServiceOffering> {
+        return try await get("/chefs/api/me/services/?page=\(page)")
+    }
+
+    /// Get service offering details
+    func getServiceOfferingDetail(id: Int) async throws -> ServiceOffering {
+        return try await get("/chefs/api/me/services/\(id)/")
+    }
+
+    /// Create a service offering
+    func createServiceOffering(data: ServiceOfferingCreateRequest) async throws -> ServiceOffering {
+        let body = try encodeToDictionary(data)
+        return try await post("/chefs/api/me/services/", body: body)
+    }
+
+    /// Update a service offering
+    func updateServiceOffering(id: Int, data: ServiceOfferingCreateRequest) async throws -> ServiceOffering {
+        let body = try encodeToDictionary(data)
+        return try await patch("/chefs/api/me/services/\(id)/", body: body)
+    }
+
+    /// Delete a service offering
+    func deleteServiceOffering(id: Int) async throws {
+        try await delete("/chefs/api/me/services/\(id)/")
+    }
+
+    /// Add price tier to service offering
+    func addPriceTier(offeringId: Int, data: PriceTierCreateRequest) async throws -> PriceTier {
+        let body = try encodeToDictionary(data)
+        return try await post("/chefs/api/me/services/\(offeringId)/tiers/", body: body)
+    }
+
+    /// Update price tier
+    func updatePriceTier(offeringId: Int, tierId: Int, data: PriceTierCreateRequest) async throws -> PriceTier {
+        let body = try encodeToDictionary(data)
+        return try await patch("/chefs/api/me/services/\(offeringId)/tiers/\(tierId)/", body: body)
+    }
+
+    /// Delete price tier
+    func deletePriceTier(offeringId: Int, tierId: Int) async throws {
+        try await delete("/chefs/api/me/services/\(offeringId)/tiers/\(tierId)/")
+    }
+
     // MARK: - Generic Request Methods
 
     /// GET request
@@ -545,6 +780,15 @@ class APIClient {
         default:
             throw APIError.unexpectedStatus(httpResponse.statusCode)
         }
+    }
+
+    /// Encode Codable object to dictionary
+    private func encodeToDictionary<T: Encodable>(_ value: T) throws -> [String: Any] {
+        let data = try encoder.encode(value)
+        guard let dictionary = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw APIError.invalidResponse
+        }
+        return dictionary
     }
 
     /// Parse error message from response data

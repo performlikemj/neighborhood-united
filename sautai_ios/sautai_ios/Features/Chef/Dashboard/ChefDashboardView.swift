@@ -246,8 +246,7 @@ struct ChefDashboardView: View {
                 Spacer()
 
                 NavigationLink("See All") {
-                    // TODO: OrdersListView
-                    Text("Orders List")
+                    OrdersListView()
                 }
                 .font(SautaiFont.caption)
                 .foregroundColor(.sautai.earthenClay)
@@ -273,8 +272,7 @@ struct ChefDashboardView: View {
                 Spacer()
 
                 NavigationLink("See All") {
-                    // TODO: EventsListView
-                    Text("Events List")
+                    MealEventsListView()
                 }
                 .font(SautaiFont.caption)
                 .foregroundColor(.sautai.earthenClay)
@@ -389,69 +387,6 @@ struct ChefDashboardView: View {
         }
 
         isLoading = false
-    }
-}
-
-// MARK: - Order Row View
-
-struct OrderRowView: View {
-    let order: Order
-
-    var body: some View {
-        HStack(spacing: SautaiDesign.spacingM) {
-            // Status Icon
-            Image(systemName: order.status.icon)
-                .font(.system(size: 20))
-                .foregroundColor(statusColor)
-                .frame(width: 32, height: 32)
-
-            // Order Details
-            VStack(alignment: .leading, spacing: SautaiDesign.spacingXS) {
-                Text(order.customerName ?? "Order #\(order.id)")
-                    .font(SautaiFont.body)
-                    .foregroundColor(.sautai.slateTile)
-
-                HStack(spacing: SautaiDesign.spacingS) {
-                    Text(order.status.displayName)
-                        .font(SautaiFont.caption)
-                        .foregroundColor(statusColor)
-
-                    if let date = order.deliveryDate {
-                        Text("•")
-                            .foregroundColor(.sautai.slateTile.opacity(0.5))
-                        Text(formatDate(date))
-                            .font(SautaiFont.caption)
-                            .foregroundColor(.sautai.slateTile.opacity(0.7))
-                    }
-                }
-            }
-
-            Spacer()
-
-            // Amount
-            Text(order.displayTotal)
-                .font(SautaiFont.money)
-                .foregroundColor(.sautai.slateTile)
-        }
-        .padding(SautaiDesign.spacing)
-        .background(Color.white)
-        .cornerRadius(SautaiDesign.cornerRadiusS)
-        .sautaiShadow(SautaiDesign.shadowSubtle)
-    }
-
-    private var statusColor: Color {
-        switch order.status {
-        case .pending: return .sautai.warning
-        case .confirmed, .preparing: return .sautai.info
-        case .ready, .delivered, .completed: return .sautai.success
-        case .cancelled: return .sautai.danger
-        }
-    }
-
-    private func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d"
-        return formatter.string(from: date)
     }
 }
 

@@ -72,6 +72,41 @@ struct SettingsView: View {
                     }
                 }
 
+                // Chef Tools Section (only visible for chefs)
+                if authManager.currentRole == .chef {
+                    Section {
+                        NavigationLink {
+                            LeadsListView()
+                        } label: {
+                            HStack {
+                                Image(systemName: "person.badge.plus")
+                                    .foregroundColor(.sautai.herbGreen)
+                                    .frame(width: 28)
+
+                                Text("Leads")
+                                    .font(SautaiFont.body)
+                                    .foregroundColor(.sautai.slateTile)
+                            }
+                        }
+
+                        NavigationLink {
+                            SousChefView()
+                        } label: {
+                            HStack {
+                                Image(systemName: "bubble.left.and.bubble.right.fill")
+                                    .foregroundColor(.sautai.sunlitApricot)
+                                    .frame(width: 28)
+
+                                Text("Sous Chef AI")
+                                    .font(SautaiFont.body)
+                                    .foregroundColor(.sautai.slateTile)
+                            }
+                        }
+                    } header: {
+                        Text("Chef Tools")
+                    }
+                }
+
                 // Preferences Section
                 Section {
                     settingsRow(icon: "bell.fill", title: "Notifications", color: .sautai.sunlitApricot)

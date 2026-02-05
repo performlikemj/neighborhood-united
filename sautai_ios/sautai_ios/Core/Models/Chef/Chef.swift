@@ -16,23 +16,45 @@ struct ChefDashboard: Codable {
     let topServices: [TopService]
 }
 
-// MARK: - Revenue Stats
+// MARK: - Revenue Stats (matches Django RevenueStatsSerializer)
 
 struct RevenueStats: Codable {
-    let today: String
-    let thisWeek: String
-    let thisMonth: String
+    // Django returns Decimal as numbers, we parse flexibly
+    let today: Decimal
+    let thisWeek: Decimal
+    let thisMonth: Decimal
 
-    var todayDecimal: Decimal {
-        Decimal(string: today) ?? 0
+    enum CodingKeys: String, CodingKey {
+        case today, thisWeek, thisMonth
     }
 
-    var thisWeekDecimal: Decimal {
-        Decimal(string: thisWeek) ?? 0
+    init(today: Decimal = 0, thisWeek: Decimal = 0, thisMonth: Decimal = 0) {
+        self.today = today
+        self.thisWeek = thisWeek
+        self.thisMonth = thisMonth
     }
 
-    var thisMonthDecimal: Decimal {
-        Decimal(string: thisMonth) ?? 0
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        // Handle both String and Number from API
+        if let str = try? container.decode(String.self, forKey: .today) {
+            today = Decimal(string: str) ?? 0
+        } else {
+            today = try container.decodeIfPresent(Decimal.self, forKey: .today) ?? 0
+        }
+
+        if let str = try? container.decode(String.self, forKey: .thisWeek) {
+            thisWeek = Decimal(string: str) ?? 0
+        } else {
+            thisWeek = try container.decodeIfPresent(Decimal.self, forKey: .thisWeek) ?? 0
+        }
+
+        if let str = try? container.decode(String.self, forKey: .thisMonth) {
+            thisMonth = Decimal(string: str) ?? 0
+        } else {
+            thisMonth = try container.decodeIfPresent(Decimal.self, forKey: .thisMonth) ?? 0
+        }
     }
 }
 
@@ -52,93 +74,73 @@ struct OrderStats: Codable {
     let completedThisMonth: Int
 }
 
-// MARK: - Top Service
+// MARK: - Top Service (matches Django TopServiceSerializer)
 
 struct TopService: Codable, Identifiable {
     let id: Int
     let name: String
-    let serviceType: String
+    let serviceType: String?  // Optional in Django API
     let orderCount: Int
 }
 
-// MARK: - Client
+// MARK: - Client (matches Django ClientListItemSerializer)
 
 struct Client: Codable, Identifiable {
-    let id: Int
-    let userId: Int?
-    let name: String
-    let email: String?
-    let phoneNumber: String?
-    let address: Address?
-    let dietaryPreferences: [DietaryPreference]?
-    let allergies: [String]?
-    let notes: String?
-    let createdAt: Date?
-    let lastOrderAt: Date?
-    let totalOrders: Int?
-    let totalSpent: String?
+    // Django returns customer_id, we use it as our id
+    var id: Int { customerId }
 
-    var displayName: String { name }
+    let customerId: Int
+    let username: String?
+    let email: String?
+    let firstName: String?
+    let lastName: String?
+    let connectionStatus: String?
+    let connectedSince: Date?
+    let totalOrders: Int?
+    let totalSpent: Decimal?
+
+    var displayName: String {
+        let first = firstName ?? ""
+        let last = lastName ?? ""
+        let combined = "\(first) \(last)".trimmingCharacters(in: .whitespaces)
+        if !combined.isEmpty { return combined }
+        return username ?? "Client"
+    }
 
     var initials: String {
-        let parts = name.split(separator: " ")
+        let parts = displayName.split(separator: " ")
         if parts.count >= 2 {
             return "\(parts[0].prefix(1))\(parts[1].prefix(1))".uppercased()
         }
-        return String(name.prefix(2)).uppercased()
-    }
-}
-
-// MARK: - Lead
-
-struct Lead: Codable, Identifiable {
-    let id: Int
-    var name: String
-    var email: String?
-    var phoneNumber: String?
-    var source: String?
-    var status: LeadStatus
-    var notes: String?
-    var estimatedValue: String?
-    var createdAt: Date?
-    var lastContactAt: Date?
-
-    var displayName: String { name }
-}
-
-// MARK: - Lead Status
-
-enum LeadStatus: String, Codable, CaseIterable {
-    case new
-    case contacted
-    case qualified
-    case proposal
-    case negotiation
-    case won
-    case lost
-
-    var displayName: String {
-        switch self {
-        case .new: return "New"
-        case .contacted: return "Contacted"
-        case .qualified: return "Qualified"
-        case .proposal: return "Proposal"
-        case .negotiation: return "Negotiation"
-        case .won: return "Won"
-        case .lost: return "Lost"
-        }
+        return String(displayName.prefix(2)).uppercased()
     }
 
-    var color: String {
-        switch self {
-        case .new: return "info"
-        case .contacted: return "primary"
-        case .qualified: return "warning"
-        case .proposal: return "pending"
-        case .negotiation: return "warning"
-        case .won: return "success"
-        case .lost: return "danger"
-        }
+    var totalSpentDisplay: String? {
+        guard let spent = totalSpent else { return nil }
+        return String(format: "$%.2f", NSDecimalNumber(decimal: spent).doubleValue)
+    }
+
+    // Memberwise initializer
+    init(
+        customerId: Int,
+        username: String? = nil,
+        email: String? = nil,
+        firstName: String? = nil,
+        lastName: String? = nil,
+        connectionStatus: String? = nil,
+        connectedSince: Date? = nil,
+        totalOrders: Int? = nil,
+        totalSpent: Decimal? = nil
+    ) {
+        self.customerId = customerId
+        self.username = username
+        self.email = email
+        self.firstName = firstName
+        self.lastName = lastName
+        self.connectionStatus = connectionStatus
+        self.connectedSince = connectedSince
+        self.totalOrders = totalOrders
+        self.totalSpent = totalSpent
     }
 }
 

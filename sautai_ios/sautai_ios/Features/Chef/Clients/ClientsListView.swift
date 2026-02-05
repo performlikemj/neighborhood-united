@@ -12,14 +12,16 @@ struct ClientsListView: View {
     @State private var searchText = ""
     @State private var isLoading = true
     @State private var error: Error?
+    @State private var showingAddLeadSheet = false
 
     var filteredClients: [Client] {
         if searchText.isEmpty {
             return clients
         }
         return clients.filter { client in
-            client.name.localizedCaseInsensitiveContains(searchText) ||
-            (client.email?.localizedCaseInsensitiveContains(searchText) ?? false)
+            client.displayName.localizedCaseInsensitiveContains(searchText) ||
+            (client.email?.localizedCaseInsensitiveContains(searchText) ?? false) ||
+            (client.username?.localizedCaseInsensitiveContains(searchText) ?? false)
         }
     }
 
@@ -43,11 +45,16 @@ struct ClientsListView: View {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
-                        // TODO: Add new client
+                        showingAddLeadSheet = true
                     } label: {
                         Image(systemName: "person.badge.plus")
                             .foregroundColor(.sautai.earthenClay)
                     }
+                }
+            }
+            .sheet(isPresented: $showingAddLeadSheet) {
+                AddLeadView { _ in
+                    // Lead added - they'll become a client when they convert
                 }
             }
         }
@@ -102,21 +109,30 @@ struct ClientsListView: View {
                 .font(SautaiFont.headline)
                 .foregroundColor(.sautai.slateTile)
 
-            Text("Your clients will appear here once you start working together.")
+            Text("Clients appear here once leads convert to paying customers. Start by adding leads to your pipeline.")
                 .font(SautaiFont.body)
                 .foregroundColor(.sautai.slateTile.opacity(0.7))
                 .multilineTextAlignment(.center)
 
             Button {
-                // TODO: Add client
+                showingAddLeadSheet = true
             } label: {
-                Label("Add First Client", systemImage: "person.badge.plus")
+                Label("Add Lead", systemImage: "person.badge.plus")
                     .font(SautaiFont.button)
                     .foregroundColor(.white)
                     .padding(.horizontal, SautaiDesign.spacingXL)
                     .padding(.vertical, SautaiDesign.spacingM)
                     .background(Color.sautai.earthenClay)
                     .cornerRadius(SautaiDesign.cornerRadius)
+            }
+
+            Button {
+                // Navigate to Leads tab
+                NotificationCenter.default.post(name: .switchToTab, object: 2)
+            } label: {
+                Text("View Leads")
+                    .font(SautaiFont.button)
+                    .foregroundColor(.sautai.earthenClay)
             }
         }
         .padding(SautaiDesign.spacingXL)
@@ -222,19 +238,25 @@ struct ClientDetailView: View {
                 // Stats
                 HStack(spacing: SautaiDesign.spacingL) {
                     statItem(value: "\(client.totalOrders ?? 0)", label: "Orders")
-                    statItem(value: client.totalSpent ?? "$0", label: "Total Spent")
+                    statItem(value: client.totalSpentDisplay ?? "$0", label: "Total Spent")
                 }
 
-                // Notes section
-                if let notes = client.notes, !notes.isEmpty {
+                // Connection info
+                if let status = client.connectionStatus {
                     VStack(alignment: .leading, spacing: SautaiDesign.spacingS) {
-                        Text("Notes")
+                        Text("Connection Status")
                             .font(SautaiFont.headline)
                             .foregroundColor(.sautai.slateTile)
 
-                        Text(notes)
+                        Text(status.capitalized)
                             .font(SautaiFont.body)
                             .foregroundColor(.sautai.slateTile.opacity(0.8))
+
+                        if let since = client.connectedSince {
+                            Text("Connected since \(since.formatted(date: .abbreviated, time: .omitted))")
+                                .font(SautaiFont.caption)
+                                .foregroundColor(.sautai.slateTile.opacity(0.6))
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(SautaiDesign.spacing)

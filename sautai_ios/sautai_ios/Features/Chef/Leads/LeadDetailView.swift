@@ -45,7 +45,7 @@ struct LeadDetailView: View {
             .padding(SautaiDesign.spacing)
         }
         .background(Color.sautai.softCream)
-        .navigationTitle(currentLead.name)
+        .navigationTitle(currentLead.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -62,7 +62,7 @@ struct LeadDetailView: View {
                         Label("Log Interaction", systemImage: "plus.bubble")
                     }
 
-                    if let phone = currentLead.phoneNumber {
+                    if let phone = currentLead.phone {
                         Button {
                             callPhone(phone)
                         } label: {
@@ -109,9 +109,23 @@ struct LeadDetailView: View {
                 )
 
             VStack(alignment: .leading, spacing: SautaiDesign.spacingXS) {
-                Text(currentLead.name)
-                    .font(SautaiFont.title3)
-                    .foregroundColor(.sautai.slateTile)
+                HStack {
+                    Text(currentLead.displayName)
+                        .font(SautaiFont.title3)
+                        .foregroundColor(.sautai.slateTile)
+
+                    if currentLead.isPriority {
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 12))
+                            .foregroundColor(.sautai.sunlitApricot)
+                    }
+                }
+
+                if let company = currentLead.company, !company.isEmpty {
+                    Text(company)
+                        .font(SautaiFont.body)
+                        .foregroundColor(.sautai.slateTile.opacity(0.7))
+                }
 
                 if let source = currentLead.source {
                     Label(source.displayName, systemImage: "link")
@@ -147,11 +161,11 @@ struct LeadDetailView: View {
                     contactRow(icon: "envelope.fill", value: email, action: { sendEmail(email) })
                 }
 
-                if let phone = currentLead.phoneNumber {
+                if let phone = currentLead.phone {
                     contactRow(icon: "phone.fill", value: phone, action: { callPhone(phone) })
                 }
 
-                if currentLead.email == nil && currentLead.phoneNumber == nil {
+                if currentLead.email == nil && currentLead.phone == nil {
                     Text("No contact info")
                         .font(SautaiFont.body)
                         .foregroundColor(.sautai.slateTile.opacity(0.5))
@@ -218,8 +232,12 @@ struct LeadDetailView: View {
                         .font(SautaiFont.headline)
                         .foregroundColor(.sautai.slateTile)
 
-                    if let lastContact = currentLead.lastContactAt {
+                    if let lastContact = currentLead.lastInteractionAt {
                         Text("Last contact: \(formatDate(lastContact))")
+                            .font(SautaiFont.caption)
+                            .foregroundColor(.sautai.slateTile.opacity(0.6))
+                    } else if let daysSince = currentLead.daysSinceInteraction {
+                        Text("Last contact: \(daysSince) days ago")
                             .font(SautaiFont.caption)
                             .foregroundColor(.sautai.slateTile.opacity(0.6))
                     }
@@ -227,8 +245,8 @@ struct LeadDetailView: View {
 
                 Spacer()
 
-                if let value = currentLead.estimatedValue {
-                    Text("$\(value)")
+                if let budget = currentLead.budgetDisplay {
+                    Text(budget)
                         .font(SautaiFont.money)
                         .foregroundColor(.sautai.herbGreen)
                 }
@@ -311,7 +329,7 @@ struct LeadDetailView: View {
     private func interactionRow(_ interaction: LeadInteraction) -> some View {
         HStack(alignment: .top, spacing: SautaiDesign.spacingM) {
             // Icon
-            Image(systemName: interaction.type.icon)
+            Image(systemName: interaction.interactionType.icon)
                 .font(.system(size: 14))
                 .foregroundColor(.sautai.earthenClay)
                 .frame(width: 28, height: 28)
@@ -321,22 +339,40 @@ struct LeadDetailView: View {
             // Content
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
-                    Text(interaction.type.displayName)
+                    Text(interaction.interactionType.displayName)
                         .font(SautaiFont.caption)
                         .fontWeight(.semibold)
                         .foregroundColor(.sautai.slateTile)
 
                     Spacer()
 
-                    Text(formatDate(interaction.createdAt))
-                        .font(SautaiFont.caption2)
-                        .foregroundColor(.sautai.slateTile.opacity(0.5))
+                    if let date = interaction.happenedAt ?? interaction.createdAt {
+                        Text(formatDate(date))
+                            .font(SautaiFont.caption2)
+                            .foregroundColor(.sautai.slateTile.opacity(0.5))
+                    }
                 }
 
-                if let notes = interaction.notes, !notes.isEmpty {
-                    Text(notes)
+                if let summary = interaction.summary, !summary.isEmpty {
+                    Text(summary)
                         .font(SautaiFont.body)
                         .foregroundColor(.sautai.slateTile.opacity(0.8))
+                }
+
+                if let details = interaction.details, !details.isEmpty {
+                    Text(details)
+                        .font(SautaiFont.caption)
+                        .foregroundColor(.sautai.slateTile.opacity(0.6))
+                }
+
+                if let nextSteps = interaction.nextSteps, !nextSteps.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.forward.circle")
+                            .font(.system(size: 10))
+                        Text(nextSteps)
+                            .font(SautaiFont.caption)
+                    }
+                    .foregroundColor(.sautai.earthenClay)
                 }
             }
         }
@@ -406,7 +442,9 @@ struct AddInteractionView: View {
     let onAdd: (LeadInteraction) -> Void
 
     @State private var type: InteractionType = .note
-    @State private var notes = ""
+    @State private var summary = ""
+    @State private var details = ""
+    @State private var nextSteps = ""
     @State private var isLoading = false
 
     var body: some View {
@@ -421,9 +459,17 @@ struct AddInteractionView: View {
                     }
                 }
 
-                Section("Notes") {
-                    TextField("What happened?", text: $notes, axis: .vertical)
-                        .lineLimit(4...10)
+                Section("Summary") {
+                    TextField("Brief summary", text: $summary)
+                }
+
+                Section("Details (optional)") {
+                    TextField("Additional details", text: $details, axis: .vertical)
+                        .lineLimit(3...6)
+                }
+
+                Section("Next Steps (optional)") {
+                    TextField("Follow-up actions", text: $nextSteps)
                 }
             }
             .navigationTitle("Log Activity")
@@ -436,7 +482,7 @@ struct AddInteractionView: View {
                     Button("Save") {
                         saveInteraction()
                     }
-                    .disabled(isLoading)
+                    .disabled(isLoading || summary.isEmpty)
                 }
             }
         }
@@ -446,10 +492,16 @@ struct AddInteractionView: View {
         isLoading = true
         Task {
             do {
-                let data: [String: Any] = [
-                    "type": type.rawValue,
-                    "notes": notes
+                var data: [String: Any] = [
+                    "interaction_type": type.rawValue,
+                    "summary": summary
                 ]
+                if !details.isEmpty {
+                    data["details"] = details
+                }
+                if !nextSteps.isEmpty {
+                    data["next_steps"] = nextSteps
+                }
                 let newInteraction = try await APIClient.shared.addLeadInteraction(leadId: leadId, data: data)
                 await MainActor.run {
                     onAdd(newInteraction)
@@ -468,15 +520,18 @@ struct AddInteractionView: View {
     NavigationStack {
         LeadDetailView(lead: Lead(
             id: 1,
-            name: "John Smith",
+            firstName: "John",
+            lastName: "Smith",
             email: "john@example.com",
-            phoneNumber: "+1 555-123-4567",
-            source: .referral,
+            phone: "+1 555-123-4567",
+            company: "Acme Corp",
             status: .qualified,
+            source: .referral,
+            isPriority: true,
+            budgetCents: 50000,
             notes: "Interested in weekly meal prep for family of 4",
-            estimatedValue: "500",
-            createdAt: Date().addingTimeInterval(-86400 * 7),
-            lastContactAt: Date().addingTimeInterval(-86400 * 2)
+            daysSinceInteraction: 2,
+            createdAt: Date().addingTimeInterval(-86400 * 7)
         ))
     }
 }

@@ -40,32 +40,35 @@ def get_sous_chef_service(
     channel: str = "web",
     family_id: Optional[int] = None,
     family_type: Optional[str] = None,
+    client_type: str = "web",
 ) -> Union["SousChefService", "AgentsSousChefService"]:
     """
     Factory function to get the appropriate Sous Chef service.
-    
+
     Uses USE_AGENTS_SDK setting or environment variable to determine
     which backend to use.
-    
+
     Args:
         chef_id: ID of the chef
         channel: Channel type ('web', 'telegram', 'line', 'api')
         family_id: Optional family/customer ID
         family_type: 'customer' or 'lead' if family_id provided
-    
+        client_type: Client type for response formatting ('web', 'ios', 'android')
+
     Returns:
         SousChefService or AgentsSousChefService instance
     """
     use_agents_sdk = getattr(settings, 'USE_AGENTS_SDK', None)
     if use_agents_sdk is None:
         use_agents_sdk = os.getenv('USE_AGENTS_SDK', 'true').lower() == 'true'
-    
+
     if use_agents_sdk and AGENTS_SDK_AVAILABLE:
         return AgentsSousChefService(
             chef_id=chef_id,
             channel=channel,
             family_id=family_id,
             family_type=family_type,
+            client_type=client_type,
         )
     else:
         return SousChefService(
@@ -73,6 +76,7 @@ def get_sous_chef_service(
             channel=channel,
             family_id=family_id,
             family_type=family_type,
+            client_type=client_type,
         )
 
 

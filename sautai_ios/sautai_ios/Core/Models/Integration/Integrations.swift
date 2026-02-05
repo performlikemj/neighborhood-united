@@ -164,27 +164,7 @@ struct MealPlanMeal: Codable, Identifiable {
     let chefName: String?
 }
 
-// MARK: - Chef Profile Detail (extended from PublicChef)
-
-struct ChefProfileDetail: Codable, Identifiable {
-    let id: Int
-    let username: String?
-    let displayName: String
-    let bio: String?
-    let cuisines: [String]?
-    let specialties: [String]?
-    let profileImageUrl: String?
-    let coverImageUrl: String?
-    let rating: Double?
-    let reviewCount: Int?
-    let isVerified: Bool
-    let isLive: Bool
-    let onBreak: Bool?
-    let serviceAreas: [ServiceArea]?
-    let services: [ChefService]?
-    let gallery: [GalleryPhoto]?
-    let yearsExperience: Int?
-}
+// MARK: - Chef Service
 
 struct ChefService: Codable, Identifiable {
     let id: Int
@@ -195,12 +175,6 @@ struct ChefService: Codable, Identifiable {
     let currency: String?
     let duration: String?
     let isActive: Bool
-}
-
-struct ServiceArea: Codable, Identifiable {
-    let id: Int
-    let name: String
-    let postalCodes: [String]?
 }
 
 struct GalleryPhoto: Codable, Identifiable {

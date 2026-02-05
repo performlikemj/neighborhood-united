@@ -12,6 +12,10 @@ struct ChefDashboardView: View {
     @State private var isLoading = true
     @State private var error: Error?
 
+    // Quick action navigation
+    @State private var showingAddLead = false
+    @State private var selectedTab: Int = 0
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -27,6 +31,12 @@ struct ChefDashboardView: View {
             .navigationTitle("Dashboard")
             .refreshable {
                 await loadDashboard()
+            }
+            .sheet(isPresented: $showingAddLead) {
+                AddLeadView { _ in
+                    // Refresh dashboard after adding lead
+                    Task { await loadDashboard() }
+                }
             }
         }
         .task {
@@ -112,13 +122,13 @@ struct ChefDashboardView: View {
         }
     }
 
-    private func revenueCard(title: String, amount: String, color: Color) -> some View {
+    private func revenueCard(title: String, amount: Decimal, color: Color) -> some View {
         VStack(alignment: .leading, spacing: SautaiDesign.spacingXS) {
             Text(title)
                 .font(SautaiFont.caption)
                 .foregroundColor(.sautai.slateTile.opacity(0.7))
 
-            Text("$\(amount)")
+            Text(formatCurrency(amount))
                 .font(SautaiFont.money)
                 .foregroundColor(color)
         }
@@ -127,6 +137,14 @@ struct ChefDashboardView: View {
         .background(Color.white)
         .cornerRadius(SautaiDesign.cornerRadius)
         .sautaiShadow(SautaiDesign.shadowSubtle)
+    }
+
+    private func formatCurrency(_ value: Decimal) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "USD"
+        formatter.maximumFractionDigits = 0
+        return formatter.string(from: value as NSDecimalNumber) ?? "$0"
     }
 
     // MARK: - Quick Stats Section
@@ -215,17 +233,23 @@ struct ChefDashboardView: View {
                 .foregroundColor(.sautai.slateTile)
 
             HStack(spacing: SautaiDesign.spacingM) {
-                actionButton(icon: "plus.circle.fill", label: "New Order", color: .sautai.earthenClay)
-                actionButton(icon: "person.badge.plus.fill", label: "Add Client", color: .sautai.herbGreen)
-                actionButton(icon: "calendar.badge.plus", label: "Schedule", color: .sautai.sunlitApricot)
+                actionButton(icon: "plus.circle.fill", label: "New Lead", color: .sautai.earthenClay) {
+                    showingAddLead = true
+                }
+                actionButton(icon: "bubble.left.and.bubble.right.fill", label: "Sous Chef", color: .sautai.herbGreen) {
+                    // Navigate to Sous Chef tab (index 3)
+                    NotificationCenter.default.post(name: .switchToTab, object: 3)
+                }
+                actionButton(icon: "person.2.fill", label: "Clients", color: .sautai.sunlitApricot) {
+                    // Navigate to Clients tab (index 1)
+                    NotificationCenter.default.post(name: .switchToTab, object: 1)
+                }
             }
         }
     }
 
-    private func actionButton(icon: String, label: String, color: Color) -> some View {
-        Button {
-            // TODO: Implement action
-        } label: {
+    private func actionButton(icon: String, label: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             VStack(spacing: SautaiDesign.spacingS) {
                 Image(systemName: icon)
                     .font(.system(size: 28))

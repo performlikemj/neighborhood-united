@@ -105,7 +105,11 @@ struct SousChefMessage: Codable, Identifiable, Equatable {
     }
 
     static func == (lhs: SousChefMessage, rhs: SousChefMessage) -> Bool {
-        lhs.id == rhs.id
+        // Compare all relevant fields for SwiftUI updates
+        lhs.id == rhs.id &&
+        lhs.content == rhs.content &&
+        lhs.role == rhs.role &&
+        lhs.isStreaming == rhs.isStreaming
     }
 }
 

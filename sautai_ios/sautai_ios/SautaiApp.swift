@@ -60,37 +60,57 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Tab Notification
+
+extension Notification.Name {
+    static let switchToTab = Notification.Name("switchToTab")
+}
+
 // MARK: - Chef Tab View
 
 struct ChefTabView: View {
+    @State private var selectedTab = 0
+
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             ChefDashboardView()
                 .tabItem {
                     Label("Dashboard", systemImage: "chart.bar.fill")
                 }
+                .tag(0)
 
             ClientsListView()
                 .tabItem {
                     Label("Clients", systemImage: "person.2.fill")
                 }
+                .tag(1)
 
             LeadsListView()
                 .tabItem {
                     Label("Leads", systemImage: "person.badge.plus")
                 }
+                .tag(2)
 
             SousChefView()
                 .tabItem {
                     Label("Sous Chef", systemImage: "bubble.left.and.bubble.right.fill")
                 }
+                .tag(3)
 
             SettingsView()
                 .tabItem {
                     Label("Settings", systemImage: "gearshape.fill")
                 }
+                .tag(4)
         }
         .tint(Color.sautai.earthenClay)
+        .onReceive(NotificationCenter.default.publisher(for: .switchToTab)) { notification in
+            if let tab = notification.object as? Int {
+                withAnimation {
+                    selectedTab = tab
+                }
+            }
+        }
     }
 }
 

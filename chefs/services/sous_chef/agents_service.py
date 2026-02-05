@@ -86,26 +86,29 @@ class AgentsSousChefService:
         channel: str = "web",
         family_id: Optional[int] = None,
         family_type: Optional[str] = None,
+        client_type: str = "web",
     ):
         """
         Initialize the service.
-        
+
         Args:
             chef_id: ID of the chef
             channel: Channel type ('web', 'telegram', 'line', 'api')
             family_id: Optional family/customer ID
             family_type: 'customer' or 'lead' if family_id provided
+            client_type: Client type for response formatting ('web', 'ios', 'android')
         """
         if not AGENTS_SDK_AVAILABLE:
             raise ImportError(
                 "OpenAI Agents SDK not installed. "
                 "Run: pip install 'openai-agents[litellm]>=0.6.0'"
             )
-        
+
         self.chef_id = chef_id
         self.channel = channel
         self.family_id = family_id
         self.family_type = family_type
+        self.client_type = client_type
         
         # Initialize factory
         self.factory = AgentsSousChefFactory(
@@ -404,19 +407,19 @@ class AgentsSousChefService:
     def stream_message(self, message: str) -> Generator[Dict[str, Any], None, None]:
         """
         Stream a response (for web UI).
-        
+
         Note: Agents SDK streaming support may be limited.
         Falls back to non-streaming if not available.
-        
+
         Args:
             message: The user's message
-        
+
         Yields:
             Dict events with type and content
         """
         try:
             thread = self.thread_manager.get_or_create_thread()
-            
+
             # Check if streaming is supported
             if hasattr(Runner, 'run_streamed'):
                 # Use streaming if available
@@ -436,20 +439,35 @@ class AgentsSousChefService:
                 logger.info(f"[stream_message] Agent response: {response[:500]}...")
                 logger.info(f"[stream_message] Captured actions: {hooks.captured_actions}")
 
-                # Convert response to structured blocks with captured actions
-                structured = self._convert_to_blocks(response, actions=hooks.captured_actions)
-                logger.info(f"[stream_message] Structured content: {structured}")
-                yield {"type": "text", "content": json_module.dumps(structured)}
+                # For iOS/Android clients, return plain markdown text (no JSON blocks)
+                if self.client_type in ("ios", "android"):
+                    # Normalize and return plain text
+                    plain_text = self._normalize_markdown(response)
+                    logger.info(f"[stream_message] Sending plain text for {self.client_type} client")
+                    yield {"type": "text", "content": plain_text}
+                else:
+                    # For web, convert response to structured blocks with captured actions
+                    structured = self._convert_to_blocks(response, actions=hooks.captured_actions)
+                    logger.info(f"[stream_message] Structured content: {structured}")
+                    yield {"type": "text", "content": json_module.dumps(structured)}
 
                 self.thread_manager.save_turn(message, response)
                 yield {"type": "done", "thread_id": thread.id}
             else:
                 # Fallback to send_structured_message which handles hooks
                 import json as json_module
-                result = self.send_structured_message(message)
-                structured = result.get("content", {"blocks": []})
-                yield {"type": "text", "content": json_module.dumps(structured)}
-                yield {"type": "done", "thread_id": result.get("thread_id")}
+
+                # For iOS/Android clients, use send_message (plain text)
+                if self.client_type in ("ios", "android"):
+                    result = self.send_message(message)
+                    plain_text = result.get("message", "")
+                    yield {"type": "text", "content": plain_text}
+                    yield {"type": "done", "thread_id": result.get("thread_id")}
+                else:
+                    result = self.send_structured_message(message)
+                    structured = result.get("content", {"blocks": []})
+                    yield {"type": "text", "content": json_module.dumps(structured)}
+                    yield {"type": "done", "thread_id": result.get("thread_id")}
                 
         except Exception as e:
             logger.error(f"AgentsSousChefService stream error: {e}", exc_info=True)

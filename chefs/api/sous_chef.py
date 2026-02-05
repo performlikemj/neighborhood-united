@@ -155,22 +155,26 @@ def sous_chef_stream_message(request):
     message = request.data.get('message', '').strip()
     if not message:
         return Response({"error": "message is required"}, status=400)
-    
+
+    # Get client_type for response formatting (web, ios, android)
+    client_type = request.data.get('client_type', 'web')
+
     # Verify family access if family provided
     success, error_response = _verify_family_access(chef, family_id, family_type)
     if not success:
         return error_response
-    
+
     def stream_generator() -> Generator[str, None, None]:
         """Generate SSE events from the assistant."""
         try:
             from chefs.services.sous_chef import get_sous_chef_service
-            
+
             service = get_sous_chef_service(
                 chef_id=chef.id,
                 channel="web",
                 family_id=family_id,
                 family_type=family_type,
+                client_type=client_type,
             )
             
             for event in service.stream_message(message):

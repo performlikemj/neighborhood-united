@@ -24,9 +24,10 @@ struct LeadsListView: View {
 
         if !searchText.isEmpty {
             result = result.filter { lead in
-                lead.name.localizedCaseInsensitiveContains(searchText) ||
+                lead.displayName.localizedCaseInsensitiveContains(searchText) ||
                 (lead.email?.localizedCaseInsensitiveContains(searchText) ?? false) ||
-                (lead.phoneNumber?.localizedCaseInsensitiveContains(searchText) ?? false)
+                (lead.phone?.localizedCaseInsensitiveContains(searchText) ?? false) ||
+                (lead.company?.localizedCaseInsensitiveContains(searchText) ?? false)
             }
         }
 
@@ -246,11 +247,23 @@ struct LeadRowView: View {
 
             // Info
             VStack(alignment: .leading, spacing: 2) {
-                Text(lead.name)
-                    .font(SautaiFont.headline)
-                    .foregroundColor(.sautai.slateTile)
+                HStack {
+                    Text(lead.displayName)
+                        .font(SautaiFont.headline)
+                        .foregroundColor(.sautai.slateTile)
 
-                if let email = lead.email {
+                    if lead.isPriority {
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(.sautai.sunlitApricot)
+                    }
+                }
+
+                if let company = lead.company, !company.isEmpty {
+                    Text(company)
+                        .font(SautaiFont.caption)
+                        .foregroundColor(.sautai.slateTile.opacity(0.7))
+                } else if let email = lead.email {
                     Text(email)
                         .font(SautaiFont.caption)
                         .foregroundColor(.sautai.slateTile.opacity(0.6))
@@ -287,15 +300,17 @@ struct LeadRowView: View {
     }
 }
 
-// MARK: - Add Lead View (Placeholder)
+// MARK: - Add Lead View
 
 struct AddLeadView: View {
     @Environment(\.dismiss) var dismiss
     let onAdd: (Lead) -> Void
 
-    @State private var name = ""
+    @State private var firstName = ""
+    @State private var lastName = ""
     @State private var email = ""
     @State private var phone = ""
+    @State private var company = ""
     @State private var source: LeadSource = .other
     @State private var notes = ""
     @State private var isLoading = false
@@ -304,7 +319,8 @@ struct AddLeadView: View {
         NavigationStack {
             Form {
                 Section("Contact Info") {
-                    TextField("Name *", text: $name)
+                    TextField("First Name *", text: $firstName)
+                    TextField("Last Name", text: $lastName)
                     TextField("Email", text: $email)
                         .textContentType(.emailAddress)
                         .keyboardType(.emailAddress)
@@ -312,6 +328,7 @@ struct AddLeadView: View {
                     TextField("Phone", text: $phone)
                         .textContentType(.telephoneNumber)
                         .keyboardType(.phonePad)
+                    TextField("Company", text: $company)
                 }
 
                 Section("Lead Info") {
@@ -335,7 +352,7 @@ struct AddLeadView: View {
                     Button("Save") {
                         saveLead()
                     }
-                    .disabled(name.isEmpty || isLoading)
+                    .disabled(firstName.isEmpty || isLoading)
                 }
             }
         }
@@ -346,12 +363,14 @@ struct AddLeadView: View {
         Task {
             do {
                 var data: [String: Any] = [
-                    "name": name,
+                    "first_name": firstName,
                     "source": source.rawValue,
                     "status": LeadStatus.new.rawValue
                 ]
+                if !lastName.isEmpty { data["last_name"] = lastName }
                 if !email.isEmpty { data["email"] = email }
-                if !phone.isEmpty { data["phone_number"] = phone }
+                if !phone.isEmpty { data["phone"] = phone }
+                if !company.isEmpty { data["company"] = company }
                 if !notes.isEmpty { data["notes"] = notes }
 
                 let newLead = try await APIClient.shared.createLead(data: data)

@@ -57,20 +57,23 @@ class SousChefService:
         channel: str = "web",
         family_id: Optional[int] = None,
         family_type: Optional[str] = None,
+        client_type: str = "web",
     ):
         """
         Initialize the service.
-        
+
         Args:
             chef_id: ID of the chef
             channel: Channel type ('web', 'telegram', 'line', 'api')
             family_id: Optional family/customer ID
             family_type: 'customer' or 'lead' if family_id provided
+            client_type: Client type for response formatting ('web', 'ios', 'android')
         """
         self.chef_id = chef_id
         self.channel = channel
         self.family_id = family_id
         self.family_type = family_type
+        self.client_type = client_type
         
         # Initialize components
         self.factory = SousChefAgentFactory(

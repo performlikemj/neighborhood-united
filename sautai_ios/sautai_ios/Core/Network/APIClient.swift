@@ -436,11 +436,24 @@ class APIClient {
 
     /// Execute request and decode response
     private func execute<T: Decodable>(_ request: URLRequest) async throws -> T {
+        #if DEBUG
+        print("🌐 API: \(request.httpMethod ?? "?") \(request.url?.absoluteString ?? "?")")
+        #endif
+
         let (data, response) = try await session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
         }
+
+        #if DEBUG
+        print("📥 \(httpResponse.statusCode) \(request.url?.path ?? "")")
+        if httpResponse.statusCode >= 400 {
+            if let body = String(data: data, encoding: .utf8) {
+                print("❌ Error: \(body.prefix(500))")
+            }
+        }
+        #endif
 
         // Handle specific status codes
         switch httpResponse.statusCode {
@@ -452,7 +465,12 @@ class APIClient {
             do {
                 return try decoder.decode(T.self, from: data)
             } catch {
-                print("Decoding error: \(error)")
+                #if DEBUG
+                print("❌ Decoding error: \(error)")
+                if let body = String(data: data, encoding: .utf8) {
+                    print("📄 Body: \(body.prefix(1000))")
+                }
+                #endif
                 throw APIError.decodingFailed(error)
             }
 

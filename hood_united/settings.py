@@ -138,10 +138,7 @@ else:
         os.getenv('STREAMLIT_URL', 'https://sautai.com'),
         'https://sautai.com',
         'https://www.sautai.com',
-        'https://hoodunited.org',
-        'https://www.hoodunited.org',
-        'https://neighborhoodunited.org',
-        'https://www.neighborhoodunited.org',
+        'https://api.sautai.com',
     ]
 
 # Allow cookies/credentials to be sent by the browser

@@ -146,19 +146,25 @@ class TelegramLinkService:
         # Check if this Telegram user is already linked to any chef
         existing_link = ChefTelegramLink.objects.filter(
             telegram_user_id=telegram_user_id,
-            is_active=True,
         ).first()
-        
+
         if existing_link:
-            return False  # Already linked to another chef
-        
-        # Create the link
-        ChefTelegramLink.objects.create(
-            chef=link_token.chef,
-            telegram_user_id=telegram_user_id,
-            telegram_username=telegram_user.get('username'),
-            telegram_first_name=telegram_user.get('first_name'),
-        )
+            if existing_link.is_active:
+                return False  # Already actively linked
+            # Reactivate inactive link for the new chef
+            existing_link.chef = link_token.chef
+            existing_link.telegram_username = telegram_user.get('username')
+            existing_link.telegram_first_name = telegram_user.get('first_name')
+            existing_link.is_active = True
+            existing_link.save()
+        else:
+            # Create the link
+            ChefTelegramLink.objects.create(
+                chef=link_token.chef,
+                telegram_user_id=telegram_user_id,
+                telegram_username=telegram_user.get('username'),
+                telegram_first_name=telegram_user.get('first_name'),
+            )
         
         # Mark token as used
         link_token.used = True

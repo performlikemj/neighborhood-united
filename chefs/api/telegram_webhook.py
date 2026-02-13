@@ -91,13 +91,15 @@ def telegram_webhook(request):
     # Import here to avoid circular imports and allow mocking in tests
     from chefs.tasks.telegram_tasks import process_telegram_update
     
-    # Check if we're in eager mode (tests) or should use delay
-    if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
-        # In test mode, run synchronously
-        process_telegram_update(update)
-    else:
-        # In production, queue the task
-        process_telegram_update.delay(update)
-    
+    # Execute the task - with CELERY_TASK_ALWAYS_EAGER this runs synchronously.
+    # Wrap in try/except so we always return 200 to Telegram (fast ack).
+    try:
+        if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
+            process_telegram_update(update)
+        else:
+            process_telegram_update.delay(update)
+    except Exception as e:
+        logger.error(f"Error processing Telegram update {update_id}: {e}", exc_info=True)
+
     # Fast ack - Telegram expects 200 within a few seconds
     return HttpResponse(status=200)

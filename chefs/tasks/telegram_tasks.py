@@ -284,6 +284,23 @@ def handle_start_command(
         token: Optional linking token from /start <token>
         chat_id: Chat ID to send response to
     """
+    # Check if user is already linked — no need to re-process stale /start commands
+    existing_link = ChefTelegramLink.objects.filter(
+        telegram_user_id=telegram_user_id,
+        is_active=True,
+    ).first()
+
+    if existing_link:
+        first_name = telegram_user.get('first_name', 'Chef')
+        send_telegram_message(
+            chat_id,
+            f"👋 <b>Welcome back, {first_name}!</b>\n\n"
+            "Your Telegram is already linked to Sautai. "
+            "Just send me a message and I'll help you out!",
+            parse_mode="HTML"
+        )
+        return
+
     if token:
         # Attempt to link account
         service = TelegramLinkService()
